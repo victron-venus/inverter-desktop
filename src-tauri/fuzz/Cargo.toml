@@ -1,0 +1,35 @@
+[package]
+name = "inverter-dashboard-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.inverter-dashboard]
+path = ".."
+
+[[bin]]
+name = "fuzz_json_parsing"
+path = "fuzz_targets/fuzz_json_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mqtt_handling"
+path = "fuzz_targets/fuzz_mqtt_handling.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_command_parsing"
+path = "fuzz_targets/fuzz_command_parsing.rs"
+test = false
+doc = false
+bench = false

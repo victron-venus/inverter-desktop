@@ -1,0 +1,31 @@
+# ClusterFuzzLite configuration for OSS-Fuzz integration
+
+[build]
+# Build the fuzz targets
+builder = "cargo"
+
+# Build arguments
+build_args = ["--release"]
+
+# Fuzz target arguments
+fuzz_args = ["-max_total_time=60"]
+
+# Sanitizer configuration
+sanitizer = "address"
+
+# Dictionary for JSON parsing
+[[dictionaries]]
+file = "fuzz/dictionaries/json.dict"
+
+# Corpus directories
+[[corpora]]
+target = "fuzz_json_parsing"
+corpus = "fuzz/corpus/json_parsing"
+
+[[corpora]]
+target = "fuzz_mqtt_handling"
+corpus = "fuzz/corpus/mqtt_handling"
+
+[[corpora]]
+target = "fuzz_command_parsing"
+corpus = "fuzz/corpus/command_parsing"
