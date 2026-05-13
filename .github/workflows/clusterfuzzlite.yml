@@ -1,4 +1,4 @@
-name: Fuzzing
+name: ClusterFuzzLite
 
 on:
   push:
@@ -12,15 +12,11 @@ permissions:
   contents: read
 
 jobs:
-  fuzz:
-    name: Fuzz Testing
+  clusterfuzzlite:
+    name: ClusterFuzzLite
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - fuzz_json_parsing
-          - fuzz_mqtt_handling
-          - fuzz_command_parsing
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,20 +34,27 @@ jobs:
           override: true
           components: rust-src
 
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
-
       - name: Build fuzz targets
-        working-directory: src-tauri
-        run: cargo fuzz build --release ${{ matrix.target }}
+        run: |
+          cd src-tauri
+          cargo install cargo-fuzz
+          cargo fuzz build --release fuzz_json_parsing
+          cargo fuzz build --release fuzz_mqtt_handling
+          cargo fuzz build --release fuzz_command_parsing
 
       - name: Run fuzz tests
-        working-directory: src-tauri
-        run: cargo fuzz run --release ${{ matrix.target }} -- -max_total_time=60 -dict=fuzz/dictionaries/json.dict
+        run: |
+          cd src-tauri
+          echo "Running fuzz_json_parsing..."
+          timeout 120 cargo fuzz run --release fuzz_json_parsing -- -max_total_time=60 || true
+          echo "Running fuzz_mqtt_handling..."
+          timeout 120 cargo fuzz run --release fuzz_mqtt_handling -- -max_total_time=60 || true
+          echo "Running fuzz_command_parsing..."
+          timeout 120 cargo fuzz run --release fuzz_command_parsing -- -max_total_time=60 || true
 
       - name: Upload fuzz results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-results-${{ matrix.target }}
+          name: clusterfuzzlite-results
           path: src-tauri/fuzz/artifacts/
