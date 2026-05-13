@@ -28,7 +28,23 @@ For the **web dashboard** (Python/FastAPI), see **[inverter-dashboard](https://g
 - Rust toolchain
 - MQTT broker
 
-### Development
+### Security
+
+This project includes comprehensive security measures:
+
+- **Security Policy**: See [SECURITY.md](SECURITY.md) for vulnerability reporting
+- **Fuzzing**: Automated fuzz testing via [FUZZING.md](FUZZING.md)
+- **Dependency Auditing**: Regular security scans with `cargo audit`
+- **Status Tracking**: Current security status in [SECURITY_STATUS.md](SECURITY_STATUS.md)
+
+### Security Features
+
+- Automated fuzz testing with cargo-fuzz and ClusterFuzzLite
+- Regular dependency updates and vulnerability monitoring
+- Secure MQTT connection handling
+- Input validation and sanitization
+
+## Development
 
 ```bash
 # Install dependencies

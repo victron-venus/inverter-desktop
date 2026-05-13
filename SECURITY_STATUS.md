@@ -1,5 +1,22 @@
 # Security Vulnerability Status
 
+## Fuzzing Integration
+
+✅ **Implemented**: Comprehensive fuzzing integration using cargo-fuzz and ClusterFuzzLite
+
+### Fuzz Targets
+- **JSON Parsing**: Tests InverterState JSON parsing for vulnerabilities
+- **MQTT Handling**: Tests MQTT topic and payload processing
+- **Command Parsing**: Tests command validation and execution
+
+### CI/CD Integration
+- GitHub Actions workflow for automated fuzzing
+- ClusterFuzzLite integration for continuous fuzzing
+- Weekly scheduled fuzzing runs
+- Artifact collection for crash analysis
+
+See [FUZZING.md](FUZZING.md) for detailed fuzzing documentation.
+
 ## Current Vulnerabilities
 
 ### Critical/High Severity

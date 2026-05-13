@@ -1,0 +1,84 @@
+name: Fuzzing
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz Testing
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - fuzz_json_parsing
+          - fuzz_mqtt_handling
+          - fuzz_command_parsing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: rust-src
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Build fuzz targets
+        working-directory: src-tauri
+        run: cargo fuzz build --release ${{ matrix.target }}
+
+      - name: Run fuzz tests
+        working-directory: src-tauri
+        run: cargo fuzz run --release ${{ matrix.target }} -- -max_total_time=60 -dict=fuzz/dictionaries/json.dict
+
+      - name: Upload fuzz results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-results-${{ matrix.target }}
+          path: src-tauri/fuzz/artifacts/
+
+  clusterfuzzlite:
+    name: ClusterFuzzLite
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: rust-src
+
+      - name: Build fuzzers
+        run: |
+          cd src-tauri
+          cargo install cargo-fuzz
+          cargo fuzz build --release fuzz_json_parsing
+          cargo fuzz build --release fuzz_mqtt_handling
+          cargo fuzz build --release fuzz_command_parsing
+
+      - name: Run ClusterFuzzLite
+        uses: google/clusterfuzzlite/actions@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-args: -- -max_total_time=60
+          sanitizer: address
