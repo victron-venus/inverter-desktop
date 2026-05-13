@@ -1,0 +1,39 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "assignees": ["4alvit"],
+  "commitMessageAction": "Update",
+  "commitMessageExtra": "to {{newVersion}}",
+  "commitMessagePrefix": "deps",
+  "commitMessageTopic": "{{depName}}",
+  "extends": ["config:base"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "automerge": true,
+      "automergeType": "pr",
+      "description": "Automatically merge minor and patch updates",
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "description": "Group Rust dependencies",
+      "groupName": "Rust dependencies",
+      "groupSlug": "rust-deps",
+      "matchManagers": ["cargo"]
+    },
+    {
+      "description": "Group npm dependencies",
+      "groupName": "npm dependencies",
+      "groupSlug": "npm-deps",
+      "matchManagers": ["npm"]
+    }
+  ],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "reviewers": ["4alvit"],
+  "schedule": ["every weekend"],
+  "timezone": "UTC",
+  "vulnerabilityAlerts": {
+    "assignees": ["4alvit"],
+    "labels": ["security"]
+  }
+}
