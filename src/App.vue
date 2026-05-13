@@ -211,7 +211,7 @@
       HA: {{ state.ha_connected ? 'Connected' : 'Disconnected' }}{{ state.ha_direct_connected ? ' · direct' : '' }}
       &nbsp;|&nbsp; Uptime: {{ formatUptime(state.uptime || 0) }}
       &nbsp;|&nbsp; MQTT: {{ mqttConnected ? 'OK' : 'Disconnected' }}
-      &nbsp;|&nbsp; Dashboard {{ formatSemverLabel(state.dashboard_version) }} · Control {{ formatSemverLabel(state.version) }}
+      &nbsp;|&nbsp; Desktop v{{ appVersion }} · Control {{ formatSemverLabel(state.version) }}
     </div>
   </div>
 </template>
@@ -220,6 +220,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import uPlot from 'uplot'
+import appVersion from '../package.json' with { type: 'json' }
 
 interface InverterState {
   gt?: number
