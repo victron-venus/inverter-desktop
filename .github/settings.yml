@@ -1,0 +1,12 @@
+# Repository settings for Scorecard compatibility
+# See: https://github.com/ossf/scorecard-action#workflow-restrictions
+
+repository:
+  # Set default permissions for workflows
+  default_workflow_permissions: read
+
+  # Explicit permissions for specific actions
+  actions: read
+  contents: read
+  security-events: write
+  id-token: write
