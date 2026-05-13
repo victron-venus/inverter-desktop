@@ -15,18 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Type-check
-        run: pnpm exec tsc --noEmit
+          cache: npm
+      - run: npm ci
       - name: Build frontend
-        run: pnpm build
+        run: npm run build
 
   rust:
     runs-on: ubuntu-22.04
