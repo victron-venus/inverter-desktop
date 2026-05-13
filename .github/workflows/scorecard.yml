@@ -12,6 +12,7 @@ permissions:
   contents: read
   security-events: write
   id-token: write  # Required for OIDC signing
+  actions: read  # Required for workflow verification
 
 jobs:
   analysis:
@@ -31,6 +32,10 @@ jobs:
           publish_results: true
         env:
           SCORECARD_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCORECARD_VCS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCORECARD_REPOSITORY: ${{ github.repository }}
+          SCORECARD_REF: ${{ github.ref }}
+          SCORECARD_SHA: ${{ github.sha }}
 
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v4
