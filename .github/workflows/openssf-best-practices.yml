@@ -17,9 +17,13 @@ jobs:
   check-best-practices:
     name: Check OpenSSF Best Practices
     runs-on: ubuntu-latest
+    outputs:
+      eligible: ${{ steps.check_eligibility.outputs.eligible }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Python
         uses: actions/setup-python@v4
@@ -37,7 +41,7 @@ jobs:
 
       - name: Generate badge report
         run: |
-          cat > OPENSSF_BADGE_REPORT.md << EOF
+          cat > OPENSSF_BADGE_REPORT.md << 'EOF'
           # OpenSSF Best Practices Badge Report
 
           **Date:** $(date +%Y-%m-%d)
@@ -100,8 +104,21 @@ jobs:
             echo "⚠️  Project needs additional work for OpenSSF Best Practices badge"
           fi
 
-      - name: Create issue if not eligible
-        if: steps.check_eligibility.outputs.eligible == 'false'
+  create-issues:
+    name: Create Issues
+    runs-on: ubuntu-latest
+    needs: check-best-practices
+    if: needs.check-best-practices.outputs.eligible == 'false'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Create eligibility issue
         uses: actions/github-script@v7
         with:
           script: |
@@ -111,28 +128,28 @@ jobs:
               title: 'OpenSSF Best Practices Badge - Additional Work Needed',
               body: `## OpenSSF Best Practices Badge Status
 
-          The project needs additional work to earn the OpenSSF Best Practices badge.
+            The project needs additional work to earn the OpenSSF Best Practices badge.
 
-          ## Missing Criteria
+            ## Missing Criteria
 
-          Please review the following:
-          - Security policy documentation
-          - License file
-          - README documentation
-          - Other badge requirements
+            Please review the following:
+            - Security policy documentation
+            - License file
+            - README documentation
+            - Other badge requirements
 
-          ## Resources
+            ## Resources
 
-          - [OpenSSF Best Practices](https://www.bestpractices.dev/)
-          - [Badge Criteria](https://www.bestpractices.dev/en/criteria)
-          - [Submission Guide](https://www.bestpractices.dev/en/submission)
+            - [OpenSSF Best Practices](https://www.bestpractices.dev/)
+            - [Badge Criteria](https://www.bestpractices.dev/en/criteria)
+            - [Submission Guide](https://www.bestpractices.dev/en/submission)
 
-          ## Next Steps
+            ## Next Steps
 
-          1. Review badge criteria
-          2. Implement missing requirements
-          3. Submit for evaluation
-          4. Address feedback`,
+            1. Review badge criteria
+            2. Implement missing requirements
+            3. Submit for evaluation
+            4. Address feedback`,
               labels: ['security', 'enhancement']
             });
 
@@ -141,9 +158,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     needs: check-best-practices
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Python
         uses: actions/setup-python@v4
@@ -165,33 +187,35 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const submissionDate = new Date().toISOString();
+
             github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: 'OpenSSF Best Practices Badge - Submission Complete',
               body: `## OpenSSF Best Practices Badge Submission
 
-          The project has been submitted for OpenSSF Best Practices badge evaluation.
+            The project has been submitted for OpenSSF Best Practices badge evaluation.
 
-          ## Submission Details
+            ## Submission Details
 
-          - **Date:** ${new Date().toISOString()}
-          - **Project:** victron-venus/inverter-desktop
-          - **Status:** Submitted for evaluation
+            - **Date:** ${submissionDate}
+            - **Project:** victron-venus/inverter-desktop
+            - **Status:** Submitted for evaluation
 
-          ## Next Steps
+            ## Next Steps
 
-          1. Monitor evaluation progress
-          2. Address any feedback from reviewers
-          3. Implement requested changes
-          4. Earn the badge
+            1. Monitor evaluation progress
+            2. Address any feedback from reviewers
+            3. Implement requested changes
+            4. Earn the badge
 
-          ## Resources
+            ## Resources
 
-          - [OpenSSF Best Practices](https://www.bestpractices.dev/)
-          - [Project Status](https://www.bestpractices.dev/en/projects)
+            - [OpenSSF Best Practices](https://www.bestpractices.dev/)
+            - [Project Status](https://www.bestpractices.dev/en/projects)
 
-          ---
-          This issue can be closed once the badge is earned.`,
+            ---
+            This issue can be closed once the badge is earned.`,
               labels: ['security', 'enhancement']
             });

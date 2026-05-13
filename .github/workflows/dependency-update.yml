@@ -6,16 +6,20 @@ on:
   workflow_dispatch:  # Manual trigger
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  issues: write
 
 jobs:
   update-dependencies:
     name: Update Dependencies
     runs-on: ubuntu-latest
+    outputs:
+      has_vulnerabilities: ${{ steps.check_vulnerabilities.outputs.has_vulnerabilities }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -42,9 +46,18 @@ jobs:
           echo "Running security audit..."
           cargo audit > ../audit-report.txt || true
 
+      - name: Check for vulnerabilities
+        id: check_vulnerabilities
+        run: |
+          if grep -q "warning\|vulnerable" audit-report.txt 2>/dev/null; then
+            echo "has_vulnerabilities=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_vulnerabilities=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Generate dependency report
         run: |
-          cat > DEPENDENCY_REPORT.md << EOF
+          cat > DEPENDENCY_REPORT.md << 'EOF'
           # Dependency Update Report
 
           **Date:** $(date +%Y-%m-%d)
@@ -52,15 +65,15 @@ jobs:
 
           ## Outdated Dependencies
 
-          \`\`\`
+          ```
           $(cat outdated-report.txt 2>/dev/null || echo "No outdated dependencies found")
-          \`\`\`
+          ```
 
           ## Security Audit
 
-          \`\`\`
+          ```
           $(cat audit-report.txt 2>/dev/null || echo "No security issues found")
-          \`\`\`
+          ```
 
           ## Recommendations
 
@@ -89,13 +102,36 @@ jobs:
             outdated-report.txt
             audit-report.txt
 
-      - name: Create PR if vulnerabilities found
-        if: contains(files('audit-report.txt'), 'warning') || contains(files('audit-report.txt'), 'vulnerable')
+  create-security-issue:
+    name: Create Security Issue
+    runs-on: ubuntu-latest
+    needs: update-dependencies
+    if: needs.update-dependencies.outputs.has_vulnerabilities == 'true'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read audit report
+        id: read_report
+        run: |
+          if [ -f "audit-report.txt" ]; then
+            echo "report_content<<EOF" >> $GITHUB_OUTPUT
+            cat audit-report.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "report_content=No audit report found" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create security issue
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const auditReport = fs.readFileSync('audit-report.txt', 'utf8');
+            const auditReport = '${{ steps.read_report.outputs.report_content }}';
 
             const issue = await github.rest.issues.create({
               owner: context.repo.owner,
@@ -103,20 +139,20 @@ jobs:
               title: 'Security Vulnerabilities Detected',
               body: `## Security Audit Results
 
-          The following security vulnerabilities were detected:
+            The following security vulnerabilities were detected:
 
-          \`\`\`
-          ${auditReport}
-          \`\`\`
+            \`\`\`
+            ${auditReport}
+            \`\`\`
 
-          ## Action Required
+            ## Action Required
 
-          Please review and update the affected dependencies.
+            Please review and update the affected dependencies.
 
-          ## Resources
+            ## Resources
 
-          - [RustSec Advisory Database](https://rustsec.org/)
-          - [cargo-audit documentation](https://github.com/rustsec/cargo-audit)
-          - [Security Policy](SECURITY.md)`,
+            - [RustSec Advisory Database](https://rustsec.org/)
+            - [cargo-audit documentation](https://github.com/rustsec/cargo-audit)
+            - [Security Policy](SECURITY.md)`,
               labels: ['security', 'dependencies']
             });
