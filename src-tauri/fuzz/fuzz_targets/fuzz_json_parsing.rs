@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use inverter_dashboard::mqtt::InverterState;
+use inverter_dashboard_lib::mqtt::InverterState;
 
 fuzz_target!(|data: &[u8]| {
     // Fuzz JSON parsing for InverterState
