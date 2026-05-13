@@ -5,6 +5,7 @@
 [![GitHub forks](https://img.shields.io/github/forks/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/network/members)
 [![GitHub last commit](https://img.shields.io/github/last-commit/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/commits/main)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/victron-venus/inverter-desktop/graphs/commit-activity)
+[![OSS-Fuzz](https://img.shields.io/badge/OSS--Fuzz-integrated-success)](https://oss-fuzz.com/testcases?project=inverter-desktop)
 
 Desktop application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
@@ -34,15 +35,24 @@ This project includes comprehensive security measures:
 
 - **Security Policy**: See [SECURITY.md](SECURITY.md) for vulnerability reporting
 - **Fuzzing**: Automated fuzz testing via [FUZZING.md](FUZZING.md)
+- **OSS-Fuzz Integration**: Continuous fuzzing with [OSS_FUZZ_GUIDE.md](OSS_FUZZ_GUIDE.md)
 - **Dependency Auditing**: Regular security scans with `cargo audit`
 - **Status Tracking**: Current security status in [SECURITY_STATUS.md](SECURITY_STATUS.md)
 
 ### Security Features
 
-- Automated fuzz testing with cargo-fuzz and ClusterFuzzLite
-- Regular dependency updates and vulnerability monitoring
-- Secure MQTT connection handling
-- Input validation and sanitization
+- ✅ **OSS-Fuzz Integration**: Continuous automated fuzzing
+- ✅ **3 Fuzz Targets**: JSON parsing, MQTT handling, command parsing
+- ✅ **ClusterFuzzLite**: CI/CD fuzzing integration
+- ✅ **Regular Dependency Updates**: Automated vulnerability monitoring
+- ✅ **Secure MQTT**: Connection handling and input validation
+- ✅ **Security Policy**: Coordinated vulnerability disclosure
+
+### Monitoring
+
+- **OSS-Fuzz Dashboard**: https://oss-fuzz.com/testcases?project=inverter-desktop
+- **Coverage Analysis**: https://introspector.oss-fuzz.com/?project=inverter-desktop
+- **Automated Reports**: Weekly security monitoring via GitHub Actions
 
 ## Development
 
