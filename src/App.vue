@@ -600,7 +600,7 @@ const dailyStatsHtml = computed(() => {
 function initChart() {
   if (!chartEl.value) return
   chart = new uPlot({
-    width: chartEl.value.clientWidth, height: 200,
+    width: chartEl.value.clientWidth, height: 250,
     series: [
       { label: 'Time' },
       { stroke: '#4a90d9', fill: 'rgba(74,144,217,0.05)', label: 'Grid' },
@@ -627,7 +627,7 @@ onMounted(() => {
   connectMqtt()
   nextTick(() => initChart())
   window.addEventListener('resize', () => {
-    if (chart && chartEl.value) chart.setSize({ width: chartEl.value.clientWidth, height: 200 })
+    if (chart && chartEl.value) chart.setSize({ width: chartEl.value.clientWidth, height: 250 })
   })
 })
 

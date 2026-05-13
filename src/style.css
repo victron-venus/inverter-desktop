@@ -21,7 +21,7 @@ body { background: var(--bg-dark); color: var(--text); font-family: 'Segoe UI', 
 .daily-stats .money { color: #4caf50; }
 .daily-stats .dim { color: #555; }
 .daily-stats .detail { color: #888; font-size: 0.7rem; }
-.chart-wrap { height: 200px; }
+.chart-wrap { height: 250px; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 .status-dot.online { background: #4caf50; } .status-dot.offline { background: #f44336; }
 .ws-status { position: fixed; top: 10px; right: 10px; padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; }
