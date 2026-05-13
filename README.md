@@ -6,6 +6,7 @@
 [![GitHub last commit](https://img.shields.io/github/last-commit/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/commits/main)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/victron-venus/inverter-desktop/graphs/commit-activity)
 [![OSS-Fuzz](https://img.shields.io/badge/OSS--Fuzz-integrated-success)](https://oss-fuzz.com/testcases?project=inverter-desktop)
+[![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF%20Best%20Practices-in%20progress-blue)](https://www.bestpractices.dev/)
 
 Desktop application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
@@ -36,6 +37,7 @@ This project includes comprehensive security measures:
 - **Security Policy**: See [SECURITY.md](SECURITY.md) for vulnerability reporting
 - **Fuzzing**: Automated fuzz testing via [FUZZING.md](FUZZING.md)
 - **OSS-Fuzz Integration**: Continuous fuzzing with [OSS_FUZZ_GUIDE.md](OSS_FUZZ_GUIDE.md)
+- **OpenSSF Best Practices**: Badge effort documented in [OPENSSF_BADGE_GUIDE.md](OPENSSF_BADGE_GUIDE.md)
 - **Dependency Auditing**: Regular security scans with `cargo audit`
 - **Status Tracking**: Current security status in [SECURITY_STATUS.md](SECURITY_STATUS.md)
 
@@ -44,6 +46,7 @@ This project includes comprehensive security measures:
 - ✅ **OSS-Fuzz Integration**: Continuous automated fuzzing
 - ✅ **3 Fuzz Targets**: JSON parsing, MQTT handling, command parsing
 - ✅ **ClusterFuzzLite**: CI/CD fuzzing integration
+- ✅ **OpenSSF Best Practices**: Working toward badge certification
 - ✅ **Regular Dependency Updates**: Automated vulnerability monitoring
 - ✅ **Secure MQTT**: Connection handling and input validation
 - ✅ **Security Policy**: Coordinated vulnerability disclosure
@@ -52,6 +55,7 @@ This project includes comprehensive security measures:
 
 - **OSS-Fuzz Dashboard**: https://oss-fuzz.com/testcases?project=inverter-desktop
 - **Coverage Analysis**: https://introspector.oss-fuzz.com/?project=inverter-desktop
+- **OpenSSF Best Practices**: https://www.bestpractices.dev/
 - **Automated Reports**: Weekly security monitoring via GitHub Actions
 
 ## Development
