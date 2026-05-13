@@ -201,29 +201,25 @@ impl MqttClient {
             tokio::task::spawn_blocking(move || {
                 for event in connection.iter() {
                     match event {
-                        Ok(rumqttc::Event::Incoming(packet)) => {
-                            match packet {
-                                rumqttc::Packet::Publish(publish) => {
-                                    let topic = publish.topic;
-                                    let payload = String::from_utf8(publish.payload.to_vec())
-                                        .unwrap_or_else(|_| String::new());
+                        Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
+                            let topic = publish.topic;
+                            let payload = String::from_utf8(publish.payload.to_vec())
+                                .unwrap_or_else(|_| String::new());
 
-                                    if topic == "inverter/state" {
-                                        if let Ok(new_state) = serde_json::from_str::<InverterState>(&payload) {
-                                            *state.lock().unwrap() = new_state;
-                                        }
-                                    } else if topic == "inverter/console" {
-                                        let mut state = state.lock().unwrap();
-                                        let console = state.console.get_or_insert_with(Vec::new);
-                                        console.push(payload);
-                                        if console.len() > 50 {
-                                            console.remove(0);
-                                        }
-                                    }
+                            if topic == "inverter/state" {
+                                if let Ok(new_state) = serde_json::from_str::<InverterState>(&payload) {
+                                    *state.lock().unwrap() = new_state;
                                 }
-                                _ => {}
+                            } else if topic == "inverter/console" {
+                                let mut state = state.lock().unwrap();
+                                let console = state.console.get_or_insert_with(Vec::new);
+                                console.push(payload);
+                                if console.len() > 50 {
+                                    console.remove(0);
+                                }
                             }
                         }
+                        Ok(rumqttc::Event::Incoming(_)) => {}
                         Err(e) => {
                             eprintln!("MQTT error: {:?}", e);
                         }
