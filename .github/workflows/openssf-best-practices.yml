@@ -25,19 +25,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install best-practices-badge
+      - name: Check badge eligibility
+        id: check_eligibility
         run: |
-          pip install best-practices-badge
-
-      - name: Check badge criteria
-        run: |
-          echo "Checking OpenSSF Best Practices criteria..."
-          best-practices-badge check --verbose > badge-report.txt || true
+          # Check if project meets minimum criteria
+          if [ -f "SECURITY.md" ] && [ -f "LICENSE" ] && [ -f "README.md" ]; then
+            echo "eligible=true" >> $GITHUB_OUTPUT
+            echo "✅ Project meets minimum criteria for OpenSSF Best Practices badge"
+          else
+            echo "eligible=false" >> $GITHUB_OUTPUT
+            echo "⚠️  Project needs additional work for OpenSSF Best Practices badge"
+          fi
 
       - name: Generate badge report
         run: |
@@ -88,21 +86,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openssf-badge-report
-          path: |
-            OPENSSF_BADGE_REPORT.md
-            badge-report.txt
-
-      - name: Check badge eligibility
-        id: check_eligibility
-        run: |
-          # Check if project meets minimum criteria
-          if [ -f "SECURITY.md" ] && [ -f "LICENSE" ] && [ -f "README.md" ]; then
-            echo "eligible=true" >> $GITHUB_OUTPUT
-            echo "✅ Project meets minimum criteria for OpenSSF Best Practices badge"
-          else
-            echo "eligible=false" >> $GITHUB_OUTPUT
-            echo "⚠️  Project needs additional work for OpenSSF Best Practices badge"
-          fi
+          path: OPENSSF_BADGE_REPORT.md
 
   create-issues:
     name: Create Issues
@@ -167,22 +151,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install best-practices-badge
-        run: |
-          pip install best-practices-badge
-
-      - name: Submit for evaluation
-        env:
-          BEST_PRACTICES_TOKEN: ${{ secrets.BEST_PRACTICES_TOKEN }}
-        run: |
-          echo "Submitting project for OpenSSF Best Practices badge evaluation..."
-          best-practices-badge submit --token $BEST_PRACTICES_TOKEN || true
-
       - name: Create submission issue
         uses: actions/github-script@v7
         with:
@@ -192,23 +160,35 @@ jobs:
             github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'OpenSSF Best Practices Badge - Submission Complete',
-              body: `## OpenSSF Best Practices Badge Submission
+              title: 'OpenSSF Best Practices Badge - Manual Submission',
+              body: `## OpenSSF Best Practices Badge Manual Submission
 
-            The project has been submitted for OpenSSF Best Practices badge evaluation.
+            The project is ready for OpenSSF Best Practices badge evaluation.
 
             ## Submission Details
 
             - **Date:** ${submissionDate}
             - **Project:** victron-venus/inverter-desktop
-            - **Status:** Submitted for evaluation
+            - **Status:** Ready for manual submission
+
+            ## Manual Submission Required
+
+            Please submit the project manually at:
+            https://www.bestpractices.dev/en/submission
+
+            ## Project Information
+
+            - **Repository:** https://github.com/victron-venus/inverter-desktop
+            - **License:** MIT
+            - **Security Policy:** https://github.com/victron-venus/inverter-desktop/blob/main/SECURITY.md
+            - **Fuzzing:** Comprehensive integration with OSS-Fuzz
 
             ## Next Steps
 
-            1. Monitor evaluation progress
-            2. Address any feedback from reviewers
-            3. Implement requested changes
-            4. Earn the badge
+            1. Visit https://www.bestpractices.dev/en/submission
+            2. Submit the project URL
+            3. Monitor evaluation progress
+            4. Address any feedback from reviewers
 
             ## Resources
 
