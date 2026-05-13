@@ -1,0 +1,8 @@
+# Scorecard configuration for local runs
+# Signing is handled by GitHub Actions, not locally
+repo:
+  url: https://github.com/victron-venus/inverter-desktop
+
+# Disable signing for local runs
+signing:
+  enabled: false
