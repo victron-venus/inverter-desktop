@@ -30,16 +30,6 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
-        env:
-          SCORECARD_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SCORECARD_VCS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SCORECARD_REPOSITORY: ${{ github.repository }}
-          SCORECARD_REF: ${{ github.ref }}
-          SCORECARD_SHA: ${{ github.sha }}
-          SCORECARD_WORKFLOW_REF: ${{ github.workflow_ref }}
-          SCORECARD_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          SCORECARD_RUN_ID: ${{ github.run_id }}
-          SCORECARD_RUN_NUMBER: ${{ github.run_number }}
 
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v4
