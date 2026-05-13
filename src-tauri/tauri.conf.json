@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "inverter-dashboard",
+        "title": "Inverter Desktop v0.1.0",
         "width": 800,
         "height": 600
       }
