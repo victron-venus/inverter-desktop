@@ -33,7 +33,7 @@ fn send_command(
 
 #[tauri::command]
 fn get_config() -> Result<serde_json::Value, String> {
-    let config_paths = vec![
+    let config_paths = [
         std::path::PathBuf::from("config.json"),
         std::path::PathBuf::from("../Resources/config.json"),
     ];
