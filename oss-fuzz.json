@@ -1,0 +1,12 @@
+{
+  "architectures": ["x86_64", "i386"],
+  "auto_ccs": ["4alvit"],
+  "fuzzing_engines": ["libfuzzer", "afl"],
+  "fuzzing_introspection": true,
+  "fuzzing_introspection_url": "https://introspector.oss-fuzz.com",
+  "homepage": "https://github.com/victron-venus/inverter-desktop",
+  "language": "rust",
+  "main_repo": "https://github.com/victron-venus/inverter-desktop",
+  "name": "inverter-desktop",
+  "sanitizers": ["address", "undefined"]
+}
