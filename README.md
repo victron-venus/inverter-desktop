@@ -5,8 +5,11 @@
 [![GitHub forks](https://img.shields.io/github/forks/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/network/members)
 [![GitHub last commit](https://img.shields.io/github/last-commit/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/commits/main)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/victron-venus/inverter-desktop/graphs/commit-activity)
+[![CI](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml)
 [![OSS-Fuzz](https://img.shields.io/badge/OSS--Fuzz-integrated-success)](https://oss-fuzz.com/testcases?project=inverter-desktop)
 [![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF%20Best%20Practices-in%20progress-blue)](https://www.bestpractices.dev/)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Tauri](https://img.shields.io/badge/Tauri-2.0%2B-blue.svg)](https://tauri.app/)
 
 Desktop application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
