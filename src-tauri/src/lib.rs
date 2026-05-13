@@ -1,4 +1,4 @@
-mod mqtt;
+pub mod mqtt;
 
 use mqtt::{MqttClient, InverterState};
 use std::sync::{Arc, Mutex};
