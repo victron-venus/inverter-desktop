@@ -13,9 +13,13 @@ jobs:
   monitor:
     name: Monitor OSS-Fuzz Results
     runs-on: ubuntu-latest
+    outputs:
+      integrated: ${{ steps.check_integration.outputs.integrated }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Check OSS-Fuzz Integration
         id: check_integration
@@ -45,7 +49,7 @@ jobs:
       - name: Generate Report
         if: steps.check_integration.outputs.integrated == 'true'
         run: |
-          cat > OSS_FUZZ_REPORT.md << EOF
+          cat > OSS_FUZZ_REPORT.md << 'EOF'
           # OSS-Fuzz Monitoring Report
 
           **Date:** $(date +%Y-%m-%d)
@@ -80,8 +84,21 @@ jobs:
           name: oss-fuzz-report
           path: OSS_FUZZ_REPORT.md
 
-      - name: Create Issue if Not Integrated
-        if: steps.check_integration.outputs.integrated == 'false'
+  create-issues:
+    name: Create Issues
+    runs-on: ubuntu-latest
+    needs: monitor
+    if: needs.monitor.outputs.integrated == 'false'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Create Integration Issue
         uses: actions/github-script@v7
         with:
           script: |
@@ -93,54 +110,48 @@ jobs:
               labels: ['security', 'enhancement']
             })
 
-  setup-reminder:
-    name: Setup Integration Reminder
-    runs-on: ubuntu-latest
-    if: steps.check_integration.outputs.integrated == 'false'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Create Setup Issue
         uses: actions/github-script@v7
         with:
           script: |
-            const issue = await github.rest.issues.create({
+            const issueBody = `## OSS-Fuzz Integration Required
+
+            The project has fuzzing infrastructure ready but is not yet integrated with OSS-Fuzz.
+
+            ## Next Steps
+
+            1. Follow [OSS_FUZZ_GUIDE.md](OSS_FUZZ_GUIDE.md) for detailed instructions
+            2. Fork the OSS-Fuzz repository
+            3. Submit a pull request with project configuration
+            4. Monitor and respond to review feedback
+
+            ## Files Ready
+
+            - \`oss-fuzz.json\` - Project configuration
+            - \`Dockerfile\` - Build environment
+            - \`build.sh\` - Build script
+            - \`src-tauri/fuzz/\` - Fuzz targets and corpus
+
+            ## Benefits
+
+            - Continuous automated fuzzing
+            - Crash detection and reporting
+            - Security vulnerability detection
+            - Code coverage analysis
+
+            ## Resources
+
+            - [OSS-Fuzz Documentation](https://google.github.io/oss-fuzz/)
+            - [Integration Guide](OSS_FUZZ_GUIDE.md)
+            - [Fuzzing Documentation](FUZZING.md)
+
+            ---
+            This issue can be closed once OSS-Fuzz integration is complete.`;
+
+            github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: 'Complete OSS-Fuzz Integration',
-              body: `## OSS-Fuzz Integration Required
-
-          The project has fuzzing infrastructure ready but is not yet integrated with OSS-Fuzz.
-
-          ## Next Steps
-
-          1. Follow [OSS_FUZZ_GUIDE.md](OSS_FUZZ_GUIDE.md) for detailed instructions
-          2. Fork the OSS-Fuzz repository
-          3. Submit a pull request with project configuration
-          4. Monitor and respond to review feedback
-
-          ## Files Ready
-
-          - \`oss-fuzz.json\` - Project configuration
-          - \`Dockerfile\` - Build environment
-          - \`build.sh\` - Build script
-          - \`src-tauri/fuzz/\` - Fuzz targets and corpus
-
-          ## Benefits
-
-          - Continuous automated fuzzing
-          - Crash detection and reporting
-          - Security vulnerability detection
-          - Code coverage analysis
-
-          ## Resources
-
-          - [OSS-Fuzz Documentation](https://google.github.io/oss-fuzz/)
-          - [Integration Guide](OSS_FUZZ_GUIDE.md)
-          - [Fuzzing Documentation](FUZZING.md)
-
-          ---
-          This issue can be closed once OSS-Fuzz integration is complete.`,
+              body: issueBody,
               labels: ['security', 'good first issue']
             });
