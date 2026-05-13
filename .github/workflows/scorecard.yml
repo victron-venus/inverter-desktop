@@ -11,13 +11,16 @@ on:
 permissions:
   contents: read
   security-events: write
-  id-token: write  # Required for OIDC signing
   actions: read  # Required for workflow verification
 
 jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for OIDC signing
+      contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
