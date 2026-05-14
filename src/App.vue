@@ -215,6 +215,8 @@
     </div>
   </div>
 
+</template>
+
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
