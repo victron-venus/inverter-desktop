@@ -46,7 +46,7 @@ jobs:
           workspaces: ./src-tauri -> target
       - name: cargo check
         working-directory: src-tauri
-        run: cargo check --all-targets --offline
+        run: cargo check --all-targets
       - name: cargo clippy
         working-directory: src-tauri
-        run: cargo clippy --all-targets --offline -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
