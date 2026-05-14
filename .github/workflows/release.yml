@@ -2,14 +2,37 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths:
+      - 'src-tauri/VERSION'
 
 permissions:
   contents: write
 
 jobs:
+  check-version-change:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      new_version: ${{ steps.check.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check if VERSION file changed
+        id: check
+        run: |
+          # Check if VERSION file changed
+          if git diff --name-only HEAD^ HEAD | grep -q "src-tauri/VERSION"; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "new_version=$(cat src-tauri/VERSION)" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
   release:
+    needs: check-version-change
+    if: needs.check-version-change.outputs.should_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -19,7 +42,7 @@ jobs:
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
-            args: ''
+            args:  ''
           - platform: 'windows-latest'
             args: ''
 
