@@ -208,7 +208,7 @@
     <!-- Status -->
     <div class="mt-2 text-center small" style="color:#666">
       <span class="status-dot" :class="state.ha_connected ? 'online' : 'offline'"></span>
-      HA: {{ state.ha_connected ? 'Connected' : 'Disconnected' }}{{ state.ha_direct_connected ? ' · direct' : '' }}
+      HA
       &nbsp;|&nbsp; Uptime: {{ formatUptime(state.uptime || 0) }}
       &nbsp;|&nbsp; MQTT: {{ mqttConnected ? 'OK' : 'Disconnected' }}
       &nbsp;|&nbsp; Desktop v{{ appVersion }} · Control v{{ appVersion }}
