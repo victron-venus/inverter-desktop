@@ -585,7 +585,7 @@ const dailyStatsHtml = computed(() => {
 function initChart() {
   if (!chartEl.value) return
   chart = new uPlot({
-    width: chartEl.value.clientWidth, height: 250,
+    width: chartEl.value.clientWidth, height: 170,
     series: [
       { label: 'Time' },
       { stroke: '#4a90d9', fill: 'rgba(74,144,217,0.05)', label: 'Grid' },
