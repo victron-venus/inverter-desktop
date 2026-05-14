@@ -16,8 +16,13 @@ jobs:
     outputs:
       integrated: ${{ steps.check_integration.outputs.integrated }}
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        with:
+          egress-policy: audit
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
@@ -79,7 +84,7 @@ jobs:
 
       - name: Upload Report
         if: steps.check_integration.outputs.integrated == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oss-fuzz-report
           path: OSS_FUZZ_REPORT.md
@@ -93,13 +98,18 @@ jobs:
       contents: read
       issues: write
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        with:
+          egress-policy: audit
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
       - name: Create Integration Issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             github.rest.issues.create({
@@ -111,7 +121,7 @@ jobs:
             })
 
       - name: Create Setup Issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const issueBody = `## OSS-Fuzz Integration Required

@@ -18,8 +18,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        with:
+          egress-policy: audit
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install system dependencies
         run: |
@@ -27,7 +32,7 @@ jobs:
           sudo apt-get install -y libglib2.0-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
         with:
           profile: minimal
           toolchain: nightly
@@ -54,7 +59,7 @@ jobs:
 
       - name: Upload fuzz results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: clusterfuzzlite-results
           path: src-tauri/fuzz/artifacts/
