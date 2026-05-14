@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'src-tauri/VERSION'
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -74,4 +75,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          release: true
+          tagName: v${{ needs.check-version-change.outputs.new_version }}
+          releaseName: Release v${{ needs.check-version-change.outputs.new_version }}
           args: ${{ matrix.args }}
