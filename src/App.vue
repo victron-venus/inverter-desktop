@@ -221,7 +221,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import uPlot from 'uplot'
-import appVersion from '../package.json' with { type: 'json' }
+import appVersion from '../src-tauri/VERSION?raw'
 import fs from 'fs'
 
 interface InverterState {
@@ -415,26 +415,8 @@ const buttonStates = computed(() => {
   const states: Record<string, string> = {}
   homeButtons.value.forEach(btn => {
     const stateKey = btn.state_key || 'home_' + btn.id
-
-    // Try multiple possible keys
-    const possibleKeys = [
-      stateKey,
-      btn.id,
-      btn.entity,
-      btn.entity?.split('.').pop(), // Extract last part after dot
-      'input_boolean.' + btn.id,
-      'switch.' + btn.id
-    ]
-
-    let isOn = false
-    for (const key of possibleKeys) {
-      if (state.value.booleans?.[key]) {
-        isOn = true
-        break
-      }
-    }
-
-    states[btn.id] = isOn ? 'on' : 'off'
+    const val = (state.value as any)[stateKey]
+    states[btn.id] = val ? 'on' : 'off'
   })
   return states
 })
