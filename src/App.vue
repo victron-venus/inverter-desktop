@@ -221,8 +221,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import uPlot from 'uplot'
-import appVersion from '../src-tauri/VERSION?raw'
-import fs from 'fs'
+import { getVersion } from '@tauri-apps/api/app'
 
 interface InverterState {
   gt?: number
@@ -295,6 +294,7 @@ const mqttConnected = ref(false)
 const chartEl = ref<HTMLElement | null>(null)
 const isDark = ref(localStorage.getItem('theme') !== 'light')
 const appConfig = ref<any>(null)
+const appVersion = ref('')
 
 let chart: uPlot | null = null
 let pollInterval: number | null = null
@@ -608,7 +608,13 @@ function updateChart() {
   chart.setData([historyData.timestamps, historyData.grid, historyData.solar, historyData.battery, historyData.setpoint])
 }
 
-onMounted(() => {
+onMounted(async () => {
+  try {
+    appVersion.value = await getVersion()
+  } catch (e) {
+    console.error('Failed to get app version:', e)
+    appVersion.value = 'unknown'
+  }
   connectMqtt()
   nextTick(() => initChart())
   window.addEventListener('resize', () => {
