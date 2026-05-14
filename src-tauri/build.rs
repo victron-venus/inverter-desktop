@@ -1,10 +1,9 @@
 use std::fs;
-use std::path::Path;
 use std::env;
 
 fn main() {
     // Read VERSION file
-    let version = fs::read_to_string("VERSION")
+    let version = fs::read_to_string("../VERSION")
         .expect("Failed to read VERSION file")
         .trim()
         .to_string();
@@ -14,6 +13,9 @@ fn main() {
 
     // Also set the version from Cargo.toml for consistency
     println!("cargo:rustc-env=CARGO_PKG_VERSION={}", version);
+
+    // Set environment variable for Tauri CLI subprocess
+    env::set_var("APP_VERSION", version);
 
     tauri_build::build()
 }
