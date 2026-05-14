@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Inverter Dashboard",
-  "version": "1.0.1",
   "identifier": "com.alvit.inverter-dashboard",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -13,7 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Inverter Desktop v1.0.1",
+        "title": "Inverter Dashboard",
         "width": 800,
         "height": 1000
       }

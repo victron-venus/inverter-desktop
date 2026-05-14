@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src-tauri/VERSION'
+      - 'src-tauri/Cargo.toml'
   workflow_dispatch: {}
 
 permissions:
@@ -25,13 +25,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 2
-      - name: Check if VERSION file changed
+      - name: Check if Cargo.toml changed and get version
         id: check
         run: |
-          # Check if VERSION file changed
-          if git diff --name-only HEAD^ HEAD | grep -q "src-tauri/VERSION"; then
+          if git diff --name-only HEAD^ HEAD | grep -q "src-tauri/Cargo.toml"; then
+            version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
             echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "new_version=$(cat src-tauri/VERSION)" >> $GITHUB_OUTPUT
+            echo "new_version=$version" >> $GITHUB_OUTPUT
           else
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
@@ -84,6 +84,7 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
         with:
           release: true
           tagName: v${{ needs.check-version-change.outputs.new_version }}
