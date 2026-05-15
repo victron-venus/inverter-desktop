@@ -9,7 +9,7 @@
     <div class="card mb-2">
       <div class="card-body py-1 px-2">
         <div class="d-flex flex-wrap gap-1 align-items-center">
-          <div class="toggle-btn" :class="state.dry_run ? 'on' : 'off'" @click="send('dry_run')">
+          <div class="toggle-btn" :class="state.booleans?.dry_run ? 'on' : 'off'" @click="send('dry_run')">
             <i class="fas fa-flask me-1"></i>DRY
           </div>
           <div class="toggle-btn" :class="essClass" @click="send('ess_mode')">
@@ -17,7 +17,7 @@
           </div>
           <div class="vr mx-1" style="border-left:1px solid #ccc;height:16px;"></div>
           <div v-for="toggle in headerToggles" :key="toggle.id"
-               class="toggle-btn" :class="headerToggleStates[toggle.id]"
+               class="toggle-btn" :class="state.booleans?.[toggle.id] ? 'on' : 'off'"
                @click="send('toggle', {entity: toggle.entity})">
             {{ toggle.label }}
           </div>
@@ -421,30 +421,6 @@ const buttonStates = computed(() => {
   return states
 })
 
-const headerToggleStates = computed(() => {
-  const states: Record<string, string> = {}
-  headerToggles.value.forEach(toggle => {
-    // Try multiple possible keys
-    const possibleKeys = [
-      toggle.id,
-      toggle.entity,
-      toggle.entity?.split('.').pop(), // Extract last part after dot
-      'input_boolean.' + toggle.id,
-      'switch.' + toggle.id
-    ]
-
-    let isOn = false
-    for (const key of possibleKeys) {
-      if (state.value.booleans?.[key]) {
-        isOn = true
-        break
-      }
-    }
-
-    states[toggle.id] = isOn ? 'on' : 'off'
-  })
-  return states
-})
 
 const essClass = computed(() => {
   const m = state.value.ess_mode
