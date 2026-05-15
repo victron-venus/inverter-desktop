@@ -2,7 +2,7 @@
 name = "inverter-dashboard"
 version = "1.0.7"
 description = "Desktop application for monitoring Victron inverter systems via MQTT"
-authors = ["4alvit <4alvit@users.noreplygithub.com>"]
+authors = ["4alvit <4alvit@users.noreply.github.com>"]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/victron-venus/inverter-desktop"
