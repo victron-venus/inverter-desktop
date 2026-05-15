@@ -294,6 +294,7 @@ const state = ref<InverterState>({
 const mqttConnected = ref(false)
 const chartEl = ref<HTMLElement | null>(null)
 const isDark = ref(localStorage.getItem('theme') !== 'light')
+const appConfig = ref<any>(null)
 const appVersion = ref('')
 
 let chart: uPlot | null = null
