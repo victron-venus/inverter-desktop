@@ -90,6 +90,9 @@ jobs:
             librsvg2-dev \
             libssl-dev
 
+      - name: Install AppIndicator
+        if: matrix.platform == 'ubuntu-22.04'
+        run: sudo apt-get install -y libappindicator3-dev
       - name: Build app
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
