@@ -145,7 +145,6 @@ This project is part of a Victron Venus OS integration suite:
 | [inverter-control](https://github.com/victron-venus/inverter-control) | ESS external control with web dashboard |
 | [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) | Python/FastAPI dashboard via MQTT (`alvit/inverter-dashboard` on Docker Hub) |
 | **inverter-desktop** (this) | Tauri desktop application |
-| [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go) | Go rewrite: same UI and MQTT workflow; binaries + Docker image `alvit/inverter-dashboard-go` |
 | [dbus-mqtt-battery](https://github.com/victron-venus/dbus-mqtt-battery) | MQTT to D-Bus bridge for BMS integration |
 | [dbus-tasmota-pv](https://github.com/victron-venus/dbus-tasmota-pv) | Tasmota smart plug as PV inverter on D-Bus |
 | [esphome-jbd-bms-mqtt](https://github.com/victron-venus/esphome-jbd-bms-mqtt) | ESP32 Bluetooth monitor for JBD BMS |
