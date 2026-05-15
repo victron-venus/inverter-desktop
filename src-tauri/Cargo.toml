@@ -1,8 +1,8 @@
 [package]
 name = "inverter-dashboard"
-version = "1.0.5"
+version = "1.0.6"
 description = "Desktop application for monitoring Victron inverter systems via MQTT"
-authors = ["4alvit <4alvit@users.noreply.github.com>"]
+authors = ["4alvit <4alvit@users.noreplygithub.com>"]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/victron-venus/inverter-desktop"
