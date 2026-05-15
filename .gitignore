@@ -45,3 +45,5 @@ src-tauri/fuzz/corpus/*/timeout-*
 security-reports/
 OSS_FUZZ_REPORT.md
 oss-fuzz-stats.html
+
+dependabot.sh
