@@ -222,6 +222,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import uPlot from 'uplot'
 import { getVersion } from '@tauri-apps/api/app'
+import { getAppConfig, defaultConfig } from './config'
 
 interface InverterState {
   gt?: number
@@ -293,7 +294,6 @@ const state = ref<InverterState>({
 const mqttConnected = ref(false)
 const chartEl = ref<HTMLElement | null>(null)
 const isDark = ref(localStorage.getItem('theme') !== 'light')
-const appConfig = ref<any>(null)
 const appVersion = ref('')
 
 let chart: uPlot | null = null
@@ -310,19 +310,9 @@ if (!isDark.value) document.body.classList.add('light')
 
 async function connectMqtt() {
   try {
-    let mqttHost = '192.168.160.150'
-    let mqttPort = 1883
-
-    try {
-      const config = await invoke<any>('get_config')
-      appConfig.value = config
-      mqttHost = config.mqtt_host || mqttHost
-      mqttPort = config.mqtt_port || mqttPort
-    } catch (e) {
-      console.warn('Failed to load config, using defaults')
-    }
-
-    await invoke('connect_mqtt', { host: mqttHost, port: mqttPort })
+    const config = await getAppConfig()
+    appConfig.value = config
+    await invoke('connect_mqtt', { host: config.mqtt_host, port: config.mqtt_port })
     mqttConnected.value = true
     startPolling()
   } catch (e) {
@@ -336,12 +326,27 @@ function startPolling() {
   pollInterval = window.setInterval(async () => {
     try {
       const newState = await invoke<InverterState>('get_state')
-      state.value = newState
-
+      // Convert boolean strings to actual booleans
+      if (newState.booleans) {
+        Object.keys(newState.booleans).forEach(key => {
+          const val = newState.booleans[key]
+          if (typeof val === 'string') {
+            newState.booleans[key] = val === 'true' || val === '1'
+          }
+        })
+      }
+      // Convert specific boolean fields that might come as strings
+      const boolFields = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run'];
+      boolFields.forEach(field => {
+        if (typeof newState[field] === 'string') {
+          newState[field] = newState[field] === 'true' || newState[field] === '1';
+        }
+      })
       // Debug: log booleans to see what keys are available
       if (newState.booleans) {
         console.log('Booleans from HA:', Object.keys(newState.booleans))
       }
+      state.value = newState
 
       if (newState.gt !== undefined) {
         const now = Date.now() / 1000
@@ -491,7 +496,7 @@ const headerToggles = computed(() => {
     return uiConfig.header_toggles
   }
 
-  const config = appConfig.value
+  const config = appConfig.value || defaultConfig
   if (config && config.ha_boolean_entities) {
     return Object.entries(config.ha_boolean_entities).map(([id, entity]) => ({
       id,
