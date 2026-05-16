@@ -101,9 +101,19 @@ To avoid Gatekeeper warnings, notarize the app. Add additional secrets:
 Then update the `Build app` step to include notarization:
 
 ```yaml
-with:
-  release: true
-  notarize: true
+- name: Build app
+  uses: tauri-apps/tauri-action@v0
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+    APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+    APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+    APPLE_ID: ${{ secrets.APPLE_ID }}
+    APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+    APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+  with:
+    release: true
+    notarize: true
 ```
 
 `tauri-action` will submit the app to Apple for notarization and staple the ticket.
