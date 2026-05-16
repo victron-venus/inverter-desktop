@@ -5,5 +5,5 @@ import VueAwesomeButton from 'vue-awesome-button'
 import 'vue-awesome-button/dist/style.css'
 
 const app = createApp(App)
-app.use(VueAwesomeButton)
+app.component('VueAwesomeButton', VueAwesomeButton)
 app.mount('#app')
