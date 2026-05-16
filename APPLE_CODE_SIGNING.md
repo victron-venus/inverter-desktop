@@ -95,7 +95,7 @@ Commit and push changes.
 
 To avoid Gatekeeper warnings, notarize the app. Add additional secrets:
 
-- `APPLE_KEYCHAIN_PASSWORD` – lock screen password for the runner's keychain (your macOS password)
+- `APPLE_KEYCHAIN_PASSWORD` – a strong randomly generated password used only for the temporary CI keychain (do **not** use your personal macOS password)
 - `APPLE_NOTARIZE` – set to `true`
 
 Then update the `Build app` step to include notarization:
