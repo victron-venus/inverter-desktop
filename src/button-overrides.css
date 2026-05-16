@@ -1,0 +1,98 @@
+/* Vue Awesome Button overrides - small, flat, harmonious */
+button.aws-btn {
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: inherit !important;
+  font: inherit !important;
+  cursor: pointer !important;
+  height: 28px;
+  min-height: 28px;
+  font-size: 0.6875rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transform: none !important;
+  width: auto !important;
+  min-width: 32px;
+}
+button.aws-btn .aws-btn__wrapper,
+button.aws-btn .aws-btn__content {
+  transform: none !important;
+  backface-visibility: initial;
+  transform-style: flat;
+}
+button.aws-btn .aws-btn__wrapper::before,
+button.aws-btn .aws-btn__wrapper::after,
+button.aws-btn::before {
+  display: none !important;
+}
+button.aws-btn .aws-btn__content {
+  width: 100%;
+  height: 100%;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+button.aws-btn--small {
+  height: 24px;
+  min-height: 24px;
+  font-size: 0.625rem;
+}
+button.aws-btn--small .aws-btn__content {
+  padding: 0 6px;
+  min-width: 40px;
+}
+button.aws-btn--large {
+  height: 32px;
+  font-size: 0.75rem;
+}
+button.aws-btn--large .aws-btn__content {
+  padding: 0 10px;
+}
+button.aws-btn--success .aws-btn__content {
+  background-color: var(--battery);
+  color: #fff;
+  border: none;
+}
+button.aws-btn--success:hover .aws-btn__content {
+  background-color: #6bc11f;
+}
+button.aws-btn--success:active .aws-btn__content,
+button.aws-btn--success.aws-btn--active .aws-btn__content {
+  background-color: #5aad17;
+}
+button.aws-btn--dark .aws-btn__content {
+  background-color: var(--bg-card);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+button.aws-btn--dark:hover .aws-btn__content {
+  background-color: var(--border);
+  color: var(--text);
+}
+button.aws-btn--dark:active .aws-btn__content,
+button.aws-btn--dark.aws-btn--active .aws-btn__content {
+  background-color: #444;
+}
+button.aws-btn--disabled,
+button.aws-btn--disabled .aws-btn__content {
+  background-color: var(--border) !important;
+  color: var(--text-dim) !important;
+  cursor: not-allowed !important;
+  opacity: 0.7;
+}
+body.light button.aws-btn--dark .aws-btn__content {
+  background-color: #e0e0e0;
+  border-color: #ccc;
+  color: #555;
+}
+body.light button.aws-btn--dark:hover .aws-btn__content {
+  background-color: #d0d0d0;
+}
