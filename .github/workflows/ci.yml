@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - run: npm ci || npm install
       - name: Build frontend
         run: npm run build
 

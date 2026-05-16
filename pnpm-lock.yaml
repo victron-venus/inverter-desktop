@@ -23,6 +23,9 @@ importers:
       vue:
         specifier: ^3.4.21
         version: 3.5.34(typescript@6.0.3)
+      vue-awesome-button:
+        specifier: ^0.1.0
+        version: 0.1.0(vue@3.5.34(typescript@6.0.3))
       vue-echarts:
         specifier: ^8.0.1
         version: 8.0.1(echarts@6.0.0)(vue@3.5.34(typescript@6.0.3))
@@ -493,6 +496,11 @@ packages:
       yaml:
         optional: true
 
+  vue-awesome-button@0.1.0:
+    resolution: {integrity: sha512-T1GskmL2BCU7VqNPmMGr0dFgs+e5t5BO9cXOLBwwD+3xoyYj6ofmUIGNHWlQVsOjHalGLZ73TQg10Jx1H34+cw==}
+    peerDependencies:
+      vue: '>=3.0.0'
+
   vue-echarts@8.0.1:
     resolution: {integrity: sha512-23rJTFLu1OUEGRWjJGmdGt8fP+8+ja1gVgzMYPIPaHWpXegcO1viIAaeu2H4QHESlVeHzUAHIxKXGrwjsyXAaA==}
     peerDependencies:
@@ -852,6 +860,10 @@ snapshots:
       tinyglobby: 0.2.16
     optionalDependencies:
       fsevents: 2.3.3
+
+  vue-awesome-button@0.1.0(vue@3.5.34(typescript@6.0.3)):
+    dependencies:
+      vue: 3.5.34(typescript@6.0.3)
 
   vue-echarts@8.0.1(echarts@6.0.0)(vue@3.5.34(typescript@6.0.3)):
     dependencies:
