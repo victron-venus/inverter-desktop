@@ -1,5 +1,8 @@
 import { createApp } from 'vue'
 import './style.css'
 import App from './App.vue'
+import { AwesomeButton } from 'vue-awesome-button'
 
-createApp(App).mount('#app')
+const app = createApp(App)
+app.component('VueAwesomeButton', AwesomeButton)
+app.mount('#app')

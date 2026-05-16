@@ -15,6 +15,7 @@
     "echarts": "^6.0.0",
     "uplot": "^1.6.30",
     "vue": "^3.4.21",
+    "vue-awesome-button": "^0.1.0",
     "vue-echarts": "^8.0.1"
   },
   "devDependencies": {
