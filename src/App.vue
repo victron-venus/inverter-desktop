@@ -9,18 +9,30 @@
     <div class="card mb-2">
       <div class="card-body py-1 px-2">
         <div class="d-flex flex-wrap gap-1 align-items-center">
-          <div class="toggle-btn" :class="state.dry_run ? 'on' : 'off'" @click="send('dry_run')">
+          <VueAwesomeButton
+            :type="state.dry_run ? 'success' : 'dark'"
+            size="small"
+            @click="send('dry_run')"
+          >
             <i class="fas fa-flask me-1"></i>DRY
-          </div>
-          <div class="toggle-btn" :class="essClass" @click="send('ess_mode')">
+          </VueAwesomeButton>
+          <VueAwesomeButton
+            :type="essClass === 'on' ? 'success' : 'dark'"
+            size="small"
+            @click="send('ess_mode')"
+          >
             <i class="fas fa-bolt me-1"></i>{{ essText }}
-          </div>
+          </VueAwesomeButton>
           <div class="vr mx-1" style="border-left:1px solid #ccc;height:16px;"></div>
-          <div v-for="toggle in headerToggles" :key="toggle.id"
-               class="toggle-btn" :class="state.booleans?.[toggle.id] === true ? 'on' : 'off'"
-               @click="send('toggle', {entity: toggle.entity})">
+          <VueAwesomeButton
+            v-for="toggle in headerToggles"
+            :key="toggle.id"
+            :type="state.booleans?.[toggle.id] === true ? 'success' : 'dark'"
+            size="small"
+            @click="send('toggle', {entity: toggle.entity})"
+          >
             {{ toggle.label }}
-          </div>
+          </VueAwesomeButton>
           <div class="ms-auto d-flex gap-1">
             <div class="toggle-btn" @click="toggleTheme" id="theme-btn">
               <i class="fas" :class="isDark ? 'fa-sun' : 'fa-moon'"></i>
@@ -103,8 +115,20 @@
             <div class="d-flex justify-content-between align-items-center">
               <div class="fw-bold" :style="{color: state.water_valve ? '#f44336' : '#4caf50'}">{{ state.water_level || 0 }} cm</div>
               <div class="d-flex gap-1">
-                <div class="toggle-btn" :class="state.pump_switch ? 'on' : 'off'" @click="send('toggle', {entity: pumpSwitchEntity})">PUMP</div>
-                <div class="toggle-btn" :class="state.water_valve ? 'on' : 'off'" @click="send('toggle', {entity: waterValveEntity})">VALVE</div>
+                <VueAwesomeButton
+                  :type="state.pump_switch ? 'success' : 'dark'"
+                  size="small"
+                  @click="send('toggle', {entity: pumpSwitchEntity})"
+                >
+                  PUMP
+                </VueAwesomeButton>
+                <VueAwesomeButton
+                  :type="state.water_valve ? 'success' : 'dark'"
+                  size="small"
+                  @click="send('toggle', {entity: waterValveEntity})"
+                >
+                  VALVE
+                </VueAwesomeButton>
               </div>
             </div>
           </div>
@@ -125,7 +149,13 @@
           <div class="card-body py-1">
             <div class="d-flex justify-content-between align-items-center">
               <div class="fw-bold">{{ formatDuration(state.washer_time) }}</div>
-              <div class="toggle-btn" :class="state.washer_power ? 'on' : 'off'">PWR</div>
+              <VueAwesomeButton
+                :type="state.washer_power ? 'success' : 'dark'"
+                size="small"
+                disabled
+              >
+                PWR
+              </VueAwesomeButton>
             </div>
           </div>
         </div>
@@ -135,7 +165,13 @@
           <div class="card-body py-1">
             <div class="d-flex justify-content-between align-items-center">
               <div class="fw-bold">{{ formatDuration(state.dryer_time) }}</div>
-              <div class="toggle-btn" :class="state.dryer_power ? 'on' : 'off'">PWR</div>
+              <VueAwesomeButton
+                :type="state.dryer_power ? 'success' : 'dark'"
+                size="small"
+                disabled
+              >
+                PWR
+              </VueAwesomeButton>
             </div>
           </div>
         </div>
