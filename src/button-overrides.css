@@ -1,37 +1,37 @@
-/* Custom 3D White Buttons for Vuetify v-btn outlined */
+/* Slim 3D Light Buttons for Vuetify v-btn outlined */
 
-/* Base 3D white button style */
+/* Base 3D light button style */
 .v-btn.outlined.custom-3d {
   background-color: white !important;
-  border-color: #ddd !important;
-  color: #333 !important;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.8) !important;
+  border-color: #eee !important;
+  color: #555 !important;
+  box-shadow: 0 2px 3px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.8) !important;
   transition: all 0.15s ease;
   position: relative;
-  border-width: 2px !important;
+  border-width: 1px !important;
   border-style: solid !important;
   font-weight: 500;
   text-transform: none;
   letter-spacing: normal;
-  min-width: 12px;
-  padding: 0 6px;
-  height: 12px;
-  font-size: 10px;
-  border-radius: 8px;
-  background-image: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(255,255,255,0.95) 50%, rgba(245,245,245,1) 100%) !important;
+  min-width: 18px;
+  padding: 0 4px;
+  height: 18px;
+  font-size: 11px;
+  border-radius: 4px;
+  background-image: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(255,255,255,0.95) 50%, rgba(248,248,248,1) 100%) !important;
 }
 
 .v-btn.outlined.custom-3d:hover {
-  background-color: #f5f5f5 !important;
-  border-color: #ccc !important;
+  background-color: #fafafa !important;
+  border-color: #ddd !important;
   transform: translateY(-1px);
-  box-shadow: 0 6px 8px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.9) !important;
+  box-shadow: 0 3px 4px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.9) !important;
 }
 
 .v-btn.outlined.custom-3d:active,
 .v-btn.outlined.custom-3d:focus {
-  transform: translateY(2px) !important;
-  box-shadow: 0 2px 3px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.6) !important;
+  transform: translateY(1px) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.7) !important;
   background-color: #fff !important;
 }
 
@@ -39,28 +39,28 @@
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
-  box-shadow: 0 2px 3px rgba(0,0,0,0.05) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
 }
 
 /* Success color variant */
 .v-btn.outlined.custom-3d[color="success"] {
-  color: #4CAF50 !important;
-  border-color: #4CAF50 !important;
-  background: linear-gradient(180deg, #fff 0%, #fff 50%, #f9f9f9 100%) !important;
+  color: #8bc34a !important;
+  border-color: #8bc34a !important;
+  background: linear-gradient(180deg, #fff 0%, #fff 50%, #f9fff9 100%) !important;
 }
 
 .v-btn.outlined.custom-3d[color="success"]:hover {
-  background: #f0f9f0 !important;
-  border-color: #43A047 !important;
+  background: #f0fff0 !important;
+  border-color: #7cb342 !important;
 }
 
-/* Dark grey variant */
+/* Light grey variant */
 .v-btn.outlined.custom-3d[color="grey-darken-3"] {
-  color: #424242 !important;
-  border-color: #424242 !important;
+  color: #757575 !important;
+  border-color: #757575 !important;
 }
 
 .v-btn.outlined.custom-3d[color="grey-darken-3"]:hover {
-  background: #f5f5f5 !important;
-  border-color: #303030 !important;
+  background: #fafafa !important;
+  border-color: #616161 !important;
 }
