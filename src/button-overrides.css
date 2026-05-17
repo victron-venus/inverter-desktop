@@ -1,98 +1,65 @@
-/* Vue Awesome Button overrides - small, flat, harmonious */
-button.aws-btn {
-  background: transparent !important;
-  padding: 0 !important;
-  border: none !important;
-  box-shadow: none !important;
-  color: inherit !important;
-  font: inherit !important;
-  cursor: pointer !important;
-  height: 28px;
-  min-height: 28px;
-  font-size: 0.6875rem;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transform: none !important;
-  width: auto !important;
-  min-width: 32px;
+/* Custom 3D White Buttons for Vuetify v-btn outlined */
+
+/* Base 3D white button style */
+.v-btn.outlined.custom-3d {
+  background-color: white !important;
+  border-color: #ddd !important;
+  color: #333 !important;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.8) !important;
+  transition: all 0.15s ease;
+  position: relative;
+  border-width: 2px !important;
+  border-style: solid !important;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  min-width: 36px;
+  padding: 0 12px;
+  height: 36px;
+  border-radius: 8px;
+  background-image: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(255,255,255,0.95) 50%, rgba(245,245,245,1) 100%) !important;
 }
-button.aws-btn .aws-btn__wrapper,
-button.aws-btn .aws-btn__content {
-  transform: none !important;
-  backface-visibility: initial;
-  transform-style: flat;
+
+.v-btn.outlined.custom-3d:hover {
+  background-color: #f5f5f5 !important;
+  border-color: #ccc !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 8px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.9) !important;
 }
-button.aws-btn .aws-btn__wrapper::before,
-button.aws-btn .aws-btn__wrapper::after,
-button.aws-btn::before {
-  display: none !important;
+
+.v-btn.outlined.custom-3d:active,
+.v-btn.outlined.custom-3d:focus {
+  transform: translateY(2px) !important;
+  box-shadow: 0 2px 3px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.6) !important;
+  background-color: #fff !important;
 }
-button.aws-btn .aws-btn__content {
-  width: 100%;
-  height: 100%;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: inherit;
-  transition: background-color 0.15s ease, color 0.15s ease;
+
+.v-btn.outlined.custom-3d:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: 0 2px 3px rgba(0,0,0,0.05) !important;
 }
-button.aws-btn--small {
-  height: 24px;
-  min-height: 24px;
-  font-size: 0.625rem;
+
+/* Success color variant */
+.v-btn.outlined.custom-3d[color="success"] {
+  color: #4CAF50 !important;
+  border-color: #4CAF50 !important;
+  background: linear-gradient(180deg, #fff 0%, #fff 50%, #f9f9f9 100%) !important;
 }
-button.aws-btn--small .aws-btn__content {
-  padding: 0 6px;
-  min-width: 40px;
+
+.v-btn.outlined.custom-3d[color="success"]:hover {
+  background: #f0f9f0 !important;
+  border-color: #43A047 !important;
 }
-button.aws-btn--large {
-  height: 32px;
-  font-size: 0.75rem;
+
+/* Dark grey variant */
+.v-btn.outlined.custom-3d[color="grey-darken-3"] {
+  color: #424242 !important;
+  border-color: #424242 !important;
 }
-button.aws-btn--large .aws-btn__content {
-  padding: 0 10px;
-}
-button.aws-btn--success .aws-btn__content {
-  background-color: var(--battery);
-  color: #fff;
-  border: none;
-}
-button.aws-btn--success:hover .aws-btn__content {
-  background-color: #6bc11f;
-}
-button.aws-btn--success:active .aws-btn__content,
-button.aws-btn--success.aws-btn--active .aws-btn__content {
-  background-color: #5aad17;
-}
-button.aws-btn--dark .aws-btn__content {
-  background-color: var(--bg-card);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-}
-button.aws-btn--dark:hover .aws-btn__content {
-  background-color: var(--border);
-  color: var(--text);
-}
-button.aws-btn--dark:active .aws-btn__content,
-button.aws-btn--dark.aws-btn--active .aws-btn__content {
-  background-color: #444;
-}
-button.aws-btn--disabled,
-button.aws-btn--disabled .aws-btn__content {
-  background-color: var(--border) !important;
-  color: var(--text-dim) !important;
-  cursor: not-allowed !important;
-  opacity: 0.7;
-}
-body.light button.aws-btn--dark .aws-btn__content {
-  background-color: #e0e0e0;
-  border-color: #ccc;
-  color: #555;
-}
-body.light button.aws-btn--dark:hover .aws-btn__content {
-  background-color: #d0d0d0;
+
+.v-btn.outlined.custom-3d[color="grey-darken-3"]:hover {
+  background: #f5f5f5 !important;
+  border-color: #303030 !important;
 }
