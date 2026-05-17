@@ -9,34 +9,47 @@
     <div class="card mb-2">
       <div class="card-body py-1 px-2">
         <div class="d-flex flex-wrap gap-1 align-items-center">
-          <VueAwesomeButton
-            :type="state.dry_run ? 'success' : 'dark'"
+          <v-btn
+            outlined
+            class="custom-3d"
+            :color="state.dry_run ? 'success' : 'grey-darken-3'"
             size="small"
             @click="send('dry_run')"
           >
             <i class="fas fa-flask me-1"></i>DRY
-          </VueAwesomeButton>
-          <VueAwesomeButton
-            :type="essClass === 'on' ? 'success' : 'dark'"
+          </v-btn>
+          <v-btn
+            outlined
+            class="custom-3d"
+            :color="essClass === 'on' ? 'success' : 'grey-darken-3'"
             size="small"
             @click="send('ess_mode')"
           >
             <i class="fas fa-bolt me-1"></i>{{ essText }}
-          </VueAwesomeButton>
+          </v-btn>
           <div class="vr mx-1" style="border-left:1px solid #ccc;height:16px;"></div>
-          <VueAwesomeButton
+          <v-btn
             v-for="toggle in headerToggles"
             :key="toggle.id"
-            :type="state.booleans?.[toggle.id] === true ? 'success' : 'dark'"
+            outlined
+            class="custom-3d"
+            :color="state.booleans?.[toggle.id] === true ? 'success' : 'grey-darken-3'"
             size="small"
             @click="send('toggle', {entity: toggle.entity})"
           >
             {{ toggle.label }}
-          </VueAwesomeButton>
+          </v-btn>
           <div class="ms-auto d-flex gap-1">
-            <div class="toggle-btn" @click="toggleTheme" id="theme-btn">
+            <v-btn
+              outlined
+              class="custom-3d"
+              icon
+              size="small"
+              @click="toggleTheme"
+              id="theme-btn"
+            >
               <i class="fas" :class="isDark ? 'fa-sun' : 'fa-moon'"></i>
-            </div>
+            </v-btn>
           </div>
         </div>
       </div>
@@ -115,20 +128,24 @@
             <div class="d-flex justify-content-between align-items-center">
               <div class="fw-bold" :style="{color: state.water_valve ? '#f44336' : '#4caf50'}">{{ state.water_level || 0 }} cm</div>
               <div class="d-flex gap-1">
-                <VueAwesomeButton
-                  :type="state.pump_switch ? 'success' : 'dark'"
+                <v-btn
+                  outlined
+                  class="custom-3d"
+                  :color="state.pump_switch ? 'success' : 'grey-darken-3'"
                   size="small"
                   @click="send('toggle', {entity: pumpSwitchEntity})"
                 >
                   PUMP
-                </VueAwesomeButton>
-                <VueAwesomeButton
-                  :type="state.water_valve ? 'success' : 'dark'"
+                </v-btn>
+                <v-btn
+                  outlined
+                  class="custom-3d"
+                  :color="state.water_valve ? 'success' : 'grey-darken-3'"
                   size="small"
                   @click="send('toggle', {entity: waterValveEntity})"
                 >
                   VALVE
-                </VueAwesomeButton>
+                </v-btn>
               </div>
             </div>
           </div>
@@ -149,13 +166,15 @@
           <div class="card-body py-1">
             <div class="d-flex justify-content-between align-items-center">
               <div class="fw-bold">{{ formatDuration(state.washer_time) }}</div>
-              <VueAwesomeButton
-                :type="state.washer_power ? 'success' : 'dark'"
+              <v-btn
+                outlined
+                class="custom-3d"
+                :color="state.washer_power ? 'success' : 'grey-darken-3'"
                 size="small"
                 disabled
               >
                 PWR
-              </VueAwesomeButton>
+              </v-btn>
             </div>
           </div>
         </div>
@@ -165,13 +184,15 @@
           <div class="card-body py-1">
             <div class="d-flex justify-content-between align-items-center">
               <div class="fw-bold">{{ formatDuration(state.dryer_time) }}</div>
-              <VueAwesomeButton
-                :type="state.dryer_power ? 'success' : 'dark'"
+              <v-btn
+                outlined
+                class="custom-3d"
+                :color="state.dryer_power ? 'success' : 'grey-darken-3'"
                 size="small"
                 disabled
               >
                 PWR
-              </VueAwesomeButton>
+              </v-btn>
             </div>
           </div>
         </div>
@@ -180,9 +201,17 @@
           <div class="card-header"><i class="fas fa-home me-2"></i>Home</div>
           <div class="card-body py-1">
             <div class="d-flex gap-1 flex-wrap">
-              <div v-for="btn in homeButtons" :key="btn.id" class="toggle-btn"
-                   :class="buttonStates[btn.id]"
-                   @click="send('toggle', {entity: btn.entity})">{{ btn.label }}</div>
+              <v-btn
+                v-for="btn in homeButtons"
+                :key="btn.id"
+                outlined
+                class="custom-3d"
+                :color="buttonStates[btn.id] === 'on' ? 'success' : 'grey-darken-3'"
+                size="small"
+                @click="send('toggle', {entity: btn.entity})"
+              >
+                {{ btn.label }}
+              </v-btn>
             </div>
           </div>
         </div>
