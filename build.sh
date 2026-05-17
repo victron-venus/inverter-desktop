@@ -13,3 +13,4 @@ pnpm tauri build
 echo "===> Build complete!"
 echo "Frontend artifacts: dist/"
 echo "Tauri installers: src-tauri/target/release/bundle/"
+open ~/cursor/dbus-btbattery/inverter-desktop/src-tauri/target/release/bundle/dmg/

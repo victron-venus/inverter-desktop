@@ -12,7 +12,7 @@
           <v-btn
             outlined
             class="custom-3d"
-            :color="state.dry_run ? 'success' : 'grey-darken-3'"
+            :class="state.dry_run ? 'state-on' : 'state-off'"
             size="small"
             @click="send('dry_run')"
           >
@@ -21,7 +21,7 @@
           <v-btn
             outlined
             class="custom-3d"
-            :color="essClass === 'on' ? 'success' : 'grey-darken-3'"
+            :class="essClass === 'on' ? 'state-on' : 'state-off'"
             size="small"
             @click="send('ess_mode')"
           >
@@ -33,7 +33,7 @@
             :key="toggle.id"
             outlined
             class="custom-3d"
-            :color="state.booleans?.[toggle.id] === true ? 'success' : 'grey-darken-3'"
+            :class="state.booleans?.[toggle.id] === true ? 'state-on' : 'state-off'"
             size="small"
             @click="send('toggle', {entity: toggle.entity})"
           >
@@ -131,7 +131,7 @@
                 <v-btn
                   outlined
                   class="custom-3d"
-                  :color="state.pump_switch ? 'success' : 'grey-darken-3'"
+                  :color="state.pump_switch ? 'state-on' : 'state-off'"
                   size="small"
                   @click="send('toggle', {entity: pumpSwitchEntity})"
                 >
@@ -140,7 +140,7 @@
                 <v-btn
                   outlined
                   class="custom-3d"
-                  :color="state.water_valve ? 'success' : 'grey-darken-3'"
+                  :color="state.water_valve ? 'state-on' : 'state-off'"
                   size="small"
                   @click="send('toggle', {entity: waterValveEntity})"
                 >
@@ -169,7 +169,7 @@
               <v-btn
                 outlined
                 class="custom-3d"
-                :color="state.washer_power ? 'success' : 'grey-darken-3'"
+                :color="state.washer_power ? 'state-on' : 'state-off'"
                 size="small"
                 disabled
               >
@@ -187,7 +187,7 @@
               <v-btn
                 outlined
                 class="custom-3d"
-                :color="state.dryer_power ? 'success' : 'grey-darken-3'"
+                :color="state.dryer_power ? 'state-on' : 'state-off'"
                 size="small"
                 disabled
               >
@@ -206,7 +206,7 @@
                 :key="btn.id"
                 outlined
                 class="custom-3d"
-                :color="buttonStates[btn.id] === 'on' ? 'success' : 'grey-darken-3'"
+                :color="buttonStates[btn.id] === 'on' ? 'state-on' : 'state-off'"
                 size="small"
                 @click="send('toggle', {entity: btn.entity})"
               >
@@ -285,6 +285,10 @@
     </div>
   </div>
 
+<button @click='debugMode = !debugMode' style='position:fixed;top:10px;right:10px;z-index:99999;font-size:12px;padding:2px 6px;background:#f0f0f0;border:1px solid #ccc;border-radius:4px;cursor:pointer;'>Debug</button>
+<div v-if='debugMode' style='position:fixed;bottom:10px;left:10px;background:rgba(0,0,0,0.85);color:#0f0;padding:8px;font-size:11px;z-index:99998;max-height:300px;overflow:auto;font-family:monospace;border-radius:4px;'>
+  <pre style='margin:0;'>{{ JSON.stringify({ homeButtons, buttonStates, booleans: state.value.booleans }, null, 2) }}</pre>
+</div>
 </template>
 
 <script setup lang="ts">
@@ -365,6 +369,7 @@ const state = ref<InverterState>({
 })
 const mqttConnected = ref(false)
 const isDark = ref(localStorage.getItem('theme') !== 'light')
+const debugMode = ref(false)
 const appConfig = ref<any>(null)
 const appVersion = ref('')
 const chartOption = ref<any>({})
@@ -492,7 +497,8 @@ const buttonStates = computed(() => {
   const states: Record<string, string> = {}
   homeButtons.value.forEach(btn => {
     const stateKey = btn.state_key || 'home_' + btn.id
-    let val = (state.value as any)[stateKey]
+    let val = state.value.booleans?.[stateKey]
+    console.log('Btn:', btn.id, 'key:', stateKey, 'val:', val, 'booleans:', state.value.booleans)
     if (typeof val === 'string') {
       val = val === 'true' || val === '1'
     } else if (typeof val === 'number') {
