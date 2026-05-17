@@ -47,4 +47,5 @@ OSS_FUZZ_REPORT.md
 oss-fuzz-stats.html
 
 dependabot*.sh
+build.sh
 
