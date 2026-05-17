@@ -10,18 +10,21 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@mdi/font": "^7.4.47",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "echarts": "^6.0.0",
     "uplot": "^1.6.30",
     "vue": "^3.4.21",
     "vue-awesome-button": "^0.1.0",
-    "vue-echarts": "^8.0.1"
+    "vue-echarts": "^8.0.1",
+    "vuetify": "^4.0.7"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^6.0.7",
     "typescript": "~6.0.3",
-    "vite": "^8.0.13"
+    "vite": "^8.0.13",
+    "vite-plugin-vuetify": "^2.1.3"
   }
 }
