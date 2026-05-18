@@ -14,7 +14,8 @@
       {
         "title": "Inverter Dashboard",
         "width": 800,
-        "height": 900
+        "height": 900,
+        "center": true
       }
     ],
     "security": {

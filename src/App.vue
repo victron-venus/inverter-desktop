@@ -285,8 +285,8 @@
     </div>
   </div>
 
-<button @click='debugMode = !debugMode' style='position:fixed;top:10px;right:10px;z-index:99999;font-size:12px;padding:2px 6px;background:#f0f0f0;border:1px solid #ccc;border-radius:4px;cursor:pointer;'>Debug</button>
-<div v-if='debugMode' style='position:fixed;bottom:10px;left:10px;background:rgba(0,0,0,0.85);color:#0f0;padding:8px;font-size:11px;z-index:99998;max-height:300px;overflow:auto;font-family:monospace;border-radius:4px;'>
+<button v-if="isDev" @click='debugMode = !debugMode' style='position:fixed;top:10px;right:10px;z-index:99999;font-size:12px;padding:2px 6px;background:#f0f0f0;border:1px solid #ccc;border-radius:4px;cursor:pointer;'>Debug</button>
+<div v-if='isDev && debugMode' style='position:fixed;bottom:10px;left:10px;background:rgba(0,0,0,0.85);color:#0f0;padding:8px;font-size:11px;z-index:99998;max-height:300px;overflow:auto;font-family:monospace;border-radius:4px;'>
   <pre style='margin:0;'>{{ JSON.stringify({ homeButtons, buttonStates, booleans: state.value.booleans }, null, 2) }}</pre>
 </div>
 </template>
@@ -299,6 +299,8 @@ import * as echarts from 'echarts'
 VChart.inst = echarts
 import { getVersion } from '@tauri-apps/api/app'
 import { getAppConfig, defaultConfig } from './config'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import Config from './Config.vue'
 
 interface InverterState {
   gt?: number
