@@ -134,15 +134,22 @@ impl HaApiClient {
         entity_id: &str,
         domain: &str,
         service: &str,
-        data: serde_json::Value,
+        mut data: serde_json::Value,
     ) -> Result<(), String> {
         let url = format!("{}/api/services/{}/{}", self.base_url, domain, service);
+        // Merge entity_id into data object
+        let mut payload = if let Some(obj) = data.as_object_mut() {
+            obj.insert("entity_id".to_string(), serde_json::Value::String(entity_id.to_string()));
+            data
+        } else {
+            serde_json::json!({ "entity_id": entity_id })
+        };
         let response = self
             .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Content-Type", "application/json")
-            .json(&serde_json::json!({ "entity_id": entity_id, ..data }))
+            .json(&payload)
             .send()
             .await
             .map_err(|e| format!("Service call failed: {}", e))?;

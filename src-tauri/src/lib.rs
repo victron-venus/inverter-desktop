@@ -199,38 +199,6 @@ async fn discover_ha_entities(
 }
 
 #[tauri::command]
-async fn discover_ha_entities(
-    url: String,
-    port: Option<u16>,
-    token: String,
-) -> Result<Vec<DiscoveredEntity>, String> {
-    let client = ha_api::HaApiClient::new(&url, port, &token).await?;
-    let states = client.get_states().await?;
-    let togglable = [
-        "switch", "light", "input_boolean", "fan", "cover", "lock", "media_player",
-        "scene", "script", "number", "sensor", "binary_sensor"
-    ];
-    let mut result = Vec::new();
-    for state in states {
-        if let Some(domain) = state.entity_id.split('.').next() {
-            if togglable.contains(&domain) {
-                let friendly_name = state.attributes
-                    .and_then(|attrs| attrs.get("friendly_name"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| state.entity_id.clone());
-                result.push(DiscoveredEntity {
-                    entity_id: state.entity_id,
-                    friendly_name,
-                    domain: domain.to_string(),
-                });
-            }
-        }
-    }
-    Ok(result)
-}
-
-#[tauri::command]
 async fn toggle_ha_entity(
     url: String,
     port: Option<u16>,
