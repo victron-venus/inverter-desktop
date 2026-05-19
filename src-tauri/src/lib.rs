@@ -192,7 +192,7 @@ async fn discover_ha_entities(
             entity_id.clone()
         };
         if let Some(domain_str) = domain {
-            if togglable.contains(domain_str.as_str()) {
+            if togglable.contains(&domain_str.as_str()) {
                 result.push(DiscoveredEntity {
                     entity_id,
                     friendly_name,
