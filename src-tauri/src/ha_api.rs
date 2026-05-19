@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HaEntity {
     pub id: String,
@@ -51,7 +52,7 @@ impl HaApiClient {
     pub async fn test_connection(&self) -> Result<(), String> {
         let response = self
             .client
-            .get(&format!("{}/api/", self.base_url))
+            .get(format!("{}/api/", self.base_url))
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
             .await
@@ -67,7 +68,7 @@ impl HaApiClient {
     pub async fn get_states(&self) -> Result<Vec<HaState>, String> {
         let response = self
             .client
-            .get(&format!("{}/api/states", self.base_url))
+            .get(format!("{}/api/states", self.base_url))
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
             .await
@@ -106,6 +107,7 @@ impl HaApiClient {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     pub async fn get_entities(&self, domain: &str) -> Result<Vec<serde_json::Value>, String> {
         let states = self.get_states().await?;
         let mut entities = Vec::new();
@@ -173,6 +175,7 @@ impl HaApiClient {
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn toggle(&self, entity_id: &str, current_on: bool) -> Result<(), String> {
         if current_on {
             self.turn_off(entity_id).await
