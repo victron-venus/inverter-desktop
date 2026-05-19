@@ -277,11 +277,13 @@
 
     <!-- Status -->
     <div class="mt-2 text-center small" style="color:#666">
-      <span class="status-dot" :class="state.ha_connected ? 'online' : 'offline'"></span>
-      HA
+      <span class="status-dot" :class="haEnabled ? (haConnected ? 'online' : 'offline') : 'offline'"></span>
+      HA {{ haEnabled ? (haConnected ? '(OK)' : '(Offline)') : '(Disabled)' }}
+      &nbsp;|&nbsp;
+      <span class="status-dot" :class="mqttConnected ? 'online' : 'offline'"></span>
+      MQTT {{ mqttConnected ? 'OK' : (mqttConnected === false ? 'Disconnected' : 'Connecting...') }}
       &nbsp;|&nbsp; Uptime: {{ formatUptime(state.uptime || 0) }}
-      &nbsp;|&nbsp; MQTT: {{ mqttConnected ? 'OK' : 'Disconnected' }}
-      &nbsp;|&nbsp; Desktop v{{ appVersion }} · Control v{{ appVersion }}
+      &nbsp;|&nbsp; Desktop v{{ appVersion }}
     </div>
   </div>
 
@@ -301,6 +303,14 @@ import { getVersion } from '@tauri-apps/api/app'
 import { getAppConfig, defaultConfig } from './config'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Config from './Config.vue'
+
+// HA entity detection: domain. entity format
+const HA_DOMAINS = ['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'media_player', 'scene', 'script', 'number', 'sensor', 'binary_sensor']
+function isHaEntity(entityId: string): boolean {
+  if (!entityId || typeof entityId !== 'string') return false
+  const parts = entityId.split('.')
+  return parts.length === 2 && HA_DOMAINS.includes(parts[0])
+}
 
 interface InverterState {
   gt?: number
@@ -373,6 +383,15 @@ const mqttConnected = ref(false)
 const isDark = ref(localStorage.getItem('theme') !== 'light')
 const debugMode = ref(false)
 const appConfig = ref<any>(null)
+const reconnectAttempts = ref(0)
+const reconnectTimeout = ref<number | null>(null)
+const haEnabled = computed(() => {
+  const cfg = appConfig.value
+  return !!(cfg && cfg.ha_use_direct_api && cfg.ha_url && cfg.ha_longlived_token)
+})
+const haEntityStates = ref<Record<string, string>>({})
+const haLastPollSuccess = ref(false)
+let haPollInterval: number | null = null
 const appVersion = ref('')
 const chartOption = ref<any>({})
 
@@ -387,6 +406,23 @@ function toggleTheme() {
 
 if (!isDark.value) document.body.classList.add('light')
 
+function clearReconnect() {
+  if (reconnectTimeout.value) {
+    clearTimeout(reconnectTimeout.value)
+    reconnectTimeout.value = null
+  }
+  reconnectAttempts.value = 0
+}
+
+function scheduleReconnect() {
+  if (reconnectTimeout.value) clearTimeout(reconnectTimeout.value)
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.value), 30000)
+  reconnectTimeout.value = window.setTimeout(async () => {
+    reconnectAttempts.value++
+    await connectMqtt()
+  }, delay)
+}
+
 async function connectMqtt() {
   try {
     const config = await getAppConfig()
@@ -394,6 +430,8 @@ async function connectMqtt() {
     await invoke('connect_mqtt', { host: config.mqtt_host, port: config.mqtt_port })
     mqttConnected.value = true
     startPolling()
+    clearReconnect()
+    clearReconnect()
   } catch (e) {
     console.error('Failed to connect to MQTT:', e)
     mqttConnected.value = false
@@ -452,6 +490,20 @@ function startPolling() {
 }
 
 async function send(action: string, payload: any = {}) {
+  const cfg = appConfig.value
+  if (haEnabled.value && payload.entity && isHaEntity(payload.entity)) {
+    try {
+      await invoke('toggle_ha_entity', {
+        url: cfg.ha_url || '',
+        port: cfg.ha_port || 8123,
+        token: cfg.ha_longlived_token || '',
+        entity_id: payload.entity
+      })
+      return
+    } catch (e) {
+      console.error('HA command failed:', e)
+    }
+  }
   try {
     await invoke('send_command', { action, payload })
   } catch (e) {
@@ -498,19 +550,83 @@ function getButtonState(btn: { id: string; state_key?: string }) {
 const buttonStates = computed(() => {
   const states: Record<string, string> = {}
   homeButtons.value.forEach(btn => {
-    const stateKey = btn.state_key || 'home_' + btn.id
-    let val = state.value.booleans?.[stateKey]
-    console.log('Btn:', btn.id, 'key:', stateKey, 'val:', val, 'booleans:', state.value.booleans)
-    if (typeof val === 'string') {
-      val = val === 'true' || val === '1'
-    } else if (typeof val === 'number') {
-      val = val !== 0
+    if (haEnabled.value && haEntityStates.value[btn.entity] !== undefined) {
+      states[btn.id] = haEntityStates.value[btn.entity] === 'on' ? 'on' : 'off'
+    } else {
+      const stateKey = btn.state_key || 'home_' + btn.id
+      let val = state.value.booleans?.[stateKey]
+      if (typeof val === 'string') val = val === 'true' || val === '1'
+      else if (typeof val === 'number') val = val !== 0
+      states[btn.id] = val ? 'on' : 'off'
     }
-    states[btn.id] = val ? 'on' : 'off'
   })
   return states
 })
 
+
+const headerToggleStates = computed(() => {
+  const states: Record<string, string> = {}
+  headerToggles.value.forEach(toggle => {
+    if (haEnabled.value && haEntityStates.value[toggle.entity] !== undefined) {
+      states[toggle.id] = haEntityStates.value[toggle.entity] === 'on' ? 'on' : 'off'
+    } else {
+      let val = state.value.booleans?.[toggle.id]
+      if (typeof val === 'string') val = val === 'true' || val === '1'
+      else if (typeof val === 'number') val = val !== 0
+      states[toggle.id] = val ? 'on' : 'off'
+    }
+  })
+  return states
+})
+
+const waterValveOn = computed(() => {
+  const entity = waterValveEntity.value
+  if (haEnabled.value && entity && haEntityStates.value[entity] !== undefined) {
+    return haEntityStates.value[entity] === 'on'
+  }
+  return state.value.water_valve || false
+})
+
+const pumpSwitchOn = computed(() => {
+  const entity = pumpSwitchEntity.value
+  if (haEnabled.value && entity && haEntityStates.value[entity] !== undefined) {
+    return haEntityStates.value[entity] === 'on'
+  }
+  return state.value.pump_switch || false
+})
+
+const haConnected = computed(() => {
+  if (haEnabled.value) {
+    return haLastPollSuccess.value
+  }
+  return state.value.ha_connected || false
+})
+
+async function pollHaStates() {
+  if (!haEnabled.value) return
+  const cfg = appConfig.value
+  if (!cfg?.ha_url || !cfg.ha_longlived_token) return
+
+  try {
+    const states = await invoke<Array<{ entity_id: string; state: string }>>('get_ha_states', {
+      url: cfg.ha_url,
+      port: cfg.ha_port || 8123,
+      token: cfg.ha_longlived_token
+    })
+    const map: Record<string, string> = {}
+    for (const s of states) {
+      // Track only on/off states for toggle buttons
+      if (s.state === 'on' || s.state === 'off') {
+        map[s.entity_id] = s.state
+      }
+    }
+    haEntityStates.value = map
+    haLastPollSuccess.value = true
+  } catch (e) {
+    console.error('HA poll failed:', e)
+    haLastPollSuccess.value = false
+  }
+}
 
 const essClass = computed(() => {
   const m = state.value.ess_mode
@@ -549,13 +665,20 @@ const sortedLoads = computed(() => {
 
 const homeButtons = computed(() => {
   const uiConfig = state.value.ui_config || {}
-  if (uiConfig.home_buttons) {
-    return uiConfig.home_buttons
+  if (uiConfig.home_buttons) return uiConfig.home_buttons
+
+  const cfg = appConfig.value
+  if (cfg?.ha_entities && cfg.ha_entities.length > 0) {
+    return cfg.ha_entities.filter(e => e.enabled).map(e => ({
+      id: e.id,
+      label: e.label,
+      entity: e.entity,
+      state_key: e.state_key
+    }))
   }
 
-  const config = appConfig.value
-  if (config && config.ha_switch_entities) {
-    return Object.entries(config.ha_switch_entities).map(([id, data]) => ({
+  if (cfg?.ha_switch_entities) {
+    return Object.entries(cfg.ha_switch_entities).map(([id, data]) => ({
       id,
       label: data.label || id,
       entity: data.entity
@@ -746,13 +869,33 @@ onMounted(async () => {
     appVersion.value = 'unknown'
   }
   connectMqtt()
+  if (haEnabled.value) {
+    haPollInterval = window.setInterval(pollHaStates, 3000)
+    pollHaStates()
+  }
   nextTick(() => initChart())
   window.addEventListener('resize', () => {
     if (chart && chartEl.value) chart.setSize({ width: chartEl.value.clientWidth, height: 250 })
   })
 })
 
+watch(haEnabled, (newVal) => {
+  if (newVal) {
+    if (haPollInterval) clearInterval(haPollInterval)
+    haPollInterval = window.setInterval(pollHaStates, 3000)
+    pollHaStates()
+  } else {
+    if (haPollInterval) {
+      clearInterval(haPollInterval)
+      haPollInterval = null
+    }
+    haEntityStates.value = {}
+    haLastPollSuccess.value = false
+  }
+})
+
 onUnmounted(() => {
   if (pollInterval) clearInterval(pollInterval)
+  if (haPollInterval) clearInterval(haPollInterval)
 })
 </script>
