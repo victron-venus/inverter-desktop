@@ -138,7 +138,7 @@ impl HaApiClient {
     ) -> Result<(), String> {
         let url = format!("{}/api/services/{}/{}", self.base_url, domain, service);
         // Merge entity_id into data object
-        let mut payload = if let Some(obj) = data.as_object_mut() {
+        let payload = if let Some(obj) = data.as_object_mut() {
             obj.insert("entity_id".to_string(), serde_json::Value::String(entity_id.to_string()));
             data
         } else {

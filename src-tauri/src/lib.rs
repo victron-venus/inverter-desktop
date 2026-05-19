@@ -1,6 +1,5 @@
 pub mod mqtt;
 mod ha_api;
-use ha_api::HaState;
 
 use mqtt::{MqttClient, InverterState, HeaderToggle};
 use serde::{Deserialize, Serialize};
@@ -180,17 +179,24 @@ async fn discover_ha_entities(
     ];
     let mut result = Vec::new();
     for state in states {
-        if let Some(domain) = state.entity_id.split('.').next() {
-            if togglable.contains(&domain) {
-                let friendly_name = state.attributes
-                    .and_then(|attrs| attrs.get("friendly_name"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| state.entity_id.clone());
+        // Clone entity_id early to avoid borrow issues
+        let entity_id = state.entity_id.clone();
+        let domain = entity_id.split('.').next().map(String::from);
+        // Use as_ref to avoid consuming attributes
+        let friendly_name = if let Some(attrs) = &state.attributes {
+            attrs.get("friendly_name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| entity_id.clone())
+        } else {
+            entity_id.clone()
+        };
+        if let Some(domain_str) = domain {
+            if togglable.contains(&domain_str) {
                 result.push(DiscoveredEntity {
-                    entity_id: state.entity_id,
+                    entity_id,
                     friendly_name,
-                    domain: domain.to_string(),
+                    domain: domain_str,
                 });
             }
         }
