@@ -10,10 +10,18 @@ import './button-overrides.css'
 import vuetify from './plugins/vuetify'
 import 'vuetify/styles'
 
-const path = window.location.pathname
+const path = globalThis.location.pathname
 const isConfigWindow = path === '/config'
 const isAboutWindow = path === '/about'
-const rootComponent = isConfigWindow ? Config : isAboutWindow ? About : App
+
+let rootComponent
+if (isConfigWindow) {
+  rootComponent = Config
+} else if (isAboutWindow) {
+  rootComponent = About
+} else {
+  rootComponent = App
+}
 
 const app = createApp(rootComponent)
 app.use(vuetify)

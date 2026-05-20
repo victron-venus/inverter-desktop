@@ -1,12 +1,12 @@
 <template>
   <div class="col-md-4">
     <!-- EV -->
-    <div class="card mb-2" v-if="features?.ev !== false && (parseFloat(evCharging) > 0 || parseFloat(evPower) > 0)">
+    <div class="card mb-2" v-if="features?.ev !== false">
       <div class="card-header"><i class="fas fa-car me-2"></i>EV</div>
       <div class="card-body py-1">
         <div class="d-flex justify-content-between">
-          <div><div class="stat-value text-solar">{{ evCharging }}</div><div class="stat-sub">Charging</div></div>
-          <div class="text-center"><div class="stat-value" style="color:#9e9e9e">{{ evPower }}</div><div class="stat-sub">VUE</div></div>
+          <div v-if="parseFloat(evCharging) > 0"><div class="stat-value text-solar">{{ evCharging }}</div><div class="stat-sub">Charging</div></div>
+          <div class="text-center" v-if="parseFloat(evPower) > 0"><div class="stat-value" style="color:#9e9e9e">{{ evPower }}</div><div class="stat-sub">VUE</div></div>
           <div class="text-end"><div class="stat-value text-accent">{{ Math.floor(carSoc || 0) }}%</div><div class="stat-sub">SoC</div></div>
         </div>
       </div>
