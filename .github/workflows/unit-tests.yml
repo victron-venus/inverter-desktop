@@ -27,6 +27,5 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci || npm install
-      - name: Run unit tests
-        run: npm test
+      - run: npm ci
+      - run: npm test

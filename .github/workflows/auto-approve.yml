@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   auto-approve:
-    if: github.actor == '4alvit'
+    if: github.event.pull_request.user.login == '4alvit'
     runs-on: ubuntu-latest
     steps:
       - uses: hmarr/auto-approve-action@f0939ea97e9205ef24d872e76833fa908a770363 # v4
