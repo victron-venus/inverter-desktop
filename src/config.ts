@@ -5,6 +5,10 @@ export interface AppConfig {
   mqtt_port: number
   mqtt_login?: string | null
   mqtt_password?: string | null
+  mqtt_ha_host?: string
+  mqtt_ha_port?: number
+  mqtt_ha_login?: string | null
+  mqtt_ha_password?: string | null
   ha_longlived_token?: string | null
   ha_url?: string | null
   ha_port?: number | null
@@ -24,6 +28,10 @@ const defaultConfig: AppConfig = {
   mqtt_port: 1883,
   mqtt_login: null,
   mqtt_password: null,
+  mqtt_ha_host: '192.168.160.150',
+  mqtt_ha_port: 1883,
+  mqtt_ha_login: null,
+  mqtt_ha_password: null,
   ha_longlived_token: null,
   ha_url: null,
   ha_port: null,
