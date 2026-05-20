@@ -215,172 +215,25 @@
                     </v-col>
                   </v-row>
 
-                  <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="primary">Home Buttons</v-chip>
-                  </v-divider>
+                  <HaEntitiesEditor
+                    :haEntitiesList="haEntitiesList"
+                    :discoveredEntities="discoveredEntities"
+                    :entityRules="entityRules"
+                    @add="addHaEntity"
+                    @remove="removeHaEntity"
+                    @move-up="moveEntityUp"
+                    @move-down="moveEntityDown"
+                  />
 
-                  <div
-                    v-if="haEntitiesList.length === 0"
-                    class="text-caption grey--text mb-2"
-                  >
-                    No home buttons configured. Add entities below.
-                  </div>
-
-                  <div
-                    v-for="(entity, index) in haEntitiesList"
-                    :key="entity.id || `home-${index}`"
-                    class="entity-card mb-2 pa-2 rounded border"
-                  >
-                    <v-row dense>
-                      <v-col cols="12" sm="3">
-                        <v-text-field
-                          v-model="entity.label"
-                          label="Label"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                          required
-                        ></v-text-field>
-                      </v-col>
-                      <v-col cols="12" sm="4">
-                        <v-autocomplete
-                          v-model="entity.entity"
-                          :items="discoveredEntities"
-                          item-title="entity_id"
-                          item-value="entity_id"
-                          label="Entity ID"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                          clearable
-                          :rules="entityRules"
-                        ></v-autocomplete>
-                      </v-col>
-                      <v-col cols="12" sm="2" class="d-flex align-center">
-                        <v-checkbox
-                          v-model="entity.enabled"
-                          label="Active"
-                          hide-details
-                          density="compact"
-                        ></v-checkbox>
-                      </v-col>
-                      <v-col cols="12" sm="2" class="d-flex flex-column align-center">
-                        <v-btn
-                          icon
-                          size="x-small"
-                          @click="moveEntityUp(index)"
-                          :disabled="index === 0"
-                        >
-                          <v-icon>mdi-arrow-up</v-icon>
-                        </v-btn>
-                        <v-btn
-                          icon
-                          size="x-small"
-                          @click="moveEntityDown(index)"
-                          :disabled="index === haEntitiesList.length - 1"
-                        >
-                          <v-icon>mdi-arrow-down</v-icon>
-                        </v-btn>
-                      </v-col>
-                      <v-col cols="12" sm="1" class="d-flex align-center justify-center">
-                        <v-btn
-                          icon
-                          size="x-small"
-                          color="red"
-                          @click="removeHaEntity(index)"
-                        >
-                          <v-icon>mdi-delete</v-icon>
-                        </v-btn>
-                      </v-col>
-                    </v-row>
-                  </div>
-
-                  <v-btn
-                    color="primary"
-                    variant="flat"
-                    size="small"
-                    @click="addHaEntity"
-                    class="mt-2"
-                  >
-                    <v-icon start>mdi-plus</v-icon>
-                    Add Home Entity
-                  </v-btn>
-
-                  <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="primary">Header Toggles</v-chip>
-                  </v-divider>
-
-                  <div
-                    v-for="(toggle, index) in headerTogglesList"
-                    :key="toggle.id || `toggle-${index}`"
-                    class="toggle-card mb-2 pa-2 rounded border"
-                  >
-                    <v-row dense>
-                      <v-col cols="12" sm="4">
-                        <v-text-field
-                          v-model="toggle.label"
-                          label="Label"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                          required
-                        ></v-text-field>
-                      </v-col>
-                      <v-col cols="12" sm="5">
-                        <v-autocomplete
-                          v-model="toggle.entity"
-                          :items="discoveredEntities"
-                          item-title="entity_id"
-                          item-value="entity_id"
-                          label="Entity ID"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                          clearable
-                          :rules="entityRules"
-                        ></v-autocomplete>
-                      </v-col>
-                      <v-col cols="12" sm="1" class="d-flex align-center justify-center">
-                        <v-btn
-                          icon
-                          size="x-small"
-                          color="red"
-                          @click="removeHeaderToggle(index)"
-                        >
-                          <v-icon>mdi-delete</v-icon>
-                        </v-btn>
-                      </v-col>
-                      <v-col cols="12" sm="2" class="d-flex flex-column align-center">
-                        <v-btn
-                          icon
-                          size="x-small"
-                          @click="moveToggleUp(index)"
-                          :disabled="index === 0"
-                        >
-                          <v-icon>mdi-arrow-up</v-icon>
-                        </v-btn>
-                        <v-btn
-                          icon
-                          size="x-small"
-                          @click="moveToggleDown(index)"
-                          :disabled="index === headerTogglesList.length - 1"
-                        >
-                          <v-icon>mdi-arrow-down</v-icon>
-                        </v-btn>
-                      </v-col>
-                    </v-row>
-                  </div>
-
-                  <v-btn
-                    color="primary"
-                    variant="flat"
-                    size="small"
-                    @click="addHeaderToggle"
-                    class="mt-2"
-                  >
-                    <v-icon start>mdi-plus</v-icon>
-                    Add Header Toggle
-                  </v-btn>
+                  <HeaderTogglesEditor
+                    :headerTogglesList="headerTogglesList"
+                    :discoveredEntities="discoveredEntities"
+                    :entityRules="entityRules"
+                    @add="addHeaderToggle"
+                    @remove="removeHeaderToggle"
+                    @move-up="moveToggleUp"
+                    @move-down="moveToggleDown"
+                  />
 
                   <v-divider class="mb-4 mt-4">
                     <v-chip size="small" color="info">Preview</v-chip>
@@ -519,8 +372,11 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { logger } from './logger'
 import { useConfigForm } from './composables/useConfigForm'
 import { useHAEntityManager } from './composables/useHAEntityManager'
+import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
+import HeaderTogglesEditor from './components/HeaderTogglesEditor.vue'
 
 const { config, saving, message, messageType, loadConfig, saveConfig, resetToDefaults, clearMessage } = useConfigForm()
 const {
@@ -614,11 +470,11 @@ async function closeWindow() {
     const window = await getCurrentWindow()
     await window.close()
   } catch (e) {
-    console.error('JS close failed, trying Rust command:', e)
+    logger.error('JS close failed, trying Rust command:', e)
     try {
       await invoke('close_config_window')
     } catch (e2) {
-      console.error('Rust close also failed:', e2)
+      logger.error('Rust close also failed:', e2)
     }
   }
 }

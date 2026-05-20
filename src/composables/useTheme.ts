@@ -2,6 +2,8 @@ import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { state } from './useInverterState'
 import { getAppConfig } from '../config'
+import { logger } from '../logger'
+import { escapeHtml } from '../utils'
 
 export function useTheme() {
   const isDark = ref(localStorage.getItem('theme') !== 'light')
@@ -17,7 +19,7 @@ export function useTheme() {
       cfg.color_scheme = scheme
       await invoke('save_config', { config: cfg })
     } catch (e) {
-      console.error('Failed to save theme:', e)
+      logger.error('Failed to save theme:', e)
     }
   }
 
@@ -39,9 +41,10 @@ export function useTheme() {
     let solarParts: string[] = []
     tasmotaDaily.forEach((v: number) => { if (v > 0) solarParts.push(v.toFixed(2)) })
     solarParts.push(pvTotalDaily.toFixed(2) + '(' + mpptDaily.map((v: number) => v.toFixed(2)).join('+') + ')')
-    let result = `<span class="highlight">☀️ ${prod}kWh</span> <span class="detail">${solarParts.join('+')}</span> `
-    result += `<span class="money">($${dollars})</span> | Grid: ${grid}kWh <span class="money">($${gridCost})</span> | `
-    result += `🔋 I: ${batIn}kWh <span class="dim">(${batInY})</span>, O: ${batOut}kWh <span class="dim">(${batOutY})</span>; Δ: ${batDelta}kWh <span class="dim">(${batDeltaY})</span>`
+    const solarStr = escapeHtml(solarParts.join('+'))
+    let result = `<span class="highlight">☀️ ${escapeHtml(prod)}kWh</span> <span class="detail">${solarStr}</span> `
+    result += `<span class="money">($${escapeHtml(dollars)})</span> | Grid: ${escapeHtml(grid)}kWh <span class="money">($${escapeHtml(gridCost)})</span> | `
+    result += `🔋 I: ${escapeHtml(batIn)}kWh <span class="dim">(${escapeHtml(batInY)})</span>, O: ${escapeHtml(batOut)}kWh <span class="dim">(${escapeHtml(batOutY)})</span>; Δ: ${escapeHtml(batDelta)}kWh <span class="dim">(${escapeHtml(batDeltaY)})</span>`
     return result
   })
 

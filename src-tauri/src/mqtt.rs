@@ -179,7 +179,9 @@ impl MqttClient {
     }
 
     pub fn get_state(&self) -> InverterState {
-        self.state.lock().unwrap().clone()
+        self.state.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -208,14 +210,17 @@ impl MqttClient {
 
                             if topic == "inverter/state" {
                                 if let Ok(new_state) = serde_json::from_str::<InverterState>(&payload) {
-                                    *state.lock().unwrap() = new_state;
+                                    if let Ok(mut guard) = state.lock() {
+                                        *guard = new_state;
+                                    }
                                 }
                             } else if topic == "inverter/console" {
-                                let mut state = state.lock().unwrap();
-                                let console = state.console.get_or_insert_with(Vec::new);
-                                console.push(payload);
-                                if console.len() > 50 {
-                                    console.remove(0);
+                                if let Ok(mut guard) = state.lock() {
+                                    let console = guard.console.get_or_insert_with(Vec::new);
+                                    console.push(payload);
+                                    if console.len() > 50 {
+                                        console.remove(0);
+                                    }
                                 }
                             }
                         }

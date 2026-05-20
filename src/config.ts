@@ -1,4 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from './logger'
+
+/** Default MQTT broker address – configure to match your local setup */
+const DEFAULT_MQTT_HOST = '192.168.160.150'
 
 export interface AppConfig {
   mqtt_host: string
@@ -24,11 +28,11 @@ export interface AppConfig {
 }
 
 const defaultConfig: AppConfig = {
-  mqtt_host: '192.168.160.150',
+  mqtt_host: DEFAULT_MQTT_HOST,
   mqtt_port: 1883,
   mqtt_login: null,
   mqtt_password: null,
-  mqtt_ha_host: '192.168.160.150',
+  mqtt_ha_host: DEFAULT_MQTT_HOST,
   mqtt_ha_port: 1883,
   mqtt_ha_login: null,
   mqtt_ha_password: null,
@@ -54,7 +58,7 @@ export async function getAppConfig(): Promise<AppConfig> {
     config = { ...defaultConfig, ...fetched }
     return config
   } catch (e) {
-    console.warn('Failed to load config, using defaults', e)
+    logger.warn('Failed to load config, using defaults', e)
     return config
   }
 }
