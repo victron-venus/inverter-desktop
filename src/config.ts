@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { logger } from './logger'
 
 /** Default MQTT broker address – configure to match your local setup */
-const DEFAULT_MQTT_HOST = '192.168.160.150'
+const DEFAULT_MQTT_HOST = 'Cerbo'
 
 export interface AppConfig {
   mqtt_host: string
@@ -33,7 +33,7 @@ const defaultConfig: AppConfig = {
   mqtt_port: 1883,
   mqtt_login: null,
   mqtt_password: null,
-  mqtt_ha_host: DEFAULT_MQTT_HOST,
+  mqtt_ha_host: 'HA',
   mqtt_ha_port: 1883,
   mqtt_ha_login: null,
   mqtt_ha_password: null,

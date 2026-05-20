@@ -1,5 +1,5 @@
 <template>
-  <v-app :theme="config.color_scheme === 'light' ? 'light' : 'dark'" style="font-size:65%">
+  <v-app :theme="config.color_scheme === 'light' ? 'light' : 'dark'" style="font-size:35%">
     <v-app-bar color="primary" density="compact">
       <v-app-bar-title>Configuration</v-app-bar-title>
       <v-spacer></v-spacer>
