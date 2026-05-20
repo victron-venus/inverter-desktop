@@ -23,9 +23,7 @@
         <v-col cols="12" sm="5">
           <v-autocomplete
             v-model="toggle.entity"
-            :items="discoveredEntities"
-            item-title="entity_id"
-            item-value="entity_id"
+            :items="discoveredEntityIds"
             label="Entity ID"
             variant="outlined"
             density="compact"
@@ -79,11 +77,15 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue'
+
+const props = defineProps<{
   headerTogglesList: Array<{ id: string; label: string; entity: string }>
   discoveredEntities: Array<{ entity_id: string; friendly_name: string; domain: string }>
   entityRules: ((v: string) => boolean | string)[]
 }>()
+
+const discoveredEntityIds = computed(() => props.discoveredEntities.map(e => e.entity_id))
 
 defineEmits<{
   add: []

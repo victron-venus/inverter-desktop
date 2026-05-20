@@ -5,6 +5,7 @@ export interface DiscoveredEntity {
   entity_id: string
   friendly_name: string
   domain: string
+  state: string
 }
 
 export function useHAEntityManager() {
@@ -131,6 +132,22 @@ export function useHAEntityManager() {
     headerTogglesList.value.splice(index + 1, 0, item)
   }
 
+  function autofillDomain(domain: string) {
+    const toAdd = discoveredEntities.value.filter(
+      e => e.domain === domain && e.state !== 'unavailable'
+    )
+    for (const de of toAdd) {
+      if (haEntitiesList.value.some(ex => ex.entity === de.entity_id)) continue
+      haEntitiesList.value.push({
+        id: de.entity_id.replace(/\./g, '_'),
+        label: de.friendly_name,
+        entity: de.entity_id,
+        domain: de.domain,
+        enabled: true,
+      })
+    }
+  }
+
   return {
     haEntitiesList, headerTogglesList,
     discoveryDialog, discoveredEntities, selectedDiscovery, discoveryLoading,
@@ -138,5 +155,6 @@ export function useHAEntityManager() {
     loadFromConfig, fetchHaEntities, addDiscoveredEntities,
     addHaEntity, removeHaEntity, moveEntityUp, moveEntityDown,
     addHeaderToggle, removeHeaderToggle, moveToggleUp, moveToggleDown,
+    autofillDomain,
   }
 }

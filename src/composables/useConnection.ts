@@ -1,17 +1,18 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 import { state, mqttConnected, appConfig, type InverterState } from './useInverterState'
 import { getAppConfig } from '../config'
 import { logger } from '../logger'
 
 export function useConnection() {
-  let pollInterval: number | null = null
   let notificationPermission = false
+  let unlistenStateUpdate: (() => void) | null = null
 
-  const NOTIFY_LOAD_W = 300        // Notify if any individual load > 300W (e.g. washing machine, dryer)
-  const NOTIFY_CONSUMPTION_W = 300 // Notify if total house consumption > 300W from grid
-  const NOTIFY_WATER_CM = 23       // Notify if cistern water level drops below 23cm (near empty)
-  const NOTIFY_SOLAR_W = 3000      // Notify if solar production exceeds 3kW (peak alert)
+  const NOTIFY_LOAD_W = 300
+  const NOTIFY_CONSUMPTION_W = 300
+  const NOTIFY_WATER_CM = 23
+  const NOTIFY_SOLAR_W = 3000
 
   async function ensureNotificationPermission() {
     try {
@@ -46,7 +47,29 @@ export function useConnection() {
     }
   }
 
-    async function connectMqtt() {
+  type BoolField = keyof Pick<InverterState, 'pump_switch' | 'water_valve' | 'washer_power' | 'dryer_power' | 'dry_run'>
+
+  function processState(newState: InverterState) {
+    if (newState.booleans) {
+      Object.keys(newState.booleans).forEach(key => {
+        const val = newState.booleans![key]
+        if (typeof val === 'string') {
+          newState.booleans![key] = val === 'true' || val === '1'
+        }
+      })
+    }
+    const boolFields: BoolField[] = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run']
+    boolFields.forEach(field => {
+      const val = newState[field]
+      if (typeof val === 'string') {
+        (newState as Record<string, unknown>)[field] = val === 'true' || val === '1'
+      }
+    })
+    state.value = newState
+    checkThresholds(newState)
+  }
+
+  async function connectMqtt() {
     try {
       const config = await getAppConfig()
       appConfig.value = config
@@ -55,43 +78,26 @@ export function useConnection() {
         document.body.classList.toggle('light', !isDark)
         localStorage.setItem('theme', config.color_scheme)
       }
+
+      // Subscribe to MQTT state updates from Rust (event-driven, no polling)
+      unlistenStateUpdate = await listen<InverterState>('mqtt-state-update', (event) => {
+        processState(event.payload)
+      })
+
       await invoke('connect_mqtt', { host: config.mqtt_host, port: config.mqtt_port })
       mqttConnected.value = true
-      startPolling()
+
+      // Fetch initial state
+      try {
+        const initial = await invoke<InverterState>('get_state')
+        processState(initial)
+      } catch (e) {
+        logger.error('Failed to get initial state:', e)
+      }
     } catch (e) {
       logger.error('Failed to connect to MQTT:', e)
       mqttConnected.value = false
     }
-  }
-
-  function startPolling() {
-    if (pollInterval) clearInterval(pollInterval)
-    pollInterval = window.setInterval(async () => {
-      try {
-        const newState = await invoke<InverterState>('get_state')
-        if (newState.booleans) {
-          Object.keys(newState.booleans).forEach(key => {
-            const val = newState.booleans![key]
-            if (typeof val === 'string') {
-              newState.booleans![key] = val === 'true' || val === '1'
-            }
-          })
-        }
-        type BoolField = keyof Pick<InverterState, 'pump_switch' | 'water_valve' | 'washer_power' | 'dryer_power' | 'dry_run'>
-        const boolFields: BoolField[] = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run']
-        boolFields.forEach(field => {
-          const val = newState[field]
-          if (typeof val === 'string') {
-            (newState as Record<string, unknown>)[field] = val === 'true' || val === '1'
-          }
-        })
-        state.value = newState
-        checkThresholds(newState)
-      } catch (e) {
-        logger.error('Failed to get state:', e)
-        mqttConnected.value = false
-      }
-    }, 1000)
   }
 
   async function send(action: string, payload: any = {}) {
@@ -103,7 +109,10 @@ export function useConnection() {
   }
 
   function cleanup() {
-    if (pollInterval) clearInterval(pollInterval)
+    if (unlistenStateUpdate) {
+      unlistenStateUpdate()
+      unlistenStateUpdate = null
+    }
   }
 
   return {

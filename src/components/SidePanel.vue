@@ -1,7 +1,7 @@
 <template>
   <div class="col-md-4">
     <!-- EV -->
-    <div class="card mb-2" v-if="features?.ev !== false">
+    <div class="card mb-2" v-if="features?.ev !== false && (parseFloat(evCharging) > 0 || parseFloat(evPower) > 0)">
       <div class="card-header"><i class="fas fa-car me-2"></i>EV</div>
       <div class="card-body py-1">
         <div class="d-flex justify-content-between">

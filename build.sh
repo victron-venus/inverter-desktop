@@ -4,6 +4,14 @@ set -e
 echo "===> Installing dependencies..."
 pnpm install --frozen-lockfile
 
+echo "===> Rust compile check"
+cd ./src-tauri/
+cargo check
+cd ..
+
+echo "===> TypeScript compile check"
+npx vue-tsc --noEmit
+
 echo "===> Building frontend..."
 npm run build
 
