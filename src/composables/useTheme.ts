@@ -48,12 +48,12 @@ export function useTheme() {
       if (parseFloat(dollars) > 0) parts[parts.length - 1] += ` <span class="money">($${escapeHtml(dollars)})</span>`
     }
     if (parseFloat(grid) > 0) {
-      parts.push(`Grid: ${escapeHtml(grid)}kWh <span class="money">($${escapeHtml(gridCost)})</span>`)
+      parts.push(`Grid: ${escapeHtml(grid)}kWh <span class="money">($${escapeHtml(gridCost)})</span><br>`)
     }
     if (parseFloat(batIn) > 0 || parseFloat(batOut) > 0) {
       parts.push(`🔋 I: ${escapeHtml(batIn)}kWh <span class="dim">(${escapeHtml(batInY)})</span>, O: ${escapeHtml(batOut)}kWh <span class="dim">(${escapeHtml(batOutY)})</span>; Δ: ${escapeHtml(batDelta)}kWh <span class="dim">(${escapeHtml(batDeltaY)})</span>`)
     }
-    let result = parts.join(' | ')
+    let result = parts.join('')
     return result
   })
 

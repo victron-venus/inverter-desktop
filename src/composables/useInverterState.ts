@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import type { AppConfig } from '../config'
 
 export interface InverterState {
   gt?: number
@@ -69,4 +70,4 @@ export const state = ref<InverterState>({
 })
 
 export const mqttConnected = ref(false)
-export const appConfig = ref<any>(null)
+export const appConfig = ref<AppConfig | null>(null)

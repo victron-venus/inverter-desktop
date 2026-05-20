@@ -59,6 +59,7 @@ struct FullConfig {
     // new unified entities config
     ha_entities: Option<Vec<HaEntityConfig>>,
     header_toggles_config: Option<Vec<HeaderToggle>>,
+    portal_id: Option<String>,
 }
 
 impl Default for FullConfig {
@@ -84,13 +85,15 @@ impl Default for FullConfig {
             header_toggles: None,
             ha_entities: None,
             header_toggles_config: None,
+            portal_id: None,
         }
     }
 }
 
 #[tauri::command]
 fn get_state(mqtt_client: State<MqttState>) -> Result<InverterState, String> {
-    let client = mqtt_client.lock().unwrap();
+    let client = mqtt_client.lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
         Ok(client.get_state())
     } else {
@@ -104,7 +107,8 @@ fn send_command(
     payload: serde_json::Value,
     mqtt_client: State<MqttState>
 ) -> Result<(), String> {
-    let client = mqtt_client.lock().unwrap();
+    let client = mqtt_client.lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
         client.publish_command(&action, payload).map_err(|e| e.to_string())
     } else {
@@ -144,12 +148,15 @@ fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> 
 fn connect_mqtt(
     host: String,
     port: u16,
+    portal_id: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<MqttState>
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client.lock().unwrap();
+    let mut client_guard = mqtt_client.lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     let mut client = MqttClient::new(host, port);
     client.set_app_handle(app);
+    client.set_portal_id(portal_id);
     client.connect().map_err(|e| e.to_string())?;
     *client_guard = Some(client);
     Ok(())
@@ -157,7 +164,8 @@ fn connect_mqtt(
 
 #[tauri::command]
 fn disconnect_mqtt(mqtt_client: State<MqttState>) -> Result<(), String> {
-    let mut client_guard = mqtt_client.lock().unwrap();
+    let mut client_guard = mqtt_client.lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = None;
     Ok(())
 }
