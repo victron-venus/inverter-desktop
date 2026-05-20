@@ -28,13 +28,13 @@ export function useTheme() {
     const prod = (ds.produced_today || 0).toFixed(2)
     const dollars = (ds.produced_dollars || 0).toFixed(2)
     const grid = (ds.grid_kwh || 0).toFixed(2)
-    const gridCost = (parseFloat(grid) * 0.31).toFixed(2)
+    const gridCost = (Number.parseFloat(grid) * 0.31).toFixed(2)
     const batIn = (ds.battery_in || 0).toFixed(2)
     const batOut = (ds.battery_out || 0).toFixed(2)
     const batInY = (ds.battery_in_yesterday || 0).toFixed(1)
     const batOutY = (ds.battery_out_yesterday || 0).toFixed(1)
-    const batDelta = (parseFloat(batIn) - parseFloat(batOut)).toFixed(2)
-    const batDeltaY = (parseFloat(batInY) - parseFloat(batOutY)).toFixed(1)
+    const batDelta = (Number.parseFloat(batIn) - Number.parseFloat(batOut)).toFixed(2)
+    const batDeltaY = (Number.parseFloat(batInY) - Number.parseFloat(batOutY)).toFixed(1)
     const tasmotaDaily = ds.tasmota_daily || []
     const mpptDaily = ds.mppt_daily || []
     const pvTotalDaily = ds.pv_total_daily || 0
@@ -43,14 +43,14 @@ export function useTheme() {
     solarParts.push(pvTotalDaily.toFixed(2) + '(' + mpptDaily.map((v: number) => v.toFixed(2)).join('+') + ')')
     const solarStr = escapeHtml(solarParts.join('+'))
     let parts: string[] = []
-    if (parseFloat(prod) > 0) {
+    if (Number.parseFloat(prod) > 0) {
       parts.push(`<span class="highlight">☀️ ${escapeHtml(prod)}kWh</span> <span class="detail">${solarStr}</span>`)
-      if (parseFloat(dollars) > 0) parts[parts.length - 1] += ` <span class="money">($${escapeHtml(dollars)})</span>`
+      if (Number.parseFloat(dollars) > 0) parts[parts.length - 1] += ` <span class="money">($${escapeHtml(dollars)})</span>`
     }
-    if (parseFloat(grid) > 0) {
-      parts.push(`Grid: ${escapeHtml(grid)}kWh <span class="money">($${escapeHtml(gridCost)})</span><br>`)
+    if (Number.parseFloat(grid) > 0) {
+      parts.push(`Grid: ${escapeHtml(grid)}kWh <span class="money">($${escapeHtml(gridCost)})</span>`)
     }
-    if (parseFloat(batIn) > 0 || parseFloat(batOut) > 0) {
+    if (Number.parseFloat(batIn) > 0 || Number.parseFloat(batOut) > 0) {
       parts.push(`🔋 I: ${escapeHtml(batIn)}kWh <span class="dim">(${escapeHtml(batInY)})</span>, O: ${escapeHtml(batOut)}kWh <span class="dim">(${escapeHtml(batOutY)})</span>; Δ: ${escapeHtml(batDelta)}kWh <span class="dim">(${escapeHtml(batDeltaY)})</span>`)
     }
     let result = parts.join('')

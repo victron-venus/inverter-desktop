@@ -5,7 +5,7 @@ use mqtt::{MqttClient, InverterState, HeaderToggle};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
-const DEFAULT_MQTT_HOST: &str = "192.168.160.150";
+const DEFAULT_MQTT_HOST: &str = "Cerbo";
 
 use tauri::{Manager, State};
 use tauri::menu::{Menu, Submenu, MenuItem, PredefinedMenuItem};
@@ -122,14 +122,62 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
         .build()
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
-    match store.get("config") {
-        Some(value) => {
-            let config: FullConfig = serde_json::from_value(value)
-                .map_err(|e| format!("Failed to parse config: {}", e))?;
-            Ok(config)
+    let mut config = match store.get("config") {
+        Some(value) => serde_json::from_value(value)
+            .unwrap_or_default(),
+        None => FullConfig::default(),
+    };
+
+    let mut changed = false;
+
+    // Auto-fill HA Long-lived Token from env if not set
+    if config.ha_longlived_token.as_ref().map_or(true, |s| s.is_empty()) {
+        if let Ok(token) = std::env::var("HA_TOKEN") {
+            if !token.is_empty() {
+                config.ha_longlived_token = Some(token);
+                changed = true;
+            }
         }
-        None => Ok(FullConfig::default()),
     }
+
+    // Auto-fill MQTT HA credentials from env if not set
+    if config.mqtt_ha_login.as_ref().map_or(true, |s| s.is_empty()) {
+        if let Ok(user) = std::env::var("HA_MQTT_USER") {
+            if !user.is_empty() {
+                config.mqtt_ha_login = Some(user);
+                changed = true;
+            }
+        }
+    }
+    if config.mqtt_ha_password.as_ref().map_or(true, |s| s.is_empty()) {
+        if let Ok(pwd) = std::env::var("HA_MQTT_PWD") {
+            if !pwd.is_empty() {
+                config.mqtt_ha_password = Some(pwd);
+                changed = true;
+            }
+        }
+    }
+
+    // Default ports
+    if config.ha_port.is_none() {
+        config.ha_port = Some(8123);
+        changed = true;
+    }
+    if config.mqtt_port == 0 {
+        config.mqtt_port = 1883;
+        changed = true;
+    }
+    if config.mqtt_ha_port.is_none() {
+        config.mqtt_ha_port = Some(1883);
+        changed = true;
+    }
+
+    if changed {
+        store.set("config", serde_json::to_value(&config).map_err(|e| e.to_string())?);
+        store.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    }
+
+    Ok(config)
 }
 
 #[tauri::command]

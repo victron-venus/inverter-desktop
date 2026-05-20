@@ -30,7 +30,7 @@ export function formatSemverLabel(ver: string | undefined) {
   if (ver === null || ver === undefined || ver === '') return '?'
   const s = String(ver).trim()
   if (s === '?') return '?'
-  if (/^v[0-9]/i.test(s)) return s
-  if (/^[0-9]/.test(s)) return 'v' + s
+  if (/^v\d/i.test(s)) return s
+  if (/^\d/.test(s)) return 'v' + s
   return s
 }

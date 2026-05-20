@@ -26,8 +26,8 @@ export interface AppConfig {
 }
 
 const defaultConfig: AppConfig = {
-  mqtt_host: '192.168.160.150', mqtt_port: 1883, mqtt_login: null, mqtt_password: null,
-  mqtt_ha_host: '192.168.160.150', mqtt_ha_port: 1883, mqtt_ha_login: null, mqtt_ha_password: null,
+  mqtt_host: 'Cerbo', mqtt_port: 1883, mqtt_login: null, mqtt_password: null,
+  mqtt_ha_host: 'HA', mqtt_ha_port: 1883, mqtt_ha_login: null, mqtt_ha_password: null,
   ha_longlived_token: null, ha_url: null, ha_port: null, ha_use_direct_api: false,
   ha_entities: null, header_toggles_config: null,
   ha_water_valve_entity: null, ha_pump_switch_entity: null,

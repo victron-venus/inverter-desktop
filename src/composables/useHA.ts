@@ -3,12 +3,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { state, appConfig } from './useInverterState'
 import { logger } from '../logger'
 
-const HA_DOMAINS = ['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'media_player', 'scene', 'script', 'number', 'sensor', 'binary_sensor']
+const HA_DOMAINS = new Set(['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'media_player', 'scene', 'script', 'number', 'sensor', 'binary_sensor'])
 
 function isHaEntity(entityId: string): boolean {
   if (!entityId || typeof entityId !== 'string') return false
   const parts = entityId.split('.')
-  return parts.length === 2 && HA_DOMAINS.includes(parts[0])
+  return parts.length === 2 && HA_DOMAINS.has(parts[0])
 }
 
 export function useHA() {
@@ -54,7 +54,7 @@ export function useHA() {
 
   function startHaPolling() {
     if (haPollInterval) clearInterval(haPollInterval)
-    haPollInterval = window.setInterval(pollHaStates, 3000)
+    haPollInterval = globalThis.setInterval(pollHaStates, 3000)
     pollHaStates()
   }
 

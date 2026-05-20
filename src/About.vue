@@ -44,10 +44,10 @@ async function closeWindow() {
   try {
     const window = await getCurrentWindow()
     await window.close()
-  } catch (e) {
+  } catch {
     try {
       await invoke('close_config_window')
-    } catch (e2) {
+    } catch {
       // ignore
     }
   }
