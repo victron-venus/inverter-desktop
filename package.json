@@ -13,7 +13,7 @@
     "@mdi/font": "^7.4.47",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
-    "echarts": "^6.0.0",
+    "echarts": "^6.1.0",
     "uplot": "^1.6.30",
     "vue": "^3.4.21",
     "vue-awesome-button": "^0.1.0",
