@@ -1,13 +1,13 @@
 <template>
-  <v-app>
+  <v-app :theme="config.color_scheme === 'light' ? 'light' : 'dark'" style="font-size:35%">
     <v-app-bar color="primary" density="compact">
       <v-app-bar-title>Configuration</v-app-bar-title>
       <v-spacer></v-spacer>
-      <v-btn icon @click="resetToDefaults">
+      <v-btn icon @click="handleReset">
         <v-icon>mdi-refresh</v-icon>
         <v-tooltip activator="parent">Reset to defaults</v-tooltip>
       </v-btn>
-      <v-btn icon @click="saveConfig" :loading="saving">
+      <v-btn icon @click="handleSave" :loading="saving">
         <v-icon>mdi-content-save</v-icon>
         <v-tooltip activator="parent">Save</v-tooltip>
       </v-btn>
@@ -24,7 +24,6 @@
             <v-card>
               <v-card-text>
                 <v-form ref="formRef">
-                  <!-- MQTT Settings -->
                   <v-divider class="mb-4">
                     <v-chip size="small" color="primary">MQTT</v-chip>
                   </v-divider>
@@ -64,7 +63,7 @@
                       <v-text-field
                         v-model="config.mqtt_password"
                         label="MQTT Password (optional)"
-                        type="password"
+                        :type="showPassword ? 'text' : 'password'"
                         variant="outlined"
                         density="compact"
                         :append-inner-icon="showPassword ? 'mdi-eye' : 'mdi-eye-off'"
@@ -73,10 +72,98 @@
                     </v-col>
                   </v-row>
 
-                  <!-- Home Assistant Settings -->
+                  <v-text-field
+                    v-model="config.portal_id"
+                    label="VRM Portal ID (optional — keep-alive)"
+                    placeholder="e.g. a1b2c3d4e5f6"
+                    variant="outlined"
+                    density="compact"
+                    hint="Required for Cerbo GX data stream keep-alive"
+                    persistent-hint
+                    class="mb-2"
+                  ></v-text-field>
+
+                  <v-divider class="mb-4 mt-4">
+                    <v-chip size="small" color="primary">MQTT HA</v-chip>
+                  </v-divider>
+
+                  <v-row>
+                    <v-col cols="12" sm="6">
+                      <v-text-field
+                        v-model="config.mqtt_ha_host"
+                        label="MQTT HA Host"
+                        variant="outlined"
+                        density="compact"
+                      ></v-text-field>
+                    </v-col>
+                    <v-col cols="12" sm="6">
+                      <v-text-field
+                        v-model.number="config.mqtt_ha_port"
+                        label="MQTT HA Port"
+                        type="number"
+                        variant="outlined"
+                        density="compact"
+                      ></v-text-field>
+                    </v-col>
+                  </v-row>
+
+                  <v-row>
+                    <v-col cols="12" sm="6">
+                      <v-text-field
+                        v-model="config.mqtt_ha_login"
+                        label="MQTT HA Login (optional)"
+                        variant="outlined"
+                        density="compact"
+                      ></v-text-field>
+                    </v-col>
+                    <v-col cols="12" sm="6">
+                      <v-text-field
+                        v-model="config.mqtt_ha_password"
+                        label="MQTT HA Password (optional)"
+                        :type="showPasswordHa ? 'text' : 'password'"
+                        variant="outlined"
+                        density="compact"
+                        :append-inner-icon="showPasswordHa ? 'mdi-eye' : 'mdi-eye-off'"
+                        @click:append-inner="showPasswordHa = !showPasswordHa"
+                      ></v-text-field>
+                    </v-col>
+                  </v-row>
+
                   <v-divider class="mb-4 mt-4">
                     <v-chip size="small" color="primary">Home Assistant</v-chip>
                   </v-divider>
+
+                  <v-text-field
+                    v-model="config.ha_url"
+                    label="HA URL"
+                    placeholder="http://homeassistant.local"
+                    variant="outlined"
+                    density="compact"
+                    class="mb-2"
+                    :rules="urlRules"
+                  ></v-text-field>
+
+                  <v-row>
+                    <v-col cols="12" sm="6">
+                      <v-text-field
+                        v-model.number="config.ha_port"
+                        label="HA Port"
+                        type="number"
+                        placeholder="8123"
+                        variant="outlined"
+                        density="compact"
+                        :rules="portRules"
+                      ></v-text-field>
+                    </v-col>
+                    <v-col cols="12" sm="6" class="d-flex align-center">
+                      <v-chip
+                        :color="haDirectMonitoringEnabled ? 'success' : 'grey'"
+                        label
+                      >
+                        HA Direct: {{ haDirectMonitoringEnabled ? 'Enabled' : 'Disabled' }}
+                      </v-chip>
+                    </v-col>
+                  </v-row>
 
                   <v-text-field
                     v-model="config.ha_longlived_token"
@@ -84,8 +171,59 @@
                     type="password"
                     variant="outlined"
                     density="compact"
-                    class="mb-4"
+                    class="mb-2"
                   ></v-text-field>
+
+                  <v-btn
+                    color="primary"
+                    variant="flat"
+                    size="small"
+                    @click="testHaConnection"
+                    :loading="testingHa"
+                    class="mr-2 mb-4"
+                  >
+                    Test HA Connection
+                  </v-btn>
+                  <v-btn
+                    color="primary"
+                    variant="flat"
+                    size="small"
+                    @click="handleFetchHaEntities"
+                    :loading="discoveryLoading"
+                    :disabled="!isHaConfigured"
+                    class="mr-2 mb-4"
+                  >
+                    Fetch from HA
+                  </v-btn>
+                  <v-btn
+                    color="secondary"
+                    variant="flat"
+                    size="small"
+                    @click="autofillDomain('light')"
+                    :disabled="discoveredEntities.length === 0"
+                    class="mr-2 mb-4"
+                  >
+                    Autofill lights
+                  </v-btn>
+                  <v-btn
+                    color="secondary"
+                    variant="flat"
+                    size="small"
+                    @click="autofillDomain('switch')"
+                    :disabled="discoveredEntities.length === 0"
+                    class="mb-4"
+                  >
+                    Autofill switches
+                  </v-btn>
+
+                  <v-alert
+                    v-if="haTestResult"
+                    :type="haTestSuccess ? 'success' : 'error'"
+                    density="compact"
+                    class="mb-2"
+                  >
+                    {{ haTestResult }}
+                  </v-alert>
 
                   <v-row>
                     <v-col cols="12" sm="6">
@@ -108,42 +246,73 @@
                     </v-col>
                   </v-row>
 
-                  <!-- Entity Mappings -->
+                  <HaEntitiesEditor
+                    :haEntitiesList="haEntitiesList"
+                    :discoveredEntities="discoveredEntities"
+                    :entityRules="entityRules"
+                    @add="addHaEntity"
+                    @remove="removeHaEntity"
+                    @move-up="moveEntityUp"
+                    @move-down="moveEntityDown"
+                  />
+
+                  <HeaderTogglesEditor
+                    :headerTogglesList="headerTogglesList"
+                    :discoveredEntities="discoveredEntities"
+                    :entityRules="entityRules"
+                    @add="addHeaderToggle"
+                    @remove="removeHeaderToggle"
+                    @move-up="moveToggleUp"
+                    @move-down="moveToggleDown"
+                  />
+
                   <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="primary">Entity Mappings (JSON)</v-chip>
+                    <v-chip size="small" color="info">Preview</v-chip>
                   </v-divider>
 
-                  <v-textarea
-                    v-model="booleanEntitiesJson"
-                    label="Boolean Entities"
-                    placeholder='{"only_charging": "input_boolean.only_charging", ...}'
-                    variant="outlined"
-                    density="compact"
-                    rows="4"
-                    class="mb-2"
-                    hide-details="auto"
-                  ></v-textarea>
+                  <div class="preview-section mb-4">
+                    <div class="mb-2">
+                      <strong>Header Toggles:</strong>
+                    </div>
+                    <div class="d-flex flex-wrap gap-1 mb-3">
+                      <v-btn
+                        v-for="toggle in headerTogglesList"
+                        :key="toggle.id || toggle.entity"
+                        outlined
+                        class="custom-3d state-off"
+                        size="small"
+                      >
+                        {{ toggle.label }}
+                      </v-btn>
+                      <span
+                        v-if="headerTogglesList.length === 0"
+                        class="text-caption grey--text"
+                      >
+                        None
+                      </span>
+                    </div>
+                    <div class="mb-2">
+                      <strong>Home Buttons:</strong>
+                    </div>
+                    <div class="d-flex flex-wrap gap-1">
+                      <v-btn
+                        v-for="entity in haEntitiesList"
+                        :key="entity.id || entity.entity"
+                        outlined
+                        class="custom-3d state-off"
+                        size="small"
+                      >
+                        {{ entity.label }}
+                      </v-btn>
+                      <span
+                        v-if="haEntitiesList.length === 0"
+                        class="text-caption grey--text"
+                      >
+                        None
+                      </span>
+                    </div>
+                  </div>
 
-                  <v-textarea
-                    v-model="switchEntitiesJson"
-                    label="Switch Entities"
-                    placeholder='{"pump": {"label": "Pump", "entity": "switch.pump"}}'
-                    variant="outlined"
-                    density="compact"
-                    rows="4"
-                    hide-details="auto"
-                  ></v-textarea>
-
-                  <v-alert
-                    v-if="jsonError"
-                    type="error"
-                    density="compact"
-                    class="mt-2"
-                  >
-                    {{ jsonError }}
-                  </v-alert>
-
-                  <!-- UI Settings -->
                   <v-divider class="mb-4 mt-4">
                     <v-chip size="small" color="primary">UI Settings</v-chip>
                   </v-divider>
@@ -160,23 +329,58 @@
                     </v-col>
                   </v-row>
 
-                  <!-- Header Toggles -->
-                  <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="primary">Header Toggles (JSON)</v-chip>
-                  </v-divider>
-
-                  <v-textarea
-                    v-model="headerTogglesJson"
-                    label="Header Toggles Configuration"
-                    placeholder='[{"id": "only_charging", "label": "ONLY CHARGING", "entity": "input_boolean.only_charging"}]'
-                    variant="outlined"
-                    density="compact"
-                    rows="3"
-                    hide-details="auto"
-                  ></v-textarea>
+                  <v-row class="mt-4">
+                    <v-col cols="12" class="d-flex justify-end gap-2">
+                      <v-btn @click="handleReset" :disabled="saving">
+                        Reset to defaults
+                      </v-btn>
+                      <v-btn @click="handleSave" :loading="saving" color="primary">
+                        Save
+                      </v-btn>
+                      <v-btn @click="closeWindow" text>Close</v-btn>
+                    </v-col>
+                  </v-row>
                 </v-form>
               </v-card-text>
             </v-card>
+
+            <v-dialog v-model="discoveryDialog" max-width="600px">
+              <v-card title="Discover HA Entities">
+                <v-card-text>
+                  <v-progress-linear
+                    v-if="discoveryLoading"
+                    indeterminate
+                  ></v-progress-linear>
+                  <v-data-table
+                    v-else
+                    :items="discoveredEntities"
+                    :headers="discoveryHeaders"
+                    show-select
+                    v-model:selected="selectedDiscovery"
+                  ></v-data-table>
+                  <v-radio-group
+                    v-model="discoveryTargetGroup"
+                    row
+                    dense
+                    class="mt-4"
+                  >
+                    <v-radio label="Add to Home Buttons" value="home"></v-radio>
+                    <v-radio label="Add to Header Toggles" value="toggle"></v-radio>
+                  </v-radio-group>
+                </v-card-text>
+                <v-card-actions>
+                  <v-spacer></v-spacer>
+                  <v-btn @click="discoveryDialog = false">Cancel</v-btn>
+                  <v-btn
+                    @click="addDiscoveredEntities"
+                    color="primary"
+                    :disabled="!selectedDiscovery || selectedDiscovery.length === 0"
+                  >
+                    Add Selected ({{ selectedDiscovery.length }})
+                  </v-btn>
+                </v-card-actions>
+              </v-card>
+            </v-dialog>
 
             <v-alert
               v-if="message"
@@ -184,6 +388,7 @@
               density="compact"
               class="mt-4"
               closable
+              @click:close="clearMessage"
             >
               {{ message }}
             </v-alert>
@@ -195,158 +400,138 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { emit } from '@tauri-apps/api/event'
+import { logger } from './logger'
+import { useConfigForm } from './composables/useConfigForm'
+import { useHAEntityManager } from './composables/useHAEntityManager'
+import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
+import HeaderTogglesEditor from './components/HeaderTogglesEditor.vue'
 
-interface AppConfig {
-  mqtt_host: string
-  mqtt_port: number
-  mqtt_login?: string | null
-  mqtt_password?: string | null
-  ha_longlived_token?: string | null
-  color_scheme?: string | null
-  ha_boolean_entities?: Record<string, string> | null
-  ha_switch_entities?: Record<string, { label?: string; entity: string }> | null
-  ha_water_valve_entity?: string | null
-  ha_pump_switch_entity?: string | null
-  header_toggles?: Array<{ id: string; label: string; entity: string }> | null
-}
+const { config, saving, message, messageType, loadConfig, saveConfig, resetToDefaults, clearMessage } = useConfigForm()
+const {
+  haEntitiesList, headerTogglesList,
+  discoveryDialog, discoveredEntities, selectedDiscovery, discoveryLoading,
+  discoveryTargetGroup,
+  loadFromConfig, fetchHaEntities, addDiscoveredEntities,
+  addHaEntity, removeHaEntity, moveEntityUp, moveEntityDown,
+  addHeaderToggle, removeHeaderToggle, moveToggleUp, moveToggleDown,
+  autofillDomain,
+} = useHAEntityManager()
 
-const defaultConfig: AppConfig = {
-  mqtt_host: '192.168.160.150',
-  mqtt_port: 1883,
-  mqtt_login: null,
-  mqtt_password: null,
-  ha_longlived_token: null,
-  color_scheme: 'dark',
-  ha_boolean_entities: null,
-  ha_switch_entities: null,
-  ha_water_valve_entity: null,
-  ha_pump_switch_entity: null,
-  header_toggles: null
-}
-
-const config = reactive<AppConfig>({ ...defaultConfig })
-const saving = ref(false)
-const message = ref('')
-const messageType = ref<'success' | 'error' | 'info'>('info')
-const jsonError = ref('')
 const showPassword = ref(false)
+const showPasswordHa = ref(false)
+const testingHa = ref(false)
+const haTestResult = ref('')
+const haTestSuccess = ref(false)
 
-// Computed JSON strings for textareas
-const booleanEntitiesJson = ref('{}')
-const switchEntitiesJson = ref('{}')
-const headerTogglesJson = ref('[]')
-
-// Watch JSON inputs and parse to update config
-watch(booleanEntitiesJson, (val) => {
-  try {
-    if (val.trim()) {
-      const parsed = JSON.parse(val)
-      config.ha_boolean_entities = parsed
-      jsonError.value = ''
-    } else {
-      config.ha_boolean_entities = {}
-      jsonError.value = ''
-    }
-  } catch (e) {
-    jsonError.value = `Invalid JSON: ${e}`
-  }
+const haDirectMonitoringEnabled = computed(() => {
+  return !!(config.ha_url && config.ha_longlived_token && config.ha_url.trim() && config.ha_longlived_token.trim())
 })
 
-watch(switchEntitiesJson, (val) => {
-  try {
-    if (val.trim()) {
-      const parsed = JSON.parse(val)
-      config.ha_switch_entities = parsed
-      jsonError.value = ''
-    } else {
-      config.ha_switch_entities = {}
-      jsonError.value = ''
-    }
-  } catch (e) {
-    jsonError.value = `Invalid JSON: ${e}`
-  }
-})
+const isHaConfigured = computed(() => haDirectMonitoringEnabled.value)
 
-watch(headerTogglesJson, (val) => {
-  try {
-    if (val.trim()) {
-      const parsed = JSON.parse(val)
-      config.header_toggles = parsed
-      jsonError.value = ''
-    } else {
-      config.header_toggles = []
-      jsonError.value = ''
-    }
-  } catch (e) {
-    jsonError.value = `Invalid JSON: ${e}`
-  }
-})
+watch(
+  [() => config.ha_longlived_token, () => config.ha_url],
+  ([token, url]) => {
+    config.ha_use_direct_api = !!(token && url && token.trim() && url.trim())
+  },
+  { immediate: true }
+)
 
-async function loadConfig() {
+const urlRules = [
+  (v: string) => !!v || 'URL required',
+  (v: string) => v.startsWith('http://') || v.startsWith('https://') || 'Must start with http:// or https://'
+]
+const portRules = [(v: number) => (v >= 1 && v <= 65535) || 'Port must be 1-65535']
+const entityRules = [
+  (v: string) => !!v || 'Required',
+  (v: string) => v.includes('.') || 'Must contain a dot (domain.entity)'
+]
+const discoveryHeaders = [
+  { title: 'Friendly Name', key: 'friendly_name' },
+  { title: 'Entity ID', key: 'entity_id' },
+  { title: 'Domain', key: 'domain' }
+]
+
+async function testHaConnection() {
+  if (!config.ha_url || !config.ha_longlived_token) {
+    haTestResult.value = 'URL and Token required'
+    haTestSuccess.value = false
+    return
+  }
+  testingHa.value = true
+  haTestResult.value = ''
   try {
-    const loaded = await invoke<AppConfig>('get_config')
-    Object.assign(config, loaded)
-    // Update JSON textareas
-    booleanEntitiesJson.value = JSON.stringify(loaded.ha_boolean_entities || {}, null, 2)
-    switchEntitiesJson.value = JSON.stringify(loaded.ha_switch_entities || {}, null, 2)
-    headerTogglesJson.value = JSON.stringify(loaded.header_toggles || [], null, 2)
-    message.value = ''
-  } catch (e) {
-    message.value = `Failed to load config: ${e}`
-    messageType.value = 'error'
+    await invoke('test_ha_connection', {
+      url: config.ha_url,
+      port: config.ha_port || 8123,
+      token: config.ha_longlived_token
+    })
+    haTestResult.value = 'Connection successful'
+    haTestSuccess.value = true
+  } catch (e: any) {
+    haTestResult.value = `Failed: ${e?.toString() || e}`
+    haTestSuccess.value = false
+  } finally {
+    testingHa.value = false
   }
 }
 
-async function saveConfig() {
-  // Validate JSON fields first
-  try {
-    if (booleanEntitiesJson.value.trim()) JSON.parse(booleanEntitiesJson.value)
-    if (switchEntitiesJson.value.trim()) JSON.parse(switchEntitiesJson.value)
-    if (headerTogglesJson.value.trim()) JSON.parse(headerTogglesJson.value)
-  } catch (e) {
-    jsonError.value = `Invalid JSON: ${e}`
-    message.value = 'Cannot save with invalid JSON'
+async function handleFetchHaEntities() {
+  if (!config.ha_url || !config.ha_longlived_token) {
+    message.value = 'Please enter HA URL and Token first'
     messageType.value = 'error'
     return
   }
-
-  saving.value = true
   try {
-    await invoke('save_config', { config })
-    message.value = 'Configuration saved successfully'
-    messageType.value = 'success'
-  } catch (e) {
-    message.value = `Failed to save config: ${e}`
+    await fetchHaEntities(config.ha_url, config.ha_port, config.ha_longlived_token)
+  } catch (e: any) {
+    message.value = `Discovery failed: ${e?.toString() || e}`
     messageType.value = 'error'
-  } finally {
-    saving.value = false
   }
 }
 
-function resetToDefaults() {
-  Object.assign(config, defaultConfig)
-  booleanEntitiesJson.value = JSON.stringify(defaultConfig.ha_boolean_entities || {}, null, 2)
-  switchEntitiesJson.value = JSON.stringify(defaultConfig.ha_switch_entities || {}, null, 2)
-  headerTogglesJson.value = JSON.stringify(defaultConfig.header_toggles || [], null, 2)
-  message.value = 'Reset to defaults (unsaved)'
-  messageType.value = 'info'
+async function handleSave() {
+  await saveConfig(haEntitiesList.value, headerTogglesList.value)
+  await emit('config-saved', { color_scheme: config.color_scheme })
 }
 
 async function closeWindow() {
-  const window = await getCurrentWindow()
-  window.close()
+  try {
+    const window = await getCurrentWindow()
+    await window.close()
+  } catch (e) {
+    logger.error('JS close failed, trying Rust command:', e)
+    try {
+      await invoke('close_config_window')
+    } catch (e2) {
+      logger.error('Rust close also failed:', e2)
+    }
+  }
 }
 
-onMounted(() => {
-  loadConfig()
+function handleReset() {
+  resetToDefaults()
+  haEntitiesList.value = []
+  headerTogglesList.value = []
+}
+
+onMounted(async () => {
+  const cfg = await loadConfig()
+  loadFromConfig(cfg)
 })
 </script>
 
 <style scoped>
 .fill-height {
   min-height: 100vh;
+}
+.entity-card.drag-over,
+.toggle-card.drag-over {
+  background-color: rgba(33, 150, 243, 0.1);
+  border: 1px dashed #2196f3;
 }
 </style>

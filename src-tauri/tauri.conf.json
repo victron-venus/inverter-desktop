@@ -12,6 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Inverter Dashboard",
         "width": 800,
         "height": 900,

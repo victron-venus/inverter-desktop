@@ -1,50 +1,66 @@
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from './logger'
+
+/** Default MQTT broker address – configure to match your local setup */
+const DEFAULT_MQTT_HOST = 'Cerbo'
 
 export interface AppConfig {
   mqtt_host: string
   mqtt_port: number
-  ha_boolean_entities: Record<string, string>
-  ha_switch_entities: Record<string, { label?: string; entity: string }>
-  ha_water_valve_entity: string
-  ha_pump_switch_entity: string
-  header_toggles: Array<{ id: string; label: string; entity: string }>
+  mqtt_login?: string | null
+  mqtt_password?: string | null
+  mqtt_ha_host?: string
+  mqtt_ha_port?: number
+  mqtt_ha_login?: string | null
+  mqtt_ha_password?: string | null
+  ha_longlived_token?: string | null
+  ha_url?: string | null
+  ha_port?: number | null
+  ha_use_direct_api?: boolean
+  ha_entities?: Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>
+  header_toggles_config?: Array<{ id: string; label: string; entity: string }>
+  ha_water_valve_entity?: string | null
+  ha_pump_switch_entity?: string | null
+  ha_boolean_entities?: Record<string, string> | null
+  ha_switch_entities?: Record<string, { label?: string; entity: string }> | null
+  header_toggles?: Array<{ id: string; label: string; entity: string }> | null
+  color_scheme?: string | null
+  portal_id?: string | null
 }
 
 const defaultConfig: AppConfig = {
-  mqtt_host: '192.168.160.150',
+  mqtt_host: DEFAULT_MQTT_HOST,
   mqtt_port: 1883,
-  ha_boolean_entities: {
-    only_charging: 'input_boolean.only_charging',
-    no_feed: 'input_boolean.no_feed',
-    house_support: 'input_boolean.house_support',
-    charge_battery: 'input_boolean.charge_battery',
-    do_not_supply_charger: 'input_boolean.do_not_supply_charger',
-    set_limit_to_ev_charger: 'input_boolean.set_limit_to_ev_charger',
-    minimize_charging: 'input_boolean.minimize_charging'
-  },
-  ha_switch_entities: {},
-  ha_water_valve_entity: 'switch.shutoff_valve',
-  ha_pump_switch_entity: 'switch.pump_switch',
-  header_toggles: [
-    { id: 'only_charging', label: 'ONLY CHARGING', entity: 'input_boolean.only_charging' },
-    { id: 'no_feed', label: 'NO FEED', entity: 'input_boolean.no_feed' },
-    { id: 'house_support', label: 'HOUSE SUPPORT', entity: 'input_boolean.house_support' },
-    { id: 'charge_battery', label: 'CHARGE BATTERY', entity: 'input_boolean.charge_battery' },
-    { id: 'do_not_supply_charger', label: 'DO NOT SUPPLY EV', entity: 'input_boolean.do_not_supply_charger' },
-    { id: 'set_limit_to_ev_charger', label: 'LIMIT TO EV', entity: 'input_boolean.set_limit_to_ev_charger' },
-    { id: 'minimize_charging', label: 'MINIMIZE CHARGING', entity: 'input_boolean.minimize_charging' }
-  ]
+  mqtt_login: null,
+  mqtt_password: null,
+  mqtt_ha_host: 'HA',
+  mqtt_ha_port: 1883,
+  mqtt_ha_login: null,
+  mqtt_ha_password: null,
+  ha_longlived_token: null,
+  ha_url: null,
+  ha_port: null,
+  ha_use_direct_api: false,
+  ha_entities: undefined,
+  header_toggles_config: undefined,
+  ha_water_valve_entity: null,
+  ha_pump_switch_entity: null,
+  ha_boolean_entities: null,
+  ha_switch_entities: null,
+  header_toggles: null,
+  color_scheme: 'dark',
+  portal_id: null,
 }
 
 let config: AppConfig = defaultConfig
 
 export async function getAppConfig(): Promise<AppConfig> {
   try {
-    const fetched = await invoke<any>('get_config')
+    const fetched = await invoke<AppConfig>('get_config')
     config = { ...defaultConfig, ...fetched }
     return config
   } catch (e) {
-    console.warn('Failed to load config, using defaults', e)
+    logger.warn('Failed to load config, using defaults', e)
     return config
   }
 }
