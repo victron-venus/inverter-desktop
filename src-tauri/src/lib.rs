@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 const DEFAULT_MQTT_HOST: &str = "192.168.160.150";
 
 use tauri::{Manager, State};
-use tauri::menu::{Menu, Submenu, PredefinedMenuItem, AboutMetadata};
+use tauri::menu::{Menu, Submenu, MenuItem, PredefinedMenuItem};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -16,6 +16,7 @@ struct DiscoveredEntity {
     entity_id: String,
     friendly_name: String,
     domain: String,
+    state: String,
 }
 
 
@@ -40,8 +41,8 @@ struct FullConfig {
     mqtt_port: u16,
     mqtt_login: Option<String>,
     mqtt_password: Option<String>,
-    mqtt_ha_host: String,
-    mqtt_ha_port: u16,
+    mqtt_ha_host: Option<String>,
+    mqtt_ha_port: Option<u16>,
     mqtt_ha_login: Option<String>,
     mqtt_ha_password: Option<String>,
     ha_longlived_token: Option<String>,
@@ -67,8 +68,8 @@ impl Default for FullConfig {
             mqtt_port: 1883,
             mqtt_login: None,
             mqtt_password: None,
-            mqtt_ha_host: DEFAULT_MQTT_HOST.to_string(),
-            mqtt_ha_port: 1883,
+            mqtt_ha_host: Some(DEFAULT_MQTT_HOST.to_string()),
+            mqtt_ha_port: Some(1883),
             mqtt_ha_login: None,
             mqtt_ha_password: None,
             ha_longlived_token: None,
@@ -143,10 +144,12 @@ fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> 
 fn connect_mqtt(
     host: String,
     port: u16,
+    app: tauri::AppHandle,
     mqtt_client: State<MqttState>
 ) -> Result<(), String> {
     let mut client_guard = mqtt_client.lock().unwrap();
     let mut client = MqttClient::new(host, port);
+    client.set_app_handle(app);
     client.connect().map_err(|e| e.to_string())?;
     *client_guard = Some(client);
     Ok(())
@@ -192,12 +195,10 @@ async fn discover_ha_entities(
         "scene", "script", "number", "sensor", "binary_sensor"
     ];
     let mut result = Vec::new();
-    for state in states {
-        // Clone entity_id early to avoid borrow issues
-        let entity_id = state.entity_id.clone();
+    for ha_state in states {
+        let entity_id = ha_state.entity_id.clone();
         let domain = entity_id.split('.').next().map(String::from);
-        // Use as_ref to avoid consuming attributes
-        let friendly_name = if let Some(attrs) = &state.attributes {
+        let friendly_name = if let Some(attrs) = &ha_state.attributes {
             attrs.get("friendly_name")
                 .and_then(|v| v.as_str())
                 .map(String::from)
@@ -211,6 +212,7 @@ async fn discover_ha_entities(
                     entity_id,
                     friendly_name,
                     domain: domain_str,
+                    state: ha_state.state.clone(),
                 });
             }
         }
@@ -240,29 +242,16 @@ async fn toggle_ha_entity(
     }
 }
 
-fn build_config_window_menu(app: &tauri::AppHandle) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
-    let close = tauri::menu::MenuItem::with_id(app, "config_close", "Close", true, Some("CmdOrCtrl+W"))?;
-    let cut = PredefinedMenuItem::cut(app, Some("Cut"))?;
-    let copy = PredefinedMenuItem::copy(app, Some("Copy"))?;
-    let paste = PredefinedMenuItem::paste(app, Some("Paste"))?;
-    let select_all = PredefinedMenuItem::select_all(app, Some("Select All"))?;
-    let file_menu = Submenu::with_items(app, "File", true, &[&close])?;
-    let edit_menu = Submenu::with_items(app, "Edit", true, &[&cut, &copy, &paste, &select_all])?;
-    Menu::with_items(app, &[&file_menu, &edit_menu])
-}
-
 #[tauri::command]
 fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
-    let menu = build_config_window_menu(&app).map_err(|e| e.to_string())?;
     tauri::WebviewWindowBuilder::new(
         &app,
         "config",
         tauri::WebviewUrl::App("config".into())
     )
     .title("Configuration")
-    .inner_size(600.0, 700.0)
+    .inner_size(800.0, 900.0)
     .resizable(true)
-    .menu(menu)
     .build()
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -299,8 +288,9 @@ pub fn run() {
         ])
         .setup(|app| {
             // Setup app menu with About
+            let about_item = MenuItem::with_id(app, "about", "About Inverter Dashboard", true, None::<&str>)?;
             let app_submenu = Submenu::with_items(app, "Inverter Dashboard", true, &[
-                &PredefinedMenuItem::about(app, Some("About Inverter Dashboard"), Some(AboutMetadata { ..Default::default() }))?,
+                &about_item,
                 &PredefinedMenuItem::separator(app)?,
                 &PredefinedMenuItem::quit(app, Some("Quit"))?,
             ])?;
@@ -353,6 +343,26 @@ pub fn run() {
             // Show window on startup
             let window = app.get_webview_window("main").unwrap();
             window.show().unwrap();
+
+            // macOS: accessory mode keeps app in menu bar (tray icon visible) without dock icon
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // Handle app menu events
+            app.on_menu_event(move |app_handle, event| {
+                if event.id.as_ref() == "about" {
+                    let _ = tauri::WebviewWindowBuilder::new(
+                        app_handle,
+                        "about",
+                        tauri::WebviewUrl::App("about".into())
+                    )
+                    .title("About Inverter Dashboard")
+                    .inner_size(380.0, 320.0)
+                    .resizable(false)
+                    .center()
+                    .build();
+                }
+            });
 
             Ok(())
         })

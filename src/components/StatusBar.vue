@@ -1,13 +1,12 @@
 <template>
   <div class="mt-2 text-center small" style="color:#666">
     <span class="status-dot" :class="haConnected ? 'online' : 'offline'"></span>
-    HA {{ haConnected ? '(OK)' : '(Offline)' }}
+    HA
     &nbsp;|&nbsp;
     <span class="status-dot" :class="mqttConnected ? 'online' : 'offline'"></span>
-    MQTT {{ mqttConnected ? 'OK' : (mqttConnected === false ? 'Disconnected' : 'Connecting...') }}
-    <br>
-    Uptime: {{ formatUptime(uptime || 0) }}
-    &nbsp;|&nbsp; {{ stateVersion ? 'Control v' + stateVersion : '' }}
+    MQTT
+    &nbsp;|&nbsp; Uptime: {{ formatUptime(uptime || 0) }}
+    &nbsp;|&nbsp; {{ stateVersion ? 'Control ' + stateVersion : '' }}
     &nbsp;|&nbsp; App v{{ appVersion }}
   </div>
 </template>

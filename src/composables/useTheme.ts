@@ -42,9 +42,18 @@ export function useTheme() {
     tasmotaDaily.forEach((v: number) => { if (v > 0) solarParts.push(v.toFixed(2)) })
     solarParts.push(pvTotalDaily.toFixed(2) + '(' + mpptDaily.map((v: number) => v.toFixed(2)).join('+') + ')')
     const solarStr = escapeHtml(solarParts.join('+'))
-    let result = `<span class="highlight">☀️ ${escapeHtml(prod)}kWh</span> <span class="detail">${solarStr}</span> `
-    result += `<span class="money">($${escapeHtml(dollars)})</span> | Grid: ${escapeHtml(grid)}kWh <span class="money">($${escapeHtml(gridCost)})</span> | `
-    result += `🔋 I: ${escapeHtml(batIn)}kWh <span class="dim">(${escapeHtml(batInY)})</span>, O: ${escapeHtml(batOut)}kWh <span class="dim">(${escapeHtml(batOutY)})</span>; Δ: ${escapeHtml(batDelta)}kWh <span class="dim">(${escapeHtml(batDeltaY)})</span>`
+    let parts: string[] = []
+    if (parseFloat(prod) > 0) {
+      parts.push(`<span class="highlight">☀️ ${escapeHtml(prod)}kWh</span> <span class="detail">${solarStr}</span>`)
+      if (parseFloat(dollars) > 0) parts[parts.length - 1] += ` <span class="money">($${escapeHtml(dollars)})</span>`
+    }
+    if (parseFloat(grid) > 0) {
+      parts.push(`Grid: ${escapeHtml(grid)}kWh <span class="money">($${escapeHtml(gridCost)})</span>`)
+    }
+    if (parseFloat(batIn) > 0 || parseFloat(batOut) > 0) {
+      parts.push(`🔋 I: ${escapeHtml(batIn)}kWh <span class="dim">(${escapeHtml(batInY)})</span>, O: ${escapeHtml(batOut)}kWh <span class="dim">(${escapeHtml(batOutY)})</span>; Δ: ${escapeHtml(batDelta)}kWh <span class="dim">(${escapeHtml(batDeltaY)})</span>`)
+    }
+    let result = parts.join(' | ')
     return result
   })
 

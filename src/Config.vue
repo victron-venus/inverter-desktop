@@ -1,5 +1,5 @@
 <template>
-  <v-app>
+  <v-app :theme="config.color_scheme === 'light' ? 'light' : 'dark'" style="font-size:65%">
     <v-app-bar color="primary" density="compact">
       <v-app-bar-title>Configuration</v-app-bar-title>
       <v-spacer></v-spacer>
@@ -63,7 +63,7 @@
                       <v-text-field
                         v-model="config.mqtt_password"
                         label="MQTT Password (optional)"
-                        type="password"
+                        :type="showPassword ? 'text' : 'password'"
                         variant="outlined"
                         density="compact"
                         :append-inner-icon="showPassword ? 'mdi-eye' : 'mdi-eye-off'"
@@ -109,7 +109,7 @@
                       <v-text-field
                         v-model="config.mqtt_ha_password"
                         label="MQTT HA Password (optional)"
-                        type="password"
+                        :type="showPasswordHa ? 'text' : 'password'"
                         variant="outlined"
                         density="compact"
                         :append-inner-icon="showPasswordHa ? 'mdi-eye' : 'mdi-eye-off'"
@@ -180,9 +180,29 @@
                     @click="handleFetchHaEntities"
                     :loading="discoveryLoading"
                     :disabled="!isHaConfigured"
-                    class="mb-4"
+                    class="mr-2 mb-4"
                   >
                     Fetch from HA
+                  </v-btn>
+                  <v-btn
+                    color="secondary"
+                    variant="flat"
+                    size="small"
+                    @click="autofillDomain('light')"
+                    :disabled="discoveredEntities.length === 0"
+                    class="mr-2 mb-4"
+                  >
+                    Autofill lights
+                  </v-btn>
+                  <v-btn
+                    color="secondary"
+                    variant="flat"
+                    size="small"
+                    @click="autofillDomain('switch')"
+                    :disabled="discoveredEntities.length === 0"
+                    class="mb-4"
+                  >
+                    Autofill switches
                   </v-btn>
 
                   <v-alert
@@ -372,6 +392,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { emit } from '@tauri-apps/api/event'
 import { logger } from './logger'
 import { useConfigForm } from './composables/useConfigForm'
 import { useHAEntityManager } from './composables/useHAEntityManager'
@@ -386,6 +407,7 @@ const {
   loadFromConfig, fetchHaEntities, addDiscoveredEntities,
   addHaEntity, removeHaEntity, moveEntityUp, moveEntityDown,
   addHeaderToggle, removeHeaderToggle, moveToggleUp, moveToggleDown,
+  autofillDomain,
 } = useHAEntityManager()
 
 const showPassword = ref(false)
@@ -463,6 +485,7 @@ async function handleFetchHaEntities() {
 
 async function handleSave() {
   await saveConfig(haEntitiesList.value, headerTogglesList.value)
+  await emit('config-saved', { color_scheme: config.color_scheme })
 }
 
 async function closeWindow() {

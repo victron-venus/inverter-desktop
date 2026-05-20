@@ -1,8 +1,10 @@
 <template>
   <div id="app" class="container-fluid p-2" @contextmenu.prevent="onContextMenu">
-    <div class="ws-status" :class="mqttConnected ? 'connected' : 'disconnected'">
-      <i class="fas" :class="mqttConnected ? 'fa-link' : 'fa-unlink'"></i>
-      {{ mqttConnected ? 'Live' : 'Disconnected' }}
+    <div class="ws-status">
+      <div :class="mqttConnected ? 'connected' : 'disconnected'" style="padding:2px 8px;border-radius:4px">
+        <i class="fas" :class="mqttConnected ? 'fa-link' : 'fa-unlink'"></i>
+        MQTT {{ mqttConnected ? 'Live' : 'Disconnected' }}
+      </div>
     </div>
 
     <AppHeader
@@ -101,6 +103,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { formatPower } from './utils'
 import { logger } from './logger'
+import { listen } from '@tauri-apps/api/event'
 import { useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
 import { useTheme } from './composables/useTheme'
@@ -128,6 +131,7 @@ const debugMode = ref(false)
 const isDev = import.meta.env.DEV
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
+let unlistenConfig: (() => void) | null = null
 
 function onContextMenu(e: MouseEvent) {
   contextMenu.value = { show: true, x: e.clientX, y: e.clientY }
@@ -233,11 +237,21 @@ onMounted(async () => {
   await connectMqtt()
   if (haEnabled.value) startHaPolling()
   document.addEventListener('click', onDocumentClick)
+
+  unlistenConfig = await listen<{color_scheme?: string}>('config-saved', (event) => {
+    const scheme = event.payload.color_scheme
+    if (scheme) {
+      isDark.value = scheme !== 'light'
+      document.body.classList.toggle('light', !isDark.value)
+      localStorage.setItem('theme', scheme)
+    }
+  })
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
   cleanupConnection()
   cleanupHa()
+  if (unlistenConfig) unlistenConfig()
 })
 </script>
