@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { state, appConfig } from './useInverterState'
+import { logger } from '../logger'
 
 const HA_DOMAINS = ['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'media_player', 'scene', 'script', 'number', 'sensor', 'binary_sensor']
 
@@ -46,7 +47,7 @@ export function useHA() {
       haEntityStates.value = map
       haLastPollSuccess.value = true
     } catch (e) {
-      console.error('HA poll failed:', e)
+      logger.error('HA poll failed:', e)
       haLastPollSuccess.value = false
     }
   }
@@ -166,13 +167,13 @@ export function useHA() {
         })
         return
       } catch (e) {
-        console.error('HA command failed:', e)
+        logger.error('HA command failed:', e)
       }
     }
     try {
       await invoke('send_command', { action, payload })
     } catch (e) {
-      console.error('Failed to send command:', e)
+      logger.error('Failed to send command:', e)
     }
   }
 

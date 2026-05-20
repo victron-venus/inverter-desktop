@@ -2,15 +2,16 @@ import { invoke } from '@tauri-apps/api/core'
 import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 import { state, mqttConnected, appConfig, type InverterState } from './useInverterState'
 import { getAppConfig } from '../config'
+import { logger } from '../logger'
 
 export function useConnection() {
   let pollInterval: number | null = null
   let notificationPermission = false
 
-  const NOTIFY_LOAD_W = 300
-  const NOTIFY_CONSUMPTION_W = 300
-  const NOTIFY_WATER_CM = 23
-  const NOTIFY_SOLAR_W = 3000
+  const NOTIFY_LOAD_W = 300        // Notify if any individual load > 300W (e.g. washing machine, dryer)
+  const NOTIFY_CONSUMPTION_W = 300 // Notify if total house consumption > 300W from grid
+  const NOTIFY_WATER_CM = 23       // Notify if cistern water level drops below 23cm (near empty)
+  const NOTIFY_SOLAR_W = 3000      // Notify if solar production exceeds 3kW (peak alert)
 
   async function ensureNotificationPermission() {
     try {
@@ -21,7 +22,7 @@ export function useConnection() {
       }
       notificationPermission = granted
     } catch (e) {
-      console.error('Notification permission error:', e)
+      logger.error('Notification permission error:', e)
     }
   }
 
@@ -58,7 +59,7 @@ export function useConnection() {
       mqttConnected.value = true
       startPolling()
     } catch (e) {
-      console.error('Failed to connect to MQTT:', e)
+      logger.error('Failed to connect to MQTT:', e)
       mqttConnected.value = false
     }
   }
@@ -76,16 +77,18 @@ export function useConnection() {
             }
           })
         }
-        const boolFields = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run'];
+        type BoolField = keyof Pick<InverterState, 'pump_switch' | 'water_valve' | 'washer_power' | 'dryer_power' | 'dry_run'>
+        const boolFields: BoolField[] = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run']
         boolFields.forEach(field => {
-          if (typeof (newState as any)[field] === 'string') {
-            (newState as any)[field] = (newState as any)[field] === 'true' || (newState as any)[field] === '1';
+          const val = newState[field]
+          if (typeof val === 'string') {
+            (newState as Record<string, unknown>)[field] = val === 'true' || val === '1'
           }
         })
         state.value = newState
         checkThresholds(newState)
       } catch (e) {
-        console.error('Failed to get state:', e)
+        logger.error('Failed to get state:', e)
         mqttConnected.value = false
       }
     }, 1000)
@@ -95,7 +98,7 @@ export function useConnection() {
     try {
       await invoke('send_command', { action, payload })
     } catch (e) {
-      console.error('Failed to send command:', e)
+      logger.error('Failed to send command:', e)
     }
   }
 

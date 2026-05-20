@@ -4,7 +4,9 @@ mod ha_api;
 use mqtt::{MqttClient, InverterState, HeaderToggle};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-//use std::path::PathBuf;
+
+const DEFAULT_MQTT_HOST: &str = "192.168.160.150";
+
 use tauri::{Manager, State};
 use tauri::menu::{Menu, Submenu, PredefinedMenuItem, AboutMetadata};
 use tauri_plugin_store::StoreExt;
@@ -61,11 +63,11 @@ struct FullConfig {
 impl Default for FullConfig {
     fn default() -> Self {
         Self {
-            mqtt_host: "192.168.160.150".to_string(),
+            mqtt_host: DEFAULT_MQTT_HOST.to_string(),
             mqtt_port: 1883,
             mqtt_login: None,
             mqtt_password: None,
-            mqtt_ha_host: "192.168.160.150".to_string(),
+            mqtt_ha_host: DEFAULT_MQTT_HOST.to_string(),
             mqtt_ha_port: 1883,
             mqtt_ha_login: None,
             mqtt_ha_password: None,
