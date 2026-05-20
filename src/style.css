@@ -44,3 +44,46 @@ body.light .card { box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 body.light .daily-stats { background: #e8e8e8; }
 body.light .toggle-btn.off { background: #ddd; color: #666; }
 body.light .subsection { border-color: #ccc; }
+
+/* Fix label overlap in outlined compact fields */
+.v-field--variant-outlined.v-field--density-compact .v-label.v-field-label--floating {
+  transform: translateY(-14px) scale(0.75) !important;
+}
+.v-field--variant-outlined.v-field--density-compact {
+  --v-field-padding-top: 4px;
+}
+.v-field--variant-outlined.v-field--density-compact .v-field__input {
+  font-size: 9px !important;
+  min-height: 24px !important;
+}
+.v-field--variant-outlined.v-field--density-compact input,
+.v-field--variant-outlined.v-field--density-compact .v-label.v-field-label {
+  font-size: 9px !important;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 100000;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  min-width: 160px;
+  padding: 4px 0;
+}
+.context-menu-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.context-menu-item:hover {
+  background: rgba(255,255,255,0.08);
+}
+body.light .context-menu {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+body.light .context-menu-item:hover {
+  background: rgba(0,0,0,0.06);
+}
