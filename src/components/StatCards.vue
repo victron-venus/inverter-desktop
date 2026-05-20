@@ -23,7 +23,7 @@
     </div>
     <div class="col-md-3">
       <div class="card h-100"><div class="card-body text-center">
-        <div class="stat-label">Battery (Shunt)</div>
+        <div class="stat-label">Battery</div>
         <div class="stat-value text-battery">{{ Math.floor(batterySoc || 0) }}%</div>
         <div class="stat-sub">{{ formatPower(batteryPower) }} | {{ (batteryVoltage || 0).toFixed(2) }}V | {{ (batteryCurrent || 0).toFixed(1) }}A</div>
       </div></div>
@@ -37,6 +37,14 @@
     </div>
   </div>
 </template>
+
+<style scoped>
+.stat-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>
 
 <script setup lang="ts">
 import { formatPower } from '../utils'

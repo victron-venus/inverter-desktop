@@ -2,6 +2,7 @@ use rumqttc::{Client, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InverterState {
@@ -122,6 +123,7 @@ pub struct MqttClient {
     state: Arc<Mutex<InverterState>>,
     host: String,
     port: u16,
+    app_handle: Option<tauri::AppHandle>,
 }
 
 impl MqttClient {
@@ -175,7 +177,12 @@ impl MqttClient {
             })),
             host,
             port,
+            app_handle: None,
         }
+    }
+
+    pub fn set_app_handle(&mut self, handle: tauri::AppHandle) {
+        self.app_handle = Some(handle);
     }
 
     pub fn get_state(&self) -> InverterState {
@@ -197,6 +204,7 @@ impl MqttClient {
         self.client = Some(client);
 
         let state = self.state.clone();
+        let app_handle = self.app_handle.clone();
 
         // Spawn a task to handle incoming messages
         tauri::async_runtime::spawn(async move {
@@ -211,7 +219,10 @@ impl MqttClient {
                             if topic == "inverter/state" {
                                 if let Ok(new_state) = serde_json::from_str::<InverterState>(&payload) {
                                     if let Ok(mut guard) = state.lock() {
-                                        *guard = new_state;
+                                        *guard = new_state.clone();
+                                    }
+                                    if let Some(ref handle) = app_handle {
+                                        let _ = handle.emit("mqtt-state-update", &new_state);
                                     }
                                 }
                             } else if topic == "inverter/console" {
