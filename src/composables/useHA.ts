@@ -157,7 +157,7 @@ export function useHA() {
 
   async function sendHaOrMqtt(action: string, payload: any = {}) {
     if (haEnabled.value && payload.entity && isHaEntity(payload.entity)) {
-      const cfg = appConfig.value
+      const cfg = appConfig.value!
       try {
         await invoke('toggle_ha_entity', {
           url: cfg.ha_url || '',

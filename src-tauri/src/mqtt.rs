@@ -124,6 +124,7 @@ pub struct MqttClient {
     host: String,
     port: u16,
     app_handle: Option<tauri::AppHandle>,
+    portal_id: Option<String>,
 }
 
 impl MqttClient {
@@ -178,11 +179,16 @@ impl MqttClient {
             host,
             port,
             app_handle: None,
+            portal_id: None,
         }
     }
 
     pub fn set_app_handle(&mut self, handle: tauri::AppHandle) {
         self.app_handle = Some(handle);
+    }
+
+    pub fn set_portal_id(&mut self, id: Option<String>) {
+        self.portal_id = id;
     }
 
     pub fn get_state(&self) -> InverterState {
@@ -201,10 +207,13 @@ impl MqttClient {
         client.subscribe("inverter/state", QoS::AtMostOnce)?;
         client.subscribe("inverter/console", QoS::AtMostOnce)?;
 
+        // Clone client before storing — needed for keep-alive publisher
+        let keepalive_client = client.clone();
         self.client = Some(client);
 
         let state = self.state.clone();
         let app_handle = self.app_handle.clone();
+        let portal_id = self.portal_id.clone();
 
         // Spawn a task to handle incoming messages
         tauri::async_runtime::spawn(async move {
@@ -244,6 +253,18 @@ impl MqttClient {
                 }
             });
         });
+
+        // Spawn keep-alive publisher for Cerbo GX
+        if let Some(pid) = portal_id {
+            let topic = format!("R/{}/keepalive", pid);
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(45));
+                loop {
+                    interval.tick().await;
+                    let _ = keepalive_client.publish(&topic, QoS::AtMostOnce, false, "");
+                }
+            });
+        }
 
         Ok(())
     }
