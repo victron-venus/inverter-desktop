@@ -2,6 +2,12 @@ use rumqttc::{Client, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tauri::Emitter;
+
+const MQTT_KEEP_ALIVE_SECS: u64 = 60;
+const KEEPALIVE_INTERVAL_SECS: u64 = 45;
+const MQTT_QUEUE_CAPACITY: usize = 10;
+const CONSOLE_MAX_LINES: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InverterState {
@@ -122,6 +128,8 @@ pub struct MqttClient {
     state: Arc<Mutex<InverterState>>,
     host: String,
     port: u16,
+    app_handle: Option<tauri::AppHandle>,
+    portal_id: Option<String>,
 }
 
 impl MqttClient {
@@ -175,26 +183,42 @@ impl MqttClient {
             })),
             host,
             port,
+            app_handle: None,
+            portal_id: None,
         }
     }
 
+    pub fn set_app_handle(&mut self, handle: tauri::AppHandle) {
+        self.app_handle = Some(handle);
+    }
+
+    pub fn set_portal_id(&mut self, id: Option<String>) {
+        self.portal_id = id;
+    }
+
     pub fn get_state(&self) -> InverterState {
-        self.state.lock().unwrap().clone()
+        self.state.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut mqttoptions = MqttOptions::new("inverter-dashboard-desktop", &self.host, self.port);
-        mqttoptions.set_keep_alive(Duration::from_secs(60));
+        mqttoptions.set_keep_alive(Duration::from_secs(MQTT_KEEP_ALIVE_SECS));
 
-        let (client, mut connection) = Client::new(mqttoptions, 10);
+        let (client, mut connection) = Client::new(mqttoptions, MQTT_QUEUE_CAPACITY);
 
         // Subscribe to topics
         client.subscribe("inverter/state", QoS::AtMostOnce)?;
         client.subscribe("inverter/console", QoS::AtMostOnce)?;
 
+        // Clone client before storing — needed for keep-alive publisher
+        let keepalive_client = client.clone();
         self.client = Some(client);
 
         let state = self.state.clone();
+        let app_handle = self.app_handle.clone();
+        let portal_id = self.portal_id.clone();
 
         // Spawn a task to handle incoming messages
         tauri::async_runtime::spawn(async move {
@@ -208,14 +232,20 @@ impl MqttClient {
 
                             if topic == "inverter/state" {
                                 if let Ok(new_state) = serde_json::from_str::<InverterState>(&payload) {
-                                    *state.lock().unwrap() = new_state;
+                                    if let Ok(mut guard) = state.lock() {
+                                        *guard = new_state.clone();
+                                    }
+                                    if let Some(ref handle) = app_handle {
+                                        let _ = handle.emit("mqtt-state-update", &new_state);
+                                    }
                                 }
                             } else if topic == "inverter/console" {
-                                let mut state = state.lock().unwrap();
-                                let console = state.console.get_or_insert_with(Vec::new);
-                                console.push(payload);
-                                if console.len() > 50 {
-                                    console.remove(0);
+                                if let Ok(mut guard) = state.lock() {
+                                    let console = guard.console.get_or_insert_with(Vec::new);
+                                    console.push(payload);
+                                    if console.len() > CONSOLE_MAX_LINES {
+                                        console.remove(0);
+                                    }
                                 }
                             }
                         }
@@ -228,6 +258,18 @@ impl MqttClient {
                 }
             });
         });
+
+        // Spawn keep-alive publisher for Cerbo GX
+        if let Some(pid) = portal_id {
+            let topic = format!("R/{}/keepalive", pid);
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
+                loop {
+                    interval.tick().await;
+                    let _ = keepalive_client.publish(&topic, QoS::AtMostOnce, false, "");
+                }
+            });
+        }
 
         Ok(())
     }
