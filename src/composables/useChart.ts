@@ -1,8 +1,16 @@
 import { ref, type Ref } from 'vue'
 import { state } from './useInverterState'
 
+const MAX_HISTORY_POINTS = 1800
+
+interface TooltipParam {
+  value: number[]
+  seriesName: string
+  color: string
+}
+
 export function useChart(isDarkRef: Ref<boolean>) {
-  const chartOption = ref<any>({})
+  const chartOption = ref({})
 
   let historyData = {
     timestamps: [] as number[],
@@ -25,11 +33,11 @@ export function useChart(isDarkRef: Ref<boolean>) {
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
-        formatter: function(params: any) {
+        formatter: function(params: TooltipParam[]) {
           const date = new Date(params[0].value[0])
           const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           let result = `${timeStr}<br/>`
-          params.forEach((p: any) => {
+          params.forEach((p: TooltipParam) => {
             if (p.seriesName === 'Setpoint') return
             const val = Math.floor(p.value[1])
             result += `<span style="display:inline-block;margin-right:5px;border-radius:10px;width:10px;height:10px;background-color:${p.color};"></span>`
@@ -93,7 +101,7 @@ export function useChart(isDarkRef: Ref<boolean>) {
       historyData.battery.push(newState.battery_power || 0)
       historyData.setpoint.push(newState.setpoint || 0)
 
-      if (historyData.timestamps.length > 1800) {
+      if (historyData.timestamps.length > MAX_HISTORY_POINTS) {
         historyData.timestamps.shift()
         historyData.grid.shift()
         historyData.solar.shift()

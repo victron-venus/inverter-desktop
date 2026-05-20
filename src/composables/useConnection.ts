@@ -30,7 +30,7 @@ function coerceBooleans(newState: InverterState) {
   for (const field of BOOL_FIELDS) {
     const val = newState[field]
     if (typeof val === 'string') {
-      newState[field] = val === 'true' || val === '1'
+      ;(newState as Record<string, unknown>)[field] = val === 'true' || val === '1'
     }
   }
 }

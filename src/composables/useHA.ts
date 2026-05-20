@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { state, appConfig } from './useInverterState'
 import { logger } from '../logger'
 
+const HA_DEFAULT_PORT = 8123
+const HA_POLL_INTERVAL_MS = 3000
 const HA_DOMAINS = new Set(['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'media_player', 'scene', 'script', 'number', 'sensor', 'binary_sensor'])
 
 function isHaEntity(entityId: string): boolean {
@@ -35,7 +37,7 @@ export function useHA() {
     try {
       const states = await invoke<Array<{ entity_id: string; state: string }>>('get_ha_states', {
         url: cfg.ha_url,
-        port: cfg.ha_port || 8123,
+          port: cfg.ha_port || HA_DEFAULT_PORT,
         token: cfg.ha_longlived_token
       })
       const map: Record<string, string> = {}
@@ -54,7 +56,7 @@ export function useHA() {
 
   function startHaPolling() {
     if (haPollInterval) clearInterval(haPollInterval)
-    haPollInterval = globalThis.setInterval(pollHaStates, 3000)
+    haPollInterval = globalThis.setInterval(pollHaStates, HA_POLL_INTERVAL_MS)
     pollHaStates()
   }
 
@@ -82,18 +84,18 @@ export function useHA() {
     if (uiConfig.home_buttons) return uiConfig.home_buttons
     const cfg = appConfig.value
     if (cfg?.ha_entities && cfg.ha_entities.length > 0) {
-      return cfg.ha_entities.filter((e: any) => e.enabled).map((e: any) => ({
+      return cfg.ha_entities.filter((e): e is (typeof e & { enabled: true }) => e.enabled).map(e => ({
         id: e.id,
         label: e.label,
         entity: e.entity,
-        state_key: e.state_key
+        state_key: (e as { state_key?: string }).state_key
       }))
     }
     if (cfg?.ha_switch_entities) {
-      return Object.entries(cfg.ha_switch_entities).map(([id, data]: [string, any]) => ({
+      return Object.entries(cfg.ha_switch_entities).map(([id, data]) => ({
         id,
-        label: data.label || id,
-        entity: data.entity
+        label: (data.label as string | undefined) || id,
+        entity: (data as { entity: string }).entity
       }))
     }
     return []
@@ -126,7 +128,7 @@ export function useHA() {
 
   const buttonStates = computed(() => {
     const states: Record<string, string> = {}
-    homeButtons.value.forEach((btn: any) => {
+    homeButtons.value.forEach((btn: { id: string; label: string; entity: string; state_key?: string }) => {
       if (haEnabled.value && haEntityStates.value[btn.entity] !== undefined) {
         states[btn.id] = haEntityStates.value[btn.entity] === 'on' ? 'on' : 'off'
       } else {
@@ -142,7 +144,7 @@ export function useHA() {
 
   const headerToggleStates = computed(() => {
     const states: Record<string, string> = {}
-    headerToggles.value.forEach((toggle: any) => {
+    headerToggles.value.forEach((toggle: { id: string; label: string; entity: string }) => {
       if (haEnabled.value && haEntityStates.value[toggle.entity] !== undefined) {
         states[toggle.id] = haEntityStates.value[toggle.entity] === 'on' ? 'on' : 'off'
       } else {
@@ -155,15 +157,16 @@ export function useHA() {
     return states
   })
 
-  async function sendHaOrMqtt(action: string, payload: any = {}) {
-    if (haEnabled.value && payload.entity && isHaEntity(payload.entity)) {
+    async function sendHaOrMqtt(action: string, payload: Record<string, unknown> = {} as Record<string, unknown>) {
+    const entity = payload.entity as string | undefined
+    if (haEnabled.value && entity && isHaEntity(entity)) {
       const cfg = appConfig.value!
       try {
         await invoke('toggle_ha_entity', {
           url: cfg.ha_url || '',
-          port: cfg.ha_port || 8123,
+        port: cfg.ha_port || HA_DEFAULT_PORT,
           token: cfg.ha_longlived_token || '',
-          entity_id: payload.entity
+          entity_id: entity
         })
         return
       } catch (e) {

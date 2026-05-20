@@ -4,6 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Emitter;
 
+const MQTT_KEEP_ALIVE_SECS: u64 = 60;
+const KEEPALIVE_INTERVAL_SECS: u64 = 45;
+const MQTT_QUEUE_CAPACITY: usize = 10;
+const CONSOLE_MAX_LINES: usize = 50;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InverterState {
     pub gt: Option<f64>,
@@ -199,9 +204,9 @@ impl MqttClient {
 
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut mqttoptions = MqttOptions::new("inverter-dashboard-desktop", &self.host, self.port);
-        mqttoptions.set_keep_alive(Duration::from_secs(60));
+        mqttoptions.set_keep_alive(Duration::from_secs(MQTT_KEEP_ALIVE_SECS));
 
-        let (client, mut connection) = Client::new(mqttoptions, 10);
+        let (client, mut connection) = Client::new(mqttoptions, MQTT_QUEUE_CAPACITY);
 
         // Subscribe to topics
         client.subscribe("inverter/state", QoS::AtMostOnce)?;
@@ -238,7 +243,7 @@ impl MqttClient {
                                 if let Ok(mut guard) = state.lock() {
                                     let console = guard.console.get_or_insert_with(Vec::new);
                                     console.push(payload);
-                                    if console.len() > 50 {
+                                    if console.len() > CONSOLE_MAX_LINES {
                                         console.remove(0);
                                     }
                                 }
@@ -258,7 +263,7 @@ impl MqttClient {
         if let Some(pid) = portal_id {
             let topic = format!("R/{}/keepalive", pid);
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(45));
+                let mut interval = tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
                 loop {
                     interval.tick().await;
                     let _ = keepalive_client.publish(&topic, QoS::AtMostOnce, false, "");
