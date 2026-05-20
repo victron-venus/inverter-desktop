@@ -100,6 +100,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { formatPower } from './utils'
+import { logger } from './logger'
 import { useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
 import { useTheme } from './composables/useTheme'
@@ -141,7 +142,7 @@ async function openConfig() {
   try {
     await invoke('open_config_window')
   } catch (e) {
-    console.error('Failed to open config window:', e)
+    logger.error('Failed to open config window:', e)
   }
 }
 
@@ -225,7 +226,7 @@ onMounted(async () => {
   try {
     appVersion.value = await getVersion()
   } catch (e) {
-    console.error('Failed to get app version:', e)
+    logger.error('Failed to get app version:', e)
     appVersion.value = 'unknown'
   }
   await ensureNotificationPermission()
