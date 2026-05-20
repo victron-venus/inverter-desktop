@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
+const DEFAULT_MQTT_PORT: u16 = 1883;
+const DEFAULT_HA_PORT: u16 = 8123;
+const ABOUT_WINDOW_W: f64 = 380.0;
+const ABOUT_WINDOW_H: f64 = 320.0;
+const CONFIG_WINDOW_W: f64 = 800.0;
+const CONFIG_WINDOW_H: f64 = 900.0;
 
 use tauri::{Manager, State};
 use tauri::menu::{Menu, Submenu, MenuItem, PredefinedMenuItem};
@@ -66,11 +72,11 @@ impl Default for FullConfig {
     fn default() -> Self {
         Self {
             mqtt_host: DEFAULT_MQTT_HOST.to_string(),
-            mqtt_port: 1883,
+            mqtt_port: DEFAULT_MQTT_PORT,
             mqtt_login: None,
             mqtt_password: None,
             mqtt_ha_host: Some(DEFAULT_MQTT_HOST.to_string()),
-            mqtt_ha_port: Some(1883),
+            mqtt_ha_port: Some(DEFAULT_MQTT_PORT),
             mqtt_ha_login: None,
             mqtt_ha_password: None,
             ha_longlived_token: None,
@@ -131,7 +137,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
     let mut changed = false;
 
     // Auto-fill HA Long-lived Token from env if not set
-    if config.ha_longlived_token.as_ref().map_or(true, |s| s.is_empty()) {
+    if config.ha_longlived_token.as_ref().is_none_or(|s| s.is_empty()) {
         if let Ok(token) = std::env::var("HA_TOKEN") {
             if !token.is_empty() {
                 config.ha_longlived_token = Some(token);
@@ -141,7 +147,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
     }
 
     // Auto-fill MQTT HA credentials from env if not set
-    if config.mqtt_ha_login.as_ref().map_or(true, |s| s.is_empty()) {
+    if config.mqtt_ha_login.as_ref().is_none_or(|s| s.is_empty()) {
         if let Ok(user) = std::env::var("HA_MQTT_USER") {
             if !user.is_empty() {
                 config.mqtt_ha_login = Some(user);
@@ -149,7 +155,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
             }
         }
     }
-    if config.mqtt_ha_password.as_ref().map_or(true, |s| s.is_empty()) {
+    if config.mqtt_ha_password.as_ref().is_none_or(|s| s.is_empty()) {
         if let Ok(pwd) = std::env::var("HA_MQTT_PWD") {
             if !pwd.is_empty() {
                 config.mqtt_ha_password = Some(pwd);
@@ -160,15 +166,15 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 
     // Default ports
     if config.ha_port.is_none() {
-        config.ha_port = Some(8123);
+        config.ha_port = Some(DEFAULT_HA_PORT);
         changed = true;
     }
     if config.mqtt_port == 0 {
-        config.mqtt_port = 1883;
+        config.mqtt_port = DEFAULT_MQTT_PORT;
         changed = true;
     }
     if config.mqtt_ha_port.is_none() {
-        config.mqtt_ha_port = Some(1883);
+        config.mqtt_ha_port = Some(DEFAULT_MQTT_PORT);
         changed = true;
     }
 
@@ -306,7 +312,7 @@ fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
         tauri::WebviewUrl::App("config".into())
     )
     .title("Configuration")
-    .inner_size(800.0, 900.0)
+    .inner_size(CONFIG_WINDOW_W, CONFIG_WINDOW_H)
     .resizable(true)
     .build()
     .map_err(|e| e.to_string())?;
@@ -413,7 +419,7 @@ pub fn run() {
                         tauri::WebviewUrl::App("about".into())
                     )
                     .title("About Inverter Dashboard")
-                    .inner_size(380.0, 320.0)
+                    .inner_size(ABOUT_WINDOW_W, ABOUT_WINDOW_H)
                     .resizable(false)
                     .center()
                     .build();

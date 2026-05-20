@@ -28,7 +28,8 @@ export function useTheme() {
     const prod = (ds.produced_today || 0).toFixed(2)
     const dollars = (ds.produced_dollars || 0).toFixed(2)
     const grid = (ds.grid_kwh || 0).toFixed(2)
-    const gridCost = (Number.parseFloat(grid) * 0.31).toFixed(2)
+    const GRID_COST_PER_KWH = 0.31
+    const gridCost = (Number.parseFloat(grid) * GRID_COST_PER_KWH).toFixed(2)
     const batIn = (ds.battery_in || 0).toFixed(2)
     const batOut = (ds.battery_out || 0).toFixed(2)
     const batInY = (ds.battery_in_yesterday || 0).toFixed(1)

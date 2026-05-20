@@ -18,7 +18,7 @@
       @toggle-theme="toggleTheme"
     />
 
-    <div class="daily-stats mb-2" v-html="dailyStatsHtml"></div>
+    <DailyStats/>
 
     <StatCards
       :gt="state.gt"
@@ -116,6 +116,7 @@ import BatterySolarPanel from './components/BatterySolarPanel.vue'
 import LoadsTable from './components/LoadsTable.vue'
 import StatusBar from './components/StatusBar.vue'
 import ContextMenu from './components/ContextMenu.vue'
+import DailyStats from './components/DailyStats.vue'
 
 const { state, mqttConnected, connectMqtt, ensureNotificationPermission, cleanup: cleanupConnection } = useConnection()
 const {
@@ -124,7 +125,7 @@ const {
   waterValveEntity, pumpSwitchEntity,
   startHaPolling, stopHaPolling, sendHaOrMqtt, cleanupHa,
 } = useHA()
-const { isDark, toggleTheme, dailyStatsHtml } = useTheme()
+const { isDark, toggleTheme } = useTheme()
 const { chartOption, addHistoryPoint } = useChart(isDark)
 
 const debugMode = ref(false)
@@ -151,7 +152,7 @@ async function openConfig() {
 }
 
 // Re-export send for template as a thin wrapper that uses HA routing
-async function send(action: string, payload: any = {}) {
+async function send(action: string, payload: Record<string, unknown> = {}) {
   return sendHaOrMqtt(action, payload)
 }
 
