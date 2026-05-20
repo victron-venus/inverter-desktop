@@ -25,6 +25,7 @@ export interface AppConfig {
   ha_switch_entities?: Record<string, { label?: string; entity: string }> | null
   header_toggles?: Array<{ id: string; label: string; entity: string }> | null
   color_scheme?: string | null
+  portal_id?: string | null
 }
 
 const defaultConfig: AppConfig = {
@@ -48,13 +49,14 @@ const defaultConfig: AppConfig = {
   ha_switch_entities: null,
   header_toggles: null,
   color_scheme: 'dark',
+  portal_id: null,
 }
 
 let config: AppConfig = defaultConfig
 
 export async function getAppConfig(): Promise<AppConfig> {
   try {
-    const fetched = await invoke<any>('get_config')
+    const fetched = await invoke<AppConfig>('get_config')
     config = { ...defaultConfig, ...fetched }
     return config
   } catch (e) {

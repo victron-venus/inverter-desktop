@@ -5,14 +5,39 @@ import { state, mqttConnected, appConfig, type InverterState } from './useInvert
 import { getAppConfig } from '../config'
 import { logger } from '../logger'
 
+/** Notification thresholds */
+const THRESHOLDS = {
+  LOAD_W: 300,        // Notify if any individual load exceeds (washing machine, dryer)
+  CONSUMPTION_W: 300, // Notify if total house consumption from grid exceeds
+  WATER_CM: 23,       // Notify if cistern water level drops below (near empty)
+  SOLAR_W: 3000,      // Notify if solar production exceeds (peak alert)
+} as const
+
+type BoolField = keyof Pick<InverterState, 'pump_switch' | 'water_valve' | 'washer_power' | 'dryer_power' | 'dry_run'>
+
+/** Map BoolField keys to their string->boolean conversion source */
+const BOOL_FIELDS: BoolField[] = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run']
+
+function coerceBooleans(newState: InverterState) {
+  if (newState.booleans) {
+    for (const key of Object.keys(newState.booleans)) {
+      const val = newState.booleans[key]
+      if (typeof val === 'string') {
+        newState.booleans[key] = val === 'true' || val === '1'
+      }
+    }
+  }
+  for (const field of BOOL_FIELDS) {
+    const val = newState[field]
+    if (typeof val === 'string') {
+      newState[field] = val === 'true' || val === '1'
+    }
+  }
+}
+
 export function useConnection() {
   let notificationPermission = false
   let unlistenStateUpdate: (() => void) | null = null
-
-  const NOTIFY_LOAD_W = 300
-  const NOTIFY_CONSUMPTION_W = 300
-  const NOTIFY_WATER_CM = 23
-  const NOTIFY_SOLAR_W = 3000
 
   async function ensureNotificationPermission() {
     try {
@@ -31,40 +56,24 @@ export function useConnection() {
     if (!notificationPermission) return
     if (newState.loads) {
       for (const [name, power] of Object.entries(newState.loads)) {
-        if (power > NOTIFY_LOAD_W) {
+        if (power > THRESHOLDS.LOAD_W) {
           sendNotification({ title: 'High Load', body: `${name}: ${power}W` })
         }
       }
     }
-    if (newState.tt && newState.tt > NOTIFY_CONSUMPTION_W) {
+    if (newState.tt && newState.tt > THRESHOLDS.CONSUMPTION_W) {
       sendNotification({ title: 'High Consumption', body: `Consumption: ${newState.tt}W` })
     }
-    if (newState.water_level !== undefined && newState.water_level < NOTIFY_WATER_CM) {
+    if (newState.water_level !== undefined && newState.water_level < THRESHOLDS.WATER_CM) {
       sendNotification({ title: 'Low Water', body: `Water level: ${newState.water_level} cm` })
     }
-    if (newState.solar_total && newState.solar_total > NOTIFY_SOLAR_W) {
+    if (newState.solar_total && newState.solar_total > THRESHOLDS.SOLAR_W) {
       sendNotification({ title: 'High Solar', body: `Solar: ${newState.solar_total}W` })
     }
   }
 
-  type BoolField = keyof Pick<InverterState, 'pump_switch' | 'water_valve' | 'washer_power' | 'dryer_power' | 'dry_run'>
-
   function processState(newState: InverterState) {
-    if (newState.booleans) {
-      Object.keys(newState.booleans).forEach(key => {
-        const val = newState.booleans![key]
-        if (typeof val === 'string') {
-          newState.booleans![key] = val === 'true' || val === '1'
-        }
-      })
-    }
-    const boolFields: BoolField[] = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run']
-    boolFields.forEach(field => {
-      const val = newState[field]
-      if (typeof val === 'string') {
-        (newState as Record<string, unknown>)[field] = val === 'true' || val === '1'
-      }
-    })
+    coerceBooleans(newState)
     state.value = newState
     checkThresholds(newState)
   }
@@ -84,7 +93,7 @@ export function useConnection() {
         processState(event.payload)
       })
 
-      await invoke('connect_mqtt', { host: config.mqtt_host, port: config.mqtt_port })
+      await invoke('connect_mqtt', { host: config.mqtt_host, port: config.mqtt_port, portalId: config.portal_id || null })
       mqttConnected.value = true
 
       // Fetch initial state

@@ -22,6 +22,7 @@ export interface AppConfig {
   ha_switch_entities?: Record<string, { label?: string; entity: string }> | null
   header_toggles?: Array<{ id: string; label: string; entity: string }> | null
   color_scheme?: string | null
+  portal_id?: string | null
 }
 
 const defaultConfig: AppConfig = {
@@ -33,7 +34,8 @@ const defaultConfig: AppConfig = {
   ha_boolean_entities: null as Record<string, string> | null,
   ha_switch_entities: null as Record<string, { label?: string; entity: string }> | null,
   header_toggles: null as Array<{ id: string; label: string; entity: string }> | null,
-  color_scheme: 'dark' as string | null
+  color_scheme: 'dark' as string | null,
+  portal_id: null as string | null
 }
 
 export function useConfigForm() {

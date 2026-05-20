@@ -72,6 +72,17 @@
                     </v-col>
                   </v-row>
 
+                  <v-text-field
+                    v-model="config.portal_id"
+                    label="VRM Portal ID (optional — keep-alive)"
+                    placeholder="e.g. a1b2c3d4e5f6"
+                    variant="outlined"
+                    density="compact"
+                    hint="Required for Cerbo GX data stream keep-alive"
+                    persistent-hint
+                    class="mb-2"
+                  ></v-text-field>
+
                   <v-divider class="mb-4 mt-4">
                     <v-chip size="small" color="primary">MQTT HA</v-chip>
                   </v-divider>
