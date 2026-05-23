@@ -1,10 +1,10 @@
-pub mod mqtt;
 mod ha_api;
+pub mod mqtt;
 
-use mqtt::{MqttClient, InverterState, HeaderToggle};
+use log::{error, info};
+use mqtt::{HeaderToggle, InverterState, MqttClient};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use log::{info, error};
 use std::time::Duration;
 
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
@@ -15,8 +15,8 @@ const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
 
-use tauri::{Manager, State, Emitter};
-use tauri::menu::{Menu, Submenu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -26,7 +26,6 @@ struct DiscoveredEntity {
     domain: String,
     state: String,
 }
-
 
 // Global state for the MQTT client
 type MqttState = Arc<Mutex<Option<MqttClient>>>;
@@ -100,7 +99,8 @@ impl Default for FullConfig {
 
 #[tauri::command]
 fn get_state(mqtt_client: State<MqttState>) -> Result<InverterState, String> {
-    let client = mqtt_client.lock()
+    let client = mqtt_client
+        .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
         Ok(client.get_state())
@@ -116,7 +116,8 @@ async fn perform_action(
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
-    let store = app.store_builder("config.json")
+    let store = app
+        .store_builder("config.json")
         .build()
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
@@ -127,43 +128,61 @@ async fn perform_action(
 
     let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
-    if config.ha_use_direct_api && entity_id.is_some() && is_ha_entity(entity_id.unwrap()) {
-        let client = ha_api::HaApiClient::new(
-            config.ha_url.as_deref().unwrap_or(""),
-            config.ha_port,
-            config.ha_longlived_token.as_deref().unwrap_or(""),
-        ).await?;
-        
-        let entity = entity_id.unwrap();
-        // For HA toggles, we need the current state or just call toggle
-        // Simplified: use toggle_ha_entity logic
-        let states = client.get_states().await?;
-        let state_opt = states.iter().find(|s| s.entity_id == entity);
-        match state_opt {
-            Some(s) => {
-                if s.state == "on" {
-                    client.turn_off(entity).await
-                } else {
-                    client.turn_on(entity).await
-                }
+    if config.ha_use_direct_api {
+        if let Some(entity) = entity_id {
+            if is_ha_entity(entity) {
+                let client = ha_api::HaApiClient::new(
+                    config.ha_url.as_deref().unwrap_or(""),
+                    config.ha_port,
+                    config.ha_longlived_token.as_deref().unwrap_or(""),
+                )
+                .await?;
+
+                // For HA toggles, we need the current state or just call toggle
+                // Simplified: use toggle_ha_entity logic
+                let states = client.get_states().await?;
+                let state_opt = states.iter().find(|s| s.entity_id == entity);
+                match state_opt {
+                    Some(s) => {
+                        if s.state == "on" {
+                            client.turn_off(entity).await
+                        } else {
+                            client.turn_on(entity).await
+                        }
+                    }
+                    None => Err(format!("Entity {} not found", entity)),
+                }?;
+                return Ok(());
             }
-            None => Err(format!("Entity {} not found", entity)),
         }
+    }
+
+    let client = mqtt_client
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
+    if let Some(ref client) = *client {
+        client
+            .publish_command(&action, payload)
+            .map_err(|e| e.to_string())
     } else {
-        let client = mqtt_client.lock()
-            .map_err(|e| format!("Internal error: {}", e))?;
-        if let Some(ref client) = *client {
-            client.publish_command(&action, payload).map_err(|e| e.to_string())
-        } else {
-            Err("MQTT client not connected".to_string())
-        }
+        Err("MQTT client not connected".to_string())
     }
 }
 
 fn is_ha_entity(entity_id: &str) -> bool {
     let domains = [
-        "switch", "light", "input_boolean", "fan", "cover", "lock", "media_player",
-        "scene", "script", "number", "sensor", "binary_sensor"
+        "switch",
+        "light",
+        "input_boolean",
+        "fan",
+        "cover",
+        "lock",
+        "media_player",
+        "scene",
+        "script",
+        "number",
+        "sensor",
+        "binary_sensor",
     ];
     let domain = entity_id.split('.').next().unwrap_or("");
     domains.contains(&domain)
@@ -174,7 +193,7 @@ fn start_ha_polling(app: tauri::AppHandle) {
         let mut interval = tokio::time::interval(Duration::from_secs(3));
         loop {
             interval.tick().await;
-            
+
             let config_res = {
                 let store = app.store_builder("config.json").build();
                 match store {
@@ -187,12 +206,16 @@ fn start_ha_polling(app: tauri::AppHandle) {
             };
 
             if let Some(config) = config_res {
-                if config.ha_use_direct_api && config.ha_url.is_some() && config.ha_longlived_token.is_some() {
+                if config.ha_use_direct_api
+                    && config.ha_url.is_some()
+                    && config.ha_longlived_token.is_some()
+                {
                     let client_res = ha_api::HaApiClient::new(
                         config.ha_url.as_deref().unwrap_or(""),
                         config.ha_port,
                         config.ha_longlived_token.as_deref().unwrap_or(""),
-                    ).await;
+                    )
+                    .await;
 
                     if let Ok(client) = client_res {
                         if let Ok(states) = client.get_states().await {
@@ -215,12 +238,15 @@ fn start_ha_polling(app: tauri::AppHandle) {
 fn send_command(
     action: String,
     payload: serde_json::Value,
-    mqtt_client: State<MqttState>
+    mqtt_client: State<MqttState>,
 ) -> Result<(), String> {
-    let client = mqtt_client.lock()
+    let client = mqtt_client
+        .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
-        client.publish_command(&action, payload).map_err(|e| e.to_string())
+        client
+            .publish_command(&action, payload)
+            .map_err(|e| e.to_string())
     } else {
         Err("MQTT client not connected".to_string())
     }
@@ -228,14 +254,14 @@ fn send_command(
 
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
-    let store = app.store_builder("config.json")
+    let store = app
+        .store_builder("config.json")
         .build()
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
     let mut is_first_run = false;
     let mut config = match store.get("config") {
-        Some(value) => serde_json::from_value(value)
-            .unwrap_or_default(),
+        Some(value) => serde_json::from_value(value).unwrap_or_default(),
         None => {
             is_first_run = true;
             FullConfig::default()
@@ -255,20 +281,36 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
                 } else {
                     format!("http://{}", server)
                 };
-                
-                let host_part = url_base.trim_start_matches("http://").trim_start_matches("https://");
-                let host_only = host_part.split('/').next().unwrap_or(host_part).split(':').next().unwrap_or(host_part);
-                
+
+                let host_part = url_base
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://");
+                let host_only = host_part
+                    .split('/')
+                    .next()
+                    .unwrap_or(host_part)
+                    .split(':')
+                    .next()
+                    .unwrap_or(host_part);
+
                 config.ha_url = Some(format!("http://{}", host_only));
                 config.mqtt_ha_host = Some(host_only.to_string());
-                
+
                 if let Some(port_str) = host_part.split(':').nth(1) {
-                    if let Ok(port) = port_str.split('/').next().unwrap_or(port_str).parse::<u16>() {
+                    if let Ok(port) = port_str
+                        .split('/')
+                        .next()
+                        .unwrap_or(port_str)
+                        .parse::<u16>()
+                    {
                         config.ha_port = Some(port);
                         info!("Config: Parsed port {} from HA_SERVER", port);
                     }
                 }
-                info!("Config: Seeded ha_url={:?}, mqtt_ha_host={:?}", config.ha_url, config.mqtt_ha_host);
+                info!(
+                    "Config: Seeded ha_url={:?}, mqtt_ha_host={:?}",
+                    config.ha_url, config.mqtt_ha_host
+                );
                 changed = true;
             }
         }
@@ -319,8 +361,13 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
     }
 
     if changed {
-        store.set("config", serde_json::to_value(&config).map_err(|e| e.to_string())?);
-        store.save().map_err(|e| format!("Failed to save config: {}", e))?;
+        store.set(
+            "config",
+            serde_json::to_value(&config).map_err(|e| e.to_string())?,
+        );
+        store
+            .save()
+            .map_err(|e| format!("Failed to save config: {}", e))?;
     }
 
     Ok(config)
@@ -328,12 +375,18 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 
 #[tauri::command]
 fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
-    let store = app.store_builder("config.json")
+    let store = app
+        .store_builder("config.json")
         .build()
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
-    store.set("config", serde_json::to_value(&config).map_err(|e| e.to_string())?);
-    store.save().map_err(|e| format!("Failed to save config: {}", e))?;
+    store.set(
+        "config",
+        serde_json::to_value(&config).map_err(|e| e.to_string())?,
+    );
+    store
+        .save()
+        .map_err(|e| format!("Failed to save config: {}", e))?;
 
     Ok(())
 }
@@ -344,9 +397,10 @@ fn connect_mqtt(
     port: u16,
     portal_id: Option<String>,
     app: tauri::AppHandle,
-    mqtt_client: State<MqttState>
+    mqtt_client: State<MqttState>,
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client.lock()
+    let mut client_guard = mqtt_client
+        .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     let mut client = MqttClient::new(host, port);
     client.set_app_handle(app);
@@ -358,18 +412,15 @@ fn connect_mqtt(
 
 #[tauri::command]
 fn disconnect_mqtt(mqtt_client: State<MqttState>) -> Result<(), String> {
-    let mut client_guard = mqtt_client.lock()
+    let mut client_guard = mqtt_client
+        .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = None;
     Ok(())
 }
 
 #[tauri::command]
-async fn test_ha_connection(
-    url: String,
-    port: Option<u16>,
-    token: String,
-) -> Result<(), String> {
+async fn test_ha_connection(url: String, port: Option<u16>, token: String) -> Result<(), String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
     client.test_connection().await
 }
@@ -393,15 +444,26 @@ async fn discover_ha_entities(
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
     let states = client.get_states().await?;
     let togglable = [
-        "switch", "light", "input_boolean", "fan", "cover", "lock", "media_player",
-        "scene", "script", "number", "sensor", "binary_sensor"
+        "switch",
+        "light",
+        "input_boolean",
+        "fan",
+        "cover",
+        "lock",
+        "media_player",
+        "scene",
+        "script",
+        "number",
+        "sensor",
+        "binary_sensor",
     ];
     let mut result = Vec::new();
     for ha_state in states {
         let entity_id = ha_state.entity_id.clone();
         let domain = entity_id.split('.').next().map(String::from);
         let friendly_name = if let Some(attrs) = &ha_state.attributes {
-            attrs.get("friendly_name")
+            attrs
+                .get("friendly_name")
                 .and_then(|v| v.as_str())
                 .map(String::from)
                 .unwrap_or_else(|| entity_id.clone())
@@ -446,16 +508,12 @@ async fn toggle_ha_entity(
 
 #[tauri::command]
 fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        "config",
-        tauri::WebviewUrl::App("config".into())
-    )
-    .title("Configuration")
-    .inner_size(CONFIG_WINDOW_W, CONFIG_WINDOW_H)
-    .resizable(true)
-    .build()
-    .map_err(|e| e.to_string())?;
+    tauri::WebviewWindowBuilder::new(&app, "config", tauri::WebviewUrl::App("config".into()))
+        .title("Configuration")
+        .inner_size(CONFIG_WINDOW_W, CONFIG_WINDOW_H)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -464,7 +522,7 @@ fn close_config_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
 
-use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -497,12 +555,18 @@ pub fn run() {
             start_ha_polling(app.handle().clone());
 
             // Setup app menu with About
-            let about_item = MenuItem::with_id(app, "about", "About Inverter Dashboard", true, None::<&str>)?;
-            let app_submenu = Submenu::with_items(app, "Inverter Dashboard", true, &[
-                &about_item,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::quit(app, Some("Quit"))?,
-            ])?;
+            let about_item =
+                MenuItem::with_id(app, "about", "About Inverter Dashboard", true, None::<&str>)?;
+            let app_submenu = Submenu::with_items(
+                app,
+                "Inverter Dashboard",
+                true,
+                &[
+                    &about_item,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, Some("Quit"))?,
+                ],
+            )?;
             let menu = Menu::with_items(app, &[&app_submenu])?;
             app.set_menu(menu)?;
 
@@ -519,34 +583,49 @@ pub fn run() {
                     let (w, h) = img.dimensions();
                     tauri::image::Image::new_owned(img.into_raw(), w, h)
                 })
-                .menu(&tauri::menu::Menu::with_items(app, &[
-                    &tauri::menu::MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(app, "config", "Settings...", true, None::<&str>)?,
-                    &tauri::menu::PredefinedMenuItem::separator(app)?,
-                    &tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
-                ])?)
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                .menu(&tauri::menu::Menu::with_items(
+                    app,
+                    &[
+                        &tauri::menu::MenuItem::with_id(
+                            app,
+                            "show",
+                            "Show Dashboard",
+                            true,
+                            None::<&str>,
+                        )?,
+                        &tauri::menu::MenuItem::with_id(
+                            app,
+                            "config",
+                            "Settings...",
+                            true,
+                            None::<&str>,
+                        )?,
+                        &tauri::menu::PredefinedMenuItem::separator(app)?,
+                        &tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
+                    ],
+                )?)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
-                        "config" => {
-                            let app = app.clone();
-                            let _ = open_config_window(app);
-                        }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "config" => {
+                        let app = app.clone();
+                        let _ = open_config_window(app);
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { 
-                        button: MouseButton::Left, .. 
-                    } = event {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -555,24 +634,24 @@ pub fn run() {
                     }
                 })
                 .build(app);
-if let Ok(tray) = tray_result {
-    info!("Tray icon built successfully.");
-    app.manage(AppTrayIcon(tray));
-} else if let Err(e) = tray_result {
-    error!("Failed to build tray icon: {}", e);
-}
+            if let Ok(tray) = tray_result {
+                info!("Tray icon built successfully.");
+                app.manage(AppTrayIcon(tray));
+            } else if let Err(e) = tray_result {
+                error!("Failed to build tray icon: {}", e);
+            }
 
-// Show window on startup
-info!("Showing main window...");
-let window = app.get_webview_window("main").unwrap();
-window.show().unwrap();
+            // Show window on startup
+            info!("Showing main window...");
+            let window = app.get_webview_window("main").unwrap();
+            window.show().unwrap();
 
-// macOS: accessory mode keeps app in menu bar (tray icon visible) without dock icon
-#[cfg(target_os = "macos")]
-{
-    info!("Setting activation policy to Accessory...");
-    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-}
+            // macOS: accessory mode keeps app in menu bar (tray icon visible) without dock icon
+            #[cfg(target_os = "macos")]
+            {
+                info!("Setting activation policy to Accessory...");
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
 
             // Handle app menu events
             app.on_menu_event(move |app_handle, event| {
@@ -580,7 +659,7 @@ window.show().unwrap();
                     let _ = tauri::WebviewWindowBuilder::new(
                         app_handle,
                         "about",
-                        tauri::WebviewUrl::App("about".into())
+                        tauri::WebviewUrl::App("about".into()),
                     )
                     .title("About Inverter Dashboard")
                     .inner_size(ABOUT_WINDOW_W, ABOUT_WINDOW_H)
