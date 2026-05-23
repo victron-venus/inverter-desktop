@@ -190,8 +190,8 @@ pub struct MqttClient {
     portal_id: Option<String>,
 }
 
-use tauri_plugin_notification::NotificationExt;
 use log::error;
+use tauri_plugin_notification::NotificationExt;
 
 const THRESHOLD_LOAD_W: f64 = 300.0;
 const THRESHOLD_CONSUMPTION_W: f64 = 300.0;
@@ -265,9 +265,7 @@ impl MqttClient {
     }
 
     pub fn get_state(&self) -> InverterState {
-        self.state.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -299,12 +297,24 @@ impl MqttClient {
                                 .unwrap_or_else(|_| String::new());
 
                             if topic == "inverter/state" {
-                                if let Ok(raw) = serde_json::from_str::<RawInverterState>(&payload) {
+                                if let Ok(raw) = serde_json::from_str::<RawInverterState>(&payload)
+                                {
                                     let new_state = InverterState {
-                                        gt: raw.gt, g1: raw.g1, g2: raw.g2, tt: raw.tt, t1: raw.t1, t2: raw.t2,
+                                        gt: raw.gt,
+                                        g1: raw.g1,
+                                        g2: raw.g2,
+                                        tt: raw.tt,
+                                        t1: raw.t1,
+                                        t2: raw.t2,
                                         solar_total: raw.solar_total,
-                                        mppt_total: raw.mppt_individual.as_ref().map(|v| v.iter().sum()),
-                                        tasmota_total: raw.tasmota_individual.as_ref().map(|v| v.iter().sum()),
+                                        mppt_total: raw
+                                            .mppt_individual
+                                            .as_ref()
+                                            .map(|v| v.iter().sum()),
+                                        tasmota_total: raw
+                                            .tasmota_individual
+                                            .as_ref()
+                                            .map(|v| v.iter().sum()),
                                         battery_soc: raw.battery_soc,
                                         battery_power: raw.battery_power,
                                         battery_voltage: raw.battery_voltage,
@@ -319,7 +329,9 @@ impl MqttClient {
                                         dry_run: raw.dry_run.as_ref().map(coerce_bool),
                                         ess_mode: raw.ess_mode,
                                         booleans: raw.booleans.map(|map| {
-                                            map.into_iter().map(|(k, v)| (k, coerce_bool(&v))).collect()
+                                            map.into_iter()
+                                                .map(|(k, v)| (k, coerce_bool(&v)))
+                                                .collect()
                                         }),
                                         features: raw.features,
                                         mppt_individual: raw.mppt_individual,
@@ -350,7 +362,8 @@ impl MqttClient {
                                         if let Some(ref loads) = new_state.loads {
                                             for (name, power) in loads {
                                                 if *power > THRESHOLD_LOAD_W {
-                                                    let _ = handle.notification()
+                                                    let _ = handle
+                                                        .notification()
                                                         .builder()
                                                         .title("High Load")
                                                         .body(format!("{}: {}W", name, power))
@@ -360,7 +373,8 @@ impl MqttClient {
                                         }
                                         if let Some(tt) = new_state.tt {
                                             if tt > THRESHOLD_CONSUMPTION_W {
-                                                let _ = handle.notification()
+                                                let _ = handle
+                                                    .notification()
                                                     .builder()
                                                     .title("High Consumption")
                                                     .body(format!("Consumption: {}W", tt))
@@ -369,7 +383,8 @@ impl MqttClient {
                                         }
                                         if let Some(wl) = new_state.water_level {
                                             if wl < THRESHOLD_WATER_CM {
-                                                let _ = handle.notification()
+                                                let _ = handle
+                                                    .notification()
                                                     .builder()
                                                     .title("Low Water")
                                                     .body(format!("Water level: {} cm", wl))
@@ -378,7 +393,8 @@ impl MqttClient {
                                         }
                                         if let Some(st) = new_state.solar_total {
                                             if st > THRESHOLD_SOLAR_W {
-                                                let _ = handle.notification()
+                                                let _ = handle
+                                                    .notification()
                                                     .builder()
                                                     .title("High Solar")
                                                     .body(format!("Solar: {}W", st))
@@ -394,8 +410,7 @@ impl MqttClient {
                                         let _ = handle.emit("mqtt-state-update", &new_state);
                                     }
                                 }
-                            }
- else if topic == "inverter/console" {
+                            } else if topic == "inverter/console" {
                                 if let Ok(mut guard) = state.lock() {
                                     let console = guard.console.get_or_insert_with(Vec::new);
                                     console.push(payload);
@@ -430,7 +445,8 @@ impl MqttClient {
         if let Some(pid) = portal_id {
             let topic = format!("R/{}/keepalive", pid);
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
                 loop {
                     interval.tick().await;
                     let _ = keepalive_client.publish(&topic, QoS::AtMostOnce, false, "");
@@ -441,7 +457,11 @@ impl MqttClient {
         Ok(())
     }
 
-    pub fn publish_command(&self, action: &str, payload: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn publish_command(
+        &self,
+        action: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(client) = &self.client {
             let topic = format!("inverter/cmd/{}", action);
             let payload_str = if payload.is_null() {
