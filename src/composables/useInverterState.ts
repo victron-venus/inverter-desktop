@@ -9,6 +9,8 @@ export interface InverterState {
   t1?: number
   t2?: number
   solar_total?: number
+  mppt_total?: number
+  tasmota_total?: number
   battery_soc?: number
   battery_power?: number
   battery_voltage?: number

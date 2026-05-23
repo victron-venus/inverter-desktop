@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue'
+import { ref } from 'vue'
 import { state } from './useInverterState'
 
 const MAX_HISTORY_POINTS = 1800
@@ -9,7 +9,7 @@ interface TooltipParam {
   color: string
 }
 
-export function useChart(isDarkRef: Ref<boolean>) {
+export function useChart() {
   const chartOption = ref({})
 
   let historyData = {
@@ -22,9 +22,9 @@ export function useChart(isDarkRef: Ref<boolean>) {
 
   function updateChartOption() {
     const { timestamps, grid, solar, battery, setpoint } = historyData
-    const dark = isDarkRef.value
-    const textColor = dark ? '#e0e0e0' : '#333'
-    const gridColor = dark ? '#444' : '#e0e0e0'
+    // Force light theme colors regardless of system theme
+    const textColor = '#333'
+    const gridColor = '#e0e0e0'
 
     const timeData = timestamps.map(ts => ts * 1000)
 
@@ -49,43 +49,45 @@ export function useChart(isDarkRef: Ref<boolean>) {
       legend: {
         data: ['Grid', 'Solar', 'Battery', 'Setpoint'],
         top: 0,
-        textStyle: { color: textColor }
+        itemWidth: 12,
+        itemHeight: 8,
+        textStyle: { color: textColor, fontSize: 10 }
       },
-      grid: { top: 30, bottom: 50, left: 50, right: 20, containLabel: false },
+      grid: { top: 25, bottom: 25, left: 40, right: 10, containLabel: false },
       xAxis: {
         type: 'time',
         axisLine: { lineStyle: { color: gridColor } },
-        axisLabel: { color: textColor, formatter: '{HH}:{mm}' },
+        axisLabel: { color: textColor, fontSize: 10, formatter: '{HH}:{mm}' },
         splitLine: { show: false }
       },
       yAxis: {
         type: 'value',
         splitLine: { lineStyle: { color: gridColor, type: 'dashed' } },
-        axisLabel: { color: textColor, formatter: (v: number) => v >= 1000 ? v/1000 + 'kW' : v + 'W' }
+        axisLabel: { color: textColor, fontSize: 10, formatter: (v: number) => v >= 1000 ? (v/1000).toFixed(1) + 'k' : v }
       },
       series: [
         {
           name: 'Grid', type: 'line', smooth: true, showSymbol: false,
           data: timeData.map((t, i) => [t, grid[i] || 0]),
-          lineStyle: { color: '#4a90d9', width: 2 },
-          areaStyle: { color: 'rgba(74,144,217,0.15)' }
+          lineStyle: { color: '#2196f3', width: 2 },
+          areaStyle: { color: 'rgba(33,150,243,0.1)' }
         },
         {
           name: 'Solar', type: 'line', smooth: true, showSymbol: false,
           data: timeData.map((t, i) => [t, solar[i] || 0]),
-          lineStyle: { color: '#f5a623', width: 2 },
-          areaStyle: { color: 'rgba(245,166,35,0.15)' }
+          lineStyle: { color: '#ff9800', width: 2 },
+          areaStyle: { color: 'rgba(255,152,0,0.1)' }
         },
         {
           name: 'Battery', type: 'line', smooth: true, showSymbol: false,
           data: timeData.map((t, i) => [t, battery[i] || 0]),
-          lineStyle: { color: '#7ed321', width: 2 },
-          areaStyle: { color: 'rgba(126,211,33,0.15)' }
+          lineStyle: { color: '#4caf50', width: 2 },
+          areaStyle: { color: 'rgba(76,175,80,0.1)' }
         },
         {
           name: 'Setpoint', type: 'line', smooth: true, showSymbol: false,
           data: timeData.map((t, i) => [t, setpoint[i] || 0]),
-          lineStyle: { color: '#00d4aa', width: 2, type: 'dashed' },
+          lineStyle: { color: '#00bcd4', width: 2, type: 'dashed' },
           areaStyle: { opacity: 0 }
         }
       ]

@@ -1,89 +1,141 @@
-:root {
-  --bg-dark: #0a0a0a; --bg-card: #151515; --border: #2a2a2a;
-  --text: #e0e0e0; --text-dim: #666; --text-value: #ccc; --accent: #00d4aa;
-  --solar: #f5a623; --grid: #4a90d9; --battery: #7ed321; --consumption: #e74c3c;
-  --subsection-bg: rgba(0,0,0,0.2);
-}
-body { background: var(--bg-dark); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
-.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; }
-.card-header { background: transparent; border-bottom: 1px solid var(--border); font-weight: 600; text-transform: uppercase; font-size: 0.7rem; color: var(--text-dim); padding: 6px 12px; }
-.card-body { padding: 8px 12px; }
-.stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1; }
-.stat-label { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; }
-.stat-sub { font-size: 0.75rem; color: var(--text-dim); margin-top: 2px; }
-.toggle-btn { cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 0.45rem; font-weight: 600; border: 1px solid var(--border); transition: all 0.15s; display: inline-block; margin: 1px; }
-.toggle-btn.on { background: #2e7d32; border-color: #4caf50; color: #fff; }
-.toggle-btn.off { background: #1a1a1a; color: #555; }
-.toggle-btn:hover { transform: scale(1.02); filter: brightness(1.1); }
-.text-solar { color: var(--solar); } .text-grid { color: var(--grid); } .text-battery { color: var(--battery); } .text-consumption { color: var(--consumption); } .text-accent { color: var(--accent); }
-.daily-stats { font-size: 0.75rem; color: var(--text-dim); padding: 8px 12px; background: #0d0d0d; border-radius: 6px; font-family: monospace; }
-.daily-stats .highlight { color: var(--solar); }
-.daily-stats .money { color: #4caf50; }
-.daily-stats .dim { color: #555; }
-.daily-stats .detail { color: #888; font-size: 0.7rem; }
-.chart-wrap { height: 250px; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-.status-dot.online { background: #4caf50; } .status-dot.offline { background: #f44336; }
-.ws-status { position: fixed; top: 10px; right: 10px; padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; }
-.ws-status.connected { background: #2e7d32; color: #fff; }
-.ws-status.disconnected { background: #c62828; color: #fff; }
-#loads { color: #888; font-size: 0.65rem; }
-#loads .loads-table { display: table; width: 100%; }
-#loads .loads-row { display: table-row; }
-#loads .loads-name { display: table-cell; text-align: left; padding-right: 8px; }
-#loads .loads-value { display: table-cell; text-align: right; font-family: monospace; min-width: 45px; font-weight: bold; }
-.subsection { border: 1px solid var(--border); border-radius: 6px; padding: 6px; background: var(--subsection-bg); }
-.subsection-value { color: var(--text-value); }
-/* Light theme */
-body.light {
-  --bg-dark: #f5f5f5; --bg-card: #ffffff; --border: #ddd;
-  --text: #222; --text-dim: #555; --text-value: #333;
-  --subsection-bg: #ffffff;
-}
-body.light .card { box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-body.light .daily-stats { background: #e8e8e8; }
-body.light .toggle-btn.off { background: #ddd; color: #666; }
-body.light .subsection { border-color: #ccc; }
+@import "tailwindcss";
 
-/* Fix label overlap in outlined compact fields */
-.v-field--variant-outlined.v-field--density-compact .v-label.v-field-label--floating {
-  transform: translateY(-14px) scale(0.75) !important;
-}
-.v-field--variant-outlined.v-field--density-compact {
-  --v-field-padding-top: 4px;
-}
-.v-field--variant-outlined.v-field--density-compact .v-field__input {
-  font-size: 9px !important;
-  min-height: 24px !important;
-}
-.v-field--variant-outlined.v-field--density-compact input,
-.v-field--variant-outlined.v-field--density-compact .v-label.v-field-label {
-  font-size: 9px !important;
+@theme {
+  /* Exact 1.0.17 Color Palette */
+  --color-grid: #2196f3;
+  --color-consumption: #f44336;
+  --color-solar: #ff9800;
+  --color-battery: #4caf50;
+  --color-accent: #00bcd4;
+  --color-text-dim: #757575;
+
+  /* Backgrounds */
+  --color-bg-page: #efeff4; /* Slightly grey "podlozhka" */
+  --color-bg-card: #ffffff;
+  --color-border-card: #e0e0e0;
+  --color-text-main: #333333;
+
+  /* Dark Mode Persistence Overrides */
+  /* We deliberately keep bg-page and bg-card same as light mode for specific sections */
+  --color-dark-bg-page: #efeff4; 
+  --color-dark-bg-card: #ffffff;
+  --color-dark-border-card: #d1d1d6;
+  --color-dark-text-main: #212121; /* Keep text dark for white cards */
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
 }
 
-.context-menu {
-  position: fixed;
-  z-index: 100000;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-  min-width: 160px;
-  padding: 4px 0;
+@layer base {
+  body {
+    @apply font-sans antialiased overflow-hidden text-[12px];
+    background-color: var(--color-bg-page);
+    color: var(--color-text-main);
+  }
+
+  /* Night mode background should NOT change as per request */
+  .dark body {
+    background-color: var(--color-bg-page);
+    color: var(--color-text-main);
+  }
 }
-.context-menu-item {
-  padding: 8px 16px;
-  cursor: pointer;
-  font-size: 0.8rem;
-  color: var(--text);
-  transition: background 0.1s;
+
+@layer components {
+  /* Card: Static White background */
+  .classic-card {
+    @apply border rounded-[3px] shadow-none bg-white;
+    border-color: var(--color-border-card);
+  }
+
+  .dark .classic-card {
+    background-color: #ffffff;
+    border-color: var(--color-dark-border-card);
+  }
+
 }
-.context-menu-item:hover {
-  background: rgba(255,255,255,0.08);
+
+/* Exact port from v1.0.9 .toggle-btn - MOVED OUTSIDE LAYERS FOR PRIORITY */
+.classic-btn {
+  cursor: pointer !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+  font-size: 9px !important;
+  font-weight: 600 !important;
+  border: 1px solid #2a2a2a !important;
+  transition: all 0.15s !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
+  margin: 1px !important;
+  background-color: #1a1a1a !important;
+  color: #555 !important;
+  text-transform: none !important;
+  height: auto !important;
+  line-height: normal !important;
 }
-body.light .context-menu {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+
+.classic-btn:hover {
+  transform: scale(1.02) !important;
+  filter: brightness(1.1) !important;
 }
-body.light .context-menu-item:hover {
-  background: rgba(0,0,0,0.06);
+
+/* State: ON - Exact v1.0.9 .toggle-btn.on */
+.classic-btn-on {
+  background-color: #2e7d32 !important;
+  border-color: #4caf50 !important;
+  color: #ffffff !important;
 }
+
+/* Reset for Dark Mode */
+.dark .classic-btn {
+  background-color: #1a1a1a !important;
+  color: #555 !important;
+  border-color: #2a2a2a !important;
+}
+
+/* Light mode overrides */
+:not(.dark) .classic-btn {
+  background-color: #ddd !important;
+  color: #666 !important;
+  border-color: #ccc !important;
+}
+
+:not(.dark) .classic-btn-on {
+  background-color: #2e7d32 !important;
+  border-color: #4caf50 !important;
+  color: #ffffff !important;
+}
+
+@layer components {
+
+  /* Card Header Style: Increased to 11px to match 0.7rem from v1.0.9 */
+  .classic-header {
+    @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-white;
+    border-color: var(--color-border-card);
+  }
+  
+  .dark .classic-header {
+    background-color: #ffffff;
+    border-color: var(--color-dark-border-card);
+  }
+
+  /* Compact Input */
+  .classic-input {
+    @apply h-6 px-1.5 rounded-[2px] border text-[11px] outline-none focus:border-blue-500 transition-none;
+    background-color: #fff;
+    border-color: #ced4da;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.scrollbar-hide::-webkit-scrollbar { display: none; }

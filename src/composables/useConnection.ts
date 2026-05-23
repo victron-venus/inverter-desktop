@@ -1,81 +1,27 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
+import { requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 import { state, mqttConnected, appConfig, type InverterState } from './useInverterState'
 import { getAppConfig } from '../config'
 import { logger } from '../logger'
 
-/** Notification thresholds */
-const THRESHOLDS = {
-  LOAD_W: 300,        // Notify if any individual load exceeds (washing machine, dryer)
-  CONSUMPTION_W: 300, // Notify if total house consumption from grid exceeds
-  WATER_CM: 23,       // Notify if cistern water level drops below (near empty)
-  SOLAR_W: 3000,      // Notify if solar production exceeds (peak alert)
-} as const
-
-type BoolField = keyof Pick<InverterState, 'pump_switch' | 'water_valve' | 'washer_power' | 'dryer_power' | 'dry_run'>
-
-/** Map BoolField keys to their string->boolean conversion source */
-const BOOL_FIELDS: BoolField[] = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run']
-
-function coerceBooleans(newState: InverterState) {
-  if (newState.booleans) {
-    for (const key of Object.keys(newState.booleans)) {
-      const val = newState.booleans[key]
-      if (typeof val === 'string') {
-        newState.booleans[key] = val === 'true' || val === '1'
-      }
-    }
-  }
-  for (const field of BOOL_FIELDS) {
-    const val = newState[field]
-    if (typeof val === 'string') {
-      ;(newState as Record<string, unknown>)[field] = val === 'true' || val === '1'
-    }
-  }
-}
-
 export function useConnection() {
-  let notificationPermission = false
   let unlistenStateUpdate: (() => void) | null = null
+  let unlistenConnectionStatus: (() => void) | null = null
 
   async function ensureNotificationPermission() {
     try {
       let granted = await isPermissionGranted()
       if (!granted) {
-        const permission = await requestPermission()
-        granted = permission === 'granted'
+        await requestPermission()
       }
-      notificationPermission = granted
     } catch (e) {
       logger.error('Notification permission error:', e)
     }
   }
 
-  function checkThresholds(newState: InverterState) {
-    if (!notificationPermission) return
-    if (newState.loads) {
-      for (const [name, power] of Object.entries(newState.loads)) {
-        if (power > THRESHOLDS.LOAD_W) {
-          sendNotification({ title: 'High Load', body: `${name}: ${power}W` })
-        }
-      }
-    }
-    if (newState.tt && newState.tt > THRESHOLDS.CONSUMPTION_W) {
-      sendNotification({ title: 'High Consumption', body: `Consumption: ${newState.tt}W` })
-    }
-    if (newState.water_level !== undefined && newState.water_level < THRESHOLDS.WATER_CM) {
-      sendNotification({ title: 'Low Water', body: `Water level: ${newState.water_level} cm` })
-    }
-    if (newState.solar_total && newState.solar_total > THRESHOLDS.SOLAR_W) {
-      sendNotification({ title: 'High Solar', body: `Solar: ${newState.solar_total}W` })
-    }
-  }
-
   function processState(newState: InverterState) {
-    coerceBooleans(newState)
     state.value = newState
-    checkThresholds(newState)
   }
 
   async function connectMqtt() {
@@ -88,13 +34,20 @@ export function useConnection() {
         localStorage.setItem('theme', config.color_scheme)
       }
 
+      // Cleanup existing listeners if any
+      cleanup()
+
       // Subscribe to MQTT state updates from Rust (event-driven, no polling)
       unlistenStateUpdate = await listen<InverterState>('mqtt-state-update', (event) => {
         processState(event.payload)
       })
 
+      // Subscribe to MQTT connection status updates
+      unlistenConnectionStatus = await listen<boolean>('mqtt-connection-status', (event) => {
+        mqttConnected.value = event.payload
+      })
+
       await invoke('connect_mqtt', { host: config.mqtt_host, port: config.mqtt_port, portalId: config.portal_id || null })
-      mqttConnected.value = true
 
       // Fetch initial state
       try {
@@ -111,7 +64,7 @@ export function useConnection() {
 
   async function send(action: string, payload: any = {}) {
     try {
-      await invoke('send_command', { action, payload })
+      await invoke('perform_action', { action, payload })
     } catch (e) {
       logger.error('Failed to send command:', e)
     }
@@ -121,6 +74,10 @@ export function useConnection() {
     if (unlistenStateUpdate) {
       unlistenStateUpdate()
       unlistenStateUpdate = null
+    }
+    if (unlistenConnectionStatus) {
+      unlistenConnectionStatus()
+      unlistenConnectionStatus = null
     }
   }
 

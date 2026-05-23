@@ -1,109 +1,99 @@
 <template>
-  <div class="col-md-4">
-    <!-- EV -->
-    <div class="card mb-2" v-if="features?.ev !== false">
-      <div class="card-header"><i class="fas fa-car me-2"></i>EV</div>
-      <div class="card-body py-1">
-        <div class="d-flex justify-content-between">
-          <div v-if="parseFloat(evCharging) > 0"><div class="stat-value text-solar">{{ evCharging }}</div><div class="stat-sub">Charging</div></div>
-          <div class="text-center" v-if="parseFloat(evPower) > 0"><div class="stat-value" style="color:#9e9e9e">{{ evPower }}</div><div class="stat-sub">VUE</div></div>
-          <div class="text-end"><div class="stat-value text-accent">{{ Math.floor(carSoc || 0) }}%</div><div class="stat-sub">SoC</div></div>
+  <div class="flex flex-col gap-1 h-full">
+    <!-- EV Section -->
+    <div v-if="features?.ev !== false" class="classic-card">
+      <div class="classic-header flex items-center gap-1.5">
+        <Car :size="10" /> EV
+      </div>
+      <div class="p-1 flex justify-between items-center gap-2">
+        <div v-if="parseFloat(evCharging) > 0">
+          <div class="text-xl font-bold text-solar leading-none">{{ evCharging }}</div>
+          <div class="text-[10px] text-slate-400 font-bold text-center">Charging</div>
+        </div>
+        <div class="text-center" v-if="parseFloat(evPower) > 0">
+          <div class="text-xl font-bold text-slate-400 leading-none">{{ evPower }}</div>
+          <div class="text-[10px] text-slate-400 font-bold tracking-tighter uppercase">VUE</div>
+        </div>
+        <div class="text-right">
+          <div class="text-2xl font-bold text-accent leading-none">{{ Math.floor(carSoc || 0) }}%</div>
+          <div class="text-[10px] text-slate-400 font-bold text-center uppercase tracking-tighter">SoC</div>
         </div>
       </div>
     </div>
-    <!-- Water -->
-    <div class="card mb-2" v-if="features?.water !== false">
-      <div class="card-header"><i class="fas fa-faucet me-2"></i>Water</div>
-      <div class="card-body py-1">
-        <div class="d-flex justify-content-between align-items-center">
-          <div class="fw-bold" :style="{color: waterValve ? '#f44336' : '#4caf50'}">{{ waterLevel || 0 }} cm</div>
-          <div class="d-flex gap-1">
-            <v-btn
-              outlined
-              :class="['custom-3d', pumpSwitch ? 'state-on' : 'state-off']"
-              size="small"
-              @click="$emit('send', 'toggle', {entity: pumpSwitchEntity})"
-            >
-              PUMP
-            </v-btn>
-            <v-btn
-              outlined
-              :class="['custom-3d', waterValve ? 'state-on' : 'state-off']"
-              size="small"
-              @click="$emit('send', 'toggle', {entity: waterValveEntity})"
-            >
-              VALVE
-            </v-btn>
-          </div>
+
+    <!-- Water Section -->
+    <div v-if="features?.water !== false" class="classic-card">
+      <div class="classic-header flex items-center gap-1.5">
+        <Droplets :size="10" /> Water
+      </div>
+      <div class="p-1 flex justify-between items-center gap-2 px-2">
+        <div class="text-xl font-bold" :class="waterValve ? 'text-red-500' : 'text-green-500'">
+          {{ waterLevel || 0 }} cm
         </div>
-      </div>
-      </div>
-      <!-- Dishwasher -->
-      <div class="card mb-2" v-if="features?.dishwasher !== false && dishwasherRunning">
-      <div class="card-header"><i class="fas fa-utensils me-2"></i>Dishwasher</div>
-      <div class="card-body py-1">
-        <div class="d-flex justify-content-between align-items-center">
-          <div class="fw-bold text-success">Running</div>
-          <div>{{ formatDuration(dishwasherDuration) }}</div>
+        <div class="flex gap-1">
+          <button 
+            class="classic-btn"
+            :class="{ 'classic-btn-on': pumpSwitch }"
+            @click="$emit('send', 'toggle', {entity: pumpSwitchEntity})"
+          >PUMP</button>
+          <button 
+            class="classic-btn"
+            :class="{ 'classic-btn-on': waterValve }"
+            @click="$emit('send', 'toggle', {entity: waterValveEntity})"
+          >VALVE</button>
         </div>
       </div>
     </div>
-    <!-- Washer -->
-    <div class="card mb-2" v-if="features?.washer !== false && (((washerTime || 0) > 0) || washerPower)">
-      <div class="card-header"><i class="fas fa-soap me-2"></i>Washer</div>
-      <div class="card-body py-1">
-        <div class="d-flex justify-content-between align-items-center">
-          <div class="fw-bold">{{ formatDuration(washerTime) }}</div>
-          <v-btn
-            outlined
-            :class="['custom-3d', washerPower ? 'state-on' : 'state-off']"
-            size="small"
-            disabled
-          >
-            PWR
-          </v-btn>
-        </div>
+
+    <!-- Home Controls -->
+    <div v-if="features?.ha !== false && homeButtons.length > 0" class="classic-card flex-1 min-h-0">
+      <div class="classic-header flex items-center gap-1.5">
+        <HomeIcon :size="10" /> Home
       </div>
+      <div class="p-1 flex flex-wrap gap-0.5 overflow-y-auto max-h-[300px]">
+        <button
+          v-for="btn in homeButtons"
+          :key="btn.id"
+          class="classic-btn !flex-1 !min-w-[50px] !normal-case"
+          :class="{ 'classic-btn-on': buttonStates[btn.id] === 'on' }"
+          @click="$emit('send', 'toggle', {entity: btn.entity})"
+        >
+          {{ btn.label }}
+        </button>
+      </div>
+
     </div>
-    <!-- Dryer -->
-    <div class="card mb-2" v-if="features?.dryer !== false && (((dryerTime || 0) > 0) || dryerPower)">
-      <div class="card-header"><i class="fas fa-wind me-2"></i>Dryer</div>
-      <div class="card-body py-1">
-        <div class="d-flex justify-content-between align-items-center">
-          <div class="fw-bold">{{ formatDuration(dryerTime) }}</div>
-          <v-btn
-            outlined
-            :class="['custom-3d', dryerPower ? 'state-on' : 'state-off']"
-            size="small"
-            disabled
-          >
-            PWR
-          </v-btn>
-        </div>
-      </div>
-    </div>
-    <!-- Home -->
-    <div class="card" v-if="features?.ha !== false && homeButtons.length > 0">
-      <div class="card-header"><i class="fas fa-home me-2"></i>Home</div>
-      <div class="card-body py-1">
-        <div class="d-flex gap-1 flex-wrap">
-          <v-btn
-            v-for="btn in homeButtons"
-            :key="btn.id"
-            outlined
-            :class="['custom-3d', (buttonStates[btn.id] === 'on') ? 'state-on' : 'state-off']"
-            size="small"
-            @click="$emit('send', 'toggle', {entity: btn.entity})"
-          >
-            {{ btn.label }}
-          </v-btn>
-        </div>
-      </div>
+
+    <!-- Appliances -->
+    <div v-if="dishwasherRunning || (washerTime || 0) > 0 || (dryerTime || 0) > 0 || washerPower || dryerPower" class="flex flex-col gap-0.5">
+       <div v-if="dishwasherRunning" class="classic-card px-2 py-0.5 flex justify-between items-center bg-white">
+         <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">Running</span>
+         <span class="text-[11px] font-bold text-slate-700">{{ formatDuration(dishwasherDuration) }}</span>
+       </div>
+
+       <div v-if="(washerTime || 0) > 0 || washerPower" class="classic-card px-2 py-0.5 flex justify-between items-center bg-white">
+         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Washer</span>
+         <div class="flex items-center gap-1.5">
+           <span class="text-[11px] font-bold text-slate-700">{{ formatDuration(washerTime) }}</span>
+           <div class="w-1.5 h-1.5 rounded-full" :class="washerPower ? 'bg-green-500' : 'bg-slate-200'"></div>
+         </div>
+       </div>
+
+       <div v-if="(dryerTime || 0) > 0 || dryerPower" class="classic-card px-2 py-0.5 flex justify-between items-center bg-white">
+         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Dryer</span>
+         <div class="flex items-center gap-1.5">
+           <span class="text-[11px] font-bold text-slate-700">{{ formatDuration(dryerTime) }}</span>
+           <div class="w-1.5 h-1.5 rounded-full" :class="dryerPower ? 'bg-green-500' : 'bg-slate-200'"></div>
+         </div>
+       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { 
+  Car, Droplets, Utensils, WashingMachine, Wind, Home as HomeIcon
+} from 'lucide-vue-next'
 import { formatDuration } from '../utils'
 
 defineProps<{
@@ -125,6 +115,7 @@ defineProps<{
   homeButtons: Array<{ id: string; label: string; entity: string }>
   buttonStates: Record<string, string>
 }>()
+
 defineEmits<{
   send: [action: string, payload?: any]
 }>()
