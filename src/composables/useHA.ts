@@ -1,22 +1,13 @@
 import { ref, computed } from 'vue'
+import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { state, appConfig } from './useInverterState'
 import { logger } from '../logger'
 
-const HA_DEFAULT_PORT = 8123
-const HA_POLL_INTERVAL_MS = 3000
-const HA_DOMAINS = new Set(['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'media_player', 'scene', 'script', 'number', 'sensor', 'binary_sensor'])
-
-function isHaEntity(entityId: string): boolean {
-  if (!entityId || typeof entityId !== 'string') return false
-  const parts = entityId.split('.')
-  return parts.length === 2 && HA_DOMAINS.has(parts[0])
-}
-
 export function useHA() {
   const haEntityStates = ref<Record<string, string>>({})
   const haLastPollSuccess = ref(false)
-  let haPollInterval: number | null = null
+  let unlistenHaUpdate: (() => void) | null = null
 
   const haEnabled = computed(() => {
     const cfg = appConfig.value
@@ -30,43 +21,11 @@ export function useHA() {
     return state.value.ha_connected || false
   })
 
-  async function pollHaStates() {
-    if (!haEnabled.value) return
-    const cfg = appConfig.value
-    if (!cfg?.ha_url || !cfg.ha_longlived_token) return
-    try {
-      const states = await invoke<Array<{ entity_id: string; state: string }>>('get_ha_states', {
-        url: cfg.ha_url,
-          port: cfg.ha_port || HA_DEFAULT_PORT,
-        token: cfg.ha_longlived_token
-      })
-      const map: Record<string, string> = {}
-      for (const s of states) {
-        if (s.state === 'on' || s.state === 'off') {
-          map[s.entity_id] = s.state
-        }
-      }
-      haEntityStates.value = map
+  async function initHa() {
+    unlistenHaUpdate = await listen<Record<string, string>>('ha-state-update', (event) => {
+      haEntityStates.value = event.payload
       haLastPollSuccess.value = true
-    } catch (e) {
-      logger.error('HA poll failed:', e)
-      haLastPollSuccess.value = false
-    }
-  }
-
-  function startHaPolling() {
-    if (haPollInterval) clearInterval(haPollInterval)
-    haPollInterval = globalThis.setInterval(pollHaStates, HA_POLL_INTERVAL_MS)
-    pollHaStates()
-  }
-
-  function stopHaPolling() {
-    if (haPollInterval) {
-      clearInterval(haPollInterval)
-      haPollInterval = null
-    }
-    haEntityStates.value = {}
-    haLastPollSuccess.value = false
+    })
   }
 
   const waterValveEntity = computed(() => {
@@ -158,30 +117,15 @@ export function useHA() {
   })
 
     async function sendHaOrMqtt(action: string, payload: Record<string, unknown> = {} as Record<string, unknown>) {
-    const entity = payload.entity as string | undefined
-    if (haEnabled.value && entity && isHaEntity(entity)) {
-      const cfg = appConfig.value!
-      try {
-        await invoke('toggle_ha_entity', {
-          url: cfg.ha_url || '',
-        port: cfg.ha_port || HA_DEFAULT_PORT,
-          token: cfg.ha_longlived_token || '',
-          entity_id: entity
-        })
-        return
-      } catch (e) {
-        logger.error('HA command failed:', e)
-      }
-    }
     try {
-      await invoke('send_command', { action, payload })
+      await invoke('perform_action', { action, payload })
     } catch (e) {
-      logger.error('Failed to send command:', e)
+      logger.error('Action failed:', e)
     }
   }
 
   function cleanupHa() {
-    stopHaPolling()
+    if (unlistenHaUpdate) unlistenHaUpdate()
   }
 
   return {
@@ -195,9 +139,7 @@ export function useHA() {
     headerToggleStates,
     waterValveEntity,
     pumpSwitchEntity,
-    pollHaStates,
-    startHaPolling,
-    stopHaPolling,
+    initHa,
     sendHaOrMqtt,
     cleanupHa,
   }
