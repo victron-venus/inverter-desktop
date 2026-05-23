@@ -1,79 +1,82 @@
 <template>
-  <div id="app" class="container-fluid p-2" @contextmenu.prevent="onContextMenu">
-    <div class="ws-status">
-      <div :class="mqttConnected ? 'connected' : 'disconnected'" style="padding:2px 8px;border-radius:4px">
-        <i class="fas" :class="mqttConnected ? 'fa-link' : 'fa-unlink'"></i>
-        MQTT {{ mqttConnected ? 'Live' : 'Disconnected' }}
-      </div>
-    </div>
-
-    <AppHeader
-      :dryRun="!!state.dry_run"
-      :essClass="essClass"
-      :essText="essText"
-      :headerToggles="headerToggles"
-      :booleans="state.booleans"
-      :isDark="isDark"
-      @send="send"
-      @toggle-theme="toggleTheme"
-    />
-
-    <DailyStats/>
-
-    <StatCards
-      :gt="state.gt"
-      :g1="state.g1"
-      :g2="state.g2"
-      :tt="state.tt"
-      :t1="state.t1"
-      :t2="state.t2"
-      :solarTotal="state.solar_total"
-      :mpptTotal="mpptTotal"
-      :tasmotaTotal="tasmotaTotal"
-      :batterySoc="state.battery_soc"
-      :batteryPower="state.battery_power"
-      :batteryVoltage="state.battery_voltage"
-      :batteryCurrent="state.battery_current"
-      :setpoint="state.setpoint"
-      :inverterState="state.inverter_state"
-    />
-
-    <div class="row g-2 mb-2">
-      <div class="col-md-8">
-        <ChartPanel :chartOption="chartOption" />
-      </div>
-      <SidePanel
-        :features="state.features"
-        :evCharging="evCharging"
-        :evPower="evPower"
-        :carSoc="state.car_soc"
-        :waterLevel="state.water_level"
-        :waterValve="state.water_valve"
-        :pumpSwitch="state.pump_switch"
-        :pumpSwitchEntity="pumpSwitchEntity"
-        :waterValveEntity="waterValveEntity"
-        :dishwasherRunning="state.dishwasher_running"
-        :dishwasherDuration="state.dishwasher_duration"
-        :washerTime="state.washer_time"
-        :washerPower="state.washer_power"
-        :dryerTime="state.dryer_time"
-        :dryerPower="state.dryer_power"
-        :homeButtons="homeButtons"
-        :buttonStates="buttonStates"
+  <div id="app" class="h-screen flex flex-col p-1 select-none overflow-hidden" @contextmenu.prevent="onContextMenu">
+    <!-- Dashboard Header: Compact buttons and theme switcher -->
+    <div class="flex items-center justify-between mb-1">
+      <AppHeader
+        :dryRun="!!state.dry_run"
+        :essClass="essClass"
+        :essText="essText"
+        :headerToggles="headerToggles"
+        :booleans="state.booleans"
+        :isDark="isDark"
         @send="send"
+        @toggle-theme="toggleTheme"
       />
     </div>
 
-    <BatterySolarPanel
-      :batteries="batteries"
-      :solarSources="solarSources"
-    />
+    <!-- Dashboard Content: Grid and Panels -->
+    <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1 scrollbar-hide">
+      
+      <DailyStats />
 
-    <LoadsTable
-      v-if="state.features?.ha_loads !== false"
-      :sortedLoads="sortedLoads"
-    />
+      <StatCards
+        :gt="state.gt"
+        :g1="state.g1"
+        :g2="state.g2"
+        :tt="state.tt"
+        :t1="state.t1"
+        :t2="state.t2"
+        :solarTotal="state.solar_total"
+        :mpptTotal="mpptTotal"
+        :tasmotaTotal="tasmotaTotal"
+        :batterySoc="state.battery_soc"
+        :batteryPower="state.battery_power"
+        :batteryVoltage="state.battery_voltage"
+        :batteryCurrent="state.battery_current"
+        :setpoint="state.setpoint"
+        :inverterState="state.inverter_state"
+      />
 
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-1">
+        <div class="md:col-span-8 h-[280px]">
+          <ChartPanel :chartOption="chartOption" />
+        </div>
+        <div class="md:col-span-4">
+          <SidePanel
+            :features="state.features"
+            :evCharging="evCharging"
+            :evPower="evPower"
+            :carSoc="state.car_soc"
+            :waterLevel="state.water_level"
+            :waterValve="state.water_valve"
+            :pumpSwitch="state.pump_switch"
+            :pumpSwitchEntity="pumpSwitchEntity"
+            :waterValveEntity="waterValveEntity"
+            :dishwasherRunning="state.dishwasher_running"
+            :dishwasherDuration="state.dishwasher_duration"
+            :washerTime="state.washer_time"
+            :washerPower="state.washer_power"
+            :dryerTime="state.dryer_time"
+            :dryerPower="state.dryer_power"
+            :homeButtons="homeButtons"
+            :buttonStates="buttonStates"
+            @send="send"
+          />
+        </div>
+      </div>
+
+      <BatterySolarPanel
+        :batteries="batteries"
+        :solarSources="solarSources"
+      />
+
+      <LoadsTable
+        v-if="state.features?.ha_loads !== false"
+        :sortedLoads="sortedLoads"
+      />
+    </div>
+
+    <!-- Bottom Status Bar: Classic dot layout -->
     <StatusBar
       :haEnabled="haEnabled"
       :haConnected="haConnected"
@@ -90,11 +93,6 @@
       @open-config="openConfig"
     />
   </div>
-
-<button v-if="isDev" @click='debugMode = !debugMode' style='position:fixed;top:10px;right:10px;z-index:99999;font-size:12px;padding:2px 6px;background:#f0f0f0;border:1px solid #ccc;border-radius:4px;cursor:pointer;'>Debug</button>
-<div v-if='isDev && debugMode' style='position:fixed;bottom:10px;left:10px;background:rgba(0,0,0,0.85);color:#0f0;padding:8px;font-size:11px;z-index:99998;max-height:300px;overflow:auto;font-family:monospace;border-radius:4px;'>
-  <pre style='margin:0;'>{{ JSON.stringify({ homeButtons, buttonStates, booleans: state.booleans }, null, 2) }}</pre>
-</div>
 </template>
 
 <script setup lang="ts">
@@ -123,13 +121,11 @@ const {
   haEnabled, haConnected, homeButtons, buttonStates,
   headerToggles,
   waterValveEntity, pumpSwitchEntity,
-  startHaPolling, stopHaPolling, sendHaOrMqtt, cleanupHa,
+  initHa, sendHaOrMqtt, cleanupHa,
 } = useHA()
 const { isDark, toggleTheme } = useTheme()
-const { chartOption, addHistoryPoint } = useChart(isDark)
+const { chartOption, addHistoryPoint } = useChart()
 
-const debugMode = ref(false)
-const isDev = import.meta.env.DEV
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
 let unlistenConfig: (() => void) | null = null
@@ -151,7 +147,6 @@ async function openConfig() {
   }
 }
 
-// Re-export send for template as a thin wrapper that uses HA routing
 async function send(action: string, payload: Record<string, unknown> = {}) {
   return sendHaOrMqtt(action, payload)
 }
@@ -170,8 +165,8 @@ const essText = computed(() => {
   return m.mode_name || 'ESS'
 })
 
-const mpptTotal = computed(() => (state.value.mppt_individual || []).reduce((a, b) => a + b, 0))
-const tasmotaTotal = computed(() => (state.value.tasmota_individual || []).reduce((a, b) => a + b, 0))
+const mpptTotal = computed(() => state.value.mppt_total || 0)
+const tasmotaTotal = computed(() => state.value.tasmota_total || 0)
 
 const evCharging = computed(() => {
   const kw = parseFloat(String(state.value.ev_charging_kw)) || 0
@@ -222,11 +217,6 @@ watch(() => state.value, (newState) => {
   if (newState.gt !== undefined) addHistoryPoint(newState)
 }, { deep: false })
 
-watch(haEnabled, (newVal) => {
-  if (newVal) startHaPolling()
-  else stopHaPolling()
-})
-
 onMounted(async () => {
   try {
     appVersion.value = await getVersion()
@@ -236,14 +226,14 @@ onMounted(async () => {
   }
   await ensureNotificationPermission()
   await connectMqtt()
-  if (haEnabled.value) startHaPolling()
+  await initHa()
   document.addEventListener('click', onDocumentClick)
 
   unlistenConfig = await listen<{color_scheme?: string}>('config-saved', (event) => {
     const scheme = event.payload.color_scheme
     if (scheme) {
       isDark.value = scheme !== 'light'
-      document.body.classList.toggle('light', !isDark.value)
+      document.documentElement.classList.toggle('dark', isDark.value)
       localStorage.setItem('theme', scheme)
     }
   })

@@ -1,13 +1,30 @@
 <template>
-  <div class="mt-2 text-center small" style="color:#666">
-    <span class="status-dot" :class="haConnected ? 'online' : 'offline'"></span>
-    HA
-    &nbsp;|&nbsp;
-    <span class="status-dot" :class="mqttConnected ? 'online' : 'offline'"></span>
-    MQTT
-    &nbsp;|&nbsp; Uptime: {{ formatUptime(uptime || 0) }}
-    &nbsp;|&nbsp; {{ stateVersion ? 'Control ' + stateVersion : '' }}
-    &nbsp;|&nbsp; App v{{ appVersion }}
+  <div class="flex items-center justify-center gap-2 text-[11px] font-medium text-slate-400 mt-1.5 pb-1">
+    <div class="flex items-center gap-1">
+      <div class="w-2.5 h-2.5 rounded-full shadow-inner transition-colors" :class="haConnected ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-700'"></div>
+      <span>HA</span>
+    </div>
+    
+    <span class="opacity-30 mx-0.5">|</span>
+    
+    <div class="flex items-center gap-1">
+      <span>Uptime:</span>
+      <span class="text-slate-500 dark:text-slate-300 font-bold">{{ formatUptime(uptime || 0) }}</span>
+    </div>
+
+    <span class="opacity-30 mx-0.5">|</span>
+
+    <div class="flex items-center gap-1">
+      <div class="w-2.5 h-2.5 rounded-full shadow-inner transition-colors" :class="mqttConnected ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-700'"></div>
+      <span>MQTT:</span>
+      <span class="text-slate-500 dark:text-slate-300 font-bold">{{ mqttConnected ? 'OK' : 'Offline' }}</span>
+    </div>
+
+    <span class="opacity-30 mx-0.5">|</span>
+    <span class="text-slate-500 dark:text-slate-400 font-bold">Desktop {{ appVersion }}</span>
+
+    <span v-if="stateVersion" class="opacity-30 mx-0.5">|</span>
+    <span v-if="stateVersion" class="text-slate-500 dark:text-slate-400 font-bold">Control {{ stateVersion }}</span>
   </div>
 </template>
 

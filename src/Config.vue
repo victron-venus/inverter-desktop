@@ -1,402 +1,228 @@
 <template>
-  <v-app :theme="config.color_scheme === 'light' ? 'light' : 'dark'" style="font-size:35%">
-    <v-app-bar color="primary" density="compact">
-      <v-app-bar-title>Configuration</v-app-bar-title>
-      <v-spacer></v-spacer>
-      <v-btn icon @click="handleReset">
-        <v-icon>mdi-refresh</v-icon>
-        <v-tooltip activator="parent">Reset to defaults</v-tooltip>
-      </v-btn>
-      <v-btn icon @click="handleSave" :loading="saving">
-        <v-icon>mdi-content-save</v-icon>
-        <v-tooltip activator="parent">Save</v-tooltip>
-      </v-btn>
-      <v-btn icon @click="closeWindow">
-        <v-icon>mdi-close</v-icon>
-        <v-tooltip activator="parent">Close</v-tooltip>
-      </v-btn>
-    </v-app-bar>
+  <div class="h-screen bg-background-light dark:bg-background-dark text-slate-800 dark:text-slate-200 flex flex-col font-sans select-none overflow-hidden">
+    <!-- macOS style titlebar (simulated) -->
+    <div class="h-[36px] flex items-center justify-between px-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+      <div class="flex items-center gap-2">
+        <Settings :size="14" class="text-slate-400" />
+        <span class="text-[11px] font-bold tracking-tight uppercase text-slate-500">Configuration</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <button @click="handleReset" class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-400" title="Reset to defaults">
+          <RotateCcw :size="12" />
+        </button>
+        <button @click="handleSave" :disabled="saving" class="classic-btn !h-[18px] !text-[7px] !bg-accent !border-emerald-600 !text-white flex items-center gap-1 shadow-md" title="Save changes">
+          <Save :size="10" v-if="!saving" />
+          <Loader2 :size="10" v-else class="animate-spin" />
+          <span>SAVE</span>
+        </button>
+        <button @click="closeWindow" class="p-1 rounded hover:bg-red-500 hover:text-white transition-colors text-slate-400">
+          <X :size="12" />
+        </button>
+      </div>
+    </div>
 
-    <v-main>
-      <v-container fluid class="fill-height">
-        <v-row>
-          <v-col cols="12" md="8" lg="6">
-            <v-card>
-              <v-card-text>
-                <v-form ref="formRef">
-                  <v-divider class="mb-4">
-                    <v-chip size="small" color="primary">MQTT</v-chip>
-                  </v-divider>
+    <!-- Main Layout -->
+    <div class="flex-1 flex overflow-hidden">
+      <!-- Sidebar -->
+      <div class="w-[160px] border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-1.5 flex flex-col gap-1">
+        <button 
+          v-for="s in sections" 
+          :key="s.id"
+          @click="activeTab = s.id"
+          class="flex items-center gap-2 px-2.5 py-1.5 rounded text-[12px] font-bold transition-all uppercase tracking-tight"
+          :class="activeTab === s.id ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'"
+        >
+          <component :is="s.icon" :size="14" />
+          {{ s.label }}
+        </button>
+      </div>
 
-                  <v-row>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.mqtt_host"
-                        label="MQTT Host"
-                        required
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model.number="config.mqtt_port"
-                        label="MQTT Port"
-                        type="number"
-                        required
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                  </v-row>
+      <!-- Content Area -->
+      <div class="flex-1 overflow-y-auto p-5 bg-white dark:bg-slate-900">
+        <div class="max-w-xl mx-auto flex flex-col gap-6">
+          
+          <!-- MQTT Section -->
+          <div v-if="activeTab === 'mqtt'" class="flex flex-col gap-4">
+            <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
+              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-600">Broker Settings</h2>
+            </header>
 
-                  <v-row>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.mqtt_login"
-                        label="MQTT Login (optional)"
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.mqtt_password"
-                        label="MQTT Password (optional)"
-                        :type="showPassword ? 'text' : 'password'"
-                        variant="outlined"
-                        density="compact"
-                        :append-inner-icon="showPassword ? 'mdi-eye' : 'mdi-eye-off'"
-                        @click:append-inner="showPassword = !showPassword"
-                      ></v-text-field>
-                    </v-col>
-                  </v-row>
+            <div class="grid grid-cols-2 gap-3">
+              <div class="flex flex-col gap-1">
+                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Host</label>
+                <input v-model="config.mqtt_host" type="text" class="classic-input w-full" placeholder="Cerbo.local" />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Port</label>
+                <input v-model.number="config.mqtt_port" type="number" class="classic-input w-full" />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Username</label>
+                <input v-model="config.mqtt_login" type="text" class="classic-input w-full" placeholder="Optional" />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Password</label>
+                <input v-model="config.mqtt_password" type="password" class="classic-input w-full" placeholder="Optional" />
+              </div>
+            </div>
 
-                  <v-text-field
-                    v-model="config.portal_id"
-                    label="VRM Portal ID (optional — keep-alive)"
-                    placeholder="e.g. a1b2c3d4e5f6"
-                    variant="outlined"
-                    density="compact"
-                    hint="Required for Cerbo GX data stream keep-alive"
-                    persistent-hint
-                    class="mb-2"
-                  ></v-text-field>
+            <div class="flex flex-col gap-1">
+              <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">VRM Portal ID</label>
+              <input v-model="config.portal_id" type="text" class="classic-input w-full" placeholder="e.g. a1b2c3d4e5f6" />
+              <p class="text-[9px] text-slate-400 px-1 italic">Keep-alive for Cerbo GX.</p>
+            </div>
 
-                  <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="primary">MQTT HA</v-chip>
-                  </v-divider>
+            <div class="flex flex-col gap-2">
+              <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Interface Theme</label>
+              <div class="flex gap-1">
+                <button 
+                  @click="config.color_scheme = 'dark'"
+                  class="classic-btn !normal-case flex-1"
+                  :class="{ 'classic-btn-on': config.color_scheme === 'dark' }"
+                >Dark</button>
+                <button 
+                  @click="config.color_scheme = 'light'"
+                  class="classic-btn !normal-case flex-1"
+                  :class="{ 'classic-btn-on': config.color_scheme === 'light' }"
+                >Light</button>
+              </div>
+            </div>
+          </div>
 
-                  <v-row>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.mqtt_ha_host"
-                        label="MQTT HA Host"
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model.number="config.mqtt_ha_port"
-                        label="MQTT HA Port"
-                        type="number"
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                  </v-row>
+          <!-- Home Assistant Section -->
+          <div v-if="activeTab === 'ha'" class="flex flex-col gap-4">
+            <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
+              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-600">Home Assistant</h2>
+            </header>
 
-                  <v-row>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.mqtt_ha_login"
-                        label="MQTT HA Login (optional)"
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.mqtt_ha_password"
-                        label="MQTT HA Password (optional)"
-                        :type="showPasswordHa ? 'text' : 'password'"
-                        variant="outlined"
-                        density="compact"
-                        :append-inner-icon="showPasswordHa ? 'mdi-eye' : 'mdi-eye-off'"
-                        @click:append-inner="showPasswordHa = !showPasswordHa"
-                      ></v-text-field>
-                    </v-col>
-                  </v-row>
-
-                  <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="primary">Home Assistant</v-chip>
-                  </v-divider>
-
-                  <v-text-field
-                    v-model="config.ha_url"
-                    label="HA URL"
-                    placeholder="http://homeassistant.local"
-                    variant="outlined"
-                    density="compact"
-                    class="mb-2"
-                    :rules="urlRules"
-                  ></v-text-field>
-
-                  <v-row>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model.number="config.ha_port"
-                        label="HA Port"
-                        type="number"
-                        placeholder="8123"
-                        variant="outlined"
-                        density="compact"
-                        :rules="portRules"
-                      ></v-text-field>
-                    </v-col>
-                    <v-col cols="12" sm="6" class="d-flex align-center">
-                      <v-chip
-                        :color="haDirectMonitoringEnabled ? 'success' : 'grey'"
-                        label
-                      >
-                        HA Direct: {{ haDirectMonitoringEnabled ? 'Enabled' : 'Disabled' }}
-                      </v-chip>
-                    </v-col>
-                  </v-row>
-
-                  <v-text-field
-                    v-model="config.ha_longlived_token"
-                    label="HA Long-lived Access Token"
-                    type="password"
-                    variant="outlined"
-                    density="compact"
-                    class="mb-2"
-                  ></v-text-field>
-
-                  <v-btn
-                    color="primary"
-                    variant="flat"
-                    size="small"
-                    @click="testHaConnection"
-                    :loading="testingHa"
-                    class="mr-2 mb-4"
-                  >
-                    Test HA Connection
-                  </v-btn>
-                  <v-btn
-                    color="primary"
-                    variant="flat"
-                    size="small"
-                    @click="handleFetchHaEntities"
-                    :loading="discoveryLoading"
-                    :disabled="!isHaConfigured"
-                    class="mr-2 mb-4"
-                  >
-                    Fetch from HA
-                  </v-btn>
-                  <v-btn
-                    color="secondary"
-                    variant="flat"
-                    size="small"
-                    @click="autofillDomain('light')"
-                    :disabled="discoveredEntities.length === 0"
-                    class="mr-2 mb-4"
-                  >
-                    Autofill lights
-                  </v-btn>
-                  <v-btn
-                    color="secondary"
-                    variant="flat"
-                    size="small"
-                    @click="autofillDomain('switch')"
-                    :disabled="discoveredEntities.length === 0"
-                    class="mb-4"
-                  >
-                    Autofill switches
-                  </v-btn>
-
-                  <v-alert
-                    v-if="haTestResult"
-                    :type="haTestSuccess ? 'success' : 'error'"
-                    density="compact"
-                    class="mb-2"
-                  >
-                    {{ haTestResult }}
-                  </v-alert>
-
-                  <v-row>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.ha_water_valve_entity"
-                        label="Water Valve Entity"
-                        placeholder="switch.shutoff_valve"
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                    <v-col cols="12" sm="6">
-                      <v-text-field
-                        v-model="config.ha_pump_switch_entity"
-                        label="Pump Switch Entity"
-                        placeholder="switch.pump_switch"
-                        variant="outlined"
-                        density="compact"
-                      ></v-text-field>
-                    </v-col>
-                  </v-row>
-
-                  <HaEntitiesEditor
-                    :haEntitiesList="haEntitiesList"
-                    :discoveredEntities="discoveredEntities"
-                    :entityRules="entityRules"
-                    @add="addHaEntity"
-                    @remove="removeHaEntity"
-                    @move-up="moveEntityUp"
-                    @move-down="moveEntityDown"
-                  />
-
-                  <HeaderTogglesEditor
-                    :headerTogglesList="headerTogglesList"
-                    :discoveredEntities="discoveredEntities"
-                    :entityRules="entityRules"
-                    @add="addHeaderToggle"
-                    @remove="removeHeaderToggle"
-                    @move-up="moveToggleUp"
-                    @move-down="moveToggleDown"
-                  />
-
-                  <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="info">Preview</v-chip>
-                  </v-divider>
-
-                  <div class="preview-section mb-4">
-                    <div class="mb-2">
-                      <strong>Header Toggles:</strong>
-                    </div>
-                    <div class="d-flex flex-wrap gap-1 mb-3">
-                      <v-btn
-                        v-for="toggle in headerTogglesList"
-                        :key="toggle.id || toggle.entity"
-                        outlined
-                        class="custom-3d state-off"
-                        size="small"
-                      >
-                        {{ toggle.label }}
-                      </v-btn>
-                      <span
-                        v-if="headerTogglesList.length === 0"
-                        class="text-caption grey--text"
-                      >
-                        None
-                      </span>
-                    </div>
-                    <div class="mb-2">
-                      <strong>Home Buttons:</strong>
-                    </div>
-                    <div class="d-flex flex-wrap gap-1">
-                      <v-btn
-                        v-for="entity in haEntitiesList"
-                        :key="entity.id || entity.entity"
-                        outlined
-                        class="custom-3d state-off"
-                        size="small"
-                      >
-                        {{ entity.label }}
-                      </v-btn>
-                      <span
-                        v-if="haEntitiesList.length === 0"
-                        class="text-caption grey--text"
-                      >
-                        None
-                      </span>
-                    </div>
+            <div class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-slate-950 rounded border border-slate-100 dark:border-slate-800">
+              <div class="flex flex-col gap-1">
+                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Server URL</label>
+                <input v-model="config.ha_url" type="text" class="classic-input w-full" placeholder="http://homeassistant.local" />
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="flex flex-col gap-1">
+                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">API Port</label>
+                  <input v-model.number="config.ha_port" type="number" class="classic-input w-full" placeholder="8123" />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Status</label>
+                  <div class="h-8 flex items-center px-2 rounded border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 text-[10px] font-bold">
+                    <span :class="haDirectMonitoringEnabled ? 'text-green-500' : 'text-slate-400'">
+                      API: {{ haDirectMonitoringEnabled ? 'Enabled' : 'Disabled' }}
+                    </span>
                   </div>
+                </div>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Access Token</label>
+                <input v-model="config.ha_longlived_token" type="password" class="classic-input w-full" placeholder="Token" />
+              </div>
 
-                  <v-divider class="mb-4 mt-4">
-                    <v-chip size="small" color="primary">UI Settings</v-chip>
-                  </v-divider>
+              <div class="flex gap-2 mt-1">
+                <button @click="testHaConnection" :disabled="testingHa" class="classic-btn flex-1 !normal-case">
+                  {{ testingHa ? 'Testing...' : 'Test Connection' }}
+                </button>
+                <button @click="handleFetchHaEntities" :disabled="discoveryLoading || !isHaConfigured" class="classic-btn flex-1 !normal-case">
+                  Fetch Entities
+                </button>
+              </div>
 
-                  <v-row>
-                    <v-col cols="12" sm="6">
-                      <v-select
-                        v-model="config.color_scheme"
-                        label="Color Scheme"
-                        :items="['dark', 'light']"
-                        variant="outlined"
-                        density="compact"
-                      ></v-select>
-                    </v-col>
-                  </v-row>
+              <div v-if="haTestResult" :class="haTestSuccess ? 'text-green-500' : 'text-red-500'" class="text-[10px] font-bold text-center mt-1">
+                {{ haTestResult }}
+              </div>
+            </div>
 
-                  <v-row class="mt-4">
-                    <v-col cols="12" class="d-flex justify-end gap-2">
-                      <v-btn @click="handleReset" :disabled="saving">
-                        Reset to defaults
-                      </v-btn>
-                      <v-btn @click="handleSave" :loading="saving" color="primary">
-                        Save
-                      </v-btn>
-                      <v-btn @click="closeWindow" text>Close</v-btn>
-                    </v-col>
-                  </v-row>
-                </v-form>
-              </v-card-text>
-            </v-card>
+            <div class="flex flex-col gap-3 mt-2">
+              <h3 class="text-[10px] font-bold uppercase tracking-widest text-slate-400">MQTT Routing</h3>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="flex flex-col gap-1">
+                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">HA MQTT Host</label>
+                  <input v-model="config.mqtt_ha_host" type="text" class="classic-input w-full" />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">HA MQTT Port</label>
+                  <input v-model.number="config.mqtt_ha_port" type="number" class="classic-input w-full" />
+                </div>
+              </div>
+            </div>
+          </div>
 
-            <v-dialog v-model="discoveryDialog" max-width="600px">
-              <v-card title="Discover HA Entities">
-                <v-card-text>
-                  <v-progress-linear
-                    v-if="discoveryLoading"
-                    indeterminate
-                  ></v-progress-linear>
-                  <v-data-table
-                    v-else
-                    :items="discoveredEntities"
-                    :headers="discoveryHeaders"
-                    show-select
-                    v-model:selected="selectedDiscovery"
-                  ></v-data-table>
-                  <v-radio-group
-                    v-model="discoveryTargetGroup"
-                    row
-                    dense
-                    class="mt-4"
-                  >
-                    <v-radio label="Add to Home Buttons" value="home"></v-radio>
-                    <v-radio label="Add to Header Toggles" value="toggle"></v-radio>
-                  </v-radio-group>
-                </v-card-text>
-                <v-card-actions>
-                  <v-spacer></v-spacer>
-                  <v-btn @click="discoveryDialog = false">Cancel</v-btn>
-                  <v-btn
-                    @click="addDiscoveredEntities"
-                    color="primary"
-                    :disabled="!selectedDiscovery || selectedDiscovery.length === 0"
-                  >
-                    Add Selected ({{ selectedDiscovery.length }})
-                  </v-btn>
-                </v-card-actions>
-              </v-card>
-            </v-dialog>
+          <!-- Entities Section -->
+          <div v-if="activeTab === 'entities'" class="flex flex-col gap-6">
+             <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
+              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-600">UI Controls</h2>
+            </header>
 
-            <v-alert
-              v-if="message"
-              :type="messageType"
-              density="compact"
-              class="mt-4"
-              closable
-              @click:close="clearMessage"
-            >
-              {{ message }}
-            </v-alert>
-          </v-col>
-        </v-row>
-      </v-container>
-    </v-main>
-  </v-app>
+            <HaEntitiesEditor
+              :haEntitiesList="haEntitiesList"
+              :discoveredEntities="discoveredEntities"
+              :entityRules="entityRules"
+              @add="addHaEntity"
+              @remove="removeHaEntity"
+              @move-up="moveEntityUp"
+              @move-down="moveEntityDown"
+            />
+
+            <div class="h-px bg-slate-100 dark:bg-slate-800"></div>
+
+            <HeaderTogglesEditor
+              :headerTogglesList="headerTogglesList"
+              :discoveredEntities="discoveredEntities"
+              :entityRules="entityRules"
+              @add="addHeaderToggle"
+              @remove="removeHeaderToggle"
+              @move-up="moveToggleUp"
+              @move-down="moveToggleDown"
+            />
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Discovery Dialog (Custom) -->
+    <div v-if="discoveryDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-[2px]">
+      <div class="classic-card w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden bg-white dark:bg-slate-900 shadow-2xl animate-in fade-in duration-150">
+        <header class="p-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-950">
+          <h3 class="text-xs font-bold uppercase text-slate-600">Discover Entities</h3>
+          <button @click="discoveryDialog = false" class="text-slate-400 hover:text-slate-600"><X :size="16" /></button>
+        </header>
+        <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
+          <div v-if="discoveryLoading" class="flex flex-col items-center justify-center py-10 gap-2">
+            <Loader2 class="animate-spin text-accent" :size="20" />
+            <span class="text-[10px] font-bold text-slate-400 uppercase">Fetching...</span>
+          </div>
+          <div v-else v-for="e in discoveredEntities" :key="e.entity_id" 
+               @click="toggleSelection(e.entity_id)"
+               class="p-2 rounded border border-transparent cursor-pointer transition-all flex items-center justify-between group"
+               :class="selectedDiscovery.includes(e.entity_id) ? 'bg-accent/10 border-accent/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800'">
+            <div>
+              <div class="text-[11px] font-bold group-hover:text-accent transition-colors" :class="{ 'text-accent': selectedDiscovery.includes(e.entity_id) }">{{ e.friendly_name }}</div>
+              <div class="text-[9px] text-slate-400 font-mono">{{ e.entity_id }}</div>
+            </div>
+            <div v-if="selectedDiscovery.includes(e.entity_id)" class="text-accent"><Check :size="12" /></div>
+          </div>
+        </div>
+        <footer class="p-3 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-2 bg-slate-50 dark:bg-slate-950">
+          <div class="flex gap-1 p-0.5 bg-slate-200/50 dark:bg-slate-800 rounded">
+            <button @click="discoveryTargetGroup = 'home'" class="flex-1 py-1 rounded text-[9px] font-bold transition-all uppercase" :class="discoveryTargetGroup === 'home' ? 'bg-white dark:bg-slate-700 shadow-sm' : 'text-slate-500 opacity-50'">Home Buttons</button>
+            <button @click="discoveryTargetGroup = 'toggle'" class="flex-1 py-1 rounded text-[9px] font-bold transition-all uppercase" :class="discoveryTargetGroup === 'toggle' ? 'bg-white dark:bg-slate-700 shadow-sm' : 'text-slate-500 opacity-50'">Header Toggles</button>
+          </div>
+          <div class="flex gap-2">
+            <button @click="discoveryDialog = false" class="classic-btn flex-1 !normal-case">Cancel</button>
+            <button @click="addDiscoveredEntities" :disabled="!selectedDiscovery.length" class="classic-btn !bg-accent !border-emerald-600 !text-white flex-1 !normal-case disabled:!bg-slate-300">Add ({{ selectedDiscovery.length }})</button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div v-if="message" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full shadow-lg text-[10px] font-bold border animate-in slide-in-from-bottom duration-200 uppercase tracking-wider"
+         :class="messageType === 'error' ? 'bg-red-500 border-red-600 text-white' : 'bg-green-500 border-green-600 text-white'">
+      {{ message }}
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -404,6 +230,10 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit } from '@tauri-apps/api/event'
+import { 
+  Settings, Wifi, Home, Layout, Save, RotateCcw, X, Loader2, 
+  Check, Server
+} from 'lucide-vue-next'
 import { logger } from './logger'
 import { useConfigForm } from './composables/useConfigForm'
 import { useHAEntityManager } from './composables/useHAEntityManager'
@@ -418,11 +248,15 @@ const {
   loadFromConfig, fetchHaEntities, addDiscoveredEntities,
   addHaEntity, removeHaEntity, moveEntityUp, moveEntityDown,
   addHeaderToggle, removeHeaderToggle, moveToggleUp, moveToggleDown,
-  autofillDomain,
 } = useHAEntityManager()
 
-const showPassword = ref(false)
-const showPasswordHa = ref(false)
+const activeTab = ref('mqtt')
+const sections = [
+  { id: 'mqtt', label: 'MQTT Broker', icon: Wifi },
+  { id: 'ha', label: 'Home Assistant', icon: Home },
+  { id: 'entities', label: 'UI Controls', icon: Layout },
+]
+
 const testingHa = ref(false)
 const haTestResult = ref('')
 const haTestSuccess = ref(false)
@@ -441,25 +275,13 @@ watch(
   { immediate: true }
 )
 
-const urlRules = [
-  (v: string) => !!v || 'URL required',
-  (v: string) => v.startsWith('http://') || v.startsWith('https://') || 'Must start with http:// or https://'
-]
-const portRules = [(v: number) => (v >= 1 && v <= 65535) || 'Port must be 1-65535']
-const entityRules = [
-  (v: string) => !!v || 'Required',
-  (v: string) => v.includes('.') || 'Must contain a dot (domain.entity)'
-]
-const discoveryHeaders = [
-  { title: 'Friendly Name', key: 'friendly_name' },
-  { title: 'Entity ID', key: 'entity_id' },
-  { title: 'Domain', key: 'domain' }
-]
+const entityRules = [(v: string) => !!v || 'Required']
 
 async function testHaConnection() {
   if (!config.ha_url || !config.ha_longlived_token) {
-    haTestResult.value = 'URL and Token required'
-    haTestSuccess.value = false
+    message.value = 'URL and Token required'
+    messageType.value = 'error'
+    setTimeout(clearMessage, 3000)
     return
   }
   testingHa.value = true
@@ -484,6 +306,7 @@ async function handleFetchHaEntities() {
   if (!config.ha_url || !config.ha_longlived_token) {
     message.value = 'Please enter HA URL and Token first'
     messageType.value = 'error'
+    setTimeout(clearMessage, 3000)
     return
   }
   try {
@@ -491,32 +314,35 @@ async function handleFetchHaEntities() {
   } catch (e: any) {
     message.value = `Discovery failed: ${e?.toString() || e}`
     messageType.value = 'error'
+    setTimeout(clearMessage, 3000)
   }
 }
 
 async function handleSave() {
   await saveConfig(haEntitiesList.value, headerTogglesList.value)
   await emit('config-saved', { color_scheme: config.color_scheme })
+  message.value = 'Settings saved successfully'
+  messageType.value = 'success'
+  setTimeout(clearMessage, 2000)
 }
 
 async function closeWindow() {
-  try {
-    const window = await getCurrentWindow()
-    await window.close()
-  } catch (e) {
-    logger.error('JS close failed, trying Rust command:', e)
-    try {
-      await invoke('close_config_window')
-    } catch (e2) {
-      logger.error('Rust close also failed:', e2)
-    }
-  }
+  const window = await getCurrentWindow()
+  await window.close()
 }
 
 function handleReset() {
-  resetToDefaults()
-  haEntitiesList.value = []
-  headerTogglesList.value = []
+  if (confirm('Reset all settings to defaults?')) {
+    resetToDefaults()
+    haEntitiesList.value = []
+    headerTogglesList.value = []
+  }
+}
+
+const toggleSelection = (id: string) => {
+  const index = selectedDiscovery.value.indexOf(id)
+  if (index > -1) selectedDiscovery.value.splice(index, 1)
+  else selectedDiscovery.value.push(id)
 }
 
 onMounted(async () => {
@@ -524,14 +350,3 @@ onMounted(async () => {
   loadFromConfig(cfg)
 })
 </script>
-
-<style scoped>
-.fill-height {
-  min-height: 100vh;
-}
-.entity-card.drag-over,
-.toggle-card.drag-over {
-  background-color: rgba(33, 150, 243, 0.1);
-  border: 1px dashed #2196f3;
-}
-</style>
