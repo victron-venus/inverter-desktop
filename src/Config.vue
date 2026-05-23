@@ -49,31 +49,31 @@
 
             <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Host</label>
-                <input v-model="config.mqtt_host" type="text" class="classic-input w-full" placeholder="Cerbo.local" />
+                <label for="mqtt_host" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Host</label>
+                <input id="mqtt_host" v-model="config.mqtt_host" type="text" class="classic-input w-full" placeholder="Cerbo.local" />
               </div>
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Port</label>
-                <input v-model.number="config.mqtt_port" type="number" class="classic-input w-full" />
+                <label for="mqtt_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Port</label>
+                <input id="mqtt_port" v-model.number="config.mqtt_port" type="number" class="classic-input w-full" />
               </div>
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Username</label>
-                <input v-model="config.mqtt_login" type="text" class="classic-input w-full" placeholder="Optional" />
+                <label for="mqtt_login" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Username</label>
+                <input id="mqtt_login" v-model="config.mqtt_login" type="text" class="classic-input w-full" placeholder="Optional" />
               </div>
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Password</label>
-                <input v-model="config.mqtt_password" type="password" class="classic-input w-full" placeholder="Optional" />
+                <label for="mqtt_password" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Password</label>
+                <input id="mqtt_password" v-model="config.mqtt_password" type="password" class="classic-input w-full" placeholder="Optional" />
               </div>
             </div>
 
             <div class="flex flex-col gap-1">
-              <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">VRM Portal ID</label>
-              <input v-model="config.portal_id" type="text" class="classic-input w-full" placeholder="e.g. a1b2c3d4e5f6" />
-              <p class="text-[9px] text-slate-400 px-1 italic">Keep-alive for Cerbo GX.</p>
+              <label for="portal_id" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">VRM Portal ID</label>
+              <input id="portal_id" v-model="config.portal_id" type="text" class="classic-input w-full" placeholder="e.g. a1b2c3d4e5f6" />
+              <p class="text-[10px] text-slate-400 px-1 italic">Keep-alive for Cerbo GX.</p>
             </div>
 
             <div class="flex flex-col gap-2">
-              <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Interface Theme</label>
+              <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Interface Theme</label>
               <div class="flex gap-1">
                 <button 
                   @click="config.color_scheme = 'dark'"
@@ -97,16 +97,16 @@
 
             <div class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-slate-950 rounded border border-slate-100 dark:border-slate-800">
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Server URL</label>
-                <input v-model="config.ha_url" type="text" class="classic-input w-full" placeholder="http://homeassistant.local" />
+                <label for="ha_url" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Server URL</label>
+                <input id="ha_url" v-model="config.ha_url" type="text" class="classic-input w-full" placeholder="http://homeassistant.local" />
               </div>
               <div class="grid grid-cols-2 gap-3">
                 <div class="flex flex-col gap-1">
-                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">API Port</label>
-                  <input v-model.number="config.ha_port" type="number" class="classic-input w-full" placeholder="8123" />
+                  <label for="ha_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">API Port</label>
+                  <input id="ha_port" v-model.number="config.ha_port" type="number" class="classic-input w-full" placeholder="8123" />
                 </div>
                 <div class="flex flex-col gap-1">
-                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Status</label>
+                  <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Status</label>
                   <div class="h-8 flex items-center px-2 rounded border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 text-[10px] font-bold">
                     <span :class="haDirectMonitoringEnabled ? 'text-green-500' : 'text-slate-400'">
                       API: {{ haDirectMonitoringEnabled ? 'Enabled' : 'Disabled' }}
@@ -115,8 +115,8 @@
                 </div>
               </div>
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">Access Token</label>
-                <input v-model="config.ha_longlived_token" type="password" class="classic-input w-full" placeholder="Token" />
+                <label for="ha_token" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Access Token</label>
+                <input id="ha_token" v-model="config.ha_longlived_token" type="password" class="classic-input w-full" placeholder="Token" />
               </div>
 
               <div class="flex gap-2 mt-1">
@@ -137,12 +137,12 @@
               <h3 class="text-[10px] font-bold uppercase tracking-widest text-slate-400">MQTT Routing</h3>
               <div class="grid grid-cols-2 gap-3">
                 <div class="flex flex-col gap-1">
-                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">HA MQTT Host</label>
-                  <input v-model="config.mqtt_ha_host" type="text" class="classic-input w-full" />
+                  <label for="mqtt_ha_host" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">HA MQTT Host</label>
+                  <input id="mqtt_ha_host" v-model="config.mqtt_ha_host" type="text" class="classic-input w-full" />
                 </div>
                 <div class="flex flex-col gap-1">
-                  <label class="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-1">HA MQTT Port</label>
-                  <input v-model.number="config.mqtt_ha_port" type="number" class="classic-input w-full" />
+                  <label for="mqtt_ha_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">HA MQTT Port</label>
+                  <input id="mqtt_ha_port" v-model.number="config.mqtt_ha_port" type="number" class="classic-input w-full" />
                 </div>
               </div>
             </div>
@@ -232,9 +232,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit } from '@tauri-apps/api/event'
 import { 
   Settings, Wifi, Home, Layout, Save, RotateCcw, X, Loader2, 
-  Check, Server
+  Check
 } from 'lucide-vue-next'
-import { logger } from './logger'
 import { useConfigForm } from './composables/useConfigForm'
 import { useHAEntityManager } from './composables/useHAEntityManager'
 import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
