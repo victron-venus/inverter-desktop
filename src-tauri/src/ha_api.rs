@@ -61,7 +61,10 @@ impl HaApiClient {
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(format!("HTTP {} - unauthorized or invalid", response.status()))
+            Err(format!(
+                "HTTP {} - unauthorized or invalid",
+                response.status()
+            ))
         }
     }
 
@@ -91,8 +94,12 @@ impl HaApiClient {
                     serde_json::from_value::<String>(state.clone()),
                 ) {
                     let attributes = item.get("attributes").cloned();
-                    let last_changed = item.get("last_changed").and_then(|v| v.as_str().map(String::from));
-                    let last_updated = item.get("last_updated").and_then(|v| v.as_str().map(String::from));
+                    let last_changed = item
+                        .get("last_changed")
+                        .and_then(|v| v.as_str().map(String::from));
+                    let last_updated = item
+                        .get("last_updated")
+                        .and_then(|v| v.as_str().map(String::from));
                     result.push(HaState {
                         entity_id: entity_id_str,
                         state: state_str,
@@ -120,7 +127,10 @@ impl HaApiClient {
                         if let Some(name) = friendly.as_str() {
                             // inject friendly_name at top level for convenience
                             if let Some(obj) = entity.as_object_mut() {
-                                obj.insert("friendly_name".to_string(), serde_json::Value::String(name.to_string()));
+                                obj.insert(
+                                    "friendly_name".to_string(),
+                                    serde_json::Value::String(name.to_string()),
+                                );
                             }
                         }
                     }
@@ -141,7 +151,10 @@ impl HaApiClient {
         let url = format!("{}/api/services/{}/{}", self.base_url, domain, service);
         // Merge entity_id into data object
         let payload = if let Some(obj) = data.as_object_mut() {
-            obj.insert("entity_id".to_string(), serde_json::Value::String(entity_id.to_string()));
+            obj.insert(
+                "entity_id".to_string(),
+                serde_json::Value::String(entity_id.to_string()),
+            );
             data
         } else {
             serde_json::json!({ "entity_id": entity_id })

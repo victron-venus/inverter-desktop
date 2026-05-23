@@ -18,6 +18,8 @@ pub struct InverterState {
     pub t1: Option<f64>,
     pub t2: Option<f64>,
     pub solar_total: Option<f64>,
+    pub mppt_total: Option<f64>,
+    pub tasmota_total: Option<f64>,
     pub battery_soc: Option<f64>,
     pub battery_power: Option<f64>,
     pub battery_voltage: Option<f64>,
@@ -54,6 +56,62 @@ pub struct InverterState {
     pub dryer_power: Option<bool>,
     pub latest_version: Option<String>,
     pub console: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct RawInverterState {
+    gt: Option<f64>,
+    g1: Option<f64>,
+    g2: Option<f64>,
+    tt: Option<f64>,
+    t1: Option<f64>,
+    t2: Option<f64>,
+    solar_total: Option<f64>,
+    battery_soc: Option<f64>,
+    battery_power: Option<f64>,
+    battery_voltage: Option<f64>,
+    battery_current: Option<f64>,
+    setpoint: Option<f64>,
+    inverter_state: Option<String>,
+    version: Option<String>,
+    dashboard_version: Option<String>,
+    uptime: Option<u64>,
+    ha_connected: Option<bool>,
+    ha_direct_connected: Option<bool>,
+    dry_run: Option<serde_json::Value>,
+    ess_mode: Option<EssMode>,
+    booleans: Option<std::collections::HashMap<String, serde_json::Value>>,
+    features: Option<std::collections::HashMap<String, bool>>,
+    mppt_individual: Option<Vec<f64>>,
+    tasmota_individual: Option<Vec<f64>>,
+    mppt_chargers: Option<Vec<MpptCharger>>,
+    batteries: Option<Vec<Battery>>,
+    loads: Option<std::collections::HashMap<String, f64>>,
+    ui_config: Option<UiConfig>,
+    daily_stats: Option<DailyStats>,
+    ev_charging_kw: Option<f64>,
+    ev_power: Option<f64>,
+    car_soc: Option<f64>,
+    water_level: Option<f64>,
+    water_valve: Option<serde_json::Value>,
+    pump_switch: Option<serde_json::Value>,
+    dishwasher_running: Option<bool>,
+    dishwasher_duration: Option<u64>,
+    washer_time: Option<u64>,
+    washer_power: Option<serde_json::Value>,
+    dryer_time: Option<u64>,
+    dryer_power: Option<serde_json::Value>,
+    latest_version: Option<String>,
+    console: Option<Vec<String>>,
+}
+
+fn coerce_bool(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::String(s) => s == "true" || s == "1",
+        serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +190,14 @@ pub struct MqttClient {
     portal_id: Option<String>,
 }
 
+use log::error;
+use tauri_plugin_notification::NotificationExt;
+
+const THRESHOLD_LOAD_W: f64 = 300.0;
+const THRESHOLD_CONSUMPTION_W: f64 = 300.0;
+const THRESHOLD_WATER_CM: f64 = 23.0;
+const THRESHOLD_SOLAR_W: f64 = 3000.0;
+
 impl MqttClient {
     pub fn new(host: String, port: u16) -> Self {
         Self {
@@ -144,6 +210,8 @@ impl MqttClient {
                 t1: None,
                 t2: None,
                 solar_total: None,
+                mppt_total: None,
+                tasmota_total: None,
                 battery_soc: None,
                 battery_power: None,
                 battery_voltage: None,
@@ -197,9 +265,7 @@ impl MqttClient {
     }
 
     pub fn get_state(&self) -> InverterState {
-        self.state.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -231,7 +297,112 @@ impl MqttClient {
                                 .unwrap_or_else(|_| String::new());
 
                             if topic == "inverter/state" {
-                                if let Ok(new_state) = serde_json::from_str::<InverterState>(&payload) {
+                                if let Ok(raw) = serde_json::from_str::<RawInverterState>(&payload)
+                                {
+                                    let new_state = InverterState {
+                                        gt: raw.gt,
+                                        g1: raw.g1,
+                                        g2: raw.g2,
+                                        tt: raw.tt,
+                                        t1: raw.t1,
+                                        t2: raw.t2,
+                                        solar_total: raw.solar_total,
+                                        mppt_total: raw
+                                            .mppt_individual
+                                            .as_ref()
+                                            .map(|v| v.iter().sum()),
+                                        tasmota_total: raw
+                                            .tasmota_individual
+                                            .as_ref()
+                                            .map(|v| v.iter().sum()),
+                                        battery_soc: raw.battery_soc,
+                                        battery_power: raw.battery_power,
+                                        battery_voltage: raw.battery_voltage,
+                                        battery_current: raw.battery_current,
+                                        setpoint: raw.setpoint,
+                                        inverter_state: raw.inverter_state,
+                                        version: raw.version,
+                                        dashboard_version: raw.dashboard_version,
+                                        uptime: raw.uptime,
+                                        ha_connected: raw.ha_connected,
+                                        ha_direct_connected: raw.ha_direct_connected,
+                                        dry_run: raw.dry_run.as_ref().map(coerce_bool),
+                                        ess_mode: raw.ess_mode,
+                                        booleans: raw.booleans.map(|map| {
+                                            map.into_iter()
+                                                .map(|(k, v)| (k, coerce_bool(&v)))
+                                                .collect()
+                                        }),
+                                        features: raw.features,
+                                        mppt_individual: raw.mppt_individual,
+                                        tasmota_individual: raw.tasmota_individual,
+                                        mppt_chargers: raw.mppt_chargers,
+                                        batteries: raw.batteries,
+                                        loads: raw.loads,
+                                        ui_config: raw.ui_config,
+                                        daily_stats: raw.daily_stats,
+                                        ev_charging_kw: raw.ev_charging_kw,
+                                        ev_power: raw.ev_power,
+                                        car_soc: raw.car_soc,
+                                        water_level: raw.water_level,
+                                        water_valve: raw.water_valve.as_ref().map(coerce_bool),
+                                        pump_switch: raw.pump_switch.as_ref().map(coerce_bool),
+                                        dishwasher_running: raw.dishwasher_running,
+                                        dishwasher_duration: raw.dishwasher_duration,
+                                        washer_time: raw.washer_time,
+                                        washer_power: raw.washer_power.as_ref().map(coerce_bool),
+                                        dryer_time: raw.dryer_time,
+                                        dryer_power: raw.dryer_power.as_ref().map(coerce_bool),
+                                        latest_version: raw.latest_version,
+                                        console: raw.console,
+                                    };
+
+                                    // Check thresholds and notify
+                                    if let Some(ref handle) = app_handle {
+                                        if let Some(ref loads) = new_state.loads {
+                                            for (name, power) in loads {
+                                                if *power > THRESHOLD_LOAD_W {
+                                                    let _ = handle
+                                                        .notification()
+                                                        .builder()
+                                                        .title("High Load")
+                                                        .body(format!("{}: {}W", name, power))
+                                                        .show();
+                                                }
+                                            }
+                                        }
+                                        if let Some(tt) = new_state.tt {
+                                            if tt > THRESHOLD_CONSUMPTION_W {
+                                                let _ = handle
+                                                    .notification()
+                                                    .builder()
+                                                    .title("High Consumption")
+                                                    .body(format!("Consumption: {}W", tt))
+                                                    .show();
+                                            }
+                                        }
+                                        if let Some(wl) = new_state.water_level {
+                                            if wl < THRESHOLD_WATER_CM {
+                                                let _ = handle
+                                                    .notification()
+                                                    .builder()
+                                                    .title("Low Water")
+                                                    .body(format!("Water level: {} cm", wl))
+                                                    .show();
+                                            }
+                                        }
+                                        if let Some(st) = new_state.solar_total {
+                                            if st > THRESHOLD_SOLAR_W {
+                                                let _ = handle
+                                                    .notification()
+                                                    .builder()
+                                                    .title("High Solar")
+                                                    .body(format!("Solar: {}W", st))
+                                                    .show();
+                                            }
+                                        }
+                                    }
+
                                     if let Ok(mut guard) = state.lock() {
                                         *guard = new_state.clone();
                                     }
@@ -249,12 +420,23 @@ impl MqttClient {
                                 }
                             }
                         }
+                        Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
+                            if let Some(ref handle) = app_handle {
+                                let _ = handle.emit("mqtt-connection-status", true);
+                            }
+                        }
                         Ok(rumqttc::Event::Incoming(_)) => {}
                         Err(e) => {
-                            eprintln!("MQTT error: {:?}", e);
+                            error!("MQTT error: {:?}", e);
+                            if let Some(ref handle) = app_handle {
+                                let _ = handle.emit("mqtt-connection-status", false);
+                            }
                         }
                         _ => {}
                     }
+                }
+                if let Some(ref handle) = app_handle {
+                    let _ = handle.emit("mqtt-connection-status", false);
                 }
             });
         });
@@ -263,7 +445,8 @@ impl MqttClient {
         if let Some(pid) = portal_id {
             let topic = format!("R/{}/keepalive", pid);
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
                 loop {
                     interval.tick().await;
                     let _ = keepalive_client.publish(&topic, QoS::AtMostOnce, false, "");
@@ -274,7 +457,11 @@ impl MqttClient {
         Ok(())
     }
 
-    pub fn publish_command(&self, action: &str, payload: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn publish_command(
+        &self,
+        action: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(client) = &self.client {
             let topic = format!("inverter/cmd/{}", action);
             let payload_str = if payload.is_null() {

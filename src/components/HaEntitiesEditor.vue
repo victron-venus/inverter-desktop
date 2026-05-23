@@ -1,106 +1,64 @@
 <template>
-  <div>
-    <v-divider class="mb-4 mt-4">
-      <v-chip size="small" color="primary">Home Buttons</v-chip>
-    </v-divider>
-
-    <div
-      v-if="haEntitiesList.length === 0"
-      class="text-caption grey--text mb-2"
-    >
-      No home buttons configured. Add entities below.
+  <div class="flex flex-col gap-2">
+    <div class="flex items-center justify-between px-1">
+      <h3 class="text-[11px] font-bold uppercase tracking-widest text-slate-500">Home Buttons</h3>
+      <button @click="$emit('add')" class="text-[10px] font-bold text-accent hover:underline flex items-center gap-1 uppercase">
+        <Plus :size="12" /> Add Button
+      </button>
     </div>
 
-    <div
-      v-for="(entity, index) in haEntitiesList"
-      :key="entity.id || `home-${index}`"
-      class="entity-card mb-2 pa-2 rounded border"
-    >
-      <v-row dense>
-        <v-col cols="12" sm="3">
-          <v-text-field
-            v-model="entity.label"
-            label="Label"
-            variant="outlined"
-            density="compact"
-            hide-details
-            required
-          ></v-text-field>
-        </v-col>
-        <v-col cols="12" sm="4">
-          <v-autocomplete
-            v-model="entity.entity"
-            :items="discoveredEntityIds"
-            label="Entity ID"
-            variant="outlined"
-            density="compact"
-            hide-details
-            clearable
-            :rules="entityRules"
-          ></v-autocomplete>
-        </v-col>
-        <v-col cols="12" sm="2" class="d-flex align-center">
-          <v-checkbox
-            v-model="entity.enabled"
-            label="Active"
-            hide-details
-            density="compact"
-          ></v-checkbox>
-        </v-col>
-        <v-col cols="12" sm="2" class="d-flex flex-column align-center">
-          <v-btn
-            icon
-            size="x-small"
-            @click="$emit('move-up', index)"
-            :disabled="index === 0"
-          >
-            <v-icon>mdi-arrow-up</v-icon>
-          </v-btn>
-          <v-btn
-            icon
-            size="x-small"
-            @click="$emit('move-down', index)"
-            :disabled="index === haEntitiesList.length - 1"
-          >
-            <v-icon>mdi-arrow-down</v-icon>
-          </v-btn>
-        </v-col>
-        <v-col cols="12" sm="1" class="d-flex align-center justify-center">
-          <v-btn
-            icon
-            size="x-small"
-            color="red"
-            @click="$emit('remove', index)"
-          >
-            <v-icon>mdi-delete</v-icon>
-          </v-btn>
-        </v-col>
-      </v-row>
+    <div v-if="haEntitiesList.length === 0" class="py-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded text-[11px] text-slate-400 bg-slate-50/30 dark:bg-slate-900/30">
+      No home buttons configured.
     </div>
 
-    <v-btn
-      color="primary"
-      variant="flat"
-      size="small"
-      @click="$emit('add')"
-      class="mt-2"
-    >
-      <v-icon start>mdi-plus</v-icon>
-      Add Home Entity
-    </v-btn>
+    <div class="flex flex-col gap-1.5">
+      <div v-for="(entity, index) in haEntitiesList" :key="entity.id || `home-${index}`" 
+           class="classic-card !rounded p-2 flex flex-col gap-2 bg-white dark:bg-slate-900">
+        <div class="flex items-center gap-2">
+          <div class="flex-1 grid grid-cols-2 gap-2">
+            <div class="flex flex-col gap-0.5">
+              <label class="text-[9px] font-bold uppercase text-slate-400 px-1">Label</label>
+              <input v-model="entity.label" type="text" class="classic-input !h-7 w-full" placeholder="Name" />
+            </div>
+            <div class="flex flex-col gap-0.5">
+              <label class="text-[9px] font-bold uppercase text-slate-400 px-1">Entity ID</label>
+              <input v-model="entity.entity" type="text" class="classic-input !h-7 w-full" placeholder="switch.xxx" />
+            </div>
+          </div>
+          
+          <div class="flex items-center gap-0.5 pt-3">
+            <button @click="$emit('move-up', index)" :disabled="index === 0" class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 text-slate-400">
+              <ChevronUp :size="14" />
+            </button>
+            <button @click="$emit('move-down', index)" :disabled="index === haEntitiesList.length - 1" class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 text-slate-400">
+              <ChevronDown :size="14" />
+            </button>
+            <button @click="$emit('remove', index)" class="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-500 transition-colors text-slate-300">
+              <Trash2 :size="14" />
+            </button>
+          </div>
+        </div>
+        
+        <div class="flex items-center gap-4 px-1 border-t border-slate-50 dark:border-slate-800/50 pt-1.5">
+          <label class="flex items-center gap-2 cursor-pointer group">
+            <input type="checkbox" v-model="entity.enabled" class="sr-only peer" />
+            <div class="w-6 h-3.5 bg-slate-200 dark:bg-slate-800 peer-checked:bg-accent rounded-full relative transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-2.5 after:w-2.5 after:transition-all peer-checked:after:translate-x-2.5 shadow-inner"></div>
+            <span class="text-[9px] font-bold uppercase text-slate-400 group-hover:text-accent transition-colors">Active</span>
+          </label>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { Plus, Trash2, ChevronUp, ChevronDown } from 'lucide-vue-next'
 
-const props = defineProps<{
+defineProps<{
   haEntitiesList: Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>
   discoveredEntities: Array<{ entity_id: string; friendly_name: string; domain: string }>
   entityRules: ((v: string) => boolean | string)[]
 }>()
-
-const discoveredEntityIds = computed(() => props.discoveredEntities.map(e => e.entity_id))
 
 defineEmits<{
   add: []
