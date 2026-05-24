@@ -3,11 +3,11 @@
     <!-- macOS style titlebar (simulated) -->
     <div class="h-[36px] flex items-center justify-between px-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-black shadow-sm">
       <div class="flex items-center gap-2">
-        <Settings :size="14" class="text-slate-600 dark:text-slate-400" />
-        <span class="text-[11px] font-bold tracking-tight uppercase text-slate-700 dark:text-slate-300">Configuration</span>
+        <Settings :size="14" class="text-slate-900 dark:text-slate-300" />
+        <span class="text-[11px] font-bold tracking-tight uppercase text-slate-900 dark:text-slate-100">Configuration</span>
       </div>
       <div class="flex items-center gap-1.5">
-        <button @click="handleReset" class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-600 dark:text-slate-400" title="Reset to defaults">
+        <button @click="handleReset" class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-900 dark:text-slate-300" title="Reset to defaults">
           <RotateCcw :size="12" />
         </button>
         <button @click="handleSave" :disabled="saving" class="classic-btn !h-[18px] !text-[7px] !bg-accent !border-emerald-600 !text-white flex items-center gap-1 shadow-md" title="Save changes">
@@ -15,7 +15,7 @@
           <Loader2 :size="10" v-else class="animate-spin" />
           <span>SAVE</span>
         </button>
-        <button @click="closeWindow" class="p-1 rounded hover:bg-red-500 hover:text-white transition-colors text-slate-600 dark:text-slate-400">
+        <button @click="closeWindow" class="p-1 rounded hover:bg-red-500 hover:text-white transition-colors text-slate-900 dark:text-slate-300">
           <X :size="12" />
         </button>
       </div>
@@ -44,36 +44,36 @@
           <!-- MQTT Section -->
           <div v-if="activeTab === 'mqtt'" class="flex flex-col gap-4">
             <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
-              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-700 dark:text-slate-300">Broker Settings</h2>
+              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100">Broker Settings</h2>
             </header>
 
             <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1">
-                <label for="mqtt_host" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Host</label>
+                <label for="mqtt_host" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Host</label>
                 <input id="mqtt_host" v-model="config.mqtt_host" type="text" class="classic-input w-full" placeholder="Cerbo.local" />
               </div>
               <div class="flex flex-col gap-1">
-                <label for="mqtt_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Port</label>
+                <label for="mqtt_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Port</label>
                 <input id="mqtt_port" v-model.number="config.mqtt_port" type="number" class="classic-input w-full" />
               </div>
               <div class="flex flex-col gap-1">
-                <label for="mqtt_login" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Username</label>
+                <label for="mqtt_login" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Username</label>
                 <input id="mqtt_login" v-model="config.mqtt_login" type="text" class="classic-input w-full" placeholder="Optional" />
               </div>
               <div class="flex flex-col gap-1">
-                <label for="mqtt_password" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Password</label>
+                <label for="mqtt_password" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Password</label>
                 <input id="mqtt_password" v-model="config.mqtt_password" type="password" class="classic-input w-full" placeholder="Optional" />
               </div>
             </div>
 
             <div class="flex flex-col gap-1">
-              <label for="portal_id" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">VRM Portal ID</label>
+              <label for="portal_id" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">VRM Portal ID</label>
               <input id="portal_id" v-model="config.portal_id" type="text" class="classic-input w-full" placeholder="e.g. a1b2c3d4e5f6" />
               <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">Keep-alive for Cerbo GX.</p>
             </div>
 
             <div class="flex flex-col gap-2">
-              <label class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Interface Theme</label>
+              <label class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Interface Theme</label>
               <div class="flex gap-1">
                 <button 
                   @click="config.color_scheme = 'dark'"
@@ -92,21 +92,21 @@
           <!-- Home Assistant Section -->
           <div v-if="activeTab === 'ha'" class="flex flex-col gap-4">
             <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
-              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-700 dark:text-slate-300">Home Assistant</h2>
+              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100">Home Assistant</h2>
             </header>
 
             <div class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-100 dark:border-slate-800">
               <div class="flex flex-col gap-1">
-                <label for="ha_url" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Server URL</label>
+                <label for="ha_url" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Server URL</label>
                 <input id="ha_url" v-model="config.ha_url" type="text" class="classic-input w-full" placeholder="http://homeassistant.local" />
               </div>
               <div class="grid grid-cols-2 gap-3">
                 <div class="flex flex-col gap-1">
-                  <label for="ha_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">API Port</label>
+                  <label for="ha_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">API Port</label>
                   <input id="ha_port" v-model.number="config.ha_port" type="number" class="classic-input w-full" placeholder="8123" />
                 </div>
                 <div class="flex flex-col gap-1">
-                  <label class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Status</label>
+                  <label class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Status</label>
                   <div class="h-8 flex items-center px-2 rounded border border-slate-100 dark:border-slate-800 bg-white dark:bg-[#1a1a1a] text-[10px] font-bold">
                     <span :class="haDirectMonitoringEnabled ? 'text-green-500' : 'text-slate-600 dark:text-slate-500'">
                       API: {{ haDirectMonitoringEnabled ? 'Enabled' : 'Disabled' }}
@@ -115,7 +115,7 @@
                 </div>
               </div>
               <div class="flex flex-col gap-1">
-                <label for="ha_token" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">Access Token</label>
+                <label for="ha_token" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Access Token</label>
                 <input id="ha_token" v-model="config.ha_longlived_token" type="password" class="classic-input w-full" placeholder="Token" />
               </div>
 
@@ -134,14 +134,14 @@
             </div>
 
             <div class="flex flex-col gap-3 mt-2">
-              <h3 class="text-[10px] font-bold uppercase tracking-widest text-slate-700 dark:text-slate-300">MQTT Routing</h3>
+              <h3 class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100">MQTT Routing</h3>
               <div class="grid grid-cols-2 gap-3">
                 <div class="flex flex-col gap-1">
-                  <label for="mqtt_ha_host" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">HA MQTT Host</label>
+                  <label for="mqtt_ha_host" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">HA MQTT Host</label>
                   <input id="mqtt_ha_host" v-model="config.mqtt_ha_host" type="text" class="classic-input w-full" />
                 </div>
                 <div class="flex flex-col gap-1">
-                  <label for="mqtt_ha_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 px-1">HA MQTT Port</label>
+                  <label for="mqtt_ha_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">HA MQTT Port</label>
                   <input id="mqtt_ha_port" v-model.number="config.mqtt_ha_port" type="number" class="classic-input w-full" />
                 </div>
               </div>
@@ -151,7 +151,7 @@
           <!-- Entities Section -->
           <div v-if="activeTab === 'entities'" class="flex flex-col gap-6">
              <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
-              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-700 dark:text-slate-300">UI Controls</h2>
+              <h2 class="text-sm font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100">UI Controls</h2>
             </header>
 
             <HaEntitiesEditor
@@ -185,13 +185,13 @@
     <div v-if="discoveryDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-[2px]">
       <div class="classic-card w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden dark:bg-[#121212] shadow-2xl animate-in fade-in duration-150">
         <header class="p-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-black">
-          <h3 class="text-xs font-bold uppercase text-slate-700 dark:text-slate-300">Discover Entities</h3>
-          <button @click="discoveryDialog = false" class="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"><X :size="16" /></button>
+          <h3 class="text-xs font-bold uppercase text-slate-900 dark:text-slate-100">Discover Entities</h3>
+          <button @click="discoveryDialog = false" class="text-slate-900 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-200"><X :size="16" /></button>
         </header>
         <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
           <div v-if="discoveryLoading" class="flex flex-col items-center justify-center py-10 gap-2">
             <Loader2 class="animate-spin text-accent" :size="20" />
-            <span class="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase">Fetching...</span>
+            <span class="text-[10px] font-bold text-slate-900 dark:text-slate-300 uppercase">Fetching...</span>
           </div>
           <div v-else v-for="e in discoveredEntities" :key="e.entity_id" 
                @click="toggleSelection(e.entity_id)"
@@ -343,6 +343,10 @@ const toggleSelection = (id: string) => {
   if (index > -1) selectedDiscovery.value.splice(index, 1)
   else selectedDiscovery.value.push(id)
 }
+
+watch(() => config.color_scheme, (scheme) => {
+  document.documentElement.classList.toggle('dark', scheme === 'dark')
+}, { immediate: true })
 
 onMounted(async () => {
   const cfg = await loadConfig()
