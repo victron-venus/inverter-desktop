@@ -589,7 +589,6 @@ pub fn run() {
                 true,
                 &[
                     &PredefinedMenuItem::minimize(app, None)?,
-                    &PredefinedMenuItem::zoom(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::close_window(app, None)?,
                 ],
