@@ -363,7 +363,7 @@ async function handleKeyDown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  window.addEventListener('keydown', handleKeyDown)
+  globalThis.addEventListener('keydown', handleKeyDown)
   const cfg = await loadConfig()
   loadFromConfig(cfg)
   // Re-apply after loading to be absolutely sure
