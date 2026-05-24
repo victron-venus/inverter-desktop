@@ -344,12 +344,33 @@ const toggleSelection = (id: string) => {
   else selectedDiscovery.value.push(id)
 }
 
+const applyTheme = (scheme: string | null | undefined) => {
+  const isDark = scheme === 'dark'
+  document.documentElement.classList.toggle('dark', isDark)
+  document.body.classList.toggle('dark', isDark)
+}
+
 watch(() => config.color_scheme, (scheme) => {
-  document.documentElement.classList.toggle('dark', scheme === 'dark')
+  applyTheme(scheme)
 }, { immediate: true })
 
+async function handleKeyDown(e: KeyboardEvent) {
+  // Close window on Cmd+W (macOS) or Ctrl+W
+  if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+    e.preventDefault()
+    await closeWindow()
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', handleKeyDown)
   const cfg = await loadConfig()
   loadFromConfig(cfg)
+  // Re-apply after loading to be absolutely sure
+  applyTheme(cfg.color_scheme)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown)
 })
 </script>
