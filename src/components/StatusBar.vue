@@ -16,8 +16,7 @@
 
     <div class="flex items-center gap-1">
       <div class="w-2.5 h-2.5 rounded-full shadow-inner transition-colors" :class="mqttConnected ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-700'"></div>
-      <span>MQTT:</span>
-      <span class="text-slate-500 dark:text-slate-300 font-bold">{{ mqttConnected ? 'OK' : 'Offline' }}</span>
+      <span class="font-bold text-slate-500 dark:text-slate-300">MQTT</span>
     </div>
 
     <span class="opacity-30 mx-0.5">|</span>
