@@ -6,7 +6,7 @@
         <BatteryMedium :size="10" /> Batteries
       </div>
       <div class="p-1 flex flex-wrap gap-x-3 gap-y-1.5">
-        <div v-for="bat in batteries" :key="bat.name" class="flex-1 min-w-[130px] border border-slate-100 dark:border-slate-800 p-1 rounded-sm">
+        <div v-for="bat in batteries" :key="bat.name" class="flex-1 min-w-[130px] border border-slate-50 dark:border-slate-800/30 p-1 rounded-sm">
           <div class="text-[10px] font-extrabold text-black dark:text-white uppercase tracking-tighter">{{ bat.name }}</div>
           <div class="flex justify-between items-baseline gap-1 mt-0.5">
             <span class="text-[12px] font-extrabold text-black dark:text-white leading-none">{{ bat.voltage.toFixed(2) }}V</span>
