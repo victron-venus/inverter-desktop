@@ -20,10 +20,10 @@
     </div>
 
     <span class="opacity-30 mx-0.5">|</span>
-    <span class="text-slate-500 dark:text-slate-400 font-bold">Desktop {{ appVersion }}</span>
+    <span class="text-slate-500 dark:text-slate-400">Desktop {{ appVersion }}</span>
 
     <span v-if="stateVersion" class="opacity-30 mx-0.5">|</span>
-    <span v-if="stateVersion" class="text-slate-500 dark:text-slate-400 font-bold">Control {{ stateVersion }}</span>
+    <span v-if="stateVersion" class="text-slate-500 dark:text-slate-400">Control {{ stateVersion }}</span>
   </div>
 </template>
 

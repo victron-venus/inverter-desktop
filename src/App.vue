@@ -124,7 +124,7 @@ const {
   initHa, sendHaOrMqtt, cleanupHa,
 } = useHA()
 const { isDark, toggleTheme } = useTheme()
-const { chartOption, addHistoryPoint } = useChart()
+const { chartOption, addHistoryPoint, updateChartOption } = useChart(isDark)
 
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
@@ -212,6 +212,10 @@ const solarSources = computed(() => {
 function onDocumentClick() {
   closeContextMenu()
 }
+
+watch(() => isDark.value, () => {
+  updateChartOption()
+})
 
 watch(() => state.value, (newState) => {
   if (newState.gt !== undefined) addHistoryPoint(newState)
