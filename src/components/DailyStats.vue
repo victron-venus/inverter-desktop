@@ -1,5 +1,5 @@
 <template>
-  <div class="p-0 mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-slate-700">
+  <div class="p-0 mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-slate-700 dark:text-slate-300">
     <div v-if="hasSolar" class="flex items-center gap-1.5 mr-1">
       <span class="text-solar font-bold flex items-center gap-1">☀️ {{ prod }}kWh</span>
       <span class="text-slate-500 font-medium text-[11px] tracking-tighter">{{ solarStr }}</span>
@@ -9,7 +9,7 @@
     <div v-if="hasGrid" class="flex items-center gap-1.5 mr-1">
       <div v-if="hasSolar" class="w-px h-3 bg-slate-300"></div>
       <span class="text-slate-500 uppercase text-[10px] font-bold tracking-tighter">Grid:</span>
-      <span class="font-bold text-slate-700">{{ grid }}kWh</span>
+      <span class="font-bold text-slate-700 dark:text-slate-300">{{ grid }}kWh</span>
       <span class="text-green-600 font-bold">(${{ gridCost }})</span>
     </div>
 
@@ -18,11 +18,11 @@
       <BatteryIcon :size="14" class="text-green-500" />
       <div class="flex items-center gap-1.5">
         <span class="text-slate-500 uppercase text-[10px] font-bold tracking-tighter">I:</span>
-        <span class="font-bold text-slate-700">{{ batIn }}kWh</span>
+        <span class="font-bold text-slate-700 dark:text-slate-300">{{ batIn }}kWh</span>
         <span class="text-slate-400 text-[10px]">({{ batInY }})</span>
         
         <span class="text-slate-500 uppercase text-[10px] font-bold tracking-tighter ml-0.5">O:</span>
-        <span class="font-bold text-slate-700">{{ batOut }}kWh</span>
+        <span class="font-bold text-slate-700 dark:text-slate-300">{{ batOut }}kWh</span>
         <span class="text-slate-400 text-[10px]">({{ batOutY }})</span>
         
         <span class="text-slate-500 uppercase text-[10px] font-bold tracking-tighter ml-0.5">Δ:</span>

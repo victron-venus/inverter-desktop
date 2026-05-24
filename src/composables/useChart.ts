@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import { state } from './useInverterState'
 
 const MAX_HISTORY_POINTS = 1800
@@ -9,7 +9,7 @@ interface TooltipParam {
   color: string
 }
 
-export function useChart() {
+export function useChart(isDarkRef: Ref<boolean>) {
   const chartOption = ref({})
 
   let historyData = {
@@ -22,17 +22,21 @@ export function useChart() {
 
   function updateChartOption() {
     const { timestamps, grid, solar, battery, setpoint } = historyData
-    // Force light theme colors regardless of system theme
-    const textColor = '#333'
-    const gridColor = '#e0e0e0'
+    const dark = isDarkRef.value
+    const textColor = dark ? '#e0e0e0' : '#333'
+    const gridColor = dark ? '#444' : '#e0e0e0'
 
     const timeData = timestamps.map(ts => ts * 1000)
 
     chartOption.value = {
       animation: false,
+      backgroundColor: 'transparent',
       tooltip: {
         trigger: 'axis',
+        backgroundColor: dark ? '#242424' : '#fff',
+        borderColor: dark ? '#444' : '#ccc',
         axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
+        textStyle: { color: textColor, fontSize: 10 },
         formatter: function(params: TooltipParam[]) {
           const date = new Date(params[0].value[0])
           const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

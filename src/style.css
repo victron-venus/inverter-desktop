@@ -41,7 +41,8 @@
 @layer components {
   /* Card: Standard appearance */
   .classic-card {
-    @apply border rounded-[3px] shadow-none bg-white;
+    @apply border rounded-[3px] shadow-none;
+    background-color: var(--color-bg-card);
     border-color: var(--color-border-card);
   }
 
@@ -109,7 +110,8 @@
 
   /* Card Header Style: Increased to 11px to match 0.7rem from v1.0.9 */
   .classic-header {
-    @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-500 bg-white;
+    @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-600;
+    background-color: var(--color-bg-card);
     border-color: var(--color-border-card);
   }
   
@@ -124,6 +126,13 @@
     @apply h-6 px-1.5 rounded-[2px] border text-[11px] outline-none focus:border-blue-500 transition-none;
     background-color: #fff;
     border-color: #ced4da;
+    color: #333;
+  }
+
+  .dark .classic-input {
+    background-color: #1a1a1a;
+    border-color: #444;
+    color: #e0e0e0;
   }
 }
 
