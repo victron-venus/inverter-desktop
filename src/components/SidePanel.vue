@@ -8,15 +8,15 @@
       <div class="p-1 flex justify-between items-center gap-2">
         <div v-if="parseFloat(evCharging) > 0">
           <div class="text-xl font-bold text-solar leading-none">{{ evCharging }}</div>
-          <div class="text-[10px] text-slate-400 font-bold text-center">Charging</div>
+          <div class="text-[10px] text-slate-500 font-bold text-center">Charging</div>
         </div>
         <div class="text-center" v-if="parseFloat(evPower) > 0">
-          <div class="text-xl font-bold text-slate-400 leading-none">{{ evPower }}</div>
-          <div class="text-[10px] text-slate-400 font-bold tracking-tighter uppercase">VUE</div>
+          <div class="text-xl font-bold text-slate-500 leading-none">{{ evPower }}</div>
+          <div class="text-[10px] text-slate-500 font-bold tracking-tighter uppercase">VUE</div>
         </div>
         <div class="text-right">
           <div class="text-2xl font-bold text-accent leading-none">{{ Math.floor(carSoc || 0) }}%</div>
-          <div class="text-[10px] text-slate-400 font-bold text-center uppercase tracking-tighter">SoC</div>
+          <div class="text-[10px] text-slate-500 font-bold text-center uppercase tracking-tighter">SoC</div>
         </div>
       </div>
     </div>

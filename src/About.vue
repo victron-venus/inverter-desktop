@@ -10,9 +10,9 @@
       />
       
       <h2 class="text-lg font-bold tracking-tight mb-0.5">Inverter Dashboard</h2>
-      <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Version 1.0.18</div>
+      <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Version 1.0.18</div>
       
-      <p class="text-[12px] leading-relaxed text-slate-500 dark:text-slate-400 mb-6 px-2">
+      <p class="text-[12px] leading-relaxed text-slate-500 dark:text-slate-500 mb-6 px-2">
         Desktop application for monitoring and controlling
         Victron energy inverter systems via MQTT.
         Integrates with Home Assistant for unified device control.

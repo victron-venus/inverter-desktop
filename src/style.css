@@ -15,12 +15,11 @@
   --color-border-card: #e0e0e0;
   --color-text-main: #333333;
 
-  /* Dark Mode Persistence Overrides */
-  /* We deliberately keep bg-page and bg-card same as light mode for specific sections */
-  --color-dark-bg-page: #efeff4; 
-  --color-dark-bg-card: #ffffff;
-  --color-dark-border-card: #d1d1d6;
-  --color-dark-text-main: #212121; /* Keep text dark for white cards */
+  /* Dark Mode Palette - Now with actual dark backgrounds */
+  --color-dark-bg-page: #1a1a1a; 
+  --color-dark-bg-card: #242424;
+  --color-dark-border-card: #333333;
+  --color-dark-text-main: #e0e0e0;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
 }
@@ -32,22 +31,22 @@
     color: var(--color-text-main);
   }
 
-  /* Night mode background should NOT change as per request */
+  /* Night mode background - correctly syncing with dark theme now */
   .dark body {
-    background-color: var(--color-bg-page);
-    color: var(--color-text-main);
+    background-color: var(--color-dark-bg-page);
+    color: var(--color-dark-text-main);
   }
 }
 
 @layer components {
-  /* Card: Static White background */
+  /* Card: Standard appearance */
   .classic-card {
     @apply border rounded-[3px] shadow-none bg-white;
     border-color: var(--color-border-card);
   }
 
   .dark .classic-card {
-    background-color: #ffffff;
+    background-color: var(--color-dark-bg-card);
     border-color: var(--color-dark-border-card);
   }
 
@@ -110,13 +109,14 @@
 
   /* Card Header Style: Increased to 11px to match 0.7rem from v1.0.9 */
   .classic-header {
-    @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-white;
+    @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-500 bg-white;
     border-color: var(--color-border-card);
   }
   
   .dark .classic-header {
-    background-color: #ffffff;
+    background-color: var(--color-dark-bg-card);
     border-color: var(--color-dark-border-card);
+    color: #e0e0e0;
   }
 
   /* Compact Input */
