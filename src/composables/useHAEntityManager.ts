@@ -13,7 +13,7 @@ export function useHAEntityManager() {
   const headerTogglesList = ref<Array<{ id: string; label: string; entity: string }>>([])
   const discoveryDialog = ref(false)
   const discoveredEntities = ref<DiscoveredEntity[]>([])
-  const selectedDiscovery = ref<DiscoveredEntity[]>([])
+  const selectedDiscovery = ref<string[]>([])
   const discoveryLoading = ref(false)
   const discoveryTargetGroup = ref<'home' | 'toggle'>('home')
   const dragOverIndex = ref<number | null>(null)
@@ -67,13 +67,14 @@ export function useHAEntityManager() {
 
   function addDiscoveredEntities() {
     const target = discoveryTargetGroup.value
-    const toAdd = selectedDiscovery.value
+    const toAdd = discoveredEntities.value.filter(e => selectedDiscovery.value.includes(e.entity_id))
+    
     if (target === 'home') {
       toAdd.forEach(de => {
         if (haEntitiesList.value.some(e => e.entity === de.entity_id)) return
         haEntitiesList.value.push({
           id: de.entity_id.replace(/\./g, '_'),
-          label: de.friendly_name,
+          label: de.friendly_name || de.entity_id,
           entity: de.entity_id,
           domain: de.domain,
           enabled: true
@@ -84,7 +85,7 @@ export function useHAEntityManager() {
         if (headerTogglesList.value.some(t => t.entity === de.entity_id)) return
         headerTogglesList.value.push({
           id: de.entity_id.replace(/\./g, '_'),
-          label: de.friendly_name,
+          label: de.friendly_name || de.entity_id,
           entity: de.entity_id
         })
       })
