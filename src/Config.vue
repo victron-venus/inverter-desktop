@@ -364,13 +364,13 @@ async function handleKeyDown(e: KeyboardEvent) {
 
 onMounted(async () => {
   globalThis.addEventListener('keydown', handleKeyDown)
-  const cfg = await loadConfig()
-  loadFromConfig(cfg)
-  // Re-apply after loading to be absolutely sure
-  applyTheme(cfg.color_scheme)
-})
+    const cfg = await loadConfig()
+    loadFromConfig(cfg)
+    // Re-apply after loading to be absolutely sure
+    applyTheme(cfg.color_scheme)
+  })
 
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeyDown)
-})
+  onUnmounted(() => {
+    globalThis.removeEventListener('keydown', handleKeyDown)
+  })
 </script>
