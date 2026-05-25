@@ -8,8 +8,8 @@
 
     <div v-if="hasGrid" class="flex items-center gap-1.5 mr-1">
       <div v-if="hasSolar" class="w-px h-3 bg-slate-300"></div>
-      <span class="text-black dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter">Grid:</span>
-      <span class="font-bold text-black dark:text-white">{{ grid }}kWh</span>
+      <span class="text-slate-600 dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter">Grid:</span>
+      <span class="font-bold text-slate-800 dark:text-white">{{ grid }}kWh</span>
       <span class="text-green-600 font-bold">(${{ gridCost }})</span>
     </div>
 
@@ -17,17 +17,17 @@
       <div v-if="hasSolar || hasGrid" class="w-px h-3 bg-slate-300"></div>
       <BatteryIcon :size="14" class="text-green-500" />
       <div class="flex items-center gap-1.5">
-        <span class="text-black dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter">I:</span>
-        <span class="font-bold text-black dark:text-white">{{ batIn }}kWh</span>
-        <span class="text-black dark:text-slate-400 text-[10px] font-bold">({{ batInY }})</span>
+        <span class="text-slate-600 dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter">I:</span>
+        <span class="font-bold text-slate-800 dark:text-white">{{ batIn }}kWh</span>
+        <span class="text-slate-500 dark:text-slate-400 text-[10px] font-bold">({{ batInY }})</span>
         
-        <span class="text-black dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter ml-0.5">O:</span>
-        <span class="font-bold text-black dark:text-white">{{ batOut }}kWh</span>
-        <span class="text-black dark:text-slate-400 text-[10px] font-bold">({{ batOutY }})</span>
+        <span class="text-slate-600 dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter ml-0.5">O:</span>
+        <span class="font-bold text-slate-800 dark:text-white">{{ batOut }}kWh</span>
+        <span class="text-slate-500 dark:text-slate-400 text-[10px] font-bold">({{ batOutY }})</span>
         
-        <span class="text-black dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter ml-0.5">Δ:</span>
+        <span class="text-slate-600 dark:text-slate-400 uppercase text-[10px] font-bold tracking-tighter ml-0.5">Δ:</span>
         <span class="font-bold" :class="parseFloat(batDelta) >= 0 ? 'text-green-600' : 'text-red-600'">{{ batDelta }}kWh</span>
-        <span class="text-black dark:text-slate-400 text-[10px] font-bold">({{ batDeltaY }})</span>
+        <span class="text-slate-500 dark:text-slate-400 text-[10px] font-bold">({{ batDeltaY }})</span>
       </div>
     </div>
   </div>
