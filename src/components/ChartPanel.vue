@@ -1,5 +1,5 @@
 <template>
-  <div class="classic-card h-full overflow-hidden bg-white">
+  <div class="classic-card h-full overflow-hidden">
     <VChart
       class="chart-wrap w-full"
       :option="chartOption"

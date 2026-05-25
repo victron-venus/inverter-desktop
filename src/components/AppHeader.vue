@@ -1,5 +1,5 @@
 <template>
-  <div class="classic-card mb-1.5 p-1 flex items-center gap-1 bg-white w-full border-slate-200">
+  <div class="classic-card mb-1.5 p-1 flex items-center gap-1 w-full">
     <div class="flex flex-wrap gap-0.5 items-center flex-1">
       <button
         class="classic-btn min-w-[28px]"
