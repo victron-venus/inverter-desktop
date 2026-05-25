@@ -8,11 +8,8 @@ export function useTheme() {
   
   // Initial sync on module load
   const syncTheme = (dark: boolean) => {
-    if (dark) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
+    document.documentElement.classList.toggle('dark', dark)
+    document.body.classList.toggle('dark', dark)
   }
   
   syncTheme(isDark.value)
