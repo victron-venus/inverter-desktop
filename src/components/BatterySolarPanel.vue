@@ -9,7 +9,7 @@
         <div v-for="bat in batteries" :key="bat.name" class="flex-1 min-w-[130px] border border-slate-50 dark:border-slate-800/30 p-1 rounded-sm">
           <div class="text-[10px] font-extrabold text-slate-600 dark:text-white uppercase tracking-tighter">{{ bat.name }}</div>
           <div class="flex justify-between items-baseline gap-1 mt-0.5">
-            <span class="text-[12px] font-extrabold text-slate-600 dark:text-white leading-none">{{ bat.voltage.toFixed(2) }}V</span>
+            <span class="text-[12px] text-slate-600 dark:text-white leading-none">{{ bat.voltage.toFixed(2) }}V</span>
             <span v-if="bat.current !== undefined" class="text-[11px] font-bold text-slate-500 dark:text-slate-300 leading-none">{{ bat.current.toFixed(1) }}A</span>
             <span v-if="bat.power !== undefined" class="text-[11px] font-bold text-slate-500 dark:text-slate-300 leading-none">{{ Math.floor(bat.power) }}W</span>
           </div>
