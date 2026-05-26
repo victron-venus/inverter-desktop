@@ -116,6 +116,7 @@
           class="w-full h-full"
           :src="videoPopup.url"
         >
+          <track kind="captions" />
           Your browser does not support the video tag.
         </video>
       </div>
@@ -282,7 +283,7 @@ onMounted(async () => {
   await connectMqtt()
   await initHa()
   document.addEventListener('click', onDocumentClick)
-  window.addEventListener('show-video-popup', handleShowVideoPopup)
+  globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 
   unlistenConfig = await listen<{color_scheme?: string}>('config-saved', (event) => {
     const scheme = event.payload.color_scheme
@@ -296,7 +297,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
-  window.removeEventListener('show-video-popup', handleShowVideoPopup)
+  globalThis.removeEventListener('show-video-popup', handleShowVideoPopup)
   cleanupConnection()
   cleanupHa()
   if (unlistenConfig) unlistenConfig()

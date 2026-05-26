@@ -51,7 +51,7 @@ export function useConnection() {
       // Subscribe to camera events
       unlistenCamera = await listen<any>('camera-event', (event) => {
         // Emit global event for App.vue to show popup
-        window.dispatchEvent(new CustomEvent('show-video-popup', { detail: event.payload }))
+        globalThis.dispatchEvent(new CustomEvent('show-video-popup', { detail: event.payload }))
       })
 
       await invoke('connect_mqtt', { 
