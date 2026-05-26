@@ -92,6 +92,35 @@
       :y="contextMenu.y"
       @open-config="openConfig"
     />
+
+    <!-- Video Popup Overlay -->
+    <div v-if="videoPopup.show" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div class="relative w-full max-w-4xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl border border-slate-800">
+        <!-- Camera Name Header -->
+        <div class="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-center">
+          <div class="flex items-center gap-2">
+            <div class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+            <span class="text-xs font-bold text-white uppercase tracking-widest">LIVE: {{ videoPopup.cameraName }}</span>
+          </div>
+          <button 
+            @click="videoPopup.show = false"
+            class="p-1.5 rounded-full bg-white/10 text-white hover:bg-red-500 transition-colors"
+          >
+            <X :size="20" />
+          </button>
+        </div>
+
+        <video 
+          autoplay 
+          controls 
+          class="w-full h-full"
+          :src="videoPopup.url"
+        >
+          <track kind="captions" />
+          Your browser does not support the video tag.
+        </video>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -102,6 +131,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { formatPower } from './utils'
 import { logger } from './logger'
 import { listen } from '@tauri-apps/api/event'
+import { X } from 'lucide-vue-next'
 import { useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
 import { useTheme } from './composables/useTheme'
@@ -128,6 +158,7 @@ const { chartOption, addHistoryPoint, updateChartOption } = useChart(isDark)
 
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
+const videoPopup = ref({ show: false, url: '', cameraName: '' })
 let unlistenConfig: (() => void) | null = null
 
 function onContextMenu(e: MouseEvent) {
@@ -136,6 +167,26 @@ function onContextMenu(e: MouseEvent) {
 
 function closeContextMenu() {
   contextMenu.value.show = false
+}
+
+function handleShowVideoPopup(e: Event) {
+  const customEvent = e as CustomEvent
+  if (customEvent.detail) {
+    const data = customEvent.detail
+    if (data && typeof data === 'object') {
+      videoPopup.value = { 
+        show: true, 
+        url: data.video_url, 
+        cameraName: data.agent_name || 'Camera'
+      }
+    } else {
+      videoPopup.value = { 
+        show: true, 
+        url: data, 
+        cameraName: 'Camera' 
+      }
+    }
+  }
 }
 
 async function openConfig() {
@@ -232,6 +283,7 @@ onMounted(async () => {
   await connectMqtt()
   await initHa()
   document.addEventListener('click', onDocumentClick)
+  globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 
   unlistenConfig = await listen<{color_scheme?: string}>('config-saved', (event) => {
     const scheme = event.payload.color_scheme
@@ -245,6 +297,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
+  globalThis.removeEventListener('show-video-popup', handleShowVideoPopup)
   cleanupConnection()
   cleanupHa()
   if (unlistenConfig) unlistenConfig()

@@ -181,6 +181,13 @@ pub struct DailyStats {
     pub pv_total_daily: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraEvent {
+    pub agent_name: String,
+    pub video_url: String,
+    pub timestamp: Option<String>,
+}
+
 pub struct MqttClient {
     client: Option<Client>,
     state: Arc<Mutex<InverterState>>,
@@ -188,6 +195,28 @@ pub struct MqttClient {
     port: u16,
     app_handle: Option<tauri::AppHandle>,
     portal_id: Option<String>,
+    camera_topic: Option<String>,
+}
+
+fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
+    if pattern == topic || pattern == "#" {
+        return true;
+    }
+    let t_parts: Vec<&str> = topic.split('/').collect();
+    let p_parts: Vec<&str> = pattern.split('/').collect();
+
+    if t_parts.len() != p_parts.len() && !pattern.ends_with("/#") {
+        // Simple match, might need adjustment for #
+    }
+    
+    // Very basic MQTT wildcard matching for +
+    if t_parts.len() != p_parts.len() { return false; }
+    for (t, p) in t_parts.iter().zip(p_parts.iter()) {
+        if *p != "+" && *p != *t {
+            return false;
+        }
+    }
+    true
 }
 
 use log::error;
@@ -253,6 +282,7 @@ impl MqttClient {
             port,
             app_handle: None,
             portal_id: None,
+            camera_topic: None,
         }
     }
 
@@ -262,6 +292,10 @@ impl MqttClient {
 
     pub fn set_portal_id(&mut self, id: Option<String>) {
         self.portal_id = id;
+    }
+
+    pub fn set_camera_topic(&mut self, topic: Option<String>) {
+        self.camera_topic = topic;
     }
 
     pub fn get_state(&self) -> InverterState {
@@ -277,6 +311,12 @@ impl MqttClient {
         // Subscribe to topics
         client.subscribe("inverter/state", QoS::AtMostOnce)?;
         client.subscribe("inverter/console", QoS::AtMostOnce)?;
+        
+        if let Some(ref cam_topic) = self.camera_topic {
+            if !cam_topic.is_empty() {
+                client.subscribe(cam_topic, QoS::AtMostOnce)?;
+            }
+        }
 
         // Clone client before storing — needed for keep-alive publisher
         let keepalive_client = client.clone();
@@ -285,6 +325,7 @@ impl MqttClient {
         let state = self.state.clone();
         let app_handle = self.app_handle.clone();
         let portal_id = self.portal_id.clone();
+        let cam_topic_owned = self.camera_topic.clone();
 
         // Spawn a task to handle incoming messages
         tauri::async_runtime::spawn(async move {
@@ -292,7 +333,7 @@ impl MqttClient {
                 for event in connection.iter() {
                     match event {
                         Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
-                            let topic = publish.topic;
+                            let topic = publish.topic.clone();
                             let payload = String::from_utf8(publish.payload.to_vec())
                                 .unwrap_or_else(|_| String::new());
 
@@ -416,6 +457,23 @@ impl MqttClient {
                                     console.push(payload);
                                     if console.len() > CONSOLE_MAX_LINES {
                                         console.remove(0);
+                                    }
+                                }
+                            } else if let Some(ref cam_t) = cam_topic_owned {
+                                // Check if topic matches camera wildcard
+                                if match_mqtt_topic(&topic, cam_t) {
+                                    if let Some(ref handle) = app_handle {
+                                        // Attempt to parse as JSON first (based on user example)
+                                        if let Ok(cam_event) = serde_json::from_str::<CameraEvent>(&payload) {
+                                            let _ = handle.emit("camera-event", cam_event);
+                                        } else {
+                                            // Fallback for simple URL string payload
+                                            let _ = handle.emit("camera-event", CameraEvent {
+                                                agent_name: "Unknown Camera".to_string(),
+                                                video_url: payload,
+                                                timestamp: None,
+                                            });
+                                        }
                                     }
                                 }
                             }
