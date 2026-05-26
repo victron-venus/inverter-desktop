@@ -67,6 +67,12 @@
             </div>
 
             <div class="flex flex-col gap-1">
+              <label for="camera_topic" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Camera Detection Topic</label>
+              <input id="camera_topic" v-model="config.camera_topic" type="text" class="classic-input w-full" placeholder="e.g. frigate/+/events" />
+              <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">MQTT topic with wildcard for camera events.</p>
+            </div>
+
+            <div class="flex flex-col gap-1">
               <label for="portal_id" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">VRM Portal ID</label>
               <input id="portal_id" v-model="config.portal_id" type="text" class="classic-input w-full" placeholder="e.g. a1b2c3d4e5f6" />
               <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">Keep-alive for Cerbo GX.</p>

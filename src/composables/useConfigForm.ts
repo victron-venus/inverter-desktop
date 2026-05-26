@@ -23,6 +23,7 @@ export interface AppConfig {
   header_toggles?: Array<{ id: string; label: string; entity: string }> | null
   color_scheme?: string | null
   portal_id?: string | null
+  camera_topic?: string | null
 }
 
 const defaultConfig: AppConfig = {
@@ -35,7 +36,8 @@ const defaultConfig: AppConfig = {
   ha_switch_entities: null as Record<string, { label?: string; entity: string }> | null,
   header_toggles: null as Array<{ id: string; label: string; entity: string }> | null,
   color_scheme: 'dark' as string | null,
-  portal_id: null as string | null
+  portal_id: null as string | null,
+  camera_topic: 'frigate/+/events' as string | null
 }
 
 export function useConfigForm() {

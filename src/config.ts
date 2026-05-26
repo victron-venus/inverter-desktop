@@ -26,6 +26,7 @@ export interface AppConfig {
   header_toggles?: Array<{ id: string; label: string; entity: string }> | null
   color_scheme?: string | null
   portal_id?: string | null
+  camera_topic?: string | null
 }
 
 const defaultConfig: AppConfig = {
@@ -50,6 +51,7 @@ const defaultConfig: AppConfig = {
   header_toggles: null,
   color_scheme: 'dark',
   portal_id: null,
+  camera_topic: 'frigate/+/events'
 }
 
 let config: AppConfig = defaultConfig

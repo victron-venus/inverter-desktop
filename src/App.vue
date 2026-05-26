@@ -92,6 +92,26 @@
       :y="contextMenu.y"
       @open-config="openConfig"
     />
+
+    <!-- Video Popup Overlay -->
+    <div v-if="videoPopup.show" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div class="relative w-full max-w-4xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl border border-slate-800">
+        <video 
+          autoplay 
+          controls 
+          class="w-full h-full"
+          :src="videoPopup.url"
+        >
+          Your browser does not support the video tag.
+        </video>
+        <button 
+          @click="videoPopup.show = false"
+          class="absolute top-2 right-2 p-1.5 rounded-full bg-black/50 text-white hover:bg-red-500 transition-colors"
+        >
+          <X :size="20" />
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -102,6 +122,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { formatPower } from './utils'
 import { logger } from './logger'
 import { listen } from '@tauri-apps/api/event'
+import { X } from 'lucide-vue-next'
 import { useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
 import { useTheme } from './composables/useTheme'
@@ -128,6 +149,7 @@ const { chartOption, addHistoryPoint, updateChartOption } = useChart(isDark)
 
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
+const videoPopup = ref({ show: false, url: '' })
 let unlistenConfig: (() => void) | null = null
 
 function onContextMenu(e: MouseEvent) {
@@ -136,6 +158,13 @@ function onContextMenu(e: MouseEvent) {
 
 function closeContextMenu() {
   contextMenu.value.show = false
+}
+
+function handleShowVideoPopup(e: Event) {
+  const customEvent = e as CustomEvent
+  if (customEvent.detail) {
+    videoPopup.value = { show: true, url: customEvent.detail }
+  }
 }
 
 async function openConfig() {
@@ -232,6 +261,7 @@ onMounted(async () => {
   await connectMqtt()
   await initHa()
   document.addEventListener('click', onDocumentClick)
+  window.addEventListener('show-video-popup', handleShowVideoPopup)
 
   unlistenConfig = await listen<{color_scheme?: string}>('config-saved', (event) => {
     const scheme = event.payload.color_scheme
@@ -245,6 +275,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
+  window.removeEventListener('show-video-popup', handleShowVideoPopup)
   cleanupConnection()
   cleanupHa()
   if (unlistenConfig) unlistenConfig()
