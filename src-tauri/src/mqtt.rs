@@ -188,6 +188,28 @@ pub struct MqttClient {
     port: u16,
     app_handle: Option<tauri::AppHandle>,
     portal_id: Option<String>,
+    camera_topic: Option<String>,
+}
+
+fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
+    if pattern == topic || pattern == "#" {
+        return true;
+    }
+    let t_parts: Vec<&str> = topic.split('/').collect();
+    let p_parts: Vec<&str> = pattern.split('/').collect();
+
+    if t_parts.len() != p_parts.length() && !pattern.ends_with("/#") {
+        // Simple match, might need adjustment for #
+    }
+    
+    // Very basic MQTT wildcard matching for +
+    if t_parts.len() != p_parts.len() { return false; }
+    for (t, p) in t_parts.iter().zip(p_parts.iter()) {
+        if *p != "+" && *p != *t {
+            return false;
+        }
+    }
+    true
 }
 
 use log::error;
@@ -264,6 +286,10 @@ impl MqttClient {
         self.portal_id = id;
     }
 
+    pub fn set_camera_topic(&mut self, topic: Option<String>) {
+        self.camera_topic = topic;
+    }
+
     pub fn get_state(&self) -> InverterState {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -277,6 +303,12 @@ impl MqttClient {
         // Subscribe to topics
         client.subscribe("inverter/state", QoS::AtMostOnce)?;
         client.subscribe("inverter/console", QoS::AtMostOnce)?;
+        
+        if let Some(ref cam_topic) = self.camera_topic {
+            if !cam_topic.is_empty() {
+                client.subscribe(cam_topic, QoS::AtMostOnce)?;
+            }
+        }
 
         // Clone client before storing — needed for keep-alive publisher
         let keepalive_client = client.clone();
@@ -285,6 +317,7 @@ impl MqttClient {
         let state = self.state.clone();
         let app_handle = self.app_handle.clone();
         let portal_id = self.portal_id.clone();
+        let cam_topic_owned = self.camera_topic.clone();
 
         // Spawn a task to handle incoming messages
         tauri::async_runtime::spawn(async move {
@@ -292,7 +325,7 @@ impl MqttClient {
                 for event in connection.iter() {
                     match event {
                         Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
-                            let topic = publish.topic;
+                            let topic = publish.topic.clone();
                             let payload = String::from_utf8(publish.payload.to_vec())
                                 .unwrap_or_else(|_| String::new());
 
@@ -416,6 +449,12 @@ impl MqttClient {
                                     console.push(payload);
                                     if console.len() > CONSOLE_MAX_LINES {
                                         console.remove(0);
+                                    }
+                                }
+                            } else if let Some(ref cam_t) = cam_topic_owned {
+                                if match_mqtt_topic(&topic, cam_t) {
+                                    if let Some(ref handle) = app_handle {
+                                        let _ = handle.emit("camera-event", payload);
                                     }
                                 }
                             }

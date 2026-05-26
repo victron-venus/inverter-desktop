@@ -67,6 +67,7 @@ struct FullConfig {
     ha_entities: Option<Vec<HaEntityConfig>>,
     header_toggles_config: Option<Vec<HeaderToggle>>,
     portal_id: Option<String>,
+    camera_topic: Option<String>,
 }
 
 impl Default for FullConfig {
@@ -93,6 +94,7 @@ impl Default for FullConfig {
             ha_entities: None,
             header_toggles_config: None,
             portal_id: None,
+            camera_topic: Some("frigate/+/events".to_string()),
         }
     }
 }
@@ -396,6 +398,7 @@ fn connect_mqtt(
     host: String,
     port: u16,
     portal_id: Option<String>,
+    camera_topic: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<MqttState>,
 ) -> Result<(), String> {
@@ -405,6 +408,7 @@ fn connect_mqtt(
     let mut client = MqttClient::new(host, port);
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
+    client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
     *client_guard = Some(client);
     Ok(())

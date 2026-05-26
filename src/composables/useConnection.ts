@@ -8,6 +8,7 @@ import { logger } from '../logger'
 export function useConnection() {
   let unlistenStateUpdate: (() => void) | null = null
   let unlistenConnectionStatus: (() => void) | null = null
+  let unlistenCamera: (() => void) | null = null
 
   async function ensureNotificationPermission() {
     try {
@@ -46,8 +47,19 @@ export function useConnection() {
       unlistenConnectionStatus = await listen<boolean>('mqtt-connection-status', (event) => {
         mqttConnected.value = event.payload
       })
+      
+      // Subscribe to camera events
+      unlistenCamera = await listen<string>('camera-event', (event) => {
+        // Emit global event for App.vue to show popup
+        window.dispatchEvent(new CustomEvent('show-video-popup', { detail: event.payload }))
+      })
 
-      await invoke('connect_mqtt', { host: config.mqtt_host, port: config.mqtt_port, portalId: config.portal_id || null })
+      await invoke('connect_mqtt', { 
+        host: config.mqtt_host, 
+        port: config.mqtt_port, 
+        portalId: config.portal_id || null,
+        cameraTopic: config.camera_topic || null
+      })
 
       // Fetch initial state
       try {
@@ -78,6 +90,10 @@ export function useConnection() {
     if (unlistenConnectionStatus) {
       unlistenConnectionStatus()
       unlistenConnectionStatus = null
+    }
+    if (unlistenCamera) {
+      unlistenCamera()
+      unlistenCamera = null
     }
   }
 
