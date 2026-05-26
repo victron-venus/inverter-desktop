@@ -198,7 +198,7 @@ fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
     let t_parts: Vec<&str> = topic.split('/').collect();
     let p_parts: Vec<&str> = pattern.split('/').collect();
 
-    if t_parts.len() != p_parts.length() && !pattern.ends_with("/#") {
+    if t_parts.len() != p_parts.len() && !pattern.ends_with("/#") {
         // Simple match, might need adjustment for #
     }
     
@@ -275,6 +275,7 @@ impl MqttClient {
             port,
             app_handle: None,
             portal_id: None,
+            camera_topic: None,
         }
     }
 
