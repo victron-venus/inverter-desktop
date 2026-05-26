@@ -181,6 +181,13 @@ pub struct DailyStats {
     pub pv_total_daily: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraEvent {
+    pub agent_name: String,
+    pub video_url: String,
+    pub timestamp: Option<String>,
+}
+
 pub struct MqttClient {
     client: Option<Client>,
     state: Arc<Mutex<InverterState>>,
@@ -453,9 +460,20 @@ impl MqttClient {
                                     }
                                 }
                             } else if let Some(ref cam_t) = cam_topic_owned {
+                                // Check if topic matches camera wildcard
                                 if match_mqtt_topic(&topic, cam_t) {
                                     if let Some(ref handle) = app_handle {
-                                        let _ = handle.emit("camera-event", payload);
+                                        // Attempt to parse as JSON first (based on user example)
+                                        if let Ok(cam_event) = serde_json::from_str::<CameraEvent>(&payload) {
+                                            let _ = handle.emit("camera-event", cam_event);
+                                        } else {
+                                            // Fallback for simple URL string payload
+                                            let _ = handle.emit("camera-event", CameraEvent {
+                                                agent_name: "Unknown Camera".to_string(),
+                                                video_url: payload,
+                                                timestamp: None,
+                                            });
+                                        }
                                     }
                                 }
                             }
