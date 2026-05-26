@@ -335,6 +335,7 @@ async function handleClose() {
     const win = getCurrentWindow()
     await win.close()
   } catch (e) {
+    console.warn('Frontend close failed, trying backend:', e)
     try {
       await invoke('close_config_window')
     } catch (err) {
