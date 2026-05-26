@@ -23,6 +23,7 @@ export interface AppConfig {
   header_toggles?: Array<{ id: string; label: string; entity: string }> | null
   color_scheme?: string | null
   portal_id?: string | null
+  camera_topic?: string | null
 }
 
 const defaultConfig: AppConfig = {
@@ -31,11 +32,12 @@ const defaultConfig: AppConfig = {
   ha_longlived_token: null, ha_url: null, ha_port: null, ha_use_direct_api: false,
   ha_entities: null, header_toggles_config: null,
   ha_water_valve_entity: null, ha_pump_switch_entity: null,
-  ha_boolean_entities: null as Record<string, string> | null,
-  ha_switch_entities: null as Record<string, { label?: string; entity: string }> | null,
-  header_toggles: null as Array<{ id: string; label: string; entity: string }> | null,
-  color_scheme: 'dark' as string | null,
-  portal_id: null as string | null
+  ha_boolean_entities: null,
+  ha_switch_entities: null,
+  header_toggles: null,
+  color_scheme: 'dark',
+  portal_id: null,
+  camera_topic: 'frigate/+/events'
 }
 
 export function useConfigForm() {

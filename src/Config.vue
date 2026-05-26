@@ -15,7 +15,7 @@
           <Loader2 :size="10" v-else class="animate-spin" />
           <span>SAVE</span>
         </button>
-        <button @click="closeWindow" class="p-1 rounded hover:bg-red-500 hover:text-white transition-colors text-slate-900 dark:text-slate-300">
+        <button @click="handleClose" class="p-1 rounded hover:bg-red-500 hover:text-white transition-colors text-slate-900 dark:text-slate-300">
           <X :size="12" />
         </button>
       </div>
@@ -144,6 +144,11 @@
                   <label for="mqtt_ha_port" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">HA MQTT Port</label>
                   <input id="mqtt_ha_port" v-model.number="config.mqtt_ha_port" type="number" class="classic-input w-full" />
                 </div>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label for="camera_topic" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Camera Detection Topic</label>
+                <input id="camera_topic" v-model="config.camera_topic" type="text" class="classic-input w-full" placeholder="e.g. frigate/+/events" />
+                <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">MQTT topic with wildcard for camera events on HA broker.</p>
               </div>
             </div>
           </div>
@@ -325,9 +330,18 @@ async function handleSave() {
   setTimeout(clearMessage, 2000)
 }
 
-async function closeWindow() {
-  const window = await getCurrentWindow()
-  await window.close()
+async function handleClose() {
+  try {
+    const win = getCurrentWindow()
+    await win.close()
+  } catch (e) {
+    console.warn('Frontend close failed, trying backend:', e)
+    try {
+      await invoke('close_config_window')
+    } catch (err) {
+      console.error('Close failed:', err)
+    }
+  }
 }
 
 function handleReset() {
@@ -346,8 +360,18 @@ const toggleSelection = (id: string) => {
 
 const applyTheme = (scheme: string | null | undefined) => {
   const isDark = scheme === 'dark'
+  console.log('Applying theme to Config window:', scheme, isDark)
   document.documentElement.classList.toggle('dark', isDark)
   document.body.classList.toggle('dark', isDark)
+  
+  // Force background to prevent system-level dark mode overrides if any
+  if (isDark) {
+    document.documentElement.style.backgroundColor = '#0a0a0a'
+    document.body.style.backgroundColor = '#0a0a0a'
+  } else {
+    document.documentElement.style.backgroundColor = '#efeff4'
+    document.body.style.backgroundColor = '#efeff4'
+  }
 }
 
 watch(() => config.color_scheme, (scheme) => {
@@ -355,22 +379,27 @@ watch(() => config.color_scheme, (scheme) => {
 }, { immediate: true })
 
 async function handleKeyDown(e: KeyboardEvent) {
-  // Close window on Cmd+W (macOS) or Ctrl+W
-  if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+  const isW = e.key === 'w' || e.key === 'W' || e.code === 'KeyW'
+  if ((e.metaKey || e.ctrlKey) && isW) {
     e.preventDefault()
-    await closeWindow()
+    e.stopPropagation()
+    await handleClose()
   }
 }
 
 onMounted(async () => {
-  globalThis.addEventListener('keydown', handleKeyDown)
+  try {
+    globalThis.addEventListener('keydown', handleKeyDown)
     const cfg = await loadConfig()
     loadFromConfig(cfg)
     // Re-apply after loading to be absolutely sure
     applyTheme(cfg.color_scheme)
-  })
+  } catch (err) {
+    console.error('Config init failed:', err)
+  }
+})
 
-  onUnmounted(() => {
-    globalThis.removeEventListener('keydown', handleKeyDown)
-  })
+onUnmounted(() => {
+  globalThis.removeEventListener('keydown', handleKeyDown)
+})
 </script>
