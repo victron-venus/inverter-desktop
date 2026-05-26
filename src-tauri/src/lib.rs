@@ -27,8 +27,9 @@ struct DiscoveredEntity {
     state: String,
 }
 
-// Global state for the MQTT client
+// Global state for the MQTT clients
 type MqttState = Arc<Mutex<Option<MqttClient>>>;
+type HaMqttState = Arc<Mutex<Option<MqttClient>>>;
 
 #[allow(dead_code)]
 struct AppTrayIcon(tauri::tray::TrayIcon);
@@ -528,9 +529,29 @@ fn close_config_window(window: tauri::Window) -> Result<(), String> {
 
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
+#[tauri::command]
+fn connect_ha_mqtt(
+    host: String,
+    port: u16,
+    camera_topic: Option<String>,
+    app: tauri::AppHandle,
+    mqtt_client: State<HaMqttState>,
+) -> Result<(), String> {
+    let mut client_guard = mqtt_client
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
+    let mut client = MqttClient::new(host, port);
+    client.set_app_handle(app);
+    client.set_camera_topic(camera_topic);
+    client.connect().map_err(|e| e.to_string())?;
+    *client_guard = Some(client);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mqtt_state: MqttState = Arc::new(Mutex::new(None));
+    let ha_mqtt_state: HaMqttState = Arc::new(Mutex::new(None));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
@@ -539,12 +560,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .manage(mqtt_state)
+        .manage(ha_mqtt_state)
         .invoke_handler(tauri::generate_handler![
             get_state,
             send_command,
             perform_action,
             connect_mqtt,
             disconnect_mqtt,
+            connect_ha_mqtt,
             get_config,
             save_config,
             test_ha_connection,

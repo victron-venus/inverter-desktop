@@ -49,7 +49,7 @@ export function useConnection() {
       })
       
       // Subscribe to camera events
-      unlistenCamera = await listen<string>('camera-event', (event) => {
+      unlistenCamera = await listen<any>('camera-event', (event) => {
         // Emit global event for App.vue to show popup
         window.dispatchEvent(new CustomEvent('show-video-popup', { detail: event.payload }))
       })
@@ -58,8 +58,22 @@ export function useConnection() {
         host: config.mqtt_host, 
         port: config.mqtt_port, 
         portalId: config.portal_id || null,
-        cameraTopic: config.camera_topic || null
+        cameraTopic: null // Primary broker doesn't listen to cameras now
       })
+
+      // Connect to HA MQTT broker if configured
+      if (config.mqtt_ha_host && config.mqtt_ha_port) {
+        try {
+          await invoke('connect_ha_mqtt', {
+            host: config.mqtt_ha_host,
+            port: config.mqtt_ha_port,
+            cameraTopic: config.camera_topic || null
+          })
+          logger.log('Connected to HA MQTT broker for cameras')
+        } catch (e) {
+          logger.error('Failed to connect to HA MQTT:', e)
+        }
+      }
 
       // Fetch initial state
       try {
