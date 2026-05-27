@@ -37,4 +37,4 @@ chrono = "0.4"
 reqwest = { version = "0.13", features = ["json"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-log = "2"
-log = "0.4.29"
+log = "0.4.30"
