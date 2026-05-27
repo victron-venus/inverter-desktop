@@ -28,8 +28,8 @@ struct DiscoveredEntity {
 }
 
 // Global state for the MQTT clients
-type MqttState = Arc<Mutex<Option<MqttClient>>>;
-type HaMqttState = Arc<Mutex<Option<MqttClient>>>;
+struct MqttState(Arc<Mutex<Option<MqttClient>>>);
+struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
 
 #[allow(dead_code)]
 struct AppTrayIcon(tauri::tray::TrayIcon);
@@ -104,7 +104,7 @@ impl Default for FullConfig {
 
 #[tauri::command]
 fn get_state(mqtt_client: State<MqttState>) -> Result<InverterState, String> {
-    let client = mqtt_client
+    let client = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
@@ -162,7 +162,7 @@ async fn perform_action(
         }
     }
 
-    let client = mqtt_client
+    let client = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
@@ -245,7 +245,7 @@ fn send_command(
     payload: serde_json::Value,
     mqtt_client: State<MqttState>,
 ) -> Result<(), String> {
-    let client = mqtt_client
+    let client = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
@@ -405,7 +405,7 @@ fn connect_mqtt(
     app: tauri::AppHandle,
     mqtt_client: State<MqttState>,
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client
+    let mut client_guard = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     let mut client = MqttClient::new(host, port);
@@ -419,7 +419,7 @@ fn connect_mqtt(
 
 #[tauri::command]
 fn disconnect_mqtt(mqtt_client: State<MqttState>) -> Result<(), String> {
-    let mut client_guard = mqtt_client
+    let mut client_guard = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = None;
@@ -539,7 +539,7 @@ fn connect_ha_mqtt(
     app: tauri::AppHandle,
     mqtt_client: State<HaMqttState>,
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client
+    let mut client_guard = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     let mut client = MqttClient::new(host, port);
@@ -552,8 +552,8 @@ fn connect_ha_mqtt(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mqtt_state: MqttState = Arc::new(Mutex::new(None));
-    let ha_mqtt_state: HaMqttState = Arc::new(Mutex::new(None));
+    let mqtt_state = MqttState(Arc::new(Mutex::new(None)));
+    let ha_mqtt_state = HaMqttState(Arc::new(Mutex::new(None)));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
