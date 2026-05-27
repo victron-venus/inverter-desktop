@@ -69,6 +69,7 @@ struct FullConfig {
     header_toggles_config: Option<Vec<HeaderToggle>>,
     portal_id: Option<String>,
     camera_topic: Option<String>,
+    camera_enabled: bool,
 }
 
 impl Default for FullConfig {
@@ -96,6 +97,7 @@ impl Default for FullConfig {
             header_toggles_config: None,
             portal_id: None,
             camera_topic: Some("frigate/+/events".to_string()),
+            camera_enabled: false,
         }
     }
 }

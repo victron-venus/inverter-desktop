@@ -61,8 +61,8 @@ export function useConnection() {
         cameraTopic: null // Primary broker doesn't listen to cameras now
       })
 
-      // Connect to HA MQTT broker if configured
-      if (config.mqtt_ha_host && config.mqtt_ha_port) {
+      // Connect to HA MQTT broker if configured and enabled
+      if (config.camera_enabled && config.mqtt_ha_host && config.mqtt_ha_port) {
         try {
           await invoke('connect_ha_mqtt', {
             host: config.mqtt_ha_host,
