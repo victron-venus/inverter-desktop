@@ -146,8 +146,15 @@
                 </div>
               </div>
               <div class="flex flex-col gap-1">
+                <label class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Camera Monitoring</label>
+                <label class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-100 dark:border-slate-800 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors">
+                  <input type="checkbox" v-model="config.camera_enabled" class="rounded border-slate-300 text-accent focus:ring-accent" />
+                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">Enable camera event detection</span>
+                </label>
+              </div>
+              <div class="flex flex-col gap-1">
                 <label for="camera_topic" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Camera Detection Topic</label>
-                <input id="camera_topic" v-model="config.camera_topic" type="text" class="classic-input w-full" placeholder="e.g. frigate/+/events" />
+                <input id="camera_topic" v-model="config.camera_topic" type="text" :disabled="!config.camera_enabled" class="classic-input w-full disabled:opacity-50" placeholder="e.g. frigate/+/events" />
                 <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">MQTT topic with wildcard for camera events on HA broker.</p>
               </div>
             </div>
