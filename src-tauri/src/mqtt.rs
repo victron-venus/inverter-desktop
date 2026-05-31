@@ -95,7 +95,7 @@ struct RawInverterState {
     water_level: Option<f64>,
     water_valve: Option<serde_json::Value>,
     pump_switch: Option<serde_json::Value>,
-    dishwasher_running: Option<bool>,
+    dishwasher_running: Option<serde_json::Value>,
     dishwasher_duration: Option<u64>,
     washer_time: Option<u64>,
     washer_power: Option<serde_json::Value>,
@@ -108,7 +108,10 @@ struct RawInverterState {
 fn coerce_bool(v: &serde_json::Value) -> bool {
     match v {
         serde_json::Value::Bool(b) => *b,
-        serde_json::Value::String(s) => s == "true" || s == "1",
+        serde_json::Value::String(s) => {
+            let s_low = s.to_lowercase();
+            s_low == "true" || s_low == "1" || s_low == "on" || s_low == "online"
+        }
         serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
         _ => false,
     }
@@ -398,7 +401,7 @@ impl MqttClient {
                                         water_level: raw.water_level,
                                         water_valve: raw.water_valve.as_ref().map(coerce_bool),
                                         pump_switch: raw.pump_switch.as_ref().map(coerce_bool),
-                                        dishwasher_running: raw.dishwasher_running,
+                                        dishwasher_running: raw.dishwasher_running.as_ref().map(coerce_bool),
                                         dishwasher_duration: raw.dishwasher_duration,
                                         washer_time: raw.washer_time,
                                         washer_power: raw.washer_power.as_ref().map(coerce_bool),
