@@ -14,13 +14,13 @@
   /* Backgrounds */
   --color-bg-page: #efeff4; /* Slightly grey "podlozhka" */
   --color-bg-card: #ffffff;
-  --color-border-card: #f2f2f7; /* Softened from #e0e0e0 */
+  --color-border-card: #dcdce2; /* Darkened for visibility in light mode */
   --color-text-main: #333333;
 
   /* Dark Mode Palette - Now with actual dark backgrounds */
   --color-dark-bg-page: #0a0a0a; /* Darker black */
   --color-dark-bg-card: #1c1c1e; /* Apple dark card grey */
-  --color-dark-border-card: #2c2c2e; /* Softened dark border */
+  --color-dark-border-card: #3a3a3c; /* Brightened for visibility in dark mode */
   --color-dark-text-main: #e0e0e0;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
@@ -114,12 +114,12 @@
   .classic-header {
     @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-600;
     background-color: var(--color-bg-card);
-    border-color: #f2f2f7;
+    border-color: var(--color-border-card);
   }
   
   .dark .classic-header {
     background-color: var(--color-dark-bg-card);
-    border-color: #2c2c2e;
+    border-color: var(--color-dark-border-card);
     color: #e0e0e0;
   }
 

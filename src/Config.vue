@@ -43,7 +43,7 @@
           
           <!-- MQTT Section -->
           <div v-if="activeTab === 'mqtt'" class="flex flex-col gap-4">
-            <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
+            <header class="border-b border-slate-200 dark:border-slate-700 pb-2">
               <h2 class="text-sm font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100">Broker Settings</h2>
             </header>
 
@@ -91,11 +91,11 @@
 
           <!-- Home Assistant Section -->
           <div v-if="activeTab === 'ha'" class="flex flex-col gap-4">
-            <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
+            <header class="border-b border-slate-200 dark:border-slate-700 pb-2">
               <h2 class="text-sm font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100">Home Assistant</h2>
             </header>
 
-            <div class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-100 dark:border-slate-800">
+            <div class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700">
               <div class="flex flex-col gap-1">
                 <label for="ha_url" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Server URL</label>
                 <input id="ha_url" v-model="config.ha_url" type="text" class="classic-input w-full" placeholder="http://homeassistant.local" />
@@ -107,7 +107,7 @@
                 </div>
                 <div class="flex flex-col gap-1">
                   <label class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Status</label>
-                  <div class="h-8 flex items-center px-2 rounded border border-slate-100 dark:border-slate-800 bg-white dark:bg-[#1a1a1a] text-[10px] font-bold">
+                  <div class="h-8 flex items-center px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] text-[10px] font-bold">
                     <span :class="haDirectMonitoringEnabled ? 'text-green-500' : 'text-slate-600 dark:text-slate-500'">
                       API: {{ haDirectMonitoringEnabled ? 'Enabled' : 'Disabled' }}
                     </span>
@@ -157,7 +157,7 @@
               </div>
               <div class="flex flex-col gap-1">
                 <label class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Camera Monitoring</label>
-                <label class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-100 dark:border-slate-800 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors">
+                <label class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors">
                   <input type="checkbox" v-model="config.camera_enabled" class="rounded border-slate-300 text-accent focus:ring-accent" />
                   <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">Enable camera event detection</span>
                 </label>
@@ -172,7 +172,7 @@
 
           <!-- Entities Section -->
           <div v-if="activeTab === 'entities'" class="flex flex-col gap-6">
-             <header class="border-b border-slate-100 dark:border-slate-800 pb-2">
+             <header class="border-b border-slate-200 dark:border-slate-700 pb-2">
               <h2 class="text-sm font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100">UI Controls</h2>
             </header>
 
@@ -209,7 +209,7 @@
     <!-- Discovery Dialog (Custom) -->
     <div v-if="discoveryDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-[2px]">
       <div class="classic-card w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden dark:bg-[#121212] shadow-2xl animate-in fade-in duration-150">
-        <header class="p-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-black">
+        <header class="p-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50 dark:bg-black">
           <h3 class="text-xs font-bold uppercase text-slate-900 dark:text-slate-100">Discover Entities</h3>
           <button @click="discoveryDialog = false" class="text-slate-900 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-200"><X :size="16" /></button>
         </header>
@@ -229,7 +229,7 @@
             <div v-if="selectedDiscovery.includes(e.entity_id)" class="text-accent"><Check :size="12" /></div>
           </div>
         </div>
-        <footer class="p-3 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-2 bg-slate-50 dark:bg-black">
+        <footer class="p-3 border-t border-slate-200 dark:border-slate-700 flex flex-col gap-2 bg-slate-50 dark:bg-black">
           <div class="flex gap-1 p-0.5 bg-slate-200/50 dark:bg-slate-800 rounded">
             <button @click="discoveryTargetGroup = 'home'" class="flex-1 py-1 rounded text-[9px] font-bold transition-all uppercase" :class="discoveryTargetGroup === 'home' ? 'bg-white dark:bg-slate-700 shadow-sm dark:text-white' : 'text-slate-500 opacity-50 dark:text-slate-400'">Home Buttons</button>
             <button @click="discoveryTargetGroup = 'toggle'" class="flex-1 py-1 rounded text-[9px] font-bold transition-all uppercase" :class="discoveryTargetGroup === 'toggle' ? 'bg-white dark:bg-slate-700 shadow-sm dark:text-white' : 'text-slate-500 opacity-50 dark:text-slate-400'">Header Toggles</button>
