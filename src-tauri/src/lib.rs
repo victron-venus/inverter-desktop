@@ -397,6 +397,7 @@ fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> 
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn connect_mqtt(
     host: String,
     port: u16,
