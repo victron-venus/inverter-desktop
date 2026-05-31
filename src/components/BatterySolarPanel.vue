@@ -14,10 +14,10 @@
             <span v-if="bat.power !== undefined" class="text-[11px] font-bold text-slate-500 dark:text-slate-300 leading-none">{{ Math.floor(bat.power) }}W</span>
           </div>
           <div class="flex justify-between items-center mt-1 pt-1 border-t border-slate-50 dark:border-slate-800/30">
-            <span class="text-[12px] font-bold leading-none" :class="bat.soc > 50 ? 'text-battery' : bat.soc > 20 ? 'text-orange-500' : 'text-red-500'">
+            <span class="text-[12px] font-bold leading-none shrink-0" :class="bat.soc > 50 ? 'text-battery' : bat.soc > 20 ? 'text-orange-500' : 'text-red-500'">
               {{ bat.soc.toFixed(1) }}%
             </span>
-            <span class="text-[10px] text-slate-400 font-medium truncate max-w-[80px] uppercase">
+            <span class="text-[10px] text-slate-400 font-medium truncate uppercase ml-2 text-right flex-1">
               {{ bat.state }}<span v-if="bat.timeToGo"> · {{ bat.timeToGo }}</span>
             </span>
           </div>

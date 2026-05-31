@@ -145,6 +145,16 @@
                   <input id="mqtt_ha_port" v-model.number="config.mqtt_ha_port" type="number" class="classic-input w-full" />
                 </div>
               </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="flex flex-col gap-1">
+                  <label for="mqtt_ha_login" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">HA MQTT Username</label>
+                  <input id="mqtt_ha_login" v-model="config.mqtt_ha_login" type="text" class="classic-input w-full" placeholder="Optional" />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label for="mqtt_ha_password" class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">HA MQTT Password</label>
+                  <input id="mqtt_ha_password" v-model="config.mqtt_ha_password" type="password" class="classic-input w-full" placeholder="Optional" />
+                </div>
+              </div>
               <div class="flex flex-col gap-1">
                 <label class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1">Camera Monitoring</label>
                 <label class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-100 dark:border-slate-800 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors">
