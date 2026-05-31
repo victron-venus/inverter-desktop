@@ -22,7 +22,12 @@
             </div>
             <div class="flex flex-col gap-0.5">
               <label class="text-[9px] font-bold uppercase text-slate-600 px-1">Entity ID</label>
-              <input v-model="entity.entity" type="text" class="classic-input !h-7 w-full" placeholder="switch.xxx" />
+              <EntityAutocompleteInput 
+                v-model="entity.entity" 
+                :entities="discoveredEntities"
+                placeholder="switch.xxx"
+                @focus="$emit('focus-entity')"
+              />
             </div>
           </div>
           
@@ -53,6 +58,7 @@
 
 <script setup lang="ts">
 import { Plus, Trash2, ChevronUp, ChevronDown } from 'lucide-vue-next'
+import EntityAutocompleteInput from './EntityAutocompleteInput.vue'
 
 defineProps<{
   haEntitiesList: Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>
@@ -65,5 +71,6 @@ defineEmits<{
   remove: [index: number]
   'move-up': [index: number]
   'move-down': [index: number]
+  'focus-entity': []
 }>()
 </script>

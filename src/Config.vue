@@ -184,6 +184,7 @@
               @remove="removeHaEntity"
               @move-up="moveEntityUp"
               @move-down="moveEntityDown"
+              @focus-entity="ensureEntitiesFetched(config.ha_url || '', config.ha_port, config.ha_longlived_token || '')"
             />
 
             <div class="h-px bg-slate-100 dark:bg-slate-800"></div>
@@ -196,7 +197,9 @@
               @remove="removeHeaderToggle"
               @move-up="moveToggleUp"
               @move-down="moveToggleDown"
+              @focus-entity="ensureEntitiesFetched(config.ha_url || '', config.ha_port, config.ha_longlived_token || '')"
             />
+
           </div>
 
         </div>
