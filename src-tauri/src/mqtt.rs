@@ -95,7 +95,7 @@ struct RawInverterState {
     water_level: Option<f64>,
     water_valve: Option<serde_json::Value>,
     pump_switch: Option<serde_json::Value>,
-    dishwasher_running: Option<bool>,
+    dishwasher_running: Option<serde_json::Value>,
     dishwasher_duration: Option<u64>,
     washer_time: Option<u64>,
     washer_power: Option<serde_json::Value>,
@@ -108,7 +108,10 @@ struct RawInverterState {
 fn coerce_bool(v: &serde_json::Value) -> bool {
     match v {
         serde_json::Value::Bool(b) => *b,
-        serde_json::Value::String(s) => s == "true" || s == "1",
+        serde_json::Value::String(s) => {
+            let s_low = s.to_lowercase();
+            s_low == "true" || s_low == "1" || s_low == "on" || s_low == "online"
+        }
         serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
         _ => false,
     }
@@ -193,6 +196,8 @@ pub struct MqttClient {
     state: Arc<Mutex<InverterState>>,
     host: String,
     port: u16,
+    username: Option<String>,
+    password: Option<String>,
     app_handle: Option<tauri::AppHandle>,
     portal_id: Option<String>,
     camera_topic: Option<String>,
@@ -228,7 +233,7 @@ const THRESHOLD_WATER_CM: f64 = 23.0;
 const THRESHOLD_SOLAR_W: f64 = 3000.0;
 
 impl MqttClient {
-    pub fn new(host: String, port: u16) -> Self {
+    pub fn new(host: String, port: u16, username: Option<String>, password: Option<String>) -> Self {
         Self {
             client: None,
             state: Arc::new(Mutex::new(InverterState {
@@ -280,6 +285,8 @@ impl MqttClient {
             })),
             host,
             port,
+            username,
+            password,
             app_handle: None,
             portal_id: None,
             camera_topic: None,
@@ -305,6 +312,12 @@ impl MqttClient {
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut mqttoptions = MqttOptions::new("inverter-dashboard-desktop", &self.host, self.port);
         mqttoptions.set_keep_alive(Duration::from_secs(MQTT_KEEP_ALIVE_SECS));
+
+        if let (Some(u), Some(p)) = (&self.username, &self.password) {
+            if !u.is_empty() && !p.is_empty() {
+                mqttoptions.set_credentials(u, p);
+            }
+        }
 
         let (client, mut connection) = Client::new(mqttoptions, MQTT_QUEUE_CAPACITY);
 
@@ -388,7 +401,7 @@ impl MqttClient {
                                         water_level: raw.water_level,
                                         water_valve: raw.water_valve.as_ref().map(coerce_bool),
                                         pump_switch: raw.pump_switch.as_ref().map(coerce_bool),
-                                        dishwasher_running: raw.dishwasher_running,
+                                        dishwasher_running: raw.dishwasher_running.as_ref().map(coerce_bool),
                                         dishwasher_duration: raw.dishwasher_duration,
                                         washer_time: raw.washer_time,
                                         washer_power: raw.washer_power.as_ref().map(coerce_bool),

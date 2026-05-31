@@ -54,9 +54,11 @@ export function useConnection() {
         globalThis.dispatchEvent(new CustomEvent('show-video-popup', { detail: event.payload }))
       })
 
-      await invoke('connect_mqtt', { 
-        host: config.mqtt_host, 
-        port: config.mqtt_port, 
+      await invoke('connect_mqtt', {
+        host: config.mqtt_host,
+        port: config.mqtt_port,
+        username: config.mqtt_login || null,
+        password: config.mqtt_password || null,
         portalId: config.portal_id || null,
         cameraTopic: null // Primary broker doesn't listen to cameras now
       })
@@ -67,6 +69,8 @@ export function useConnection() {
           await invoke('connect_ha_mqtt', {
             host: config.mqtt_ha_host,
             port: config.mqtt_ha_port,
+            username: config.mqtt_ha_login || null,
+            password: config.mqtt_ha_password || null,
             cameraTopic: config.camera_topic || null
           })
           logger.log('Connected to HA MQTT broker for cameras')
@@ -74,7 +78,6 @@ export function useConnection() {
           logger.error('Failed to connect to HA MQTT:', e)
         }
       }
-
       // Fetch initial state
       try {
         const initial = await invoke<InverterState>('get_state')
