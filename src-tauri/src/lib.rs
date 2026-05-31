@@ -674,7 +674,9 @@ pub fn run() {
                     }
                     "config" => {
                         let app = app.clone();
-                        let _ = open_config_window(app);
+                        tauri::async_runtime::spawn(async move {
+                            let _ = open_config_window(app).await;
+                        });
                     }
                     "quit" => {
                         app.exit(0);
