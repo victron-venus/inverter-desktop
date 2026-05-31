@@ -285,13 +285,15 @@ onMounted(async () => {
   document.addEventListener('click', onDocumentClick)
   globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 
-  unlistenConfig = await listen<{color_scheme?: string}>('config-saved', (event) => {
+  unlistenConfig = await listen<{color_scheme?: string}>('config-saved', async (event) => {
     const scheme = event.payload.color_scheme
     if (scheme) {
       isDark.value = scheme !== 'light'
       document.documentElement.classList.toggle('dark', isDark.value)
       localStorage.setItem('theme', scheme)
     }
+    // Re-connect to update config values like home buttons
+    await connectMqtt()
   })
 })
 

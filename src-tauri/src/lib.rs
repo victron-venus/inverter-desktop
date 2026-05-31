@@ -397,9 +397,12 @@ fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> 
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn connect_mqtt(
     host: String,
     port: u16,
+    username: Option<String>,
+    password: Option<String>,
     portal_id: Option<String>,
     camera_topic: Option<String>,
     app: tauri::AppHandle,
@@ -408,7 +411,7 @@ fn connect_mqtt(
     let mut client_guard = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
-    let mut client = MqttClient::new(host, port);
+    let mut client = MqttClient::new(host, port, username, password);
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
     client.set_camera_topic(camera_topic);
@@ -535,6 +538,8 @@ use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 fn connect_ha_mqtt(
     host: String,
     port: u16,
+    username: Option<String>,
+    password: Option<String>,
     camera_topic: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<HaMqttState>,
@@ -542,7 +547,7 @@ fn connect_ha_mqtt(
     let mut client_guard = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
-    let mut client = MqttClient::new(host, port);
+    let mut client = MqttClient::new(host, port, username, password);
     client.set_app_handle(app);
     client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;

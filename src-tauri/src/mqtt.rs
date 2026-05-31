@@ -193,6 +193,8 @@ pub struct MqttClient {
     state: Arc<Mutex<InverterState>>,
     host: String,
     port: u16,
+    username: Option<String>,
+    password: Option<String>,
     app_handle: Option<tauri::AppHandle>,
     portal_id: Option<String>,
     camera_topic: Option<String>,
@@ -228,7 +230,7 @@ const THRESHOLD_WATER_CM: f64 = 23.0;
 const THRESHOLD_SOLAR_W: f64 = 3000.0;
 
 impl MqttClient {
-    pub fn new(host: String, port: u16) -> Self {
+    pub fn new(host: String, port: u16, username: Option<String>, password: Option<String>) -> Self {
         Self {
             client: None,
             state: Arc::new(Mutex::new(InverterState {
@@ -280,6 +282,8 @@ impl MqttClient {
             })),
             host,
             port,
+            username,
+            password,
             app_handle: None,
             portal_id: None,
             camera_topic: None,
@@ -305,6 +309,12 @@ impl MqttClient {
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut mqttoptions = MqttOptions::new("inverter-dashboard-desktop", &self.host, self.port);
         mqttoptions.set_keep_alive(Duration::from_secs(MQTT_KEEP_ALIVE_SECS));
+
+        if let (Some(u), Some(p)) = (&self.username, &self.password) {
+            if !u.is_empty() && !p.is_empty() {
+                mqttoptions.set_credentials(u, p);
+            }
+        }
 
         let (client, mut connection) = Client::new(mqttoptions, MQTT_QUEUE_CAPACITY);
 
