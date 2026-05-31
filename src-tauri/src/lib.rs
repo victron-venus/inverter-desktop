@@ -379,7 +379,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 }
 
 #[tauri::command]
-fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
+async fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
     let store = app
         .store_builder("config.json")
         .build()
@@ -398,7 +398,7 @@ fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> 
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-fn connect_mqtt(
+async fn connect_mqtt(
     host: String,
     port: u16,
     username: Option<String>,
@@ -406,7 +406,7 @@ fn connect_mqtt(
     portal_id: Option<String>,
     camera_topic: Option<String>,
     app: tauri::AppHandle,
-    mqtt_client: State<MqttState>,
+    mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
     let mut client_guard = mqtt_client.0
         .lock()
@@ -421,7 +421,7 @@ fn connect_mqtt(
 }
 
 #[tauri::command]
-fn disconnect_mqtt(mqtt_client: State<MqttState>) -> Result<(), String> {
+async fn disconnect_mqtt(mqtt_client: State<'_, MqttState>) -> Result<(), String> {
     let mut client_guard = mqtt_client.0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
@@ -517,7 +517,7 @@ async fn toggle_ha_entity(
 }
 
 #[tauri::command]
-fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
     tauri::WebviewWindowBuilder::new(&app, "config", tauri::WebviewUrl::App("config".into()))
         .title("Configuration")
         .inner_size(CONFIG_WINDOW_W, CONFIG_WINDOW_H)
@@ -528,21 +528,21 @@ fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn close_config_window(window: tauri::Window) -> Result<(), String> {
+async fn close_config_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
 
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
 #[tauri::command]
-fn connect_ha_mqtt(
+async fn connect_ha_mqtt(
     host: String,
     port: u16,
     username: Option<String>,
     password: Option<String>,
     camera_topic: Option<String>,
     app: tauri::AppHandle,
-    mqtt_client: State<HaMqttState>,
+    mqtt_client: State<'_, HaMqttState>,
 ) -> Result<(), String> {
     let mut client_guard = mqtt_client.0
         .lock()
