@@ -23,7 +23,7 @@
     "vue": "^3.5.35",
     "vue-awesome-button": "^0.1.0",
     "vue-echarts": "^8.0.1",
-    "vuetify": "^4.0.7"
+    "vuetify": "^4.0.8"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
