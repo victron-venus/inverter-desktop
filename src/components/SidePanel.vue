@@ -67,8 +67,11 @@
     <!-- Appliances -->
     <div v-if="dishwasherRunning || (washerTime || 0) > 0 || (dryerTime || 0) > 0 || washerPower || dryerPower" class="flex flex-col gap-0.5">
        <div v-if="dishwasherRunning" class="classic-card px-2 py-0.5 flex justify-between items-center">
-         <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">Running</span>
-         <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{ formatDuration(dishwasherDuration) }}</span>
+         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Dishwasher</span>
+         <div class="flex items-center gap-1.5">
+           <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">Running</span>
+           <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{ formatDuration(dishwasherDuration) }}</span>
+         </div>
        </div>
 
        <div v-if="(washerTime || 0) > 0 || washerPower" class="classic-card px-2 py-0.5 flex justify-between items-center">
