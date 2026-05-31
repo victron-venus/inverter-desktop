@@ -147,15 +147,49 @@ export function useHAEntityManager() {
         enabled: true,
       })
     }
-  }
+    }
 
-  return {
-    haEntitiesList, headerTogglesList,
-    discoveryDialog, discoveredEntities, selectedDiscovery, discoveryLoading,
-    discoveryTargetGroup, dragOverIndex, dragTarget,
-    loadFromConfig, fetchHaEntities, addDiscoveredEntities,
-    addHaEntity, removeHaEntity, moveEntityUp, moveEntityDown,
-    addHeaderToggle, removeHeaderToggle, moveToggleUp, moveToggleDown,
+    async function ensureEntitiesFetched(haUrl: string, haPort: number | null | undefined, haToken: string) {
+      if (discoveredEntities.value.length > 0 || discoveryLoading.value) return
+      if (!haUrl || !haToken) return
+
+      discoveryLoading.value = true
+      try {
+        const entities = await invoke<DiscoveredEntity[]>('discover_ha_entities', {
+          url: haUrl,
+          port: haPort || 8123,
+          token: haToken
+        })
+        discoveredEntities.value = entities
+      } catch (e: any) {
+        console.error('Failed to auto-fetch HA entities:', e)
+      } finally {
+        discoveryLoading.value = false
+      }
+    }
+    return {
+    haEntitiesList,
+    headerTogglesList,
+    discoveryDialog,
+    discoveredEntities,
+    selectedDiscovery,
+    discoveryLoading,
+    discoveryTargetGroup,
+    dragOverIndex,
+    dragTarget,
+    loadFromConfig,
+    fetchHaEntities,
+    addDiscoveredEntities,
+    addHaEntity,
+    removeHaEntity,
+    moveEntityUp,
+    moveEntityDown,
+    addHeaderToggle,
+    removeHeaderToggle,
+    moveToggleUp,
+    moveToggleDown,
     autofillDomain,
-  }
-}
+    ensureEntitiesFetched,
+    }
+    }
+

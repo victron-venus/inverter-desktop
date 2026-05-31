@@ -39,8 +39,6 @@ export function useHA() {
   })
 
   const homeButtons = computed(() => {
-    const uiConfig = state.value.ui_config || {}
-    if (uiConfig.home_buttons) return uiConfig.home_buttons
     const cfg = appConfig.value
     if (cfg?.ha_entities && cfg.ha_entities.length > 0) {
       return cfg.ha_entities.filter((e): e is (typeof e & { enabled: true }) => e.enabled).map(e => ({
@@ -50,6 +48,8 @@ export function useHA() {
         state_key: (e as { state_key?: string }).state_key
       }))
     }
+    const uiConfig = state.value.ui_config || {}
+    if (uiConfig.home_buttons) return uiConfig.home_buttons
     if (cfg?.ha_switch_entities) {
       return Object.entries(cfg.ha_switch_entities).map(([id, data]) => ({
         id,
@@ -61,12 +61,12 @@ export function useHA() {
   })
 
   const headerToggles = computed(() => {
-    const uiConfig = state.value.ui_config || {}
-    if (uiConfig.header_toggles) return uiConfig.header_toggles
     const cfg = appConfig.value
     if (cfg?.header_toggles_config && cfg.header_toggles_config.length > 0) {
       return cfg.header_toggles_config
     }
+    const uiConfig = state.value.ui_config || {}
+    if (uiConfig.header_toggles) return uiConfig.header_toggles
     if (cfg?.ha_boolean_entities) {
       return Object.entries(cfg.ha_boolean_entities).map(([id, entity]) => ({
         id,
