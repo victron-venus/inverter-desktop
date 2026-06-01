@@ -10,6 +10,25 @@ export default defineConfig(async () => ({
   plugins: [vue(), tailwindcss()],
   base: './',
 
+  build: {
+    rolldownOptions: {
+      output: {
+        // Split heavy vendor libraries into separate chunks so no single chunk
+        // exceeds Vite's 500 kB warning threshold.  ECharts pulls in zrender
+        // (its canvas/SVG renderer) which alone accounts for ~175 kB, so we
+        // keep the two in separate chunks.
+        codeSplitting: {
+          groups: [
+            // zrender is an internal dependency of echarts (~175 kB).
+            { name: 'zrender-vendor', test: /\/node_modules\/zrender\// },
+            // echarts + vue-echarts wrapper (~408 kB after splitting zrender).
+            { name: 'echarts-vendor', test: /\/node_modules\/(echarts|vue-echarts)\// },
+          ],
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
