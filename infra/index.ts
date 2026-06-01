@@ -52,7 +52,7 @@ const vulnAlerts = new github.RepositoryVulnerabilityAlerts('vulnerability-alert
 
 // Require all CI jobs to pass before merging into main and enforce at least
 // one approving review with stale-review dismissal.
-const mainProtection = new github.BranchProtection('main-protection', {
+new github.BranchProtection('main-protection', {
   repositoryId: repo.nodeId,
   pattern: 'main',
   // All commits pushed to main (including via PR merge) must be GPG/SSH signed.
