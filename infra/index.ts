@@ -42,7 +42,7 @@ const repo = new github.Repository(
 )
 
 // Manage Dependabot / vulnerability alerts as a dedicated resource.
-const vulnAlerts = new github.RepositoryVulnerabilityAlerts('vulnerability-alerts', {
+new github.RepositoryVulnerabilityAlerts('vulnerability-alerts', {
   repository: repo.name,
 })
 
