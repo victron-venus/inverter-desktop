@@ -29,7 +29,15 @@ export interface InverterState {
   mppt_individual?: number[]
   tasmota_individual?: number[]
   mppt_chargers?: Array<{ name?: string; pv_voltage?: number; current?: number; power?: number }>
-  batteries?: Array<{ name?: string; voltage?: number; current?: number; power?: number; soc?: number; state?: string; time_to_go?: string }>
+  batteries?: Array<{
+    name?: string
+    voltage?: number
+    current?: number
+    power?: number
+    soc?: number
+    state?: string
+    time_to_go?: string
+  }>
   loads?: Record<string, number>
   ui_config?: {
     loads?: { hidden?: string[]; min_watts?: number }
@@ -68,7 +76,7 @@ export const state = ref<InverterState>({
   booleans: {},
   features: {},
   loads: {},
-  ui_config: {}
+  ui_config: {},
 })
 
 export const mqttConnected = ref(false)
