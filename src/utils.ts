@@ -7,7 +7,8 @@ export function formatPower(w: number | undefined) {
 export function formatUptime(s: number) {
   if (s < 60) return s + 's'
   if (s < 3600) return Math.floor(s / 60) + 'm'
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
+  const h = Math.floor(s / 3600),
+    m = Math.floor((s % 3600) / 60)
   return h + 'h ' + m + 'm'
 }
 
@@ -21,8 +22,9 @@ export function formatDuration(s: number | undefined) {
 }
 
 export function escapeHtml(str: string | number | undefined | null): string {
-  return String(str ?? '').replace(/[&<>"']/g, (ch) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] ?? ch
+  return String(str ?? '').replace(
+    /[&<>"']/g,
+    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] ?? ch
   )
 }
 

@@ -5,13 +5,13 @@ import { logger } from '../logger'
 
 export function useTheme() {
   const isDark = ref(localStorage.getItem('theme') === 'dark')
-  
+
   // Initial sync on module load
   const syncTheme = (dark: boolean) => {
     document.documentElement.classList.toggle('dark', dark)
     document.body.classList.toggle('dark', dark)
   }
-  
+
   syncTheme(isDark.value)
 
   async function toggleTheme() {
@@ -19,7 +19,7 @@ export function useTheme() {
     syncTheme(isDark.value)
     const scheme = isDark.value ? 'dark' : 'light'
     localStorage.setItem('theme', scheme)
-    
+
     try {
       const cfg = await getAppConfig()
       cfg.color_scheme = scheme

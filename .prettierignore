@@ -1,0 +1,17 @@
+# Build output
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# Rust — formatted by rustfmt, not Prettier
+src-tauri/
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+
+# Generated / binary assets
+public/
+src/assets/

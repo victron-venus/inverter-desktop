@@ -28,6 +28,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Prettier check
+        run: npm run format:check
       - name: Build frontend
         run: npm run build
 

@@ -2,42 +2,67 @@
   <div class="flex flex-col gap-2">
     <div class="flex items-center justify-between px-1">
       <h3 class="text-[11px] font-bold uppercase tracking-widest text-slate-600">Header Toggles</h3>
-      <button @click="$emit('add')" class="text-[10px] font-bold text-accent hover:underline flex items-center gap-1 uppercase">
+      <button
+        @click="$emit('add')"
+        class="text-[10px] font-bold text-accent hover:underline flex items-center gap-1 uppercase"
+      >
         <Plus :size="12" /> Add Toggle
       </button>
     </div>
 
-    <div v-if="headerTogglesList.length === 0" class="py-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded text-[11px] text-slate-600 bg-slate-50/30 dark:bg-slate-900/30">
+    <div
+      v-if="headerTogglesList.length === 0"
+      class="py-4 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded text-[11px] text-slate-600 bg-slate-50/30 dark:bg-slate-900/30"
+    >
       No header toggles configured.
     </div>
 
     <div class="flex flex-col gap-1.5">
-      <div v-for="(toggle, index) in headerTogglesList" :key="toggle.id || `toggle-${index}`" 
-           class="classic-card !rounded p-2 flex items-center gap-2 bg-white dark:bg-slate-900">
+      <div
+        v-for="(toggle, index) in headerTogglesList"
+        :key="toggle.id || `toggle-${index}`"
+        class="classic-card !rounded p-2 flex items-center gap-2 bg-white dark:bg-slate-900"
+      >
         <div class="flex-1 grid grid-cols-2 gap-2">
           <div class="flex flex-col gap-0.5">
             <label class="text-[9px] font-bold uppercase text-slate-600 px-1">Label</label>
-            <input v-model="toggle.label" type="text" class="classic-input !h-7 w-full" placeholder="Name" />
+            <input
+              v-model="toggle.label"
+              type="text"
+              class="classic-input !h-7 w-full"
+              placeholder="Name"
+            />
           </div>
           <div class="flex flex-col gap-0.5">
             <label class="text-[9px] font-bold uppercase text-slate-600 px-1">Entity ID</label>
-            <EntityAutocompleteInput 
-              v-model="toggle.entity" 
+            <EntityAutocompleteInput
+              v-model="toggle.entity"
               :entities="discoveredEntities"
               placeholder="input_boolean.xxx"
               @focus="$emit('focus-entity')"
             />
           </div>
         </div>
-        
+
         <div class="flex items-center gap-0.5 pt-3">
-          <button @click="$emit('move-up', index)" :disabled="index === 0" class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 text-slate-600">
+          <button
+            @click="$emit('move-up', index)"
+            :disabled="index === 0"
+            class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 text-slate-600"
+          >
             <ChevronUp :size="14" />
           </button>
-          <button @click="$emit('move-down', index)" :disabled="index === headerTogglesList.length - 1" class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 text-slate-600">
+          <button
+            @click="$emit('move-down', index)"
+            :disabled="index === headerTogglesList.length - 1"
+            class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 text-slate-600"
+          >
             <ChevronDown :size="14" />
           </button>
-          <button @click="$emit('remove', index)" class="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-500 transition-colors text-slate-300">
+          <button
+            @click="$emit('remove', index)"
+            class="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-500 transition-colors text-slate-300"
+          >
             <Trash2 :size="14" />
           </button>
         </div>
