@@ -9,16 +9,20 @@
       class="classic-input !h-7 w-full"
       :placeholder="placeholder"
     />
-    
-    <div v-if="showSuggestions && filteredEntities.length > 0" 
-         class="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded shadow-xl">
+
+    <div
+      v-if="showSuggestions && filteredEntities.length > 0"
+      class="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded shadow-xl"
+    >
       <div
         v-for="entity in filteredEntities"
         :key="entity.entity_id"
         @mousedown.prevent="selectEntity(entity.entity_id)"
         class="px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer border-b border-slate-50 dark:border-slate-800/50 last:border-0"
       >
-        <div class="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate">{{ entity.friendly_name }}</div>
+        <div class="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate">
+          {{ entity.friendly_name }}
+        </div>
         <div class="text-[8px] text-slate-400 font-mono truncate">{{ entity.entity_id }}</div>
       </div>
     </div>
@@ -42,11 +46,11 @@ const showSuggestions = ref(false)
 const filteredEntities = computed(() => {
   const query = props.modelValue.toLowerCase()
   if (!query) return []
-  
+
   return props.entities
-    .filter(e => 
-      e.entity_id.toLowerCase().includes(query) || 
-      e.friendly_name.toLowerCase().includes(query)
+    .filter(
+      (e) =>
+        e.entity_id.toLowerCase().includes(query) || e.friendly_name.toLowerCase().includes(query)
     )
     .slice(0, 15) // Limit results
 })

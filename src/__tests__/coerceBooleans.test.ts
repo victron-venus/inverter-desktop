@@ -10,7 +10,13 @@ function coerceBooleans(newState: InverterState) {
       }
     }
   }
-  const BOOL_FIELDS: Array<keyof InverterState> = ['pump_switch', 'water_valve', 'washer_power', 'dryer_power', 'dry_run']
+  const BOOL_FIELDS: Array<keyof InverterState> = [
+    'pump_switch',
+    'water_valve',
+    'washer_power',
+    'dryer_power',
+    'dry_run',
+  ]
   for (const field of BOOL_FIELDS) {
     const val = newState[field]
     if (typeof val === 'string') {
@@ -23,7 +29,7 @@ describe('coerceBooleans (inline, matches useConnection.ts logic)', () => {
   it('converts string booleans in booleans map', () => {
     const state: Record<string, unknown> = { booleans: { a: 'true', b: 'false', c: '1', d: '0' } }
     coerceBooleans(state as InverterState)
-    const b = (state.booleans as Record<string, unknown>)
+    const b = state.booleans as Record<string, unknown>
     expect(b.a).toBe(true)
     expect(b.b).toBe(false)
     expect(b.c).toBe(true)

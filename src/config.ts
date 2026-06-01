@@ -17,7 +17,13 @@ export interface AppConfig {
   ha_url?: string | null
   ha_port?: number | null
   ha_use_direct_api?: boolean
-  ha_entities?: Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>
+  ha_entities?: Array<{
+    id: string
+    label: string
+    entity: string
+    domain: string
+    enabled: boolean
+  }>
   header_toggles_config?: Array<{ id: string; label: string; entity: string }>
   ha_water_valve_entity?: string | null
   ha_pump_switch_entity?: string | null
@@ -53,7 +59,7 @@ const defaultConfig: AppConfig = {
   color_scheme: 'dark',
   portal_id: null,
   camera_topic: 'frigate/+/events',
-  camera_enabled: false
+  camera_enabled: false,
 }
 
 let config: AppConfig = defaultConfig

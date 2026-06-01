@@ -41,12 +41,14 @@ export function useHA() {
   const homeButtons = computed(() => {
     const cfg = appConfig.value
     if (cfg?.ha_entities && cfg.ha_entities.length > 0) {
-      return cfg.ha_entities.filter((e): e is (typeof e & { enabled: true }) => e.enabled).map(e => ({
-        id: e.id,
-        label: e.label,
-        entity: e.entity,
-        state_key: (e as { state_key?: string }).state_key
-      }))
+      return cfg.ha_entities
+        .filter((e): e is typeof e & { enabled: true } => e.enabled)
+        .map((e) => ({
+          id: e.id,
+          label: e.label,
+          entity: e.entity,
+          state_key: (e as { state_key?: string }).state_key,
+        }))
     }
     const uiConfig = state.value.ui_config || {}
     if (uiConfig.home_buttons) return uiConfig.home_buttons
@@ -54,7 +56,7 @@ export function useHA() {
       return Object.entries(cfg.ha_switch_entities).map(([id, data]) => ({
         id,
         label: (data.label as string | undefined) || id,
-        entity: (data as { entity: string }).entity
+        entity: (data as { entity: string }).entity,
       }))
     }
     return []
@@ -71,7 +73,7 @@ export function useHA() {
       return Object.entries(cfg.ha_boolean_entities).map(([id, entity]) => ({
         id,
         label: id.replace(/_/g, ' ').toUpperCase(),
-        entity
+        entity,
       }))
     }
     return [
@@ -79,25 +81,39 @@ export function useHA() {
       { id: 'no_feed', label: 'NO FEED', entity: 'input_boolean.no_feed' },
       { id: 'house_support', label: 'HOUSE SUPPORT', entity: 'input_boolean.house_support' },
       { id: 'charge_battery', label: 'CHARGE BATTERY', entity: 'input_boolean.charge_battery' },
-      { id: 'do_not_supply_charger', label: 'DO NOT SUPPLY EV', entity: 'input_boolean.do_not_supply_charger' },
-      { id: 'set_limit_to_ev_charger', label: 'LIMIT TO EV', entity: 'input_boolean.set_limit_to_ev_charger' },
-      { id: 'minimize_charging', label: 'MINIMIZE CHARGING', entity: 'input_boolean.minimize_charging' }
+      {
+        id: 'do_not_supply_charger',
+        label: 'DO NOT SUPPLY EV',
+        entity: 'input_boolean.do_not_supply_charger',
+      },
+      {
+        id: 'set_limit_to_ev_charger',
+        label: 'LIMIT TO EV',
+        entity: 'input_boolean.set_limit_to_ev_charger',
+      },
+      {
+        id: 'minimize_charging',
+        label: 'MINIMIZE CHARGING',
+        entity: 'input_boolean.minimize_charging',
+      },
     ]
   })
 
   const buttonStates = computed(() => {
     const states: Record<string, string> = {}
-    homeButtons.value.forEach((btn: { id: string; label: string; entity: string; state_key?: string }) => {
-      if (haEnabled.value && haEntityStates.value[btn.entity] !== undefined) {
-        states[btn.id] = haEntityStates.value[btn.entity] === 'on' ? 'on' : 'off'
-      } else {
-        const stateKey = btn.state_key || 'home_' + btn.id
-        let val = state.value.booleans?.[stateKey]
-        if (typeof val === 'string') val = val === 'true' || val === '1'
-        else if (typeof val === 'number') val = val !== 0
-        states[btn.id] = val ? 'on' : 'off'
+    homeButtons.value.forEach(
+      (btn: { id: string; label: string; entity: string; state_key?: string }) => {
+        if (haEnabled.value && haEntityStates.value[btn.entity] !== undefined) {
+          states[btn.id] = haEntityStates.value[btn.entity] === 'on' ? 'on' : 'off'
+        } else {
+          const stateKey = btn.state_key || 'home_' + btn.id
+          let val = state.value.booleans?.[stateKey]
+          if (typeof val === 'string') val = val === 'true' || val === '1'
+          else if (typeof val === 'number') val = val !== 0
+          states[btn.id] = val ? 'on' : 'off'
+        }
       }
-    })
+    )
     return states
   })
 
@@ -116,7 +132,10 @@ export function useHA() {
     return states
   })
 
-    async function sendHaOrMqtt(action: string, payload: Record<string, unknown> = {} as Record<string, unknown>) {
+  async function sendHaOrMqtt(
+    action: string,
+    payload: Record<string, unknown> = {} as Record<string, unknown>
+  ) {
     try {
       await invoke('perform_action', { action, payload })
     } catch (e) {
