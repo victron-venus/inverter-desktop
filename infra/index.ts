@@ -58,6 +58,8 @@ const vulnAlerts = new github.RepositoryVulnerabilityAlerts(
 const mainProtection = new github.BranchProtection("main-protection", {
     repositoryId: repo.nodeId,
     pattern: "main",
+    // All commits pushed to main (including via PR merge) must be GPG/SSH signed.
+    requireSignedCommits: true,
     // Ensure the branch is up-to-date with base before merging.
     requireConversationResolution: true,
     requiredStatusChecks: [
