@@ -1,6 +1,19 @@
 import { describe, it, expect } from 'vitest'
 
-const HA_DOMAINS = new Set(['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'media_player', 'scene', 'script', 'number', 'sensor', 'binary_sensor'])
+const HA_DOMAINS = new Set([
+  'switch',
+  'light',
+  'input_boolean',
+  'fan',
+  'cover',
+  'lock',
+  'media_player',
+  'scene',
+  'script',
+  'number',
+  'sensor',
+  'binary_sensor',
+])
 
 function isHaEntity(entityId: string): boolean {
   if (!entityId || typeof entityId !== 'string') return false

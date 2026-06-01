@@ -47,7 +47,7 @@ export function useConnection() {
       unlistenConnectionStatus = await listen<boolean>('mqtt-connection-status', (event) => {
         mqttConnected.value = event.payload
       })
-      
+
       // Subscribe to camera events
       unlistenCamera = await listen<any>('camera-event', (event) => {
         // Emit global event for App.vue to show popup
@@ -60,7 +60,7 @@ export function useConnection() {
         username: config.mqtt_login || null,
         password: config.mqtt_password || null,
         portalId: config.portal_id || null,
-        cameraTopic: null // Primary broker doesn't listen to cameras now
+        cameraTopic: null, // Primary broker doesn't listen to cameras now
       })
 
       // Connect to HA MQTT broker if configured and enabled
@@ -71,7 +71,7 @@ export function useConnection() {
             port: config.mqtt_ha_port,
             username: config.mqtt_ha_login || null,
             password: config.mqtt_ha_password || null,
-            cameraTopic: config.camera_topic || null
+            cameraTopic: config.camera_topic || null,
           })
           logger.log('Connected to HA MQTT broker for cameras')
         } catch (e) {
