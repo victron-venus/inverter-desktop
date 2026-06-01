@@ -50,7 +50,7 @@ jobs:
             libssl-dev
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ./src-tauri -> target
@@ -60,3 +60,9 @@ jobs:
       - name: cargo clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
+      - name: cargo fmt
+        working-directory: src-tauri
+        run: cargo fmt -- --check
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --all-targets
