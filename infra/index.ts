@@ -91,7 +91,7 @@ new github.BranchProtection('main-protection', {
 //   pulumi config set --secret cargoRegistryToken <your-crates.io-token>
 const cargoRegistryToken = cfg.requireSecret('cargoRegistryToken')
 
-const cargoSecret = new github.ActionsSecret('cargo-registry-token', {
+new github.ActionsSecret('cargo-registry-token', {
   repository: repo.name,
   secretName: 'CARGO_REGISTRY_TOKEN',
   // plaintextValue is deprecated; use `value` (added in provider v6).
