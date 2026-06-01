@@ -1,10 +1,6 @@
 <template>
   <div class="classic-card h-full overflow-hidden">
-    <VChart
-      class="chart-wrap w-full"
-      :option="chartOption"
-      :autoresize="true"
-    />
+    <VChart class="chart-wrap w-full" :option="chartOption" :autoresize="true" />
   </div>
 </template>
 
@@ -21,14 +17,7 @@ import {
 import VChart from 'vue-echarts'
 
 // Register ECharts components
-use([
-  CanvasRenderer,
-  LineChart,
-  TitleComponent,
-  TooltipComponent,
-  GridComponent,
-  LegendComponent,
-])
+use([CanvasRenderer, LineChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent])
 
 defineProps<{
   chartOption: any

@@ -3,13 +3,21 @@ name: ClusterFuzzLite
 on:
   push:
     branches: [main]
+    paths:
+      - 'src-tauri/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'src-tauri/**'
   schedule:
     - cron: '0 0 * * 0'  # Weekly on Sunday
 
 permissions:
   contents: read
+
+concurrency:
+  group: clusterfuzzlite-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   clusterfuzzlite:

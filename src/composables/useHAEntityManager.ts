@@ -9,7 +9,9 @@ export interface DiscoveredEntity {
 }
 
 export function useHAEntityManager() {
-  const haEntitiesList = ref<Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>>([])
+  const haEntitiesList = ref<
+    Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>
+  >([])
   const headerTogglesList = ref<Array<{ id: string; label: string; entity: string }>>([])
   const discoveryDialog = ref(false)
   const discoveredEntities = ref<DiscoveredEntity[]>([])
@@ -27,7 +29,7 @@ export function useHAEntityManager() {
         label: data.label || id,
         entity: data.entity || id,
         domain: 'switch',
-        enabled: true
+        enabled: true,
       }))
     }
     haEntitiesList.value = entities
@@ -40,19 +42,23 @@ export function useHAEntityManager() {
       toggles = Object.entries(config.ha_boolean_entities).map(([id, entity]) => ({
         id,
         label: id.replace(/_/g, ' ').toUpperCase(),
-        entity
+        entity,
       }))
     }
     headerTogglesList.value = toggles
   }
 
-  async function fetchHaEntities(haUrl: string, haPort: number | null | undefined, haToken: string) {
+  async function fetchHaEntities(
+    haUrl: string,
+    haPort: number | null | undefined,
+    haToken: string
+  ) {
     discoveryLoading.value = true
     try {
       const entities = await invoke<DiscoveredEntity[]>('discover_ha_entities', {
         url: haUrl,
         port: haPort || 8123,
-        token: haToken
+        token: haToken,
       })
       discoveredEntities.value = entities
       selectedDiscovery.value = []
@@ -67,26 +73,28 @@ export function useHAEntityManager() {
 
   function addDiscoveredEntities() {
     const target = discoveryTargetGroup.value
-    const toAdd = discoveredEntities.value.filter(e => selectedDiscovery.value.includes(e.entity_id))
-    
+    const toAdd = discoveredEntities.value.filter((e) =>
+      selectedDiscovery.value.includes(e.entity_id)
+    )
+
     if (target === 'home') {
-      toAdd.forEach(de => {
-        if (haEntitiesList.value.some(e => e.entity === de.entity_id)) return
+      toAdd.forEach((de) => {
+        if (haEntitiesList.value.some((e) => e.entity === de.entity_id)) return
         haEntitiesList.value.push({
           id: de.entity_id.replace(/\./g, '_'),
           label: de.friendly_name || de.entity_id,
           entity: de.entity_id,
           domain: de.domain,
-          enabled: true
+          enabled: true,
         })
       })
     } else {
-      toAdd.forEach(de => {
-        if (headerTogglesList.value.some(t => t.entity === de.entity_id)) return
+      toAdd.forEach((de) => {
+        if (headerTogglesList.value.some((t) => t.entity === de.entity_id)) return
         headerTogglesList.value.push({
           id: de.entity_id.replace(/\./g, '_'),
           label: de.friendly_name || de.entity_id,
-          entity: de.entity_id
+          entity: de.entity_id,
         })
       })
     }
@@ -135,10 +143,10 @@ export function useHAEntityManager() {
 
   function autofillDomain(domain: string) {
     const toAdd = discoveredEntities.value.filter(
-      e => e.domain === domain && e.state !== 'unavailable'
+      (e) => e.domain === domain && e.state !== 'unavailable'
     )
     for (const de of toAdd) {
-      if (haEntitiesList.value.some(ex => ex.entity === de.entity_id)) continue
+      if (haEntitiesList.value.some((ex) => ex.entity === de.entity_id)) continue
       haEntitiesList.value.push({
         id: de.entity_id.replace(/\./g, '_'),
         label: de.friendly_name,
@@ -147,27 +155,31 @@ export function useHAEntityManager() {
         enabled: true,
       })
     }
-    }
+  }
 
-    async function ensureEntitiesFetched(haUrl: string, haPort: number | null | undefined, haToken: string) {
-      if (discoveredEntities.value.length > 0 || discoveryLoading.value) return
-      if (!haUrl || !haToken) return
+  async function ensureEntitiesFetched(
+    haUrl: string,
+    haPort: number | null | undefined,
+    haToken: string
+  ) {
+    if (discoveredEntities.value.length > 0 || discoveryLoading.value) return
+    if (!haUrl || !haToken) return
 
-      discoveryLoading.value = true
-      try {
-        const entities = await invoke<DiscoveredEntity[]>('discover_ha_entities', {
-          url: haUrl,
-          port: haPort || 8123,
-          token: haToken
-        })
-        discoveredEntities.value = entities
-      } catch (e: any) {
-        console.error('Failed to auto-fetch HA entities:', e)
-      } finally {
-        discoveryLoading.value = false
-      }
+    discoveryLoading.value = true
+    try {
+      const entities = await invoke<DiscoveredEntity[]>('discover_ha_entities', {
+        url: haUrl,
+        port: haPort || 8123,
+        token: haToken,
+      })
+      discoveredEntities.value = entities
+    } catch (e: any) {
+      console.error('Failed to auto-fetch HA entities:', e)
+    } finally {
+      discoveryLoading.value = false
     }
-    return {
+  }
+  return {
     haEntitiesList,
     headerTogglesList,
     discoveryDialog,
@@ -190,6 +202,5 @@ export function useHAEntityManager() {
     moveToggleDown,
     autofillDomain,
     ensureEntitiesFetched,
-    }
-    }
-
+  }
+}

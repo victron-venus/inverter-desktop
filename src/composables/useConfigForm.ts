@@ -14,7 +14,13 @@ export interface AppConfig {
   ha_url?: string | null
   ha_port?: number | null
   ha_use_direct_api?: boolean
-  ha_entities?: Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }> | null
+  ha_entities?: Array<{
+    id: string
+    label: string
+    entity: string
+    domain: string
+    enabled: boolean
+  }> | null
   header_toggles_config?: Array<{ id: string; label: string; entity: string }> | null
   ha_water_valve_entity?: string | null
   ha_pump_switch_entity?: string | null
@@ -28,18 +34,29 @@ export interface AppConfig {
 }
 
 const defaultConfig: AppConfig = {
-  mqtt_host: 'Cerbo', mqtt_port: 1883, mqtt_login: null, mqtt_password: null,
-  mqtt_ha_host: 'HA', mqtt_ha_port: 1883, mqtt_ha_login: null, mqtt_ha_password: null,
-  ha_longlived_token: null, ha_url: null, ha_port: null, ha_use_direct_api: false,
-  ha_entities: null, header_toggles_config: null,
-  ha_water_valve_entity: null, ha_pump_switch_entity: null,
+  mqtt_host: 'Cerbo',
+  mqtt_port: 1883,
+  mqtt_login: null,
+  mqtt_password: null,
+  mqtt_ha_host: 'HA',
+  mqtt_ha_port: 1883,
+  mqtt_ha_login: null,
+  mqtt_ha_password: null,
+  ha_longlived_token: null,
+  ha_url: null,
+  ha_port: null,
+  ha_use_direct_api: false,
+  ha_entities: null,
+  header_toggles_config: null,
+  ha_water_valve_entity: null,
+  ha_pump_switch_entity: null,
   ha_boolean_entities: null,
   ha_switch_entities: null,
   header_toggles: null,
   color_scheme: 'dark',
   portal_id: null,
   camera_topic: 'frigate/+/events',
-  camera_enabled: false
+  camera_enabled: false,
 }
 
 export function useConfigForm() {
@@ -62,13 +79,19 @@ export function useConfigForm() {
   }
 
   async function saveConfig(
-    haEntitiesList: Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>,
+    haEntitiesList: Array<{
+      id: string
+      label: string
+      entity: string
+      domain: string
+      enabled: boolean
+    }>,
     headerTogglesList: Array<{ id: string; label: string; entity: string }>
   ) {
-    haEntitiesList.forEach(e => {
+    haEntitiesList.forEach((e) => {
       if (!e.id && e.entity) e.id = e.entity.replace(/\./g, '_')
     })
-    headerTogglesList.forEach(t => {
+    headerTogglesList.forEach((t) => {
       if (!t.id && t.entity) t.id = t.entity.replace(/\./g, '_')
     })
     config.ha_entities = haEntitiesList
@@ -97,5 +120,15 @@ export function useConfigForm() {
     message.value = ''
   }
 
-  return { config, defaultConfig, saving, message, messageType, loadConfig, saveConfig, resetToDefaults, clearMessage }
+  return {
+    config,
+    defaultConfig,
+    saving,
+    message,
+    messageType,
+    loadConfig,
+    saveConfig,
+    resetToDefaults,
+    clearMessage,
+  }
 }
