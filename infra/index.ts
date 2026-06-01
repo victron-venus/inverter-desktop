@@ -69,6 +69,8 @@ const mainProtection = new github.BranchProtection("main-protection", {
                 "rust",
                 // Job defined in .github/workflows/unit-tests.yml
                 "vitest",
+                // Job defined in .github/workflows/cargo-audit.yml
+                "cargo-audit",
             ],
         },
     ],
