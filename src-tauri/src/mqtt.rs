@@ -213,9 +213,11 @@ fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
     if t_parts.len() != p_parts.len() && !pattern.ends_with("/#") {
         // Simple match, might need adjustment for #
     }
-    
+
     // Very basic MQTT wildcard matching for +
-    if t_parts.len() != p_parts.len() { return false; }
+    if t_parts.len() != p_parts.len() {
+        return false;
+    }
     for (t, p) in t_parts.iter().zip(p_parts.iter()) {
         if *p != "+" && *p != *t {
             return false;
@@ -233,7 +235,12 @@ const THRESHOLD_WATER_CM: f64 = 23.0;
 const THRESHOLD_SOLAR_W: f64 = 3000.0;
 
 impl MqttClient {
-    pub fn new(host: String, port: u16, username: Option<String>, password: Option<String>) -> Self {
+    pub fn new(
+        host: String,
+        port: u16,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Self {
         Self {
             client: None,
             state: Arc::new(Mutex::new(InverterState {
@@ -324,7 +331,7 @@ impl MqttClient {
         // Subscribe to topics
         client.subscribe("inverter/state", QoS::AtMostOnce)?;
         client.subscribe("inverter/console", QoS::AtMostOnce)?;
-        
+
         if let Some(ref cam_topic) = self.camera_topic {
             if !cam_topic.is_empty() {
                 client.subscribe(cam_topic, QoS::AtMostOnce)?;
@@ -401,7 +408,10 @@ impl MqttClient {
                                         water_level: raw.water_level,
                                         water_valve: raw.water_valve.as_ref().map(coerce_bool),
                                         pump_switch: raw.pump_switch.as_ref().map(coerce_bool),
-                                        dishwasher_running: raw.dishwasher_running.as_ref().map(coerce_bool),
+                                        dishwasher_running: raw
+                                            .dishwasher_running
+                                            .as_ref()
+                                            .map(coerce_bool),
                                         dishwasher_duration: raw.dishwasher_duration,
                                         washer_time: raw.washer_time,
                                         washer_power: raw.washer_power.as_ref().map(coerce_bool),
@@ -477,15 +487,20 @@ impl MqttClient {
                                 if match_mqtt_topic(&topic, cam_t) {
                                     if let Some(ref handle) = app_handle {
                                         // Attempt to parse as JSON first (based on user example)
-                                        if let Ok(cam_event) = serde_json::from_str::<CameraEvent>(&payload) {
+                                        if let Ok(cam_event) =
+                                            serde_json::from_str::<CameraEvent>(&payload)
+                                        {
                                             let _ = handle.emit("camera-event", cam_event);
                                         } else {
                                             // Fallback for simple URL string payload
-                                            let _ = handle.emit("camera-event", CameraEvent {
-                                                agent_name: "Unknown Camera".to_string(),
-                                                video_url: payload,
-                                                timestamp: None,
-                                            });
+                                            let _ = handle.emit(
+                                                "camera-event",
+                                                CameraEvent {
+                                                    agent_name: "Unknown Camera".to_string(),
+                                                    video_url: payload,
+                                                    timestamp: None,
+                                                },
+                                            );
                                         }
                                     }
                                 }
