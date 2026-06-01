@@ -24,16 +24,13 @@
         :key="toggle.id"
         class="classic-btn min-w-[55px]"
         :class="{ 'classic-btn-on': booleans?.[toggle.id] === true }"
-        @click="$emit('send', 'toggle', {entity: toggle.entity})"
+        @click="$emit('send', 'toggle', { entity: toggle.entity })"
       >
         {{ toggle.label.toUpperCase() }}
       </button>
     </div>
 
-    <button
-      class="classic-btn min-w-[20px]"
-      @click="$emit('toggle-theme')"
-    >
+    <button class="classic-btn min-w-[20px]" @click="$emit('toggle-theme')">
       <Sun v-if="isDark" :size="8" />
       <Moon v-else :size="8" />
     </button>

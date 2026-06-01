@@ -104,7 +104,8 @@ impl Default for FullConfig {
 
 #[tauri::command]
 fn get_state(mqtt_client: State<MqttState>) -> Result<InverterState, String> {
-    let client = mqtt_client.0
+    let client = mqtt_client
+        .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
@@ -162,7 +163,8 @@ async fn perform_action(
         }
     }
 
-    let client = mqtt_client.0
+    let client = mqtt_client
+        .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
@@ -245,7 +247,8 @@ fn send_command(
     payload: serde_json::Value,
     mqtt_client: State<MqttState>,
 ) -> Result<(), String> {
-    let client = mqtt_client.0
+    let client = mqtt_client
+        .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     if let Some(ref client) = *client {
@@ -408,7 +411,8 @@ async fn connect_mqtt(
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client.0
+    let mut client_guard = mqtt_client
+        .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     let mut client = MqttClient::new(host, port, username, password);
@@ -422,7 +426,8 @@ async fn connect_mqtt(
 
 #[tauri::command]
 async fn disconnect_mqtt(mqtt_client: State<'_, MqttState>) -> Result<(), String> {
-    let mut client_guard = mqtt_client.0
+    let mut client_guard = mqtt_client
+        .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = None;
@@ -544,7 +549,8 @@ async fn connect_ha_mqtt(
     app: tauri::AppHandle,
     mqtt_client: State<'_, HaMqttState>,
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client.0
+    let mut client_guard = mqtt_client
+        .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     let mut client = MqttClient::new(host, port, username, password);

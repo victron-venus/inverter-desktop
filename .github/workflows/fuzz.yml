@@ -3,8 +3,12 @@ name: Fuzzing
 on:
   push:
     branches: [main]
+    paths:
+      - 'src-tauri/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'src-tauri/**'
   schedule:
     - cron: '0 0 * * 0'  # Weekly on Sunday
 

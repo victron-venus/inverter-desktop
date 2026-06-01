@@ -1,5 +1,9 @@
 <template>
-  <div id="app" class="h-screen flex flex-col p-1 select-none overflow-hidden" @contextmenu.prevent="onContextMenu">
+  <div
+    id="app"
+    class="h-screen flex flex-col p-1 select-none overflow-hidden"
+    @contextmenu.prevent="onContextMenu"
+  >
     <!-- Dashboard Header: Compact buttons and theme switcher -->
     <div class="flex items-center justify-between mb-1">
       <AppHeader
@@ -16,7 +20,6 @@
 
     <!-- Dashboard Content: Grid and Panels -->
     <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1 scrollbar-hide">
-      
       <DailyStats />
 
       <StatCards
@@ -65,15 +68,9 @@
         </div>
       </div>
 
-      <BatterySolarPanel
-        :batteries="batteries"
-        :solarSources="solarSources"
-      />
+      <BatterySolarPanel :batteries="batteries" :solarSources="solarSources" />
 
-      <LoadsTable
-        v-if="state.features?.ha_loads !== false"
-        :sortedLoads="sortedLoads"
-      />
+      <LoadsTable v-if="state.features?.ha_loads !== false" :sortedLoads="sortedLoads" />
     </div>
 
     <!-- Bottom Status Bar: Classic dot layout -->
@@ -94,15 +91,24 @@
     />
 
     <!-- Video Popup Overlay -->
-    <div v-if="videoPopup.show" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div class="relative w-full max-w-4xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl border border-slate-800">
+    <div
+      v-if="videoPopup.show"
+      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+    >
+      <div
+        class="relative w-full max-w-4xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl border border-slate-800"
+      >
         <!-- Camera Name Header -->
-        <div class="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-center">
+        <div
+          class="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-center"
+        >
           <div class="flex items-center gap-2">
             <div class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
-            <span class="text-xs font-bold text-white uppercase tracking-widest">LIVE: {{ videoPopup.cameraName }}</span>
+            <span class="text-xs font-bold text-white uppercase tracking-widest"
+              >LIVE: {{ videoPopup.cameraName }}</span
+            >
           </div>
-          <button 
+          <button
             @click="videoPopup.show = false"
             class="p-1.5 rounded-full bg-white/10 text-white hover:bg-red-500 transition-colors"
           >
@@ -110,12 +116,7 @@
           </button>
         </div>
 
-        <video 
-          autoplay 
-          controls 
-          class="w-full h-full"
-          :src="videoPopup.url"
-        >
+        <video autoplay controls class="w-full h-full" :src="videoPopup.url">
           <track kind="captions" />
           Your browser does not support the video tag.
         </video>
@@ -146,12 +147,24 @@ import StatusBar from './components/StatusBar.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DailyStats from './components/DailyStats.vue'
 
-const { state, mqttConnected, connectMqtt, ensureNotificationPermission, cleanup: cleanupConnection } = useConnection()
 const {
-  haEnabled, haConnected, homeButtons, buttonStates,
+  state,
+  mqttConnected,
+  connectMqtt,
+  ensureNotificationPermission,
+  cleanup: cleanupConnection,
+} = useConnection()
+const {
+  haEnabled,
+  haConnected,
+  homeButtons,
+  buttonStates,
   headerToggles,
-  waterValveEntity, pumpSwitchEntity,
-  initHa, sendHaOrMqtt, cleanupHa,
+  waterValveEntity,
+  pumpSwitchEntity,
+  initHa,
+  sendHaOrMqtt,
+  cleanupHa,
 } = useHA()
 const { isDark, toggleTheme } = useTheme()
 const { chartOption, addHistoryPoint, updateChartOption } = useChart(isDark)
@@ -174,16 +187,16 @@ function handleShowVideoPopup(e: Event) {
   if (customEvent.detail) {
     const data = customEvent.detail
     if (data && typeof data === 'object') {
-      videoPopup.value = { 
-        show: true, 
-        url: data.video_url, 
-        cameraName: data.agent_name || 'Camera'
+      videoPopup.value = {
+        show: true,
+        url: data.video_url,
+        cameraName: data.agent_name || 'Camera',
       }
     } else {
-      videoPopup.value = { 
-        show: true, 
-        url: data, 
-        cameraName: 'Camera' 
+      videoPopup.value = {
+        show: true,
+        url: data,
+        cameraName: 'Camera',
       }
     }
   }
@@ -238,21 +251,26 @@ const sortedLoads = computed(() => {
 })
 
 const batteries = computed(() => {
-  return (state.value.batteries || []).map(b => ({
+  return (state.value.batteries || []).map((b) => ({
     name: b.name || 'Battery',
     voltage: b.voltage || 0,
     current: b.current,
     power: b.power,
     soc: b.soc || 0,
     state: b.state || 'Unknown',
-    timeToGo: b.time_to_go || ''
+    timeToGo: b.time_to_go || '',
   }))
 })
 
 const solarSources = computed(() => {
   const sources: Array<{ name: string; pvVoltage?: number; current?: number; power: number }> = []
-  ;(state.value.mppt_chargers || []).forEach(m => {
-    sources.push({ name: m.name || 'MPPT', pvVoltage: m.pv_voltage || 0, current: m.current || 0, power: m.power || 0 })
+  ;(state.value.mppt_chargers || []).forEach((m) => {
+    sources.push({
+      name: m.name || 'MPPT',
+      pvVoltage: m.pv_voltage || 0,
+      current: m.current || 0,
+      power: m.power || 0,
+    })
   })
   ;(state.value.tasmota_individual || []).forEach((power, i) => {
     sources.push({ name: 'PV Inverter ' + (i + 1), power: power || 0 })
@@ -264,13 +282,20 @@ function onDocumentClick() {
   closeContextMenu()
 }
 
-watch(() => isDark.value, () => {
-  updateChartOption()
-})
+watch(
+  () => isDark.value,
+  () => {
+    updateChartOption()
+  }
+)
 
-watch(() => state.value, (newState) => {
-  if (newState.gt !== undefined) addHistoryPoint(newState)
-}, { deep: false })
+watch(
+  () => state.value,
+  (newState) => {
+    if (newState.gt !== undefined) addHistoryPoint(newState)
+  },
+  { deep: false }
+)
 
 onMounted(async () => {
   try {
@@ -285,7 +310,7 @@ onMounted(async () => {
   document.addEventListener('click', onDocumentClick)
   globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 
-  unlistenConfig = await listen<{color_scheme?: string}>('config-saved', async (event) => {
+  unlistenConfig = await listen<{ color_scheme?: string }>('config-saved', async (event) => {
     const scheme = event.payload.color_scheme
     if (scheme) {
       isDark.value = scheme !== 'light'
