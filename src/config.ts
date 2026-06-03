@@ -34,6 +34,18 @@ export interface AppConfig {
   portal_id?: string | null
   camera_topic?: string | null
   camera_enabled?: boolean
+
+  // Section visibility
+  show_batteries?: boolean
+  show_solar_production?: boolean
+  show_active_loads?: boolean
+  show_daily_stats?: boolean
+  show_ev?: boolean
+  show_washer?: boolean
+  show_dryer?: boolean
+  show_dishwasher?: boolean
+  show_home_section?: boolean
+  show_header_toggles?: boolean
 }
 
 const defaultConfig: AppConfig = {
@@ -60,6 +72,18 @@ const defaultConfig: AppConfig = {
   portal_id: null,
   camera_topic: 'frigate/+/events',
   camera_enabled: false,
+
+  // Section visibility defaults
+  show_batteries: true,
+  show_solar_production: true,
+  show_active_loads: true,
+  show_daily_stats: true,
+  show_ev: true,
+  show_washer: true,
+  show_dryer: true,
+  show_dishwasher: true,
+  show_home_section: true,
+  show_header_toggles: true,
 }
 
 let config: AppConfig = defaultConfig
