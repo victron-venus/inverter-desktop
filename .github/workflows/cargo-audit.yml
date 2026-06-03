@@ -24,14 +24,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
 
       - name: Check if Cargo files changed
         id: changed
-        uses: tj-actions/changed-files@d6bab64177dca818e2a1e2e9d6379752d9247d3a # v46
-        with:
-          files: |
-            src-tauri/Cargo.toml
-            src-tauri/Cargo.lock
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "any_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            base="${{ github.event.pull_request.base.sha || github.event.before }}"
+            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^src-tauri/Cargo\.(toml|lock)$'; then
+              echo "any_changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "any_changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
       - name: Harden the runner (Audit all outbound calls)
         if: steps.changed.outputs.any_changed == 'true'
