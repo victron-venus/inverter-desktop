@@ -54,3 +54,6 @@ PLAN.md
 # Local version scripts
 bump.sh
 scripts/bump.js
+build-local.sh
+
+AGENTS.md

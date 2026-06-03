@@ -1,7 +1,8 @@
 mod ha_api;
 pub mod mqtt;
+mod tray_icon;
 
-use log::{error, info};
+use log::info;
 use mqtt::{HeaderToggle, InverterState, MqttClient};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -31,8 +32,7 @@ struct DiscoveredEntity {
 struct MqttState(Arc<Mutex<Option<MqttClient>>>);
 struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
 
-#[allow(dead_code)]
-struct AppTrayIcon(tauri::tray::TrayIcon);
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HaEntityConfig {
@@ -639,9 +639,8 @@ pub fn run() {
 
             // Setup system tray with configuration menu
             info!("Building system tray...");
-            let tray_result = TrayIconBuilder::with_id("main-tray")
+            TrayIconBuilder::with_id("main-tray")
                 .tooltip("Inverter Dashboard")
-                .icon_as_template(true)
                 .icon({
                     let icon_bytes = include_bytes!("../icons/icon.png");
                     let img = image::load_from_memory(icon_bytes)
@@ -702,13 +701,43 @@ pub fn run() {
                         }
                     }
                 })
-                .build(app);
-            if let Ok(tray) = tray_result {
-                info!("Tray icon built successfully.");
-                app.manage(AppTrayIcon(tray));
-            } else if let Err(e) = tray_result {
-                error!("Failed to build tray icon: {}", e);
-            }
+                .build(app)?;
+            info!("Tray icon built successfully.");
+
+            // Background task: update tray icon with animated bars from MQTT state
+            let mqtt_for_tray = app.state::<MqttState>().0.clone();
+            let app_for_tray = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(1500));
+                loop {
+                    interval.tick().await;
+                    let state = {
+                        let guard = mqtt_for_tray.lock().ok();
+                        guard.and_then(|g| g.as_ref().map(|c| c.get_state()))
+                    };
+                    if let Some(s) = state {
+                        let png = tray_icon::render(s.solar_total, s.gt);
+                        if let Ok(img) = image::load_from_memory(&png) {
+                            let rgba = img.into_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            let tauri_img =
+                                tauri::image::Image::new_owned(rgba.into_raw(), w, h);
+                            if let Some(tray) = app_for_tray.tray_by_id("main-tray") {
+                                let solar = s.solar_total.unwrap_or(0.0) / 1000.0;
+                                let batt = s.battery_soc.unwrap_or(0.0);
+                                let grid = s.gt.unwrap_or(0.0) / 1000.0;
+                                let tip = format!(
+                                    "PV {:.1}kW  Battery {:.0}%  Grid {:+.1}kW",
+                                    solar, batt, grid
+                                );
+                                let _ = tray.set_title(None::<&str>);
+                                let _ = tray.set_icon(Some(tauri_img));
+                                let _ = tray.set_tooltip(Some(&tip));
+                            }
+                        }
+                    }
+                }
+            });
 
             // Show window on startup
             info!("Showing main window...");

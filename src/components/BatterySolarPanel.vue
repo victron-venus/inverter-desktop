@@ -1,7 +1,7 @@
 <template>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-1.5 mb-1">
     <!-- Batteries Section -->
-    <div class="classic-card">
+    <div v-if="showBatteries !== false" class="classic-card">
       <div class="classic-header flex items-center gap-1.5">
         <BatteryMedium :size="10" /> Batteries
       </div>
@@ -53,7 +53,7 @@
     </div>
 
     <!-- Solar Production Section -->
-    <div class="classic-card">
+    <div v-if="showSolar !== false" class="classic-card">
       <div class="classic-header flex items-center gap-1.5">
         <SunMedium :size="10" /> Solar Production
       </div>
@@ -103,5 +103,7 @@ defineProps<{
     timeToGo?: string
   }>
   solarSources: Array<{ name: string; pvVoltage?: number; current?: number; power: number }>
+  showBatteries?: boolean
+  showSolar?: boolean
 }>()
 </script>
