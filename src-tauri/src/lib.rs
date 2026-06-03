@@ -18,7 +18,7 @@ const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -745,6 +745,16 @@ pub fn run() {
             // Show window on startup
             info!("Showing main window...");
             let window = app.get_webview_window("main").unwrap();
+
+            // Close → hide (keep app running in menu bar)
+            let window_hide = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window_hide.hide();
+                }
+            });
+
             window.show().unwrap();
 
             // macOS: accessory mode keeps app in menu bar (tray icon visible) without dock icon
