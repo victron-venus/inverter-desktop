@@ -62,7 +62,15 @@ jobs:
       - name: Run cargo audit
         if: steps.changed.outputs.any_changed == 'true'
         working-directory: src-tauri
-        run: cargo audit
+        # rustls-webpki 0.102.x advisories — transitive via rumqttc 0.25,
+        # no semver-compatible fix available. Remove ignores when rumqttc
+        # upgrades to webpki >= 0.103.
+        run: >
+          cargo audit
+          --ignore RUSTSEC-2026-0099
+          --ignore RUSTSEC-2026-0049
+          --ignore RUSTSEC-2026-0098
+          --ignore RUSTSEC-2026-0104
 
       - name: Skip (no Cargo changes)
         if: steps.changed.outputs.any_changed != 'true'
