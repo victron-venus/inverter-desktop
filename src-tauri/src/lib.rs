@@ -33,8 +33,6 @@ struct DiscoveredEntity {
 struct MqttState(Arc<Mutex<Option<MqttClient>>>);
 struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
 
-
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HaEntityConfig {
     id: String,

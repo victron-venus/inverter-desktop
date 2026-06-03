@@ -52,7 +52,11 @@ fn draw_seg(img: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, top_row: bool)
     let r = CORNER;
 
     if top_row {
-        draw_filled_rect_mut(img, Rect::at(x, y + r).of_size(SEG_W, (h - r) as u32), color);
+        draw_filled_rect_mut(
+            img,
+            Rect::at(x, y + r).of_size(SEG_W, (h - r) as u32),
+            color,
+        );
         draw_filled_circle_mut(img, (x + r, y + r), r, color);
         draw_filled_circle_mut(img, (x + w - 1 - r, y + r), r, color);
     } else {
