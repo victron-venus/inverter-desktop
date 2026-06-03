@@ -12,10 +12,7 @@
 
     <div v-if="hasGrid" class="flex items-center gap-1.5 mr-1">
       <div v-if="hasSolar" class="w-px h-3 bg-slate-300"></div>
-      <span
-        class="text-slate-400 dark:text-slate-500 uppercase text-[10px] font-bold tracking-tighter"
-        >Grid:</span
-      >
+      <Zap :size="14" class="text-slate-400 dark:text-slate-500" />
       <span class="font-bold text-slate-600 dark:text-white">{{ grid }}kWh</span>
       <span class="text-green-600 font-bold">(${{ gridCost }})</span>
     </div>
@@ -59,7 +56,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Sun, Battery as BatteryIcon } from 'lucide-vue-next'
+import { Zap, Battery as BatteryIcon } from 'lucide-vue-next'
 import { state } from '../composables/useInverterState'
 
 const GRID_COST_PER_KWH = 0.31

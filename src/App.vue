@@ -13,6 +13,7 @@
         :headerToggles="headerToggles"
         :booleans="state.booleans"
         :isDark="isDark"
+        :showHeaderToggles="appConfig?.show_header_toggles !== false"
         @send="send"
         @toggle-theme="toggleTheme"
       />
@@ -20,7 +21,7 @@
 
     <!-- Dashboard Content: Grid and Panels -->
     <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1 scrollbar-hide">
-      <DailyStats />
+      <DailyStats v-if="appConfig?.show_daily_stats !== false" />
 
       <StatCards
         :gt="state.gt"
@@ -63,14 +64,28 @@
             :dryerPower="state.dryer_power"
             :homeButtons="homeButtons"
             :buttonStates="buttonStates"
+            :showEv="appConfig?.show_ev !== false"
+            :showWasher="appConfig?.show_washer !== false"
+            :showDryer="appConfig?.show_dryer !== false"
+            :showDishwasher="appConfig?.show_dishwasher !== false"
+            :showHomeSection="appConfig?.show_home_section !== false"
             @send="send"
           />
         </div>
       </div>
 
-      <BatterySolarPanel :batteries="batteries" :solarSources="solarSources" />
+      <BatterySolarPanel
+        v-if="appConfig?.show_batteries !== false || appConfig?.show_solar_production !== false"
+        :batteries="batteries"
+        :solarSources="solarSources"
+        :showBatteries="appConfig?.show_batteries !== false"
+        :showSolar="appConfig?.show_solar_production !== false"
+      />
 
-      <LoadsTable v-if="state.features?.ha_loads !== false" :sortedLoads="sortedLoads" />
+      <LoadsTable
+        v-if="state.features?.ha_loads !== false && appConfig?.show_active_loads !== false"
+        :sortedLoads="sortedLoads"
+      />
     </div>
 
     <!-- Bottom Status Bar: Classic dot layout -->
@@ -150,6 +165,7 @@ import DailyStats from './components/DailyStats.vue'
 const {
   state,
   mqttConnected,
+  appConfig,
   connectMqtt,
   ensureNotificationPermission,
   cleanup: cleanupConnection,

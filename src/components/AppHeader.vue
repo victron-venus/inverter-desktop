@@ -17,17 +17,19 @@
         <Zap :size="7" /> {{ essText.toUpperCase() }}
       </button>
 
-      <div class="w-px h-3 bg-slate-300 mx-0.5"></div>
+      <template v-if="showHeaderToggles !== false && headerToggles.length > 0">
+        <div class="w-px h-3 bg-slate-300 mx-0.5"></div>
 
-      <button
-        v-for="toggle in headerToggles"
-        :key="toggle.id"
-        class="classic-btn min-w-[55px]"
-        :class="{ 'classic-btn-on': booleans?.[toggle.id] === true }"
-        @click="$emit('send', 'toggle', { entity: toggle.entity })"
-      >
-        {{ toggle.label.toUpperCase() }}
-      </button>
+        <button
+          v-for="toggle in headerToggles"
+          :key="toggle.id"
+          class="classic-btn min-w-[55px]"
+          :class="{ 'classic-btn-on': booleans?.[toggle.id] === true }"
+          @click="$emit('send', 'toggle', { entity: toggle.entity })"
+        >
+          {{ toggle.label.toUpperCase() }}
+        </button>
+      </template>
     </div>
 
     <button class="classic-btn min-w-[20px]" @click="$emit('toggle-theme')">
@@ -47,6 +49,7 @@ defineProps<{
   headerToggles: Array<{ id: string; label: string; entity: string }>
   booleans: Record<string, boolean> | undefined
   isDark: boolean
+  showHeaderToggles?: boolean
 }>()
 
 defineEmits<{
