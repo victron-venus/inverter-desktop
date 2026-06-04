@@ -67,17 +67,17 @@ fn draw_seg(img: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, top_row: bool)
     }
 }
 
-// ── Smart value formatting ──────────────────────────────────────
+// ── Smart value formatting (with W/kW suffix) ───────────────────
 fn fmt_solar(val: Option<f64>) -> String {
     match val {
         Some(v) if v > 0.0 => {
             if v < 1000.0 {
-                format!("{:.0}", v)
+                format!("{:.0}W", v)
             } else {
-                format!("{:.1}k", v / 1000.0)
+                format!("{:.1}kW", v / 1000.0)
             }
         }
-        _ => "0".into(),
+        _ => "0W".into(),
     }
 }
 
@@ -85,13 +85,14 @@ fn fmt_grid(val: Option<f64>) -> String {
     match val {
         Some(v) => {
             let a = v.abs();
+            let s = if v < 0.0 { "-" } else { "" };
             if a < 1000.0 {
-                format!("{:+.0}", v)
+                format!("{}{:.0}W", s, a)
             } else {
-                format!("{:+.1}k", v / 1000.0)
+                format!("{}{:.1}kW", s, a / 1000.0)
             }
         }
-        None => "0".into(),
+        None => "0W".into(),
     }
 }
 
