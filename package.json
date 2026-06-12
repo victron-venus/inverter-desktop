@@ -22,7 +22,7 @@
     "echarts": "^6.1.0",
     "lucide-vue-next": "^1.0.0",
     "uplot": "^1.6.30",
-    "vue": "^3.5.35",
+    "vue": "^3.5.38",
     "vue-awesome-button": "^0.1.0",
     "vue-echarts": "^8.0.1",
     "vuetify": "^4.1.1"
