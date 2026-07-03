@@ -20,19 +20,3 @@ export function formatDuration(s: number | undefined) {
   if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0')
   return m + ':' + String(sec).padStart(2, '0')
 }
-
-export function escapeHtml(str: string | number | undefined | null): string {
-  return String(str ?? '').replace(
-    /[&<>"']/g,
-    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] ?? ch
-  )
-}
-
-export function formatSemverLabel(ver: string | undefined) {
-  if (ver === null || ver === undefined || ver === '') return '?'
-  const s = String(ver).trim()
-  if (s === '?') return '?'
-  if (/^v\d/i.test(s)) return s
-  if (/^\d/.test(s)) return 'v' + s
-  return s
-}

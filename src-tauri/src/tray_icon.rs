@@ -1,22 +1,13 @@
-use ab_glyph::{FontRef, PxScale};
-use image::{ImageEncoder, Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut, draw_text_mut, text_size};
-use imageproc::rect::Rect;
+use ab_glyph::{point, Font, FontRef, GlyphId, PxScale, ScaleFont};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-// ── Font (SF Pro Rounded ≈ bold) ────────────────────────────────
-//const FONT_DATA: &[u8] = include_bytes!("/System/Library/Fonts/SFNSRounded.ttf");
-//const FONT_DATA: &[u8] = include_bytes!("/System/Library/Fonts/HelveticaNeue.ttc");
 const FONT_DATA: &[u8] = include_bytes!("/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf");
 
-// ── Breathing toggle ────────────────────────────────────────────
 static NEXT_DIM: AtomicBool = AtomicBool::new(true);
 
-// ── Canvas @2x (166 × 42 logical pts → 332 × 84px) ─────────────
-const W: u32 = 332;
-const H: u32 = 84;
+pub const W: u32 = 332;
+pub const H: u32 = 84;
 
-// ── Layout ──────────────────────────────────────────────────────
 const TEXT_X: i32 = 2;
 const TEXT_W: i32 = 181;
 const BAR_X: i32 = 187;
@@ -28,46 +19,88 @@ const N_ROWS: u32 = 2;
 const CORNER: i32 = 5;
 const FONT_SCALE: PxScale = PxScale { x: 65.0, y: 50.0 };
 
-// 7*17 + 6*4 = 143 → BAR_X + 143 = 330 → right margin = 332-330 = 2
-// 2*38 + 4 = 80 → 4px bottom padding
 const ROW_YS: [i32; 2] = [0, 42];
 
-const INACTIVE: Rgba<u8> = Rgba([200, 200, 200, 50]);
+#[derive(Clone, Copy)]
+struct Rgba(u8, u8, u8, u8);
+
+const INACTIVE: Rgba = Rgba(200, 200, 200, 50);
 const SOLAR_RGB: (u8, u8, u8) = (255, 245, 100);
 const GRID_IN_RGB: (u8, u8, u8) = (150, 220, 255);
 const GRID_OUT_RGB: (u8, u8, u8) = (255, 130, 255);
-const TEXT_COLOR: Rgba<u8> = Rgba([255, 255, 255, 255]);
+const TEXT_COLOR: Rgba = Rgba(255, 255, 255, 255);
 
 fn seg_x(seg: u32) -> i32 {
     BAR_X + seg as i32 * (SEG_W + SEG_GAP) as i32
 }
 
-fn with_alpha(rgb: (u8, u8, u8), a: u8) -> Rgba<u8> {
-    Rgba([rgb.0, rgb.1, rgb.2, a])
+fn with_alpha(rgb: (u8, u8, u8), a: u8) -> Rgba {
+    Rgba(rgb.0, rgb.1, rgb.2, a)
 }
 
-fn draw_seg(img: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, top_row: bool) {
+fn set_pixel(pixels: &mut [u8], x: i32, y: i32, color: Rgba) {
+    if x < 0 || x >= W as i32 || y < 0 || y >= H as i32 {
+        return;
+    }
+    let idx = (y as usize * W as usize + x as usize) * 4;
+    pixels[idx] = color.0;
+    pixels[idx + 1] = color.1;
+    pixels[idx + 2] = color.2;
+    pixels[idx + 3] = color.3;
+}
+
+fn fill_rect(pixels: &mut [u8], x: i32, y: i32, w: u32, h: u32, color: Rgba) {
+    for dy in 0..h {
+        let py = y + dy as i32;
+        if py < 0 || py >= H as i32 {
+            continue;
+        }
+        for dx in 0..w {
+            let px = x + dx as i32;
+            if px < 0 || px >= W as i32 {
+                continue;
+            }
+            set_pixel(pixels, px, py, color);
+        }
+    }
+}
+
+fn fill_circle(pixels: &mut [u8], cx: i32, cy: i32, r: i32, color: Rgba) {
+    let r2 = r * r;
+    for dy in -r..=r {
+        let py = cy + dy;
+        if py < 0 || py >= H as i32 {
+            continue;
+        }
+        for dx in -r..=r {
+            let px = cx + dx;
+            if px < 0 || px >= W as i32 {
+                continue;
+            }
+            if dx * dx + dy * dy <= r2 {
+                set_pixel(pixels, px, py, color);
+            }
+        }
+    }
+}
+
+fn draw_seg(pixels: &mut [u8], x: i32, y: i32, color: Rgba, top_row: bool) {
     let w = SEG_W as i32;
     let h = SEG_H as i32;
     let r = CORNER;
 
     if top_row {
-        draw_filled_rect_mut(
-            img,
-            Rect::at(x, y + r).of_size(SEG_W, (h - r) as u32),
-            color,
-        );
-        draw_filled_circle_mut(img, (x + r, y + r), r, color);
-        draw_filled_circle_mut(img, (x + w - 1 - r, y + r), r, color);
+        fill_rect(pixels, x, y + r, SEG_W, (h - r) as u32, color);
+        fill_circle(pixels, x + r, y + r, r, color);
+        fill_circle(pixels, x + w - 1 - r, y + r, r, color);
     } else {
-        draw_filled_rect_mut(img, Rect::at(x, y).of_size(SEG_W, (h - r) as u32), color);
+        fill_rect(pixels, x, y, SEG_W, (h - r) as u32, color);
         let by = y + h - 1;
-        draw_filled_circle_mut(img, (x + r, by - r), r, color);
-        draw_filled_circle_mut(img, (x + w - 1 - r, by - r), r, color);
+        fill_circle(pixels, x + r, by - r, r, color);
+        fill_circle(pixels, x + w - 1 - r, by - r, r, color);
     }
 }
 
-// ── Smart value formatting (with W/kW suffix) ───────────────────
 fn fmt_solar(val: Option<f64>) -> String {
     match val {
         Some(v) if v > 0.0 => {
@@ -96,7 +129,6 @@ fn fmt_grid(val: Option<f64>) -> String {
     }
 }
 
-// ── Log-scale level ─────────────────────────────────────────────
 fn level(val: Option<f64>, max: f64) -> u32 {
     match val {
         Some(v) => {
@@ -112,14 +144,78 @@ fn level(val: Option<f64>, max: f64) -> u32 {
     }
 }
 
+fn layout_text_width(scale: PxScale, font: &FontRef, text: &str) -> f32 {
+    let scaled = font.as_scaled(scale);
+    let mut w = 0.0;
+    let mut prev: Option<GlyphId> = None;
+    for c in text.chars() {
+        let gid = scaled.glyph_id(c);
+        if let Some(prev_id) = prev {
+            w += scaled.kern(gid, prev_id);
+        }
+        prev = Some(gid);
+        w += scaled.h_advance(gid);
+    }
+    w
+}
+
+fn draw_text(
+    pixels: &mut [u8],
+    x: i32,
+    y: i32,
+    scale: PxScale,
+    font: &FontRef,
+    text: &str,
+    color: Rgba,
+) {
+    let scaled = font.as_scaled(scale);
+    let mut cursor_x = 0.0_f32;
+    let mut prev: Option<GlyphId> = None;
+
+    let base_y = y as f32 + scaled.ascent();
+
+    for c in text.chars() {
+        let gid = scaled.glyph_id(c);
+        if let Some(prev_id) = prev {
+            cursor_x += scaled.kern(gid, prev_id);
+        }
+        prev = Some(gid);
+
+        let glyph = gid.with_scale_and_position(scale, point(cursor_x + x as f32, base_y));
+        if let Some(outlined) = scaled.outline_glyph(glyph) {
+            let min_x = outlined.px_bounds().min.x;
+            let min_y = outlined.px_bounds().min.y;
+            outlined.draw(|gx: u32, gy: u32, coverage: f32| {
+                if coverage <= 0.0 {
+                    return;
+                }
+                let px = (min_x + gx as f32) as i32;
+                let py = (min_y + gy as f32) as i32;
+                if px < 0 || px >= W as i32 || py < 0 || py >= H as i32 {
+                    return;
+                }
+                let idx = (py as usize * W as usize + px as usize) * 4;
+                let a = (coverage * color.3 as f32) as u8;
+                if a == 0 {
+                    return;
+                }
+                pixels[idx] = color.0;
+                pixels[idx + 1] = color.1;
+                pixels[idx + 2] = color.2;
+                pixels[idx + 3] = a;
+            });
+        }
+
+        cursor_x += scaled.h_advance(gid);
+    }
+}
+
 const MAX_SOLAR: f64 = 10_000.0;
 const MAX_GRID: f64 = 5_000.0;
 
-// ── Public ──────────────────────────────────────────────────────
-pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> Vec<u8> {
-    let font = FontRef::try_from_slice(FONT_DATA).expect("SF Rounded");
+pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> (Vec<u8>, u32, u32) {
+    let font = FontRef::try_from_slice(FONT_DATA).expect("Arial Narrow Bold");
 
-    // ── Breathing ──────────────────────────────────────────────
     let prev = NEXT_DIM.load(Ordering::Relaxed);
     NEXT_DIM.store(!prev, Ordering::Relaxed);
     let alpha: u8 = if prev { 170 } else { 200 };
@@ -131,11 +227,9 @@ pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> Vec<u8> {
     };
     let row_colors = [solar, grid_active];
 
-    // ── Text labels ────────────────────────────────────────────
     let labels = [fmt_solar(solar_total), fmt_grid(grid_power)];
 
-    // ── Render ─────────────────────────────────────────────────
-    let mut img = RgbaImage::new(W, H);
+    let mut pixels = vec![0u8; (W * H * 4) as usize];
 
     let levels = [level(solar_total, MAX_SOLAR), level(grid_power, MAX_GRID)];
 
@@ -147,19 +241,15 @@ pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> Vec<u8> {
         for seg in 0..N_SEG {
             let x = seg_x(seg);
             let fill = if seg < lv { color } else { INACTIVE };
-            draw_seg(&mut img, x, y, fill, row == 0);
+            draw_seg(&mut pixels, x, y, fill, row == 0);
         }
 
         let label = &labels[row as usize];
-        let (tw, _th) = text_size(FONT_SCALE, &font, label);
+        let tw = layout_text_width(FONT_SCALE, &font, label);
         let tx = TEXT_X + TEXT_W - tw as i32 - 19;
         let ty = y - 4;
-        draw_text_mut(&mut img, TEXT_COLOR, tx, ty, FONT_SCALE, &font, label);
+        draw_text(&mut pixels, tx, ty, FONT_SCALE, &font, label, TEXT_COLOR);
     }
 
-    let mut png = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut png)
-        .write_image(img.as_raw(), W, H, image::ExtendedColorType::Rgba8)
-        .expect("tray icon PNG encode failed");
-    png
+    (pixels, W, H)
 }

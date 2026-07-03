@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import type { AppConfig } from '../config'
 
 export interface InverterState {
@@ -18,7 +18,6 @@ export interface InverterState {
   setpoint?: number
   inverter_state?: string
   version?: string
-  dashboard_version?: string
   uptime?: number
   ha_connected?: boolean
   ha_direct_connected?: boolean
@@ -72,7 +71,7 @@ export interface InverterState {
   console?: string[]
 }
 
-export const state = ref<InverterState>({
+export const state = shallowRef<InverterState>({
   booleans: {},
   features: {},
   loads: {},
@@ -80,4 +79,44 @@ export const state = ref<InverterState>({
 })
 
 export const mqttConnected = ref(false)
+export const haMqttConnected = ref<boolean | null>(null)
 export const appConfig = ref<AppConfig | null>(null)
+
+export interface NotificationEntry {
+  id: number
+  title: string
+  body: string
+  timestamp: number
+  read: boolean
+}
+
+const notifId = ref(0)
+const MAX_NOTIFICATIONS = 100
+
+export const notifications = ref<NotificationEntry[]>([])
+
+export function addNotification(title: string, body: string) {
+  notifications.value = [
+    { id: ++notifId.value, title, body, timestamp: Date.now(), read: false },
+    ...notifications.value,
+  ].slice(0, MAX_NOTIFICATIONS)
+}
+
+export function markNotificationRead(id: number) {
+  const n = notifications.value.find((n) => n.id === id)
+  if (n) n.read = true
+}
+
+export function markAllNotificationsRead() {
+  for (const n of notifications.value) {
+    n.read = true
+  }
+}
+
+export function clearNotifications() {
+  notifications.value = []
+}
+
+export function unreadNotificationCount() {
+  return notifications.value.filter((n) => !n.read).length
+}

@@ -532,10 +532,175 @@
                   v-model="config.show_header_toggles"
                   class="rounded border-slate-300 text-accent focus:ring-accent"
                 />
+                <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  $t('config.headerToggles')
+                }}</span>
+              </label>
+              <label
+                class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  v-model="config.show_ha_sensors"
+                  class="rounded border-slate-300 text-accent focus:ring-accent"
+                />
+                <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  $t('config.sensors')
+                }}</span>
+              </label>
+              <label
+                class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  v-model="config.show_ha_numbers"
+                  class="rounded border-slate-300 text-accent focus:ring-accent"
+                />
+                <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  $t('config.numbers')
+                }}</span>
+              </label>
+              <label
+                class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  v-model="config.show_ha_covers"
+                  class="rounded border-slate-300 text-accent focus:ring-accent"
+                />
+                <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  $t('config.covers')
+                }}</span>
+              </label>
+              <label
+                class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  v-model="config.show_ha_media"
+                  class="rounded border-slate-300 text-accent focus:ring-accent"
+                />
+                <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  $t('config.mediaPlayers')
+                }}</span>
+              </label>
+              <label
+                class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  v-model="config.show_ha_scenes"
+                  class="rounded border-slate-300 text-accent focus:ring-accent"
+                />
+                <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  $t('config.scenes')
+                }}</span>
+              </label>
+              <label
+                class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  v-model="config.show_ha_weather"
+                  class="rounded border-slate-300 text-accent focus:ring-accent"
+                />
+                <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  $t('config.weather')
+                }}</span>
+              </label>
+              <label
+                class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  v-model="config.show_console"
+                  class="rounded border-slate-300 text-accent focus:ring-accent"
+                />
                 <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                  >Header Toggles (ONLY CHARGING, etc.)</span
+                  >Console</span
                 >
               </label>
+
+              <!-- App Settings -->
+              <div
+                class="flex flex-col gap-2 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
+              >
+                <h3
+                  class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
+                >
+                  App Settings
+                </h3>
+                <label
+                  class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="config.auto_start"
+                    @change="config.auto_start = ($event.target as HTMLInputElement).checked"
+                    class="rounded border-slate-300 text-accent focus:ring-accent"
+                  />
+                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                    Launch at system startup
+                  </span>
+                </label>
+              </div>
+
+              <!-- Authentication -->
+              <div
+                class="flex flex-col gap-2 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
+              >
+                <h3
+                  class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
+                >
+                  Authentication
+                </h3>
+                <label
+                  class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="config.auth_enabled"
+                    @change="config.auth_enabled = ($event.target as HTMLInputElement).checked"
+                    class="rounded border-slate-300 text-accent focus:ring-accent"
+                  />
+                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                    Enable authentication
+                  </span>
+                </label>
+                <div v-if="config.auth_enabled" class="flex flex-col gap-2 mt-1">
+                  <div class="flex flex-col gap-1">
+                    <label class="text-[10px] font-medium text-slate-500">Username</label>
+                    <input
+                      type="text"
+                      v-model="config.auth_username"
+                      placeholder="Enter username"
+                      class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-slate-700 dark:text-slate-300"
+                    />
+                  </div>
+                  <div class="flex flex-col gap-1">
+                    <label class="text-[10px] font-medium text-slate-500">Password</label>
+                    <input
+                      type="password"
+                      v-model="config.auth_password"
+                      placeholder="Enter password"
+                      class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-slate-700 dark:text-slate-300"
+                    />
+                  </div>
+                  <label
+                    class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="config.auth_biometric"
+                      @change="config.auth_biometric = ($event.target as HTMLInputElement).checked"
+                      class="rounded border-slate-300 text-accent focus:ring-accent"
+                    />
+                    <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                      Allow biometric authentication (Touch ID / Windows Hello)
+                    </span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -711,9 +876,13 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit } from '@tauri-apps/api/event'
+import { logger } from './logger'
+
+const { t: $t } = useI18n()
 import {
   Settings,
   Wifi,
@@ -760,6 +929,7 @@ const {
   removeHeaderToggle,
   moveToggleUp,
   moveToggleDown,
+  ensureEntitiesFetched,
 } = useHAEntityManager()
 
 const activeTab = ref('mqtt')
@@ -812,7 +982,7 @@ async function testHaConnection() {
     })
     haTestResult.value = 'Connection successful'
     haTestSuccess.value = true
-  } catch (e: any) {
+  } catch (e) {
     haTestResult.value = `Failed: ${e?.toString() || e}`
     haTestSuccess.value = false
   } finally {
@@ -829,7 +999,7 @@ async function handleFetchHaEntities() {
   }
   try {
     await fetchHaEntities(config.ha_url, config.ha_port, config.ha_longlived_token)
-  } catch (e: any) {
+  } catch (e) {
     message.value = `Discovery failed: ${e?.toString() || e}`
     messageType.value = 'error'
     setTimeout(clearMessage, 3000)
@@ -838,6 +1008,12 @@ async function handleFetchHaEntities() {
 
 async function handleSave() {
   await saveConfig(haEntitiesList.value, headerTogglesList.value)
+  // Apply auto-start setting
+  try {
+    await invoke('set_auto_start', { enable: config.auto_start ?? false })
+  } catch (e) {
+    logger.warn('Failed to set auto-start:', e)
+  }
   await emit('config-saved', { color_scheme: config.color_scheme })
   message.value = 'Settings saved successfully'
   messageType.value = 'success'

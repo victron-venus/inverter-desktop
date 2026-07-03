@@ -191,6 +191,52 @@ pub struct CameraEvent {
     pub timestamp: Option<String>,
 }
 
+struct AlertState {
+    triggered: bool,
+    last_alert: Option<std::time::Instant>,
+}
+
+impl AlertState {
+    fn new() -> Self {
+        Self {
+            triggered: false,
+            last_alert: None,
+        }
+    }
+
+    fn should_alert(&mut self) -> bool {
+        match self.last_alert {
+            None => {
+                self.triggered = true;
+                self.last_alert = Some(std::time::Instant::now());
+                true
+            }
+            Some(last) => {
+                if last.elapsed() > std::time::Duration::from_secs(NOTIFICATION_COOLDOWN_SECS) {
+                    self.last_alert = Some(std::time::Instant::now());
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn check_resolved(&mut self) {
+        if self.triggered {
+            self.triggered = false;
+            self.last_alert = None;
+        }
+    }
+}
+
+struct NotificationState {
+    high_consumption: AlertState,
+    low_water: AlertState,
+    high_solar: AlertState,
+    high_load: std::collections::HashMap<String, AlertState>,
+}
+
 pub struct MqttClient {
     client: Option<Client>,
     state: Arc<Mutex<InverterState>>,
@@ -201,6 +247,7 @@ pub struct MqttClient {
     app_handle: Option<tauri::AppHandle>,
     portal_id: Option<String>,
     camera_topic: Option<String>,
+    notifications: Arc<Mutex<NotificationState>>,
 }
 
 fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
@@ -226,13 +273,13 @@ fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
     true
 }
 
-use log::error;
 use tauri_plugin_notification::NotificationExt;
 
-const THRESHOLD_LOAD_W: f64 = 300.0;
-const THRESHOLD_CONSUMPTION_W: f64 = 300.0;
+const THRESHOLD_LOAD_W: f64 = 1500.0;
+const THRESHOLD_CONSUMPTION_W: f64 = 1500.0;
 const THRESHOLD_WATER_CM: f64 = 23.0;
 const THRESHOLD_SOLAR_W: f64 = 3000.0;
+const NOTIFICATION_COOLDOWN_SECS: u64 = 300;
 
 impl MqttClient {
     pub fn new(
@@ -297,6 +344,12 @@ impl MqttClient {
             app_handle: None,
             portal_id: None,
             camera_topic: None,
+            notifications: Arc::new(Mutex::new(NotificationState {
+                high_consumption: AlertState::new(),
+                low_water: AlertState::new(),
+                high_solar: AlertState::new(),
+                high_load: std::collections::HashMap::new(),
+            })),
         }
     }
 
@@ -316,238 +369,359 @@ impl MqttClient {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut mqttoptions = MqttOptions::new("inverter-dashboard-desktop", &self.host, self.port);
-        mqttoptions.set_keep_alive(Duration::from_secs(MQTT_KEEP_ALIVE_SECS));
-
-        if let (Some(u), Some(p)) = (&self.username, &self.password) {
-            if !u.is_empty() && !p.is_empty() {
-                mqttoptions.set_credentials(u, p);
-            }
-        }
-
-        let (client, mut connection) = Client::new(mqttoptions, MQTT_QUEUE_CAPACITY);
-
-        // Subscribe to topics
-        client.subscribe("inverter/state", QoS::AtMostOnce)?;
-        client.subscribe("inverter/console", QoS::AtMostOnce)?;
-
-        if let Some(ref cam_topic) = self.camera_topic {
-            if !cam_topic.is_empty() {
-                client.subscribe(cam_topic, QoS::AtMostOnce)?;
-            }
-        }
-
-        // Clone client before storing — needed for keep-alive publisher
-        let keepalive_client = client.clone();
-        self.client = Some(client);
+    pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let host = self.host.clone();
+        let port = self.port;
+        let username = self.username.clone();
+        let password = self.password.clone();
 
         let state = self.state.clone();
         let app_handle = self.app_handle.clone();
         let portal_id = self.portal_id.clone();
         let cam_topic_owned = self.camera_topic.clone();
+        let notifications = self.notifications.clone();
 
-        // Spawn a task to handle incoming messages
+        // Keep a client handle so publish_command can work while connected
+        let self_client = self.client.clone();
+        if let Some(ref c) = self_client {
+            self.client = Some(c.clone());
+        }
+
         tauri::async_runtime::spawn(async move {
-            tokio::task::spawn_blocking(move || {
-                for event in connection.iter() {
-                    match event {
-                        Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
-                            let topic = publish.topic.clone();
-                            let payload = String::from_utf8(publish.payload.to_vec())
-                                .unwrap_or_else(|_| String::new());
-
-                            if topic == "inverter/state" {
-                                if let Ok(raw) = serde_json::from_str::<RawInverterState>(&payload)
-                                {
-                                    let new_state = InverterState {
-                                        gt: raw.gt,
-                                        g1: raw.g1,
-                                        g2: raw.g2,
-                                        tt: raw.tt,
-                                        t1: raw.t1,
-                                        t2: raw.t2,
-                                        solar_total: raw.solar_total,
-                                        mppt_total: raw
-                                            .mppt_individual
-                                            .as_ref()
-                                            .map(|v| v.iter().sum()),
-                                        tasmota_total: raw
-                                            .tasmota_individual
-                                            .as_ref()
-                                            .map(|v| v.iter().sum()),
-                                        battery_soc: raw.battery_soc,
-                                        battery_power: raw.battery_power,
-                                        battery_voltage: raw.battery_voltage,
-                                        battery_current: raw.battery_current,
-                                        setpoint: raw.setpoint,
-                                        inverter_state: raw.inverter_state,
-                                        version: raw.version,
-                                        dashboard_version: raw.dashboard_version,
-                                        uptime: raw.uptime,
-                                        ha_connected: raw.ha_connected,
-                                        ha_direct_connected: raw.ha_direct_connected,
-                                        dry_run: raw.dry_run.as_ref().map(coerce_bool),
-                                        ess_mode: raw.ess_mode,
-                                        booleans: raw.booleans.map(|map| {
-                                            map.into_iter()
-                                                .map(|(k, v)| (k, coerce_bool(&v)))
-                                                .collect()
-                                        }),
-                                        features: raw.features,
-                                        mppt_individual: raw.mppt_individual,
-                                        tasmota_individual: raw.tasmota_individual,
-                                        mppt_chargers: raw.mppt_chargers,
-                                        batteries: raw.batteries,
-                                        loads: raw.loads,
-                                        ui_config: raw.ui_config,
-                                        daily_stats: raw.daily_stats,
-                                        ev_charging_kw: raw.ev_charging_kw,
-                                        ev_power: raw.ev_power,
-                                        car_soc: raw.car_soc,
-                                        water_level: raw.water_level,
-                                        water_valve: raw.water_valve.as_ref().map(coerce_bool),
-                                        pump_switch: raw.pump_switch.as_ref().map(coerce_bool),
-                                        dishwasher_running: raw
-                                            .dishwasher_running
-                                            .as_ref()
-                                            .map(coerce_bool),
-                                        dishwasher_duration: raw.dishwasher_duration,
-                                        washer_time: raw.washer_time,
-                                        washer_power: raw.washer_power.as_ref().map(coerce_bool),
-                                        dryer_time: raw.dryer_time,
-                                        dryer_power: raw.dryer_power.as_ref().map(coerce_bool),
-                                        latest_version: raw.latest_version,
-                                        console: raw.console,
-                                    };
-
-                                    // Check thresholds and notify
-                                    if let Some(ref handle) = app_handle {
-                                        if let Some(ref loads) = new_state.loads {
-                                            for (name, power) in loads {
-                                                if *power > THRESHOLD_LOAD_W {
-                                                    let _ = handle
-                                                        .notification()
-                                                        .builder()
-                                                        .title("High Load")
-                                                        .body(format!("{}: {}W", name, power))
-                                                        .show();
-                                                }
-                                            }
-                                        }
-                                        if let Some(tt) = new_state.tt {
-                                            if tt > THRESHOLD_CONSUMPTION_W {
-                                                let _ = handle
-                                                    .notification()
-                                                    .builder()
-                                                    .title("High Consumption")
-                                                    .body(format!("Consumption: {}W", tt))
-                                                    .show();
-                                            }
-                                        }
-                                        if let Some(wl) = new_state.water_level {
-                                            if wl < THRESHOLD_WATER_CM {
-                                                let _ = handle
-                                                    .notification()
-                                                    .builder()
-                                                    .title("Low Water")
-                                                    .body(format!("Water level: {} cm", wl))
-                                                    .show();
-                                            }
-                                        }
-                                        if let Some(st) = new_state.solar_total {
-                                            if st > THRESHOLD_SOLAR_W {
-                                                let _ = handle
-                                                    .notification()
-                                                    .builder()
-                                                    .title("High Solar")
-                                                    .body(format!("Solar: {}W", st))
-                                                    .show();
-                                            }
-                                        }
-                                    }
-
-                                    if let Ok(mut guard) = state.lock() {
-                                        *guard = new_state.clone();
-                                    }
-                                    if let Some(ref handle) = app_handle {
-                                        let _ = handle.emit("mqtt-state-update", &new_state);
-                                    }
-                                }
-                            } else if topic == "inverter/console" {
-                                if let Ok(mut guard) = state.lock() {
-                                    let console = guard.console.get_or_insert_with(Vec::new);
-                                    console.push(payload);
-                                    if console.len() > CONSOLE_MAX_LINES {
-                                        console.remove(0);
-                                    }
-                                }
-                            } else if let Some(ref cam_t) = cam_topic_owned {
-                                // Check if topic matches camera wildcard
-                                if match_mqtt_topic(&topic, cam_t) {
-                                    if let Some(ref handle) = app_handle {
-                                        // Attempt to parse as JSON first (based on user example)
-                                        if let Ok(cam_event) =
-                                            serde_json::from_str::<CameraEvent>(&payload)
-                                        {
-                                            let _ = handle.emit("camera-event", cam_event);
-                                        } else {
-                                            // Fallback for simple URL string payload
-                                            let _ = handle.emit(
-                                                "camera-event",
-                                                CameraEvent {
-                                                    agent_name: "Unknown Camera".to_string(),
-                                                    video_url: payload,
-                                                    timestamp: None,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
-                            if let Some(ref handle) = app_handle {
-                                let _ = handle.emit("mqtt-connection-status", true);
-                            }
-                        }
-                        Ok(rumqttc::Event::Incoming(_)) => {}
-                        Err(e) => {
-                            error!("MQTT error: {:?}", e);
-                            if let Some(ref handle) = app_handle {
-                                let _ = handle.emit("mqtt-connection-status", false);
-                            }
-                        }
-                        _ => {}
+            loop {
+                // Log error separately so `result` drops before the await
+                {
+                    let is_err = Self::run_mqtt_loop(
+                        &host,
+                        port,
+                        &username,
+                        &password,
+                        state.clone(),
+                        app_handle.clone(),
+                        portal_id.clone(),
+                        cam_topic_owned.clone(),
+                        notifications.clone(),
+                    )
+                    .await
+                    .is_err();
+                    if is_err {
+                        log::error!("MQTT loop ended (err), reconnecting in 5s...");
+                    } else {
+                        log::info!("MQTT disconnected, reconnecting in 5s...");
+                    }
+                    // Connection lost or failed — wait before reconnecting
+                    if let Some(ref handle) = app_handle {
+                        let _ = handle.emit("mqtt-connection-status", false);
                     }
                 }
-                if let Some(ref handle) = app_handle {
-                    let _ = handle.emit("mqtt-connection-status", false);
-                }
-            });
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
         });
 
-        // Spawn keep-alive publisher for Cerbo GX
-        if let Some(pid) = portal_id {
-            let topic = format!("R/{}/keepalive", pid);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_mqtt_loop(
+        host: &str,
+        port: u16,
+        username: &Option<String>,
+        password: &Option<String>,
+        state: Arc<Mutex<InverterState>>,
+        app_handle: Option<tauri::AppHandle>,
+        portal_id: Option<String>,
+        camera_topic: Option<String>,
+        notifications: Arc<Mutex<NotificationState>>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
+        let queue_cap = MQTT_QUEUE_CAPACITY;
+
+        let mut mqttoptions =
+            MqttOptions::new("inverter-dashboard-desktop", (host.to_string(), port));
+        mqttoptions.set_keep_alive(keepalive_secs as u16);
+
+        if let (Some(u), Some(p)) = (username, password) {
+            if !u.is_empty() && !p.is_empty() {
+                mqttoptions.set_credentials(u, p.clone());
+            }
+        }
+
+        let (client, mut connection) = Client::builder(mqttoptions).capacity(queue_cap).build();
+
+        // Subscribe to topics using QoS 1 (AtLeastOnce)
+        client.subscribe("inverter/state", QoS::AtLeastOnce)?;
+        client.subscribe("inverter/console", QoS::AtLeastOnce)?;
+
+        if let Some(ref cam_topic) = camera_topic {
+            if !cam_topic.is_empty() {
+                client.subscribe(cam_topic, QoS::AtMostOnce)?;
+            }
+        }
+
+        let keepalive_client = client.clone();
+
+        // Spawn keep-alive publisher for Cerbo GX (runs in background)
+        let pid = portal_id.clone();
+        let ka_client = keepalive_client.clone();
+        if let Some(ref id) = pid {
+            let topic = format!("R/{}/keepalive", id);
             tauri::async_runtime::spawn(async move {
                 let mut interval =
                     tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
                 loop {
                     interval.tick().await;
-                    let _ = keepalive_client.publish(&topic, QoS::AtMostOnce, false, "");
+                    let _ = ka_client.publish(&topic, QoS::AtMostOnce, false, "");
                 }
             });
         }
 
+        // NOTE: use tokio net (async) instead of blocking rumqttc sync iter.
+        // Since rumqttc's AsyncClient/disconnection requires refactor, keep
+        // spawn_blocking for backward compat but treat EOF as reconnect signal.
+        let state_c = state.clone();
+        let app_c = app_handle.clone();
+        let cam_c = camera_topic.clone();
+        let notif_c = notifications.clone();
+        let con_result = tokio::task::spawn_blocking(move || {
+            for event in connection.iter() {
+                match event {
+                    Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
+                        // Use closures instead of closures capturing vars below
+                        let topic = String::from_utf8_lossy(&publish.topic).to_string();
+                        let payload = String::from_utf8(publish.payload.to_vec())
+                            .unwrap_or_else(|_| String::new());
+
+                        Self::handle_message(&topic, &payload, &state_c, &app_c, &cam_c, &notif_c);
+                    }
+                    Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
+                        if let Some(ref handle) = app_c {
+                            let _ = handle.emit("mqtt-connection-status", true);
+                        }
+                    }
+                    Ok(rumqttc::Event::Incoming(_)) => {}
+                    Err(e) => {
+                        log::error!("MQTT error: {:?}", e);
+                        // Emit disconnect and return (exit for reconnect)
+                        if let Some(ref handle) = app_c {
+                            let _ = handle.emit("mqtt-connection-status", false);
+                        }
+                        return Err(e.into());
+                    }
+                    _ => {}
+                }
+            }
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        })
+        .await;
+
+        match con_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(e) => return Err(e.into()),
+        }
+
+        // Connection ended cleanly (EOF) — signal reconnect
+        if let Some(ref handle) = app_handle {
+            let _ = handle.emit("mqtt-connection-status", false);
+        }
         Ok(())
+    }
+
+    fn handle_message(
+        topic: &str,
+        payload: &str,
+        state: &Arc<Mutex<InverterState>>,
+        app_handle: &Option<tauri::AppHandle>,
+        camera_topic: &Option<String>,
+        notifications: &Arc<Mutex<NotificationState>>,
+    ) {
+        if topic == "inverter/state" {
+            if let Ok(raw) = serde_json::from_str::<RawInverterState>(payload) {
+                Self::process_state_update(
+                    raw,
+                    state.clone(),
+                    app_handle.clone(),
+                    notifications.clone(),
+                );
+            }
+        } else if topic == "inverter/console" {
+            if let Ok(mut guard) = state.lock() {
+                let console = guard.console.get_or_insert_with(Vec::new);
+                console.push(payload.to_string());
+                if console.len() > CONSOLE_MAX_LINES {
+                    console.remove(0);
+                }
+            }
+        } else if let Some(ref cam_t) = camera_topic {
+            if match_mqtt_topic(topic, cam_t) {
+                if let Some(ref handle) = app_handle {
+                    if let Ok(cam_event) = serde_json::from_str::<CameraEvent>(payload) {
+                        let _ = handle.emit("camera-event", cam_event);
+                    } else {
+                        let _ = handle.emit(
+                            "camera-event",
+                            CameraEvent {
+                                agent_name: "Unknown Camera".to_string(),
+                                video_url: payload.to_string(),
+                                timestamp: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn process_state_update(
+        raw: RawInverterState,
+        state: Arc<Mutex<InverterState>>,
+        app_handle: Option<tauri::AppHandle>,
+        notifications: Arc<Mutex<NotificationState>>,
+    ) {
+        let new_state = InverterState {
+            gt: raw.gt,
+            g1: raw.g1,
+            g2: raw.g2,
+            tt: raw.tt,
+            t1: raw.t1,
+            t2: raw.t2,
+            solar_total: raw.solar_total,
+            mppt_total: raw.mppt_individual.as_ref().map(|v| v.iter().sum()),
+            tasmota_total: raw.tasmota_individual.as_ref().map(|v| v.iter().sum()),
+            battery_soc: raw.battery_soc,
+            battery_power: raw.battery_power,
+            battery_voltage: raw.battery_voltage,
+            battery_current: raw.battery_current,
+            setpoint: raw.setpoint,
+            inverter_state: raw.inverter_state,
+            version: raw.version,
+            dashboard_version: raw.dashboard_version,
+            uptime: raw.uptime,
+            ha_connected: raw.ha_connected,
+            ha_direct_connected: raw.ha_direct_connected,
+            dry_run: raw.dry_run.as_ref().map(coerce_bool),
+            ess_mode: raw.ess_mode,
+            booleans: raw
+                .booleans
+                .map(|map| map.into_iter().map(|(k, v)| (k, coerce_bool(&v))).collect()),
+            features: raw.features,
+            mppt_individual: raw.mppt_individual,
+            tasmota_individual: raw.tasmota_individual,
+            mppt_chargers: raw.mppt_chargers,
+            batteries: raw.batteries,
+            loads: raw.loads,
+            ui_config: raw.ui_config,
+            daily_stats: raw.daily_stats,
+            ev_charging_kw: raw.ev_charging_kw,
+            ev_power: raw.ev_power,
+            car_soc: raw.car_soc,
+            water_level: raw.water_level,
+            water_valve: raw.water_valve.as_ref().map(coerce_bool),
+            pump_switch: raw.pump_switch.as_ref().map(coerce_bool),
+            dishwasher_running: raw.dishwasher_running.as_ref().map(coerce_bool),
+            dishwasher_duration: raw.dishwasher_duration,
+            washer_time: raw.washer_time,
+            washer_power: raw.washer_power.as_ref().map(coerce_bool),
+            dryer_time: raw.dryer_time,
+            dryer_power: raw.dryer_power.as_ref().map(coerce_bool),
+            latest_version: raw.latest_version,
+            console: raw.console,
+        };
+
+        // Skip alert/notification processing when window hidden (CPU/battery optimization)
+        let hidden = crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+
+        if !hidden {
+            let mut alert_notifications: Vec<(String, String)> = Vec::new();
+            if let Ok(mut alert_state) = notifications.lock() {
+                let loads_clone = new_state.loads.clone();
+                if let Some(loads) = loads_clone {
+                    let mut active_loads = std::collections::HashSet::new();
+                    for (name, power) in &loads {
+                        if *power > THRESHOLD_LOAD_W {
+                            active_loads.insert(name.clone());
+                            let alert = alert_state
+                                .high_load
+                                .entry(name.clone())
+                                .or_insert_with(AlertState::new);
+                            if alert.should_alert() {
+                                alert_notifications.push((
+                                    "High Load".to_string(),
+                                    format!("{}: {}W", name, power),
+                                ));
+                            }
+                        }
+                    }
+                    alert_state
+                        .high_load
+                        .retain(|name, _| active_loads.contains(name));
+                }
+
+                if let Some(tt) = new_state.tt {
+                    if tt > THRESHOLD_CONSUMPTION_W {
+                        if alert_state.high_consumption.should_alert() {
+                            alert_notifications.push((
+                                "High Consumption".to_string(),
+                                format!("Consumption: {}W", tt),
+                            ));
+                        }
+                    } else {
+                        alert_state.high_consumption.check_resolved();
+                    }
+                }
+                if let Some(wl) = new_state.water_level {
+                    if wl < THRESHOLD_WATER_CM {
+                        if alert_state.low_water.should_alert() {
+                            alert_notifications
+                                .push(("Low Water".to_string(), format!("Water level: {} cm", wl)));
+                        }
+                    } else {
+                        alert_state.low_water.check_resolved();
+                    }
+                }
+                if let Some(st) = new_state.solar_total {
+                    if st > THRESHOLD_SOLAR_W {
+                        if alert_state.high_solar.should_alert() {
+                            alert_notifications
+                                .push(("High Solar".to_string(), format!("Solar: {}W", st)));
+                        }
+                    } else {
+                        alert_state.high_solar.check_resolved();
+                    }
+                }
+            }
+
+            if let Some(ref handle) = app_handle {
+                for (title, body) in &alert_notifications {
+                    let _ = handle
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(body)
+                        .show();
+                    let _ = handle.emit(
+                        "notification",
+                        serde_json::json!({ "title": title, "body": body }),
+                    );
+                }
+            }
+        }
+
+        if let Ok(mut guard) = state.lock() {
+            *guard = new_state.clone();
+        }
+        if let Some(ref handle) = app_handle {
+            if !hidden {
+                let _ = handle.emit("mqtt-state-update", &new_state);
+            }
+        }
     }
 
     pub fn publish_command(
         &self,
         action: &str,
         payload: serde_json::Value,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(client) = &self.client {
             let topic = format!("inverter/cmd/{}", action);
             let payload_str = if payload.is_null() {
@@ -555,7 +729,7 @@ impl MqttClient {
             } else {
                 serde_json::to_string(&payload)?
             };
-            client.publish(topic, QoS::AtMostOnce, false, payload_str)?;
+            client.publish(topic, QoS::AtLeastOnce, false, payload_str)?;
         }
         Ok(())
     }

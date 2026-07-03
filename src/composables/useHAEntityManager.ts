@@ -1,5 +1,7 @@
-import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { ref } from 'vue'
+
+import type { AppConfig } from '../config'
 
 export interface DiscoveredEntity {
   entity_id: string
@@ -21,31 +23,10 @@ export function useHAEntityManager() {
   const dragOverIndex = ref<number | null>(null)
   const dragTarget = ref<'home' | 'toggle' | null>(null)
 
-  function loadFromConfig(config: any) {
-    let entities = config.ha_entities || []
-    if (entities.length === 0 && config.ha_switch_entities) {
-      entities = Object.entries(config.ha_switch_entities).map(([id, data]: [string, any]) => ({
-        id,
-        label: data.label || id,
-        entity: data.entity || id,
-        domain: 'switch',
-        enabled: true,
-      }))
-    }
-    haEntitiesList.value = entities
+  function loadFromConfig(config: AppConfig) {
+    haEntitiesList.value = config.ha_entities || []
 
-    let toggles = config.header_toggles_config || []
-    if (toggles.length === 0 && config.header_toggles) {
-      toggles = config.header_toggles
-    }
-    if (toggles.length === 0 && config.ha_boolean_entities) {
-      toggles = Object.entries(config.ha_boolean_entities).map(([id, entity]) => ({
-        id,
-        label: id.replace(/_/g, ' ').toUpperCase(),
-        entity,
-      }))
-    }
-    headerTogglesList.value = toggles
+    headerTogglesList.value = config.header_toggles_config || []
   }
 
   async function fetchHaEntities(
@@ -64,8 +45,6 @@ export function useHAEntityManager() {
       selectedDiscovery.value = []
       discoveryTargetGroup.value = 'home'
       discoveryDialog.value = true
-    } catch (e: any) {
-      throw e
     } finally {
       discoveryLoading.value = false
     }
@@ -141,22 +120,6 @@ export function useHAEntityManager() {
     headerTogglesList.value.splice(index + 1, 0, item)
   }
 
-  function autofillDomain(domain: string) {
-    const toAdd = discoveredEntities.value.filter(
-      (e) => e.domain === domain && e.state !== 'unavailable'
-    )
-    for (const de of toAdd) {
-      if (haEntitiesList.value.some((ex) => ex.entity === de.entity_id)) continue
-      haEntitiesList.value.push({
-        id: de.entity_id.replace(/\./g, '_'),
-        label: de.friendly_name,
-        entity: de.entity_id,
-        domain: de.domain,
-        enabled: true,
-      })
-    }
-  }
-
   async function ensureEntitiesFetched(
     haUrl: string,
     haPort: number | null | undefined,
@@ -173,7 +136,7 @@ export function useHAEntityManager() {
         token: haToken,
       })
       discoveredEntities.value = entities
-    } catch (e: any) {
+    } catch (e) {
       console.error('Failed to auto-fetch HA entities:', e)
     } finally {
       discoveryLoading.value = false
@@ -200,7 +163,6 @@ export function useHAEntityManager() {
     removeHeaderToggle,
     moveToggleUp,
     moveToggleDown,
-    autofillDomain,
     ensureEntitiesFetched,
   }
 }

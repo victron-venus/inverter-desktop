@@ -1,7 +1,7 @@
 {
   "name": "inverter_dashboard",
   "private": true,
-  "version": "1.1.4",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,33 +14,28 @@
     "format:check": "prettier --check \"src/**/*.{ts,vue}\" \"*.ts\""
   },
   "dependencies": {
-    "@mdi/font": "^7.4.47",
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "echarts": "^6.1.0",
     "lucide-vue-next": "^1.0.0",
-    "uplot": "^1.6.30",
-    "vue": "^3.5.38",
-    "vue-awesome-button": "^0.1.0",
+    "vue": "^3.5.35",
     "vue-echarts": "^8.0.1",
-    "vuetify": "^4.1.1"
+    "vue-i18n": "^10.0.7"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.2",
     "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/test-utils": "^2.4.11",
-    "autoprefixer": "^10.5.0",
     "jsdom": "^29.1.1",
-    "postcss": "^8.5.15",
-    "prettier": "^3.8.4",
-    "tailwindcss": "^4.3.1",
+    "prettier": "^3.8.3",
+    "tailwindcss": "^4.3.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
-    "vite-plugin-vuetify": "^2.1.3",
     "vitest": "^4.1.8"
   }
 }
