@@ -879,7 +879,6 @@ async fn auth_biometric(_app: tauri::AppHandle) -> Result<String, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
         Err("Biometric authentication is only supported on macOS".to_string())
     }
 }
@@ -1024,8 +1023,11 @@ pub fn run() {
                         }
                         #[cfg(not(target_os = "macos"))]
                         {
-                            tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))
+                            let img = image::load_from_memory(include_bytes!("../icons/icon.png"))
                                 .expect("Failed to load tray icon")
+                                .into_rgba8();
+                            let (w, h) = img.dimensions();
+                            tauri::image::Image::new_owned(img.into_raw(), w, h)
                         }
                     })
                     .menu(&tauri::menu::Menu::with_items(
