@@ -1,3 +1,4 @@
+# Updated Release workflow – now includes mobile builds and asset upload
 name: Release
 
 on:
@@ -48,7 +49,7 @@ jobs:
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
-            args:  ''
+            args: ''
           - platform: 'windows-latest'
             args: ''
 
@@ -93,7 +94,8 @@ jobs:
       - name: Install AppIndicator
         if: matrix.platform == 'ubuntu-22.04'
         run: sudo apt-get install -y libappindicator3-dev
-      - name: Build app
+
+      - name: Build app with tauri-action
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -102,3 +104,93 @@ jobs:
           tagName: v${{ needs.check-version-change.outputs.new_version }}
           releaseName: Release v${{ needs.check-version-change.outputs.new_version }}
           args: ${{ matrix.args }}
+
+  mobile:
+    needs: release
+    name: Build & upload mobile artifacts
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            type: ios
+          - platform: ubuntu-22.04
+            type: android
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.type == 'ios' && 'aarch64-apple-ios' || 'aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android' }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # --------- iOS specific ---------
+      - name: iOS – init project
+        if: matrix.type == 'ios'
+        run: |
+          pnpm tauri ios init --ci
+          # Disable code signing
+          PBXPROJ=src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
+          sed -i '' 's/DevelopmentTeam = [^;]*;/DevelopmentTeam = ;/g' "$PBXPROJ"
+          cat > src-tauri/gen/apple/NoSign.xcconfig << 'EOF'
+          CODE_SIGNING_ALLOWED = NO
+          CODE_SIGNING_REQUIRED = NO
+          CODE_SIGN_IDENTITY = -
+          DEVELOPMENT_TEAM =
+          PROVISIONING_PROFILE_SPECIFIER =
+          PROVISIONING_PROFILE =
+          EOF
+        env:
+          XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
+
+      - name: iOS – build
+        if: matrix.type == 'ios'
+        env:
+          XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
+        run: pnpm tauri ios build --ci
+
+      - name: iOS – upload artifact to release
+        if: matrix.type == 'ios'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: src-tauri/gen/apple/build/arm64-iphoneos/**/*.ipa
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # --------- Android specific ---------
+      - name: Android – setup Java & SDK
+        if: matrix.type == 'android'
+        uses: android-actions/setup-android@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Android – init project
+        if: matrix.type == 'android'
+        run: pnpm tauri android init --ci
+
+      - name: Android – build
+        if: matrix.type == 'android'
+        run: pnpm tauri android build --ci
+
+      - name: Android – upload artifact to release
+        if: matrix.type == 'android'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
+          token: ${{ secrets.GITHUB_TOKEN }}
