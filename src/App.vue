@@ -320,7 +320,7 @@ const evCharging = computed(() => {
 
 const evPower = computed(() => formatPower(state.value.ev_power))
 const evPowerWatts = computed(() => Math.abs(state.value.ev_power || 0))
-const evChargingKw = computed(() => parseFloat(String(state.value.ev_charging_kw)) || 0)
+const evChargingKw = computed(() => Number.parseFloat(String(state.value.ev_charging_kw)) || 0)
 const evLoadPower = computed(() => {
   const loads = state.value.loads
   if (!loads) return 0

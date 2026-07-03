@@ -6,12 +6,13 @@
       class="classic-card p-6 w-full max-w-sm flex flex-col items-center text-center shadow-lg bg-white dark:bg-slate-900"
     >
       <img
+        :class="{'hidden': imageError}"
+        @error="onImageError"
         src="/icons/128x128.png"
         width="64"
         height="64"
         class="mb-4 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800"
         alt="Inverter Dashboard"
-        onerror="this.style.display = 'none'"
       />
 
       <h2 class="text-lg font-bold tracking-tight mb-0.5">Inverter Dashboard</h2>
@@ -49,6 +50,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
 const appVersion = ref('...')
+const imageError = ref(false)
+function onImageError() {
+  imageError.value = true
+}
 
 onMounted(async () => {
   try {
