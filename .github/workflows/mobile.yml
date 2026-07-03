@@ -1,0 +1,81 @@
+name: Mobile
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - name: Get version
+        id: version
+        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+      - run: pnpm install --frozen-lockfile
+      - name: Init iOS project
+        run: pnpm tauri ios init --ci
+      - name: Build iOS
+        run: pnpm tauri ios build --ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inverter-dashboard-ios-v${{ steps.version.outputs.version }}
+          path: src-tauri/gen/apple/build/*.ipa
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Get version
+        id: version
+        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+      - run: pnpm install --frozen-lockfile
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+      - name: Init Android project
+        run: pnpm tauri android init --ci
+      - name: Build Android
+        run: pnpm tauri android build --ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inverter-dashboard-android-v${{ steps.version.outputs.version }}
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab

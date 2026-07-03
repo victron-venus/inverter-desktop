@@ -1,5 +1,0 @@
-Docs: Update README with consistent ecosystem cross-links
-
-- Synchronize Related Projects section across all repositories
-- Correct terraform-github-victron naming and links
-- Professionalize project descriptions for portfolio visibility

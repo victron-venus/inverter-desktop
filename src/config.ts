@@ -25,11 +25,6 @@ export interface AppConfig {
     enabled: boolean
   }>
   header_toggles_config?: Array<{ id: string; label: string; entity: string }>
-  ha_water_valve_entity?: string | null
-  ha_pump_switch_entity?: string | null
-  ha_boolean_entities?: Record<string, string> | null
-  ha_switch_entities?: Record<string, { label?: string; entity: string }> | null
-  header_toggles?: Array<{ id: string; label: string; entity: string }> | null
   color_scheme?: string | null
   portal_id?: string | null
   camera_topic?: string | null
@@ -45,6 +40,18 @@ export interface AppConfig {
   show_dishwasher?: boolean
   show_home_section?: boolean
   show_header_toggles?: boolean
+  show_ha_sensors?: boolean
+  show_ha_numbers?: boolean
+  show_ha_covers?: boolean
+  show_ha_media?: boolean
+  show_ha_scenes?: boolean
+  show_ha_weather?: boolean
+  show_console?: boolean
+  auto_start?: boolean
+  auth_enabled?: boolean
+  auth_username?: string | null
+  auth_password?: string | null
+  auth_biometric?: boolean
 }
 
 // Single source of truth for section visibility defaults
@@ -59,6 +66,18 @@ const SHOW_DEFAULTS = {
   show_dishwasher: true,
   show_home_section: true,
   show_header_toggles: true,
+  show_ha_sensors: true,
+  show_ha_numbers: true,
+  show_ha_covers: true,
+  show_ha_media: true,
+  show_ha_scenes: true,
+  show_ha_weather: true,
+  show_console: true,
+  auto_start: false,
+  auth_enabled: false,
+  auth_username: null,
+  auth_password: null,
+  auth_biometric: false,
 } as const
 
 const defaultConfig: AppConfig = {
@@ -76,11 +95,6 @@ const defaultConfig: AppConfig = {
   ha_use_direct_api: false,
   ha_entities: undefined,
   header_toggles_config: undefined,
-  ha_water_valve_entity: null,
-  ha_pump_switch_entity: null,
-  ha_boolean_entities: null,
-  ha_switch_entities: null,
-  header_toggles: null,
   color_scheme: 'dark',
   portal_id: null,
   camera_topic: 'frigate/+/events',

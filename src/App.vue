@@ -7,11 +7,11 @@
     <!-- Dashboard Header: Compact buttons and theme switcher -->
     <div class="flex items-center justify-between mb-1">
       <AppHeader
-        :dryRun="!!state.dry_run"
+        :dryRun="coerceBool(state.dry_run)"
         :essClass="essClass"
         :essText="essText"
         :headerToggles="headerToggles"
-        :booleans="state.booleans"
+        :toggleStates="headerToggleStates"
         :isDark="isDark"
         :showHeaderToggles="appConfig?.show_header_toggles !== false"
         @send="send"
@@ -50,26 +50,42 @@
             :features="state.features"
             :evCharging="evCharging"
             :evPower="evPower"
+            :evPowerWatts="evPowerWatts"
+            :evChargingKw="evChargingKw"
+            :evLoadPower="evLoadPower"
             :carSoc="state.car_soc"
             :waterLevel="state.water_level"
-            :waterValve="state.water_valve"
-            :pumpSwitch="state.pump_switch"
+            :waterValve="waterValveState"
+            :pumpSwitch="pumpSwitchState"
             :pumpSwitchEntity="pumpSwitchEntity"
             :waterValveEntity="waterValveEntity"
-            :dishwasherRunning="state.dishwasher_running"
+            :dishwasherRunning="dishwasherRunning"
             :dishwasherDuration="state.dishwasher_duration"
+            :washerRunning="washerRunning"
             :washerTime="state.washer_time"
             :washerPower="state.washer_power"
+            :dryerRunning="dryerRunning"
             :dryerTime="state.dryer_time"
             :dryerPower="state.dryer_power"
             :homeButtons="homeButtons"
             :buttonStates="buttonStates"
+            :haSensors="haSensors"
+            :haNumbers="haNumbers"
+            :haCovers="haCovers"
+            :haMediaPlayers="haMediaPlayers"
+            :haScenes="haScenes"
+            :haWeather="haWeather"
             :showEv="appConfig?.show_ev !== false"
             :showWasher="appConfig?.show_washer !== false"
             :showDryer="appConfig?.show_dryer !== false"
             :showDishwasher="appConfig?.show_dishwasher !== false"
             :showHomeSection="appConfig?.show_home_section !== false"
+            :appConfig="appConfig"
             @send="send"
+            @number-set="onNumberSet"
+            @cover-position="onCoverPosition"
+            @media-control="onMediaControl"
+            @scene-activate="onSceneActivate"
           />
         </div>
       </div>
@@ -82,10 +98,7 @@
         :showSolar="appConfig?.show_solar_production !== false"
       />
 
-      <LoadsTable
-        v-if="state.features?.ha_loads !== false && appConfig?.show_active_loads !== false"
-        :sortedLoads="sortedLoads"
-      />
+      <LoadsTable v-if="appConfig?.show_active_loads !== false" :sortedLoads="sortedLoads" />
     </div>
 
     <!-- Bottom Status Bar: Classic dot layout -->
@@ -93,10 +106,13 @@
       :haEnabled="haEnabled"
       :haConnected="haConnected"
       :mqttConnected="mqttConnected"
+      :haMqttConnected="haMqttConnected"
       :uptime="state.uptime"
       :appVersion="appVersion"
       :stateVersion="state.version"
     />
+
+    <ConsoleLog v-if="appConfig?.show_console !== false" :lines="state.console || []" />
 
     <ContextMenu
       :show="contextMenu.show"
@@ -137,6 +153,9 @@
         </video>
       </div>
     </div>
+
+    <!-- Auth Screen Overlay -->
+    <AuthScreen v-if="showAuthScreen" @authenticated="handleAuthenticated" />
   </div>
 </template>
 
@@ -151,7 +170,7 @@ import { X } from 'lucide-vue-next'
 import { useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
 import { useTheme } from './composables/useTheme'
-import { useChart } from './composables/useChart'
+import { useChart, addHistoryPoint } from './composables/useChart'
 import AppHeader from './components/AppHeader.vue'
 import StatCards from './components/StatCards.vue'
 import ChartPanel from './components/ChartPanel.vue'
@@ -161,10 +180,14 @@ import LoadsTable from './components/LoadsTable.vue'
 import StatusBar from './components/StatusBar.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DailyStats from './components/DailyStats.vue'
+import ConsoleLog from './components/ConsoleLog.vue'
+import AuthScreen from './components/AuthScreen.vue'
+import { initSystemNotifications } from './composables/useSystemNotifications'
 
 const {
   state,
   mqttConnected,
+  haMqttConnected,
   appConfig,
   connectMqtt,
   ensureNotificationPermission,
@@ -173,22 +196,48 @@ const {
 const {
   haEnabled,
   haConnected,
+  haEntityStates,
+  haEntityAttributes,
   homeButtons,
   buttonStates,
   headerToggles,
+  headerToggleStates,
   waterValveEntity,
   pumpSwitchEntity,
+  waterValveState,
+  pumpSwitchState,
+  haSensors,
+  haNumbers,
+  haCovers,
+  haMediaPlayers,
+  haScenes,
+  haWeather,
+  dishwasherRunning,
+  washerRunning,
+  dryerRunning,
+  coerceBool,
   initHa,
   sendHaOrMqtt,
   cleanupHa,
+  setWindowHidden,
 } = useHA()
 const { isDark, toggleTheme } = useTheme()
-const { chartOption, addHistoryPoint, updateChartOption } = useChart(isDark)
+const { chartOption, forceUpdateChart } = useChart(isDark)
 
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
 const videoPopup = ref({ show: false, url: '', cameraName: '' })
+const authToken = ref<string | null>(null)
+const showAuthScreen = ref(false)
 let unlistenConfig: (() => void) | null = null
+let unlistenWindowEvents: (() => void) | null = null
+
+function handleAuthenticated(token: string) {
+  authToken.value = token
+  showAuthScreen.value = false
+  // Store token in session
+  sessionStorage.setItem('auth_token', token)
+}
 
 function onContextMenu(e: MouseEvent) {
   contextMenu.value = { show: true, x: e.clientX, y: e.clientY }
@@ -231,6 +280,22 @@ async function send(action: string, payload: Record<string, unknown> = {}) {
   return sendHaOrMqtt(action, payload)
 }
 
+async function onNumberSet(entityId: string, value: number) {
+  await send('number_set', { entity: entityId, value })
+}
+
+async function onCoverPosition(entityId: string, position: number) {
+  await send('set_cover_position', { entity: entityId, position })
+}
+
+async function onMediaControl(entityId: string, action: string) {
+  await send('media_player', { entity: entityId, mp_action: action })
+}
+
+async function onSceneActivate(entityId: string) {
+  await send('scene_activate', { entity: entityId })
+}
+
 const essClass = computed(() => {
   const m = state.value.ess_mode
   if (!m) return 'off'
@@ -254,6 +319,16 @@ const evCharging = computed(() => {
 })
 
 const evPower = computed(() => formatPower(state.value.ev_power))
+const evPowerWatts = computed(() => Math.abs(state.value.ev_power || 0))
+const evChargingKw = computed(() => parseFloat(String(state.value.ev_charging_kw)) || 0)
+const evLoadPower = computed(() => {
+  const loads = state.value.loads
+  if (!loads) return 0
+  for (const [key, val] of Object.entries(loads)) {
+    if (key.toLowerCase().includes('ev') || key.toLowerCase().includes('charger')) return val
+  }
+  return 0
+})
 
 const sortedLoads = computed(() => {
   const loads = state.value.loads || {}
@@ -301,7 +376,7 @@ function onDocumentClick() {
 watch(
   () => isDark.value,
   () => {
-    updateChartOption()
+    forceUpdateChart()
   }
 )
 
@@ -321,8 +396,32 @@ onMounted(async () => {
     appVersion.value = 'unknown'
   }
   await ensureNotificationPermission()
+
+  // Check if authentication is enabled
+  try {
+    const cfg = appConfig.value
+    if (cfg?.auth_enabled) {
+      // Check for existing session
+      const storedToken = sessionStorage.getItem('auth_token')
+      if (storedToken) {
+        const valid = await invoke<boolean>('auth_check', { token: storedToken })
+        if (valid) {
+          authToken.value = storedToken
+        } else {
+          sessionStorage.removeItem('auth_token')
+          showAuthScreen.value = true
+        }
+      } else {
+        showAuthScreen.value = true
+      }
+    }
+  } catch (e) {
+    logger.warn('Auth check failed:', e)
+  }
+
   await connectMqtt()
   await initHa()
+  initSystemNotifications(haEntityStates)
   document.addEventListener('click', onDocumentClick)
   globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 
@@ -333,9 +432,23 @@ onMounted(async () => {
       document.documentElement.classList.toggle('dark', isDark.value)
       localStorage.setItem('theme', scheme)
     }
-    // Re-connect to update config values like home buttons
     await connectMqtt()
+    haEntityStates.value = {}
+    haEntityAttributes.value = {}
   })
+
+  // Pause HA updates when window is hidden/blurred to reduce CPU usage
+  const unlistenHidden = await listen('window-hidden', () => setWindowHidden(true))
+  const unlistenBlurred = await listen('window-blurred', () => setWindowHidden(true))
+  const unlistenShown = await listen('window-shown', () => setWindowHidden(false))
+  const unlistenFocused = await listen('window-focused', () => setWindowHidden(false))
+
+  unlistenWindowEvents = () => {
+    unlistenHidden()
+    unlistenBlurred()
+    unlistenShown()
+    unlistenFocused()
+  }
 })
 
 onUnmounted(() => {
@@ -344,5 +457,6 @@ onUnmounted(() => {
   cleanupConnection()
   cleanupHa()
   if (unlistenConfig) unlistenConfig()
+  if (unlistenWindowEvents) unlistenWindowEvents()
 })
 </script>

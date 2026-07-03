@@ -7,8 +7,6 @@
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/victron-venus/inverter-desktop/graphs/commit-activity)
 [![CI](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/victron-venus/inverter-desktop/actions/workflows/codeql.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/codeql.yml)
-[![Trivy](https://github.com/victron-venus/inverter-desktop/actions/workflows/trivy-fs.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/trivy-fs.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/victron-venus/inverter-desktop/badge?svg)](https://scorecard.dev/viewer/?github.com/victron-venus/inverter-desktop)
 [![OSS-Fuzz](https://img.shields.io/badge/OSS--Fuzz-integrated-success)](https://oss-fuzz.com/testcases?project=inverter-desktop)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0%2B-blue.svg)](https://tauri.app/)
@@ -21,7 +19,7 @@ For the **web dashboard** (Python/FastAPI), see **[inverter-dashboard](https://g
 
 - Real-time power monitoring (Grid, Solar, Battery, Consumption)
 - Interactive controls via MQTT
-- Live power charts with uPlot
+- Live power charts with ECharts
 - EV charging status
 - Water system monitoring
 - Home automation controls
@@ -50,7 +48,6 @@ This project includes comprehensive security measures:
 
 - ✅ **OSS-Fuzz Integration**: Continuous automated fuzzing
 - ✅ **3 Fuzz Targets**: JSON parsing, MQTT handling, command parsing
-- ✅ **ClusterFuzzLite**: CI/CD fuzzing integration
 - ✅ **OpenSSF Best Practices**: Working toward badge certification
 - ✅ **Regular Dependency Updates**: Automated vulnerability monitoring
 - ✅ **Secure MQTT**: Connection handling and input validation

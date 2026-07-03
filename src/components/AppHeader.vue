@@ -24,7 +24,7 @@
           v-for="toggle in headerToggles"
           :key="toggle.id"
           class="classic-btn min-w-[55px]"
-          :class="{ 'classic-btn-on': booleans?.[toggle.id] === true }"
+          :class="{ 'classic-btn-on': toggleStates?.[toggle.id] === 'on' }"
           @click="$emit('send', 'toggle', { entity: toggle.entity })"
         >
           {{ toggle.label.toUpperCase() }}
@@ -47,13 +47,13 @@ defineProps<{
   essClass: string
   essText: string
   headerToggles: Array<{ id: string; label: string; entity: string }>
-  booleans: Record<string, boolean> | undefined
+  toggleStates: Record<string, string> | undefined
   isDark: boolean
   showHeaderToggles?: boolean
 }>()
 
 defineEmits<{
-  send: [action: string, payload?: any]
+  send: [action: string, payload?: Record<string, unknown>]
   'toggle-theme': []
 }>()
 </script>

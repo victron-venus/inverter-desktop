@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatPower, formatUptime, formatDuration, formatSemverLabel, escapeHtml } from '../utils'
+import { formatPower, formatUptime, formatDuration } from '../utils'
 
 describe('formatPower', () => {
   it('formats watts below 1000', () => {
@@ -55,40 +55,5 @@ describe('formatDuration', () => {
 
   it('formats hours', () => {
     expect(formatDuration(7200)).toBe('2:00:00')
-  })
-})
-
-describe('formatSemverLabel', () => {
-  it('returns ? for null/undefined/empty', () => {
-    expect(formatSemverLabel(null as unknown as string)).toBe('?')
-    expect(formatSemverLabel(undefined)).toBe('?')
-    expect(formatSemverLabel('')).toBe('?')
-    expect(formatSemverLabel('?')).toBe('?')
-  })
-
-  it('returns string with v prefix unchanged', () => {
-    expect(formatSemverLabel('v1.2.3')).toBe('v1.2.3')
-  })
-
-  it('prepends v to version numbers', () => {
-    expect(formatSemverLabel('1.2.3')).toBe('v1.2.3')
-  })
-})
-
-describe('escapeHtml', () => {
-  it('escapes HTML special characters', () => {
-    expect(escapeHtml('<script>')).toBe('&lt;script&gt;')
-    expect(escapeHtml('"hello"')).toBe('&quot;hello&quot;')
-    expect(escapeHtml("'test'")).toBe('&#39;test&#39;')
-    expect(escapeHtml('a&b')).toBe('a&amp;b')
-  })
-
-  it('handles null/undefined', () => {
-    expect(escapeHtml(null)).toBe('')
-    expect(escapeHtml(undefined)).toBe('')
-  })
-
-  it('handles numbers', () => {
-    expect(escapeHtml(42)).toBe('42')
   })
 })

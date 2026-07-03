@@ -1,5 +1,5 @@
-import { ref, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { reactive, ref } from 'vue'
 import type { AppConfig } from '../config'
 import { defaultConfig } from '../config'
 
@@ -14,6 +14,14 @@ export function useConfigForm() {
       const loaded = await invoke<AppConfig>('get_config')
       Object.assign(config, loaded)
       if (!config.color_scheme) config.color_scheme = 'dark'
+      // Ensure new boolean fields have defaults if missing from store
+      if (config.show_ha_sensors === undefined) config.show_ha_sensors = true
+      if (config.show_ha_numbers === undefined) config.show_ha_numbers = true
+      if (config.show_ha_covers === undefined) config.show_ha_covers = true
+      if (config.show_ha_media === undefined) config.show_ha_media = true
+      if (config.show_ha_scenes === undefined) config.show_ha_scenes = true
+      if (config.show_ha_weather === undefined) config.show_ha_weather = true
+      if (config.show_console === undefined) config.show_console = true
       message.value = ''
     } catch (e) {
       message.value = `Failed to load config: ${e}`

@@ -1,11 +1,12 @@
 {
-  "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main", "config"],
+  "description": "Capability for all windows",
+  "windows": ["main", "config", "about"],
   "permissions": [
     "core:default",
     "opener:default",
-    "notification:default"
+    "notification:default",
+    "store:default",
+    "log:default"
   ]
 }
