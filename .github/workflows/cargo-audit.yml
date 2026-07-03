@@ -65,12 +65,16 @@ jobs:
         # rustls-webpki 0.102.x advisories — transitive via rumqttc 0.25,
         # no semver-compatible fix available. Remove ignores when rumqttc
         # upgrades to webpki >= 0.103.
+        # quick-xml 0.39.x advisories — transitive via plist 1.9.0 → tauri,
+        # plist requires ^0.39.2, upstream needs to update.
         run: >
           cargo audit
           --ignore RUSTSEC-2026-0099
           --ignore RUSTSEC-2026-0049
           --ignore RUSTSEC-2026-0098
           --ignore RUSTSEC-2026-0104
+          --ignore RUSTSEC-2026-0194
+          --ignore RUSTSEC-2026-0195
 
       - name: Skip (no Cargo changes)
         if: steps.changed.outputs.any_changed != 'true'
