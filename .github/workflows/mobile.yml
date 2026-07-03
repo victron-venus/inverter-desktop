@@ -33,14 +33,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Init iOS project
         run: pnpm tauri ios init --ci
+      - name: Disable code signing in Xcode project
+        run: |
+          PBXPROJ=src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj
+          # Switch to Manual signing so Xcode doesn't look for Apple accounts
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
+          echo "ProvisioningStyle set to Manual"
+      - name: Create no-sign xcconfig override
+        run: |
+          cat > src-tauri/gen/apple/NoSign.xcconfig << 'EOF'
+          CODE_SIGNING_ALLOWED = NO
+          CODE_SIGNING_REQUIRED = NO
+          DEVELOPMENT_TEAM =
+          EOF
+      - name: Build iOS (unsigned)
         env:
-          APPLE_DEVELOPMENT_TEAM: "0000000000"
-      - name: Build iOS (unsigned CI build)
-        run: pnpm tauri ios build --ci -- CODE_SIGN_STYLE=Manual CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: inverter-dashboard-ios-v${{ steps.version.outputs.version }}
-          path: src-tauri/gen/apple/build/*.ipa
+          XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
+        run: pnpm tauri ios build --ci
 
   android:
     runs-on: ubuntu-latest
