@@ -14,7 +14,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,vue}\" \"*.ts\""
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.3.0",
+    "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
