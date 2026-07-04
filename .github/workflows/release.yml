@@ -141,7 +141,9 @@ jobs:
       # --------- iOS specific ---------
       - name: iOS – init project
         if: matrix.type == 'ios'
-        run: pnpm tauri ios init --ci
+        env:
+          SERVER_ADDR_FILE: ""
+        run: pnpm tauri ios init --ci --release
 
       - name: iOS – disable code signing
         if: matrix.type == 'ios'
@@ -164,8 +166,10 @@ jobs:
         if: matrix.type == 'ios'
         env:
           TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
+          SERVER_ADDR_FILE: ""
+          RUST_BACKTRACE: "1"
         run: |
-          # Archive only — skip exportArchive which needs a paid Apple Developer team
+          # Release config prevents dev-server addr lookup
           xcodebuild archive \
             -project "src-tauri/gen/apple/inverter-dashboard.xcodeproj" \
             -scheme "inverter-dashboard_iOS" \

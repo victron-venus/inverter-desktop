@@ -34,7 +34,10 @@ jobs:
         run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
       - run: pnpm install --frozen-lockfile
       - name: Init iOS project
-        run: pnpm tauri ios init --ci
+        env:
+          # Required by Tauri CLI — empty value signals Release build, no dev server needed
+          SERVER_ADDR_FILE: ""
+        run: pnpm tauri ios init --ci --release
       - name: Disable code signing in Xcode project
         run: |
           python3 -c "
@@ -53,8 +56,11 @@ jobs:
       - name: Build iOS (unsigned .app)
         env:
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
+          # Ensure Release build — Tauri will not look for dev server address
+          SERVER_ADDR_FILE: ""
+          RUST_BACKTRACE: "1"
         run: |
-          # Archive only — skip exportArchive which needs a paid Apple Developer team
+          # Build with xcodebuild — Release config prevents dev-server addr lookup
           xcodebuild archive \
             -project "src-tauri/gen/apple/inverter-dashboard.xcodeproj" \
             -scheme "inverter-dashboard_iOS" \
