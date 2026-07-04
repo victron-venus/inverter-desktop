@@ -25,7 +25,11 @@
       >
         <div class="flex-1 grid grid-cols-2 gap-2">
           <div class="flex flex-col gap-0.5">
-            <label :for="'ht-label-' + index" class="text-[9px] font-bold uppercase text-slate-600 px-1">Label</label>
+            <label
+              :for="'ht-label-' + index"
+              class="text-[9px] font-bold uppercase text-slate-600 px-1"
+              >Label</label
+            >
             <input
               :id="'ht-label-' + index"
               v-model="toggle.label"
@@ -35,7 +39,11 @@
             />
           </div>
           <div class="flex flex-col gap-0.5">
-            <label :for="'ht-entity-' + index" class="text-[9px] font-bold uppercase text-slate-600 px-1">Entity ID</label>
+            <label
+              :for="'ht-entity-' + index"
+              class="text-[9px] font-bold uppercase text-slate-600 px-1"
+              >Entity ID</label
+            >
             <EntityAutocompleteInput
               :id="'ht-entity-' + index"
               v-model="toggle.entity"

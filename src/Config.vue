@@ -669,7 +669,9 @@
                 </label>
                 <div v-if="config.auth_enabled" class="flex flex-col gap-2 mt-1">
                   <div class="flex flex-col gap-1">
-                    <label for="auth_username" class="text-[10px] font-medium text-slate-500">Username</label>
+                    <label for="auth_username" class="text-[10px] font-medium text-slate-500"
+                      >Username</label
+                    >
                     <input
                       id="auth_username"
                       type="text"
@@ -679,7 +681,9 @@
                     />
                   </div>
                   <div class="flex flex-col gap-1">
-                    <label for="auth_password" class="text-[10px] font-medium text-slate-500">Password</label>
+                    <label for="auth_password" class="text-[10px] font-medium text-slate-500"
+                      >Password</label
+                    >
                     <input
                       id="auth_password"
                       type="password"
