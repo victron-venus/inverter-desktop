@@ -98,7 +98,7 @@
 /* Light mode */
 :not(.dark) .classic-btn {
   background-color: #ddd !important;
-  color: #666 !important;
+  color: #333 !important;
   border-color: #ccc !important;
 }
 
