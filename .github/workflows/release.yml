@@ -142,10 +142,18 @@ jobs:
         if: matrix.type == 'ios'
         run: |
           pnpm tauri ios init --ci
-          # Disable code signing
-          PBXPROJ=src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj
-          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
-          sed -i '' 's/DevelopmentTeam = [^;]*;/DevelopmentTeam = ;/g' "$PBXPROJ"
+          # Create entitlements for ad-hoc signing
+          cat > src-tauri/gen/apple/inverter-dashboard.entitlements << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.get-task-allow</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          # Disable code signing via xcconfig
           cat > src-tauri/gen/apple/NoSign.xcconfig << 'EOF'
           CODE_SIGNING_ALLOWED = NO
           CODE_SIGNING_REQUIRED = NO
@@ -153,6 +161,8 @@ jobs:
           DEVELOPMENT_TEAM =
           PROVISIONING_PROFILE_SPECIFIER =
           PROVISIONING_PROFILE =
+          AD_HOC_CODE_SIGNING_ALLOWED = YES
+          CODE_SIGN_STYLE = Automatic
           EOF
         env:
           XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
@@ -161,7 +171,7 @@ jobs:
         if: matrix.type == 'ios'
         env:
           XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
-        run: pnpm tauri ios build --ci
+        run: pnpm tauri ios build --ci --target arm64-apple-ios
 
       - name: iOS – upload artifact to release
         if: matrix.type == 'ios'
