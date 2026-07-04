@@ -75,7 +75,7 @@ jobs:
         env:
           XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
-        run: pnpm tauri ios build --ci --target arm64-apple-ios
+        run: pnpm tauri ios build --ci --target aarch64
 
   android:
     runs-on: ubuntu-latest
