@@ -44,6 +44,7 @@ jobs:
           sed -i '' 's/DevelopmentTeam = [^;]*;/DevelopmentTeam = ;/g' "$PBXPROJ"
           echo "ProvisioningStyle set to Manual and DevelopmentTeam cleared"
       - name: Create entitlements for ad-hoc signing
+        if: matrix.type == 'ios'
         run: |
           # Create entitlements for ad-hoc signing
           cat > src-tauri/gen/apple/inverter-dashboard.entitlements << 'EOF'
@@ -71,11 +72,20 @@ jobs:
           cat src-tauri/gen/apple/inverter-dashboard.entitlements
           echo "Generated xcconfig:"
           cat src-tauri/gen/apple/NoSign.xcconfig
+      - name: Debug code signing settings
+        if: matrix.type == 'ios'
+        env:
+          XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
+        run: |
+          echo "Xcconfig content:"
+          cat $XCODE_XCCONFIG_FILE
+          echo "Showing build settings for target inverter-dashboard_iOS:"
+          xcodebuild -project src-tauri/gen/apple/inverter-dashboard.xcodeproj -scheme inverter-dashboard_iOS -showBuildSettings | grep CODE_SIGNING || true
       - name: Build iOS (unsigned)
         env:
           XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
-        run: pnpm tauri ios build --ci --target arm64-apple-ios
+        run: pnpm tauri ios build --ci
 
   android:
     runs-on: ubuntu-latest
@@ -97,7 +107,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - name: Setup Android SDK
-        uses: android-actions/setup-android=@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
       - name: Get version
         id: version
         run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT

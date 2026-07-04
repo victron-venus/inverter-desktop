@@ -166,7 +166,7 @@
       <div v-if="numbersExpanded" class="p-1 flex flex-col gap-1">
         <div v-for="num in haNumbers" :key="num.entity_id" class="flex flex-col gap-0.5">
           <div class="flex justify-between items-center px-1">
-            <span class="text-[10px] font-medium text-slate-500 truncate mr-2">
+            <span :id="'num-label-' + num.entity_id" class="text-[10px] font-medium text-slate-500 truncate mr-2">
               {{ num.name }}
             </span>
             <span class="text-[10px] font-bold text-slate-600 dark:text-slate-400">
@@ -175,6 +175,8 @@
           </div>
           <input
             type="range"
+            :id="'num-slider-' + num.entity_id"
+            :aria-labelledby="'num-label-' + num.entity_id"
             :min="num.min"
             :max="num.max"
             :step="num.step"
@@ -200,7 +202,7 @@
       <div v-if="coversExpanded" class="p-1 flex flex-col gap-1">
         <div v-for="cover in haCovers" :key="cover.entity_id" class="flex flex-col gap-0.5">
           <div class="flex justify-between items-center px-1">
-            <span class="text-[10px] font-medium text-slate-500 truncate mr-2">
+            <span :id="'cover-label-' + cover.entity_id" class="text-[10px] font-medium text-slate-500 truncate mr-2">
               {{ cover.name }}
             </span>
             <span class="text-[10px] font-bold text-slate-600 dark:text-slate-400">
@@ -209,6 +211,8 @@
           </div>
           <input
             type="range"
+            :id="'cover-slider-' + cover.entity_id"
+            :aria-labelledby="'cover-label-' + cover.entity_id"
             min="0"
             max="100"
             :value="cover.position"

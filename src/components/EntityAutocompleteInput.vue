@@ -1,6 +1,7 @@
 <template>
   <div class="relative w-full">
     <input
+      :id="id"
       :value="modelValue"
       @input="handleInput"
       @focus="handleFocus"
@@ -36,6 +37,7 @@ const props = defineProps<{
   modelValue: string
   placeholder?: string
   entities: Array<{ entity_id: string; friendly_name: string; domain: string }>
+  id?: string
 }>()
 
 const emit = defineEmits(['update:modelValue', 'focus'])

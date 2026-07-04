@@ -26,8 +26,9 @@
         <div class="flex items-center gap-2">
           <div class="flex-1 grid grid-cols-2 gap-2">
             <div class="flex flex-col gap-0.5">
-              <label class="text-[9px] font-bold uppercase text-slate-600 px-1">Label</label>
+              <label :for="'ha-label-' + index" class="text-[9px] font-bold uppercase text-slate-600 px-1">Label</label>
               <input
+                :id="'ha-label-' + index"
                 v-model="entity.label"
                 type="text"
                 class="classic-input !h-7 w-full"
@@ -35,8 +36,9 @@
               />
             </div>
             <div class="flex flex-col gap-0.5">
-              <label class="text-[9px] font-bold uppercase text-slate-600 px-1">Entity ID</label>
+              <label :for="'ha-entity-' + index" class="text-[9px] font-bold uppercase text-slate-600 px-1">Entity ID</label>
               <EntityAutocompleteInput
+                :id="'ha-entity-' + index"
                 v-model="entity.entity"
                 :entities="discoveredEntities"
                 placeholder="switch.xxx"
