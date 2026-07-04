@@ -18,7 +18,7 @@ function push(level: LogEntry['level'], args: unknown[]) {
         try {
           return JSON.stringify(a)
         } catch {
-          return String(a)
+          return a === null ? 'null' : `[${(a as object).constructor?.name || 'Object'}]`
         }
       return a
     }),

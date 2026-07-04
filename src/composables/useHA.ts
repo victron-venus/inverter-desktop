@@ -13,6 +13,12 @@ import type {
 } from '../types/ha'
 import { appConfig, state } from './useInverterState'
 
+function coerceBool(v: unknown): boolean {
+  if (v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online')
+    return true
+  return false
+}
+
 export function useHA() {
   const haEntityStates = ref<Record<string, string>>({})
   const haEntityAttributes = ref<Record<string, Record<string, unknown>>>({})
@@ -201,7 +207,7 @@ export function useHA() {
     }, 10000)
 
     // Store interval for cleanup
-    ;(window as unknown as Record<string, unknown>).__haConnInterval = connInterval
+    ;(globalThis as unknown as Record<string, unknown>).__haConnInterval = connInterval
 
     // Watch for config/state changes to fetch dynamic entity IDs (home buttons, header toggles)
     watch(
@@ -232,12 +238,6 @@ export function useHA() {
       },
       { deep: true, immediate: false }
     )
-  }
-
-  function coerceBool(v: unknown): boolean {
-    if (v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online')
-      return true
-    return false
   }
 
   const waterValveEntity = computed(() => 'switch.shutoff_valve')
@@ -282,7 +282,7 @@ export function useHA() {
       // Fallback: check remaining time sensor (time > 0 means running)
       const timeVal = haEntityStates.value['sensor.washer_remaining_time']
       if (timeVal !== undefined) {
-        const time = parseFloat(timeVal)
+        const time = Number.parseFloat(timeVal)
         return !Number.isNaN(time) && time > 0
       }
     }
@@ -297,7 +297,7 @@ export function useHA() {
       if (runVal !== undefined) return runVal === 'on'
       const timeVal = haEntityStates.value['sensor.dryer_remaining_time']
       if (timeVal !== undefined) {
-        const time = parseFloat(timeVal)
+        const time = Number.parseFloat(timeVal)
         return !Number.isNaN(time) && time > 0
       }
     }
@@ -430,7 +430,7 @@ export function useHA() {
         sensors.push({ entity_id: entityId, name, state, unit })
       } else if (domain === 'number') {
         const name = (entityAttrs.friendly_name as string) || entityId
-        const value = parseFloat(state) || 0
+        const value = Number.parseFloat(state) || 0
         const min = (entityAttrs.min as number) ?? 0
         const max = (entityAttrs.max as number) ?? 100
         const step = (entityAttrs.step as number) ?? 1
@@ -468,7 +468,7 @@ export function useHA() {
     if (unlistenHaUpdate) unlistenHaUpdate()
     if (unlistenHaConn) unlistenHaConn()
     if (unlistenHaFiltered) unlistenHaFiltered()
-    const interval = (window as unknown as Record<string, unknown>).__haConnInterval
+    const interval = (globalThis as unknown as Record<string, unknown>).__haConnInterval
     if (typeof interval === 'number') {
       clearInterval(interval)
     }
