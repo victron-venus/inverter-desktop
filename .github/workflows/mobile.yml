@@ -64,6 +64,21 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             ARCHS=arm64
 
+      - name: Package .ipa
+        run: |
+          XCA="src-tauri/gen/apple/build/InverterDashboard.xcarchive"
+          APP_DIR="$XCA/Products/Applications"
+          mkdir -p Payload
+          cp -R "$APP_DIR/"*.app Payload/
+          zip -qr "inverter-dashboard-ios.ipa" Payload
+          rm -rf Payload
+          echo "Created inverter-dashboard-ios.ipa"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: inverter-dashboard-ios-v${{ steps.version.outputs.version }}
+          path: inverter-dashboard-ios.ipa
+
   android:
     runs-on: ubuntu-latest
     steps:
