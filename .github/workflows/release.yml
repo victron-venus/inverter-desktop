@@ -143,7 +143,7 @@ jobs:
         if: matrix.type == 'ios'
         env:
           SERVER_ADDR_FILE: ""
-        run: pnpm tauri ios init --ci --release
+        run: pnpm tauri ios init --ci
 
       - name: iOS – disable code signing
         if: matrix.type == 'ios'
