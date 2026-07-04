@@ -151,10 +151,10 @@
               </p>
             </div>
 
-            <div class="flex flex-col gap-2">
-              <label
+            <div class="flex flex-col gap-2" role="radiogroup" aria-label="Interface Theme">
+              <span
                 class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                >Interface Theme</label
+                >Interface Theme</span
               >
               <div class="flex gap-1">
                 <button
@@ -218,9 +218,9 @@
                   />
                 </div>
                 <div class="flex flex-col gap-1">
-                  <label
+                  <span
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Status</label
+                    >Status</span
                   >
                   <div
                     class="h-8 flex items-center px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] text-[10px] font-bold"
@@ -343,9 +343,9 @@
                 </div>
               </div>
               <div class="flex flex-col gap-1">
-                <label
+                <span
                   class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                  >Camera Monitoring</label
+                  >Camera Monitoring</span
                 >
                 <label
                   class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
@@ -669,8 +669,9 @@
                 </label>
                 <div v-if="config.auth_enabled" class="flex flex-col gap-2 mt-1">
                   <div class="flex flex-col gap-1">
-                    <label class="text-[10px] font-medium text-slate-500">Username</label>
+                    <label for="auth_username" class="text-[10px] font-medium text-slate-500">Username</label>
                     <input
+                      id="auth_username"
                       type="text"
                       v-model="config.auth_username"
                       placeholder="Enter username"
@@ -678,8 +679,9 @@
                     />
                   </div>
                   <div class="flex flex-col gap-1">
-                    <label class="text-[10px] font-medium text-slate-500">Password</label>
+                    <label for="auth_password" class="text-[10px] font-medium text-slate-500">Password</label>
                     <input
+                      id="auth_password"
                       type="password"
                       v-model="config.auth_password"
                       placeholder="Enter password"

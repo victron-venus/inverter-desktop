@@ -15,8 +15,9 @@
 
       <div class="flex flex-col gap-3">
         <div class="flex flex-col gap-1">
-          <label class="text-[10px] font-medium text-slate-500">Username</label>
+          <label for="aus_username" class="text-[10px] font-medium text-slate-500">Username</label>
           <input
+            id="aus_username"
             v-model="username"
             type="text"
             placeholder="Username"
@@ -25,8 +26,9 @@
           />
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-[10px] font-medium text-slate-500">Password</label>
+          <label for="aus_password" class="text-[10px] font-medium text-slate-500">Password</label>
           <input
+            id="aus_password"
             v-model="password"
             type="password"
             placeholder="Password"

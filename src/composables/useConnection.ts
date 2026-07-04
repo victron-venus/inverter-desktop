@@ -13,6 +13,25 @@ import {
   state,
 } from './useInverterState'
 
+async function ensureNotificationPermission() {
+  try {
+    const granted = await isPermissionGranted()
+    if (!granted) {
+      await requestPermission()
+    }
+  } catch (e) {
+    logger.error('Notification permission error:', e)
+  }
+}
+
+async function send(action: string, payload: Record<string, unknown> = {}) {
+  try {
+    await invoke('perform_action', { action, payload })
+  } catch (e) {
+    logger.error('Failed to send command:', e)
+  }
+}
+
 export function useConnection() {
   let unlistenStateUpdate: (() => void) | null = null
   let unlistenConnectionStatus: (() => void) | null = null
@@ -20,17 +39,6 @@ export function useConnection() {
   let unlistenNotification: (() => void) | null = null
   let unlistenHaMqttStatus: (() => void) | null = null
   let wakeUnlisten: (() => void) | null = null
-
-  async function ensureNotificationPermission() {
-    try {
-      const granted = await isPermissionGranted()
-      if (!granted) {
-        await requestPermission()
-      }
-    } catch (e) {
-      logger.error('Notification permission error:', e)
-    }
-  }
 
   function processState(newState: InverterState) {
     state.value = markRaw(newState)
@@ -126,14 +134,6 @@ export function useConnection() {
     } catch (e) {
       logger.error('Failed to connect to MQTT:', e)
       mqttConnected.value = false
-    }
-  }
-
-  async function send(action: string, payload: Record<string, unknown> = {}) {
-    try {
-      await invoke('perform_action', { action, payload })
-    } catch (e) {
-      logger.error('Failed to send command:', e)
     }
   }
 
