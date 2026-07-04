@@ -160,25 +160,38 @@ jobs:
           print('Code signing disabled')
           "
 
-      - name: iOS – build
+      - name: iOS – build (unsigned .app)
         if: matrix.type == 'ios'
         env:
           TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
         run: |
-          pnpm tauri ios build --ci --target aarch64
-          # Package the unsigned .app bundle since .ipa requires signing
-          APP_PATH=$(find src-tauri/gen/apple/build -name "*.app" -type d | head -1)
-          if [ -n "$APP_PATH" ]; then
-            cd "$(dirname "$APP_PATH")"
-            zip -qr "inverter-dashboard-ios-unsigned.zip" "$(basename "$APP_PATH")"
+          # Archive only — skip exportArchive which needs a paid Apple Developer team
+          xcodebuild archive \
+            -project "src-tauri/gen/apple/inverter-dashboard.xcodeproj" \
+            -scheme "inverter-dashboard_iOS" \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath "src-tauri/gen/apple/build/InverterDashboard.xcarchive" \
+            ONLY_ACTIVE_ARCH=NO \
+            ARCHS=arm64
+
+          # Extract .app from the xcarchive and zip it
+          XCA="src-tauri/gen/apple/build/InverterDashboard.xcarchive"
+          APP_DIR="$XCA/Products/Applications"
+          if [ -d "$APP_DIR" ]; then
+            cd "$APP_DIR"
+            zip -qr "${{ github.workspace }}/inverter-dashboard-ios-unsigned.zip" *.app
             echo "Created inverter-dashboard-ios-unsigned.zip"
+          else
+            echo "No .app found in archive at $APP_DIR"
+            exit 1
           fi
 
       - name: iOS – upload artifact to release
         if: matrix.type == 'ios'
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
-          files: src-tauri/gen/apple/build/**/*.zip
+          files: ${{ github.workspace }}/inverter-dashboard-ios-unsigned.zip
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # --------- Android specific ---------

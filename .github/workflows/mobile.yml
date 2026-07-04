@@ -50,10 +50,19 @@ jobs:
               f.write(c)
           print('Code signing disabled')
           "
-      - name: Build iOS (unsigned)
+      - name: Build iOS (unsigned .app)
         env:
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
-        run: pnpm tauri ios build --ci --target aarch64
+        run: |
+          # Archive only — skip exportArchive which needs a paid Apple Developer team
+          xcodebuild archive \
+            -project "src-tauri/gen/apple/inverter-dashboard.xcodeproj" \
+            -scheme "inverter-dashboard_iOS" \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath "src-tauri/gen/apple/build/InverterDashboard.xcarchive" \
+            ONLY_ACTIVE_ARCH=NO \
+            ARCHS=arm64
 
   android:
     runs-on: ubuntu-latest
