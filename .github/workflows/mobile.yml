@@ -38,7 +38,9 @@ jobs:
           PBXPROJ=src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj
           # Switch to Manual signing so Xcode doesn't look for Apple accounts
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
-          echo "ProvisioningStyle set to Manual"
+          # Ensure no development team is set
+          sed -i '' 's/DevelopmentTeam = [^;]*;/DevelopmentTeam = ;/g' "$PBXPROJ"
+          echo "ProvisioningStyle set to Manual and DevelopmentTeam cleared"
       - name: Create no-sign xcconfig override
         run: |
           cat > src-tauri/gen/apple/NoSign.xcconfig << 'EOF'
@@ -47,10 +49,15 @@ jobs:
           CODE_SIGN_IDENTITY = -
           DEVELOPMENT_TEAM =
           PROVISIONING_PROFILE_SPECIFIER =
+          PROVISIONING_PROFILE =
+          # Additional settings to ensure no team is required
           EOF
+          echo "Generated xcconfig:"
+          cat src-tauri/gen/apple/NoSign.xcconfig
       - name: Build iOS (unsigned)
         env:
           XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
+          TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
         run: pnpm tauri ios build --ci
 
   android:
