@@ -3,6 +3,8 @@ name: Mobile
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
@@ -70,6 +72,15 @@ jobs:
           cat src-tauri/gen/apple/inverter-dashboard.entitlements
           echo "Generated xcconfig:"
           cat src-tauri/gen/apple/NoSign.xcconfig
+      - name: Debug code signing settings
+        if: matrix.type == 'ios'
+        env:
+          XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
+        run: |
+          echo "Xcconfig content:"
+          cat $XCODE_XCCONFIG_FILE
+          echo "Showing build settings for target inverter-dashboard_iOS:"
+          xcodebuild -project src-tauri/gen/apple/inverter-dashboard.xcodeproj -scheme inverter-dashboard_iOS -showBuildSettings | grep CODE_SIGNING || true
       - name: Build iOS (unsigned)
         env:
           XCODE_XCCONFIG_FILE: src-tauri/gen/apple/NoSign.xcconfig
