@@ -35,9 +35,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Init iOS project
         env:
-          # Required by Tauri CLI — empty value signals Release build, no dev server needed
           SERVER_ADDR_FILE: ""
-        run: pnpm tauri ios init --ci --release
+        run: pnpm tauri ios init --ci
       - name: Disable code signing in Xcode project
         run: |
           python3 -c "
