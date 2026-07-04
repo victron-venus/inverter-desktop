@@ -6,7 +6,7 @@
       class="classic-card p-6 w-full max-w-sm flex flex-col items-center text-center shadow-lg bg-white dark:bg-slate-900"
     >
       <img
-        :class="{'hidden': imageError}"
+        :class="{ hidden: imageError }"
         @error="onImageError"
         src="/icons/128x128.png"
         width="64"
