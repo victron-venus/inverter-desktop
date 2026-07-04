@@ -175,23 +175,25 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             ARCHS=arm64
 
-          # Extract .app from the xcarchive and zip it
+          # Package .app into a sideload-ready .ipa
           XCA="src-tauri/gen/apple/build/InverterDashboard.xcarchive"
           APP_DIR="$XCA/Products/Applications"
-          if [ -d "$APP_DIR" ]; then
-            cd "$APP_DIR"
-            zip -qr "${{ github.workspace }}/inverter-dashboard-ios-unsigned.zip" *.app
-            echo "Created inverter-dashboard-ios-unsigned.zip"
-          else
+          if [ ! -d "$APP_DIR" ]; then
             echo "No .app found in archive at $APP_DIR"
             exit 1
           fi
+          mkdir -p Payload
+          cp -R "$APP_DIR/"*.app Payload/
+          # .ipa is a zip archive with Payload/ at the root
+          zip -qr "${{ github.workspace }}/inverter-dashboard-ios.ipa" Payload
+          rm -rf Payload
+          echo "Created inverter-dashboard-ios.ipa"
 
       - name: iOS – upload artifact to release
         if: matrix.type == 'ios'
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
-          files: ${{ github.workspace }}/inverter-dashboard-ios-unsigned.zip
+          files: ${{ github.workspace }}/inverter-dashboard-ios.ipa
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # --------- Android specific ---------
