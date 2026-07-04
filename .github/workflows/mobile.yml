@@ -41,8 +41,21 @@ jobs:
           # Ensure no development team is set
           sed -i '' 's/DevelopmentTeam = [^;]*;/DevelopmentTeam = ;/g' "$PBXPROJ"
           echo "ProvisioningStyle set to Manual and DevelopmentTeam cleared"
-      - name: Create no-sign xcconfig override
+      - name: Create entitlements for ad-hoc signing
+        if: matrix.type == 'ios'
         run: |
+          # Create entitlements for ad-hoc signing
+          cat > src-tauri/gen/apple/inverter-dashboard.entitlements << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.get-task-allow</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          # Disable code signing via xcconfig
           cat > src-tauri/gen/apple/NoSign.xcconfig << 'EOF'
           CODE_SIGNING_ALLOWED = NO
           CODE_SIGNING_REQUIRED = NO
@@ -50,8 +63,11 @@ jobs:
           DEVELOPMENT_TEAM =
           PROVISIONING_PROFILE_SPECIFIER =
           PROVISIONING_PROFILE =
-          # Additional settings to ensure no team is required
+          AD_HOC_CODE_SIGNING_ALLOWED = YES
+          CODE_SIGN_STYLE = Automatic
           EOF
+          echo "Generated entitlements:"
+          cat src-tauri/gen/apple/inverter-dashboard.entitlements
           echo "Generated xcconfig:"
           cat src-tauri/gen/apple/NoSign.xcconfig
       - name: Build iOS (unsigned)
