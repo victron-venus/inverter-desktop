@@ -35,10 +35,26 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Init iOS project
         run: pnpm tauri ios init --ci
+      - name: Disable code signing in Xcode project
+        run: |
+          PBXPROJ=src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj
+          python3 -c "
+import re
+with open('$PBXPROJ') as f:
+    content = f.read()
+content = re.sub(r'DEVELOPMENT_TEAM\s*=\s*\"[^\"]*\";', '', content)
+content = re.sub(r'CODE_SIGN_IDENTITY\s*=\s*\"[^\"]*\";', 'CODE_SIGN_IDENTITY = \"-\";', content)
+content = re.sub(r'(SDKROOT = iphoneos;)',
+    r'\1\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;',
+    content)
+with open('$PBXPROJ', 'w') as f:
+    f.write(content)
+print('Code signing disabled')
+"
       - name: Build iOS (unsigned)
         env:
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
-        run: pnpm tauri ios build --ci --target aarch64 -- CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=
+        run: pnpm tauri ios build --ci --target aarch64
 
   android:
     runs-on: ubuntu-latest
