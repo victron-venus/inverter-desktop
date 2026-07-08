@@ -37,6 +37,12 @@ jobs:
         env:
           SERVER_ADDR_FILE: ""
         run: pnpm tauri ios init --ci
+      - name: Ensure Archive config is Release
+        run: |
+          SCHEME="src-tauri/gen/apple/inverter-dashboard.xcodeproj/xcshareddata/xcschemes/inverter-dashboard_iOS.xcscheme"
+          # Tauri may generate ArchiveAction with debug; force release
+          sed -i '' 's/buildConfiguration = "debug"/buildConfiguration = "release"/g' "$SCHEME"
+          echo "✓ Archive action set to release"
       - name: Disable code signing in Xcode project
         run: |
           python3 -c "
@@ -55,17 +61,16 @@ jobs:
       - name: Build iOS (unsigned .app)
         env:
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
-          # Ensure Release build — Tauri will not look for dev server address
-          SERVER_ADDR_FILE: ""
-          RUST_BACKTRACE: "1"
         run: |
-          # Build with xcodebuild — Release config prevents dev-server addr lookup
-          xcodebuild archive \
+          # Clean + custom DerivedData to avoid stale debug caches
+          rm -rf "src-tauri/gen/apple/build/DerivedData"
+          xcodebuild clean archive \
             -project "src-tauri/gen/apple/inverter-dashboard.xcodeproj" \
             -scheme "inverter-dashboard_iOS" \
             -sdk iphoneos \
             -configuration Release \
             -archivePath "src-tauri/gen/apple/build/InverterDashboard.xcarchive" \
+            -derivedDataPath "src-tauri/gen/apple/build/DerivedData" \
             ONLY_ACTIVE_ARCH=NO \
             ARCHS=arm64
 
