@@ -149,7 +149,8 @@ jobs:
         if: matrix.type == 'ios'
         run: |
           SCHEME="src-tauri/gen/apple/inverter-dashboard.xcodeproj/xcshareddata/xcschemes/inverter-dashboard_iOS.xcscheme"
-          sed -i '' 's/buildConfiguration = "debug"/buildConfiguration = "release"/g' "$SCHEME"
+          sed -i.bak 's/buildConfiguration = "debug"/buildConfiguration = "release"/g' "$SCHEME"
+          rm -f "$SCHEME.bak"
           echo "✓ Archive action set to release"
 
       - name: iOS – disable code signing
@@ -180,7 +181,7 @@ jobs:
             -project "src-tauri/gen/apple/inverter-dashboard.xcodeproj" \
             -scheme "inverter-dashboard_iOS" \
             -sdk iphoneos \
-            -configuration Release \
+            -configuration release \
             -archivePath "src-tauri/gen/apple/build/InverterDashboard.xcarchive" \
             -derivedDataPath "src-tauri/gen/apple/build/DerivedData" \
             ONLY_ACTIVE_ARCH=NO \
