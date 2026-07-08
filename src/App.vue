@@ -437,17 +437,13 @@ onMounted(async () => {
     haEntityAttributes.value = {}
   })
 
-  // Pause HA updates when window is hidden/blurred to reduce CPU usage
+  // Pause HA updates only when window is minimized/closed (not when it loses focus)
   const unlistenHidden = await listen('window-hidden', () => setWindowHidden(true))
-  const unlistenBlurred = await listen('window-blurred', () => setWindowHidden(true))
   const unlistenShown = await listen('window-shown', () => setWindowHidden(false))
-  const unlistenFocused = await listen('window-focused', () => setWindowHidden(false))
 
   unlistenWindowEvents = () => {
     unlistenHidden()
-    unlistenBlurred()
     unlistenShown()
-    unlistenFocused()
   }
 })
 
