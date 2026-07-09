@@ -106,7 +106,7 @@ jobs:
           args: ${{ matrix.args }}
 
   mobile:
-    needs: check-version-change
+    needs: [check-version-change, release]
     if: needs.check-version-change.outputs.should_release == 'true'
     name: Build & upload mobile artifacts
     runs-on: ${{ matrix.platform }}
