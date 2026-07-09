@@ -163,12 +163,30 @@ jobs:
               c = f.read()
           c = re.sub(r'DEVELOPMENT_TEAM\s*=\s*\"[^\"]*\";', '', c)
           c = re.sub(r'CODE_SIGN_IDENTITY\s*=\s*\"[^\"]*\";', 'CODE_SIGN_IDENTITY = \"-\";', c)
+          # Remove any existing entries first (idempotent)
+          c = re.sub(r'\n\s*CODE_SIGNING_ALLOWED\s*=\s*(YES|NO);', '', c)
+          c = re.sub(r'\n\s*CODE_SIGNING_REQUIRED\s*=\s*(YES|NO);', '', c)
+          # Add fresh entries after each SDKROOT = iphoneos;
           c = re.sub(r'(SDKROOT = iphoneos;)',
               r'\1\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;', c)
           with open(p, 'w') as f:
               f.write(c)
           print('Code signing disabled')
           "
+
+      - name: iOS – pre-build Rust library
+        if: matrix.type == 'ios'
+        run: |
+          cargo build --target aarch64-apple-ios --release \
+            --package inverter-dashboard --lib \
+            --manifest-path src-tauri/Cargo.toml
+          mkdir -p src-tauri/gen/apple/Externals/arm64/release
+          cp src-tauri/target/aarch64-apple-ios/release/libinverter_dashboard_lib.a \
+            src-tauri/gen/apple/Externals/arm64/release/libapp.a
+
+      - name: iOS – patch build phase to skip xcode-script
+        if: matrix.type == 'ios'
+        run: python3 scripts/patch_pbxproj.py
 
       - name: iOS – build (unsigned .app)
         if: matrix.type == 'ios'

@@ -40,7 +40,7 @@
 </template>
 
 <script setup lang="ts">
-import { FlaskConical, Zap, Sun, Moon } from 'lucide-vue-next'
+import { FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
 
 defineProps<{
   dryRun: boolean

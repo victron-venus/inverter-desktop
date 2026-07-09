@@ -5,8 +5,9 @@ fn main() {
     env::set_var("TAURI_APP_VERSION", &version);
     println!("cargo:rustc-env=APP_VERSION={}", version);
 
-    #[cfg(target_os = "macos")]
-    {
+    // biometric.m is Apple-only (uses LocalAuthentication), skip for Android/Linux/Windows
+    let target = env::var("TARGET").unwrap_or_default();
+    if target.contains("apple") {
         cc::Build::new()
             .file("src/biometric.m")
             .compile("biometric");
