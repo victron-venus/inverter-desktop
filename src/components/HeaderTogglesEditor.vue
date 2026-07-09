@@ -82,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { Plus, Trash2, ChevronUp, ChevronDown } from 'lucide-vue-next'
+import { Plus, Trash2, ChevronUp, ChevronDown } from '@lucide/vue'
 import EntityAutocompleteInput from './EntityAutocompleteInput.vue'
 
 defineProps<{

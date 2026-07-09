@@ -398,7 +398,7 @@ import {
   WashingMachine,
   PlugZap,
   type LucideIcon,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { formatDuration } from '../utils'
 import type {
   HaCoverDisplay,

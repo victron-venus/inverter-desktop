@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { BatteryMedium, SunMedium } from 'lucide-vue-next'
+import { BatteryMedium, SunMedium } from '@lucide/vue'
 
 defineProps<{
   batteries: Array<{

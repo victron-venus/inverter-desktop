@@ -900,7 +900,7 @@ import {
   X,
   Loader2,
   Check,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { useConfigForm } from './composables/useConfigForm'
 import { useHAEntityManager } from './composables/useHAEntityManager'
 import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
