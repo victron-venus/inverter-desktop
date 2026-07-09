@@ -889,18 +889,7 @@ import { emit } from '@tauri-apps/api/event'
 import { logger } from './logger'
 
 const { t: $t } = useI18n()
-import {
-  Settings,
-  Wifi,
-  Home,
-  Layout,
-  Eye,
-  Save,
-  RotateCcw,
-  X,
-  Loader2,
-  Check,
-} from 'lucide-vue-next'
+import { Settings, Wifi, Home, Layout, Eye, Save, RotateCcw, X, Loader2, Check } from '@lucide/vue'
 import { useConfigForm } from './composables/useConfigForm'
 import { useHAEntityManager } from './composables/useHAEntityManager'
 import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
