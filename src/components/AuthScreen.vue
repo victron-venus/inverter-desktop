@@ -69,7 +69,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { Lock, Loader2, Fingerprint } from 'lucide-vue-next'
+import { Lock, Loader2, Fingerprint } from '@lucide/vue'
 import { logger } from '../logger'
 
 const emit = defineEmits<{

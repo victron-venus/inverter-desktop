@@ -22,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import { Zap } from 'lucide-vue-next'
+import { Zap } from '@lucide/vue'
 
 defineProps<{
   sortedLoads: Array<[string, number]>

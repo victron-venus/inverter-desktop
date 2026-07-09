@@ -55,4 +55,7 @@ PLAN.md
 bump.sh
 scripts/bump.js
 
+# Python cache
+__pycache__/
+
 AGENTS.md
