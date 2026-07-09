@@ -493,7 +493,7 @@ impl HaWebSocketClient {
         let auth_msg = serde_json::json!({ "type": "auth", "access_token": token });
         write
             .send(tokio_tungstenite::tungstenite::Message::Text(
-                auth_msg.to_string(),
+                auth_msg.to_string().into(),
             ))
             .await
             .map_err(|e| format!("WS auth send failed: {}", e))?;
@@ -522,7 +522,7 @@ impl HaWebSocketClient {
         });
         write
             .send(tokio_tungstenite::tungstenite::Message::Text(
-                sub_msg.to_string(),
+                sub_msg.to_string().into(),
             ))
             .await
             .map_err(|e| format!("WS subscribe failed: {}", e))?;
