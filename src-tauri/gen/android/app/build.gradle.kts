@@ -57,15 +57,24 @@ rust {
     rootDirRel = "../../../"
 }
 
+val webkitVersion = "1.14.0"
+val appcompatVersion = "1.7.1"
+val activityKtxVersion = "1.10.1"
+val materialVersion = "1.12.0"
+val lifecycleProcessVersion = "2.10.0"
+val junitVersion = "4.13.2"
+val testExtJunitVersion = "1.1.4"
+val testEspressoVersion = "3.5.0"
+
 dependencies {
-    implementation("androidx.webkit:webkit:1.14.0")
-    implementation("androidx.appcompat:appcompat:1.7.1")
-    implementation("androidx.activity:activity-ktx:1.10.1")
-    implementation("com.google.android.material:material:1.12.0")
-    implementation("androidx.lifecycle:lifecycle-process:2.10.0")
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.1.4")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
+    implementation("androidx.webkit:webkit:$webkitVersion")
+    implementation("androidx.appcompat:appcompat:$appcompatVersion")
+    implementation("androidx.activity:activity-ktx:$activityKtxVersion")
+    implementation("com.google.android.material:material:$materialVersion")
+    implementation("androidx.lifecycle:lifecycle-process:$lifecycleProcessVersion")
+    testImplementation("junit:junit:$junitVersion")
+    androidTestImplementation("androidx.test.ext:junit:$testExtJunitVersion")
+    androidTestImplementation("androidx.test.espresso:espresso-core:$testEspressoVersion")
 }
 
 apply(from = "tauri.build.gradle.kts")

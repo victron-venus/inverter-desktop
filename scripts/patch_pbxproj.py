@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Patch Xcode build phase to skip tauri xcode-script if libapp.a already exists."""
+import os
 import re
 import sys
 
-path = sys.argv[1] if len(sys.argv) > 1 else 'src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj'
+DEFAULT = 'src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj'
+
+raw = sys.argv[1] if len(sys.argv) > 1 else DEFAULT
+path = os.path.realpath(raw)
+
+project_root = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
+if os.path.commonpath([path, project_root]) != project_root:
+    sys.exit(f"Error: path '{raw}' resolves outside the project root ({project_root})")
 
 with open(path) as f:
     c = f.read()
