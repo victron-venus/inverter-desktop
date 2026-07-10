@@ -53,4 +53,4 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 ab_glyph = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
