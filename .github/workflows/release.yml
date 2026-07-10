@@ -227,8 +227,10 @@ jobs:
         if: matrix.type == 'ios'
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
+          tag_name: v${{ needs.check-version-change.outputs.new_version }}
           files: ${{ github.workspace }}/inverter-dashboard-ios.ipa
           token: ${{ secrets.GITHUB_TOKEN }}
+          overwrite_files: true
 
       # --------- Android specific ---------
       - name: Android – setup Java
@@ -256,7 +258,9 @@ jobs:
         if: matrix.type == 'android'
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
+          tag_name: v${{ needs.check-version-change.outputs.new_version }}
           files: |
             src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
             src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
           token: ${{ secrets.GITHUB_TOKEN }}
+          overwrite_files: true
