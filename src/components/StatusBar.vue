@@ -4,8 +4,8 @@
   >
     <div v-if="haEnabled" class="flex items-center gap-1">
       <div
-        class="w-2.5 h-2.5 rounded-full shadow-inner transition-colors ring-1 ring-slate-400 dark:ring-slate-500"
-        :class="haConnected ? 'bg-green-400' : 'bg-slate-500 dark:bg-slate-700'"
+        class="w-1.5 h-1.5 rounded-full shadow-inner transition-colors ring-1 ring-slate-400 dark:ring-slate-500"
+        :class="haConnected ? 'bg-green-500' : 'bg-slate-500 dark:bg-slate-700'"
       ></div>
       <span>{{ $t('status.ha') }}</span>
     </div>
@@ -21,8 +21,8 @@
 
     <div class="flex items-center gap-1">
       <div
-        class="w-2.5 h-2.5 rounded-full shadow-inner transition-colors ring-1 ring-slate-400 dark:ring-slate-500"
-        :class="mqttConnected ? 'bg-green-400' : 'bg-slate-500 dark:bg-slate-700'"
+        class="w-1.5 h-1.5 rounded-full shadow-inner transition-colors ring-1 ring-slate-400 dark:ring-slate-500"
+        :class="mqttConnected ? 'bg-green-500' : 'bg-slate-500 dark:bg-slate-700'"
       ></div>
       <span class="text-slate-500 dark:text-white">{{ $t('status.mqtt') }}</span>
     </div>
@@ -31,8 +31,8 @@
 
     <div v-if="haMqttConnected !== null" class="flex items-center gap-1">
       <div
-        class="w-2.5 h-2.5 rounded-full shadow-inner transition-colors ring-1 ring-slate-400 dark:ring-slate-500"
-        :class="haMqttConnected ? 'bg-green-400' : 'bg-slate-500 dark:bg-slate-700'"
+        class="w-1.5 h-1.5 rounded-full shadow-inner transition-colors ring-1 ring-slate-400 dark:ring-slate-500"
+        :class="haMqttConnected ? 'bg-green-500' : 'bg-slate-500 dark:bg-slate-700'"
       ></div>
       <span class="text-slate-500 dark:text-white">{{ $t('status.haMqtt') }}</span>
     </div>

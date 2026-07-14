@@ -248,6 +248,7 @@ pub struct MqttClient {
     portal_id: Option<String>,
     camera_topic: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
+    status_event: String,
 }
 
 fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
@@ -350,6 +351,7 @@ impl MqttClient {
                 high_solar: AlertState::new(),
                 high_load: std::collections::HashMap::new(),
             })),
+            status_event: "mqtt-connection-status".to_string(),
         }
     }
 
@@ -363,6 +365,10 @@ impl MqttClient {
 
     pub fn set_camera_topic(&mut self, topic: Option<String>) {
         self.camera_topic = topic;
+    }
+
+    pub fn set_status_event(&mut self, event: String) {
+        self.status_event = event;
     }
 
     pub fn get_state(&self) -> InverterState {
@@ -380,6 +386,7 @@ impl MqttClient {
         let portal_id = self.portal_id.clone();
         let cam_topic_owned = self.camera_topic.clone();
         let notifications = self.notifications.clone();
+        let status_event = self.status_event.clone();
 
         // Keep a client handle so publish_command can work while connected
         let self_client = self.client.clone();
@@ -401,6 +408,7 @@ impl MqttClient {
                         portal_id.clone(),
                         cam_topic_owned.clone(),
                         notifications.clone(),
+                        &status_event,
                     )
                     .await
                     .is_err();
@@ -411,7 +419,7 @@ impl MqttClient {
                     }
                     // Connection lost or failed — wait before reconnecting
                     if let Some(ref handle) = app_handle {
-                        let _ = handle.emit("mqtt-connection-status", false);
+                        let _ = handle.emit(&status_event, false);
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -432,6 +440,7 @@ impl MqttClient {
         portal_id: Option<String>,
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
+        status_event: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
         let queue_cap = MQTT_QUEUE_CAPACITY;
@@ -482,6 +491,7 @@ impl MqttClient {
         let app_c = app_handle.clone();
         let cam_c = camera_topic.clone();
         let notif_c = notifications.clone();
+        let se = status_event.to_string();
         let con_result = tokio::task::spawn_blocking(move || {
             for event in connection.iter() {
                 match event {
@@ -495,7 +505,7 @@ impl MqttClient {
                     }
                     Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
                         if let Some(ref handle) = app_c {
-                            let _ = handle.emit("mqtt-connection-status", true);
+                            let _ = handle.emit(&se, true);
                         }
                     }
                     Ok(rumqttc::Event::Incoming(_)) => {}
@@ -503,7 +513,7 @@ impl MqttClient {
                         log::error!("MQTT error: {:?}", e);
                         // Emit disconnect and return (exit for reconnect)
                         if let Some(ref handle) = app_c {
-                            let _ = handle.emit("mqtt-connection-status", false);
+                            let _ = handle.emit(&se, false);
                         }
                         return Err(e.into());
                     }
@@ -522,7 +532,7 @@ impl MqttClient {
 
         // Connection ended cleanly (EOF) — signal reconnect
         if let Some(ref handle) = app_handle {
-            let _ = handle.emit("mqtt-connection-status", false);
+            let _ = handle.emit(status_event, false);
         }
         Ok(())
     }

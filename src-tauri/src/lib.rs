@@ -907,13 +907,13 @@ async fn connect_ha_mqtt(
     let mut client = MqttClient::new(host, port, username, password);
     client.set_app_handle(app.clone());
     client.set_camera_topic(camera_topic);
+    client.set_status_event("ha-mqtt-connection-status".to_string());
     client.connect().map_err(|e| e.to_string())?;
     let mut client_guard = mqtt_client
         .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = Some(client);
-    let _ = app.emit("ha-mqtt-connection-status", true);
     Ok(())
 }
 
