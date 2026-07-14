@@ -59,15 +59,10 @@ export function useHA() {
   }
 
   const haConnected = computed(() => {
-    // If HA is configured, check if we have any data or WS connection
     const cfg = appConfig.value
     if (cfg?.ha_use_direct_api && cfg.ha_url && cfg.ha_longlived_token) {
-      // Green if WS connected OR if we have entity states (data is flowing)
-      if (haWsConnected.value) return true
-      if (Object.keys(haEntityStates.value).length > 0) return true
-      return false
+      return haWsConnected.value
     }
-    // Fallback to MQTT ha_connected flag
     return !!state.value.ha_connected
   })
 
