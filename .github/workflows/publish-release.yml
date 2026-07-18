@@ -1,0 +1,37 @@
+---
+name: Publish Release Assets
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      with:
+        fetch-depth: 0
+
+    - name: Create Release Archive
+      run: |
+        PKG_NAME="inverter-desktop"
+        ARCHIVE="${PKG_NAME}-${GITHUB_REF#refs/tags/}.tar.gz"
+        mkdir -p "${PKG_NAME}"
+        cp -r src package.json tsconfig.json vite.config.ts README.md LICENSE "${PKG_NAME}/" 2>/dev/null || true
+        tar -czf "$ARCHIVE" "${PKG_NAME}/"
+        echo "ARCHIVE=$ARCHIVE" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+      with:
+        body_path: release.txt
+        files: ${{ steps.archive.outputs.ARCHIVE }}
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
