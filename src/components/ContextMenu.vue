@@ -5,7 +5,7 @@
     :style="{ left: x + 'px', top: y + 'px' }"
     @click.stop
   >
-    <button
+    <button type="button"
       class="w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 hover:bg-apple-blue hover:text-white transition-colors group"
       @click="$emit('open-config')"
     >

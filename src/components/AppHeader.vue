@@ -1,7 +1,7 @@
 <template>
   <div class="classic-card mb-1.5 p-1 flex items-center gap-1 w-full">
     <div class="flex flex-wrap gap-0.5 items-center flex-1">
-      <button
+      <button type="button"
         class="classic-btn min-w-[28px]"
         :class="{ 'classic-btn-on': dryRun }"
         @click="$emit('send', 'dry_run')"
@@ -9,7 +9,7 @@
         <FlaskConical :size="7" /> DRY
       </button>
 
-      <button
+      <button type="button"
         class="classic-btn min-w-[45px]"
         :class="{ 'classic-btn-on': essClass === 'on' }"
         @click="$emit('send', 'ess_mode')"
@@ -20,7 +20,7 @@
       <template v-if="showHeaderToggles !== false && headerToggles.length > 0">
         <div class="w-px h-3 bg-slate-300 mx-0.5"></div>
 
-        <button
+        <button type="button"
           v-for="toggle in headerToggles"
           :key="toggle.id"
           class="classic-btn min-w-[55px]"
@@ -32,7 +32,7 @@
       </template>
     </div>
 
-    <button class="classic-btn min-w-[20px]" @click="$emit('toggle-theme')">
+    <button type="button" class="classic-btn min-w-[20px]" @click="$emit('toggle-theme')">
       <Sun v-if="isDark" :size="8" />
       <Moon v-else :size="8" />
     </button>

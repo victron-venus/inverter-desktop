@@ -1,6 +1,6 @@
 <template>
   <div class="notification-bell relative">
-    <button class="classic-btn relative" @click="showPanel = !showPanel">
+    <button type="button" class="classic-btn relative" @click="showPanel = !showPanel">
       🔔
       <span
         v-if="unreadCount > 0"
@@ -21,14 +21,14 @@
           $t('notifications.title')
         }}</span>
         <div class="flex gap-1">
-          <button
+          <button type="button"
             v-if="notifications.length > 0"
             class="text-[9px] text-blue-500 hover:underline"
             @click="markAllRead"
           >
             {{ $t('notifications.markAllRead') }}
           </button>
-          <button
+          <button type="button"
             v-if="notifications.length > 0"
             class="text-[9px] text-red-500 hover:underline"
             @click="clearAll"
