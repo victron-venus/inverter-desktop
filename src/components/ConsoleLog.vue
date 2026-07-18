@@ -1,6 +1,6 @@
 <template>
   <div v-if="lines.length > 0" class="console-log classic-card mt-1">
-    <button
+    <button type="button"
       class="w-full flex items-center justify-between px-2 py-0.5 text-xs font-mono opacity-70 hover:opacity-100 transition-opacity"
       @click="expanded = !expanded"
     >

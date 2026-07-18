@@ -14,14 +14,14 @@
         >
       </div>
       <div class="flex items-center gap-1.5">
-        <button
+        <button type="button"
           @click="handleReset"
           class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-900 dark:text-slate-300"
           title="Reset to defaults"
         >
           <RotateCcw :size="12" />
         </button>
-        <button
+        <button type="button"
           @click="handleSave"
           :disabled="saving"
           class="classic-btn !h-[18px] !text-[7px] !bg-accent !border-emerald-600 !text-white flex items-center gap-1 shadow-md"
@@ -31,7 +31,7 @@
           <Loader2 :size="10" v-else class="animate-spin" />
           <span>SAVE</span>
         </button>
-        <button
+        <button type="button"
           @click="handleClose"
           class="p-1 rounded hover:bg-red-500 hover:text-white transition-colors text-slate-900 dark:text-slate-300"
         >
@@ -46,7 +46,7 @@
       <div
         class="w-[160px] border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-black p-1.5 flex flex-col gap-1"
       >
-        <button
+        <button type="button"
           v-for="s in sections"
           :key="s.id"
           @click="activeTab = s.id"
@@ -157,14 +157,14 @@
                 >Interface Theme</span
               >
               <div class="flex gap-1">
-                <button
+                <button type="button"
                   @click="config.color_scheme = 'dark'"
                   class="classic-btn !normal-case flex-1"
                   :class="{ 'classic-btn-on': config.color_scheme === 'dark' }"
                 >
                   Dark
                 </button>
-                <button
+                <button type="button"
                   @click="config.color_scheme = 'light'"
                   class="classic-btn !normal-case flex-1"
                   :class="{ 'classic-btn-on': config.color_scheme === 'light' }"
@@ -253,14 +253,14 @@
               </div>
 
               <div class="flex gap-2 mt-1">
-                <button
+                <button type="button"
                   @click="testHaConnection"
                   :disabled="testingHa"
                   class="classic-btn flex-1 !normal-case"
                 >
                   {{ testingHa ? 'Testing...' : 'Test Connection' }}
                 </button>
-                <button
+                <button type="button"
                   @click="handleFetchHaEntities"
                   :disabled="discoveryLoading || !isHaConfigured"
                   class="classic-btn flex-1 !normal-case"
@@ -774,7 +774,7 @@
           <h3 class="text-xs font-bold uppercase text-slate-900 dark:text-slate-100">
             Discover Entities
           </h3>
-          <button
+          <button type="button"
             @click="discoveryDialog = false"
             class="text-slate-900 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-200"
           >
@@ -826,7 +826,7 @@
           class="p-3 border-t border-slate-200 dark:border-slate-700 flex flex-col gap-2 bg-slate-50 dark:bg-black"
         >
           <div class="flex gap-1 p-0.5 bg-slate-200/50 dark:bg-slate-800 rounded">
-            <button
+            <button type="button"
               @click="discoveryTargetGroup = 'home'"
               class="flex-1 py-1 rounded text-[9px] font-bold transition-all uppercase"
               :class="
@@ -837,7 +837,7 @@
             >
               Home Buttons
             </button>
-            <button
+            <button type="button"
               @click="discoveryTargetGroup = 'toggle'"
               class="flex-1 py-1 rounded text-[9px] font-bold transition-all uppercase"
               :class="
@@ -850,10 +850,10 @@
             </button>
           </div>
           <div class="flex gap-2">
-            <button @click="discoveryDialog = false" class="classic-btn flex-1 !normal-case">
+            <button type="button" @click="discoveryDialog = false" class="classic-btn flex-1 !normal-case">
               Cancel
             </button>
-            <button
+            <button type="button"
               @click="addDiscoveredEntities"
               :disabled="!selectedDiscovery.length"
               class="classic-btn !bg-accent !border-emerald-600 !text-white flex-1 !normal-case disabled:!bg-slate-300"

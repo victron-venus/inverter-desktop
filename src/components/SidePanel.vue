@@ -51,14 +51,14 @@
           {{ waterLevel || 0 }} cm
         </div>
         <div class="flex gap-1">
-          <button
+          <button type="button"
             class="classic-btn"
             :class="{ 'classic-btn-on': pumpSwitch }"
             @click="$emit('send', 'toggle', { entity: pumpSwitchEntity })"
           >
             {{ $t('sections.pump') }}
           </button>
-          <button
+          <button type="button"
             class="classic-btn"
             :class="{ 'classic-btn-on': waterValve }"
             @click="$emit('send', 'toggle', { entity: waterValveEntity })"
@@ -78,7 +78,7 @@
         <HomeIcon :size="10" /> {{ $t('sections.home') }}
       </div>
       <div class="p-1 flex flex-wrap gap-0.5 overflow-y-auto max-h-[300px]">
-        <button
+        <button type="button"
           v-for="btn in homeButtons"
           :key="btn.id"
           class="classic-btn !flex-1 !min-w-[50px] !normal-case flex flex-col items-center gap-0.5"
@@ -258,19 +258,19 @@
             <span class="text-[9px] text-slate-400 truncate">{{ mp.state }}</span>
           </div>
           <div class="flex gap-0.5 shrink-0">
-            <button
+            <button type="button"
               class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
               @click="$emit('media-control', mp.entity_id, 'play')"
             >
               ▶
             </button>
-            <button
+            <button type="button"
               class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
               @click="$emit('media-control', mp.entity_id, 'pause')"
             >
               ⏸
             </button>
-            <button
+            <button type="button"
               class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
               @click="$emit('media-control', mp.entity_id, 'stop')"
             >
@@ -368,7 +368,7 @@
         <span class="ml-auto text-[10px]">{{ scenesExpanded ? '▼' : '▶' }}</span>
       </div>
       <div v-if="scenesExpanded" class="p-1 flex flex-wrap gap-0.5">
-        <button
+        <button type="button"
           v-for="scene in haScenes"
           :key="scene.entity_id"
           class="classic-btn !flex-1 !min-w-[50px] !normal-case !text-[10px]"
