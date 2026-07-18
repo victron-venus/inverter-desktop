@@ -43,7 +43,8 @@
       </div>
 
       <div class="flex flex-col gap-2">
-        <button type="button"
+        <button
+          type="button"
           @click="handleLogin"
           :disabled="loading"
           class="classic-btn !h-[36px] !bg-accent !border-emerald-600 !text-white flex items-center justify-center gap-2"
@@ -52,7 +53,8 @@
           <span>Sign In</span>
         </button>
 
-        <button type="button"
+        <button
+          type="button"
           v-if="biometricAvailable"
           @click="handleBiometric"
           :disabled="loading"

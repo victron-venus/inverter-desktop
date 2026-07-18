@@ -21,14 +21,16 @@
           $t('notifications.title')
         }}</span>
         <div class="flex gap-1">
-          <button type="button"
+          <button
+            type="button"
             v-if="notifications.length > 0"
             class="text-[9px] text-blue-500 hover:underline"
             @click="markAllRead"
           >
             {{ $t('notifications.markAllRead') }}
           </button>
-          <button type="button"
+          <button
+            type="button"
             v-if="notifications.length > 0"
             class="text-[9px] text-red-500 hover:underline"
             @click="clearAll"

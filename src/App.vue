@@ -139,7 +139,8 @@
               >LIVE: {{ videoPopup.cameraName }}</span
             >
           </div>
-          <button type="button"
+          <button
+            type="button"
             @click="videoPopup.show = false"
             class="p-1.5 rounded-full bg-white/10 text-white hover:bg-red-500 transition-colors"
           >
