@@ -1,7 +1,8 @@
 <template>
   <div class="classic-card mb-1.5 p-1 flex items-center gap-1 w-full">
     <div class="flex flex-wrap gap-0.5 items-center flex-1">
-      <button type="button"
+      <button
+        type="button"
         class="classic-btn min-w-[28px]"
         :class="{ 'classic-btn-on': dryRun }"
         @click="$emit('send', 'dry_run')"
@@ -9,7 +10,8 @@
         <FlaskConical :size="7" /> DRY
       </button>
 
-      <button type="button"
+      <button
+        type="button"
         class="classic-btn min-w-[45px]"
         :class="{ 'classic-btn-on': essClass === 'on' }"
         @click="$emit('send', 'ess_mode')"
@@ -20,7 +22,8 @@
       <template v-if="showHeaderToggles !== false && headerToggles.length > 0">
         <div class="w-px h-3 bg-slate-300 mx-0.5"></div>
 
-        <button type="button"
+        <button
+          type="button"
           v-for="toggle in headerToggles"
           :key="toggle.id"
           class="classic-btn min-w-[55px]"

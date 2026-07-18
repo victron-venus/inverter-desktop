@@ -25,14 +25,16 @@
         Integrates with Home Assistant for unified device control.
       </p>
 
-      <button type="button"
+      <button
+        type="button"
         @click.prevent="openRepo"
         class="text-[11px] font-bold text-accent hover:underline mb-6"
       >
         github.com/victron-venus/inverter-desktop
       </button>
 
-      <button type="button"
+      <button
+        type="button"
         @click="closeWindow"
         class="classic-btn w-full !normal-case !py-2 !text-xs !classic-btn-on"
       >
