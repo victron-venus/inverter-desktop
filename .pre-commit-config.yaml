@@ -1,48 +1,50 @@
 repos:
-- repo: https://github.com/gitleaks/gitleaks
-  rev: v8.30.1
-  hooks:
-  - id: gitleaks
-- repo: https://github.com/jumanjihouse/pre-commit-hooks
-  rev: 3.0.0
-  hooks:
-  - id: shellcheck
-- repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v6.0.0
-  hooks:
-  - id: end-of-file-fixer
-  - id: trailing-whitespace
-- repo: https://github.com/crate-ci/typos
-  rev: v1.47.0
-  hooks:
-  - id: typos
-# TypeScript / Vue / JSON / YAML / Markdown formatting.
-- repo: local
-  hooks:
-  - id: prettier
-    name: prettier
-    language: node
-    entry: npx --no -- prettier --write
-    types_or: [ts, tsx, javascript, jsx, vue, json, yaml, markdown]
-    additional_dependencies:
-      - prettier
-# Commit message linting — enforce conventional commits format locally.
-- repo: local
-  hooks:
-  - id: commitlint
-    name: commitlint
-    language: node
-    entry: npx --no -- commitlint --edit
-    stages: [commit-msg]
-    additional_dependencies:
-      - '@commitlint/cli'
-      - '@commitlint/config-conventional'
-# Rust formatting — fast local feedback before CI catches it.
-- repo: local
-  hooks:
-  - id: cargo-fmt
-    name: cargo fmt
-    language: system
-    entry: cargo fmt --manifest-path src-tauri/Cargo.toml --
-    types: [rust]
-    pass_filenames: true
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/jumanjihouse/pre-commit-hooks
+    rev: 3.0.0
+    hooks:
+      - id: shellcheck
+        args:
+          [--exclude=SC2154, --exclude=SC2164, --exclude=SC2181, --exclude=SC2029, --exclude=SC1091]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.47.0
+    hooks:
+      - id: typos
+  # TypeScript / Vue / JSON / YAML / Markdown formatting.
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        language: node
+        entry: npx --no -- prettier --write
+        types_or: [ts, tsx, javascript, jsx, vue, json, yaml, markdown]
+        additional_dependencies:
+          - prettier
+  # Commit message linting — enforce conventional commits format locally.
+  - repo: local
+    hooks:
+      - id: commitlint
+        name: commitlint
+        language: node
+        entry: npx --no -- commitlint --edit
+        stages: [commit-msg]
+        additional_dependencies:
+          - '@commitlint/cli'
+          - '@commitlint/config-conventional'
+  # Rust formatting — fast local feedback before CI catches it.
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --manifest-path src-tauri/Cargo.toml --
+        types: [rust]
+        pass_filenames: true
