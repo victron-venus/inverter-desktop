@@ -582,7 +582,7 @@ async fn discover_ha_entities(
 ) -> Result<Vec<DiscoveredEntity>, String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
     let states = client.get_states().await?;
-    let togglable = [
+    let toggleable = [
         "switch",
         "light",
         "input_boolean",
@@ -611,7 +611,7 @@ async fn discover_ha_entities(
             entity_id.clone()
         };
         if let Some(domain_str) = domain {
-            if togglable.contains(&domain_str.as_str()) {
+            if toggleable.contains(&domain_str.as_str()) {
                 result.push(DiscoveredEntity {
                     entity_id,
                     friendly_name,
@@ -1060,6 +1060,7 @@ pub fn run() {
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.unminimize();
                                 let _ = window.show();
                                 let _ = window.set_focus();
                                 let _ = app.emit("window-shown", ());
@@ -1084,6 +1085,7 @@ pub fn run() {
                         {
                             let app = tray.app_handle();
                             if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.unminimize();
                                 let _ = window.show();
                                 let _ = window.set_focus();
                                 let _ = app.emit("window-shown", ());
@@ -1137,7 +1139,7 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                // Close → hide (keep app running in menu bar)
+                // Close / Minimize → hide (keep app running in menu bar) + notification
                 let window_hide = window.clone();
                 let app_handle_hide = app.handle().clone();
                 window.on_window_event(move |event| match event {
@@ -1145,8 +1147,28 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window_hide.hide();
                         let _ = app_handle_hide.emit("window-hidden", ());
+                        use tauri_plugin_notification::NotificationExt;
+                        let _ = app_handle_hide
+                            .notification()
+                            .builder()
+                            .title("Inverter Dashboard")
+                            .body("Continuing to work in background, minimized to tray")
+                            .show();
                     }
                     WindowEvent::Focused(false) => {
+                        // Minimize button → hide to tray instead of dock
+                        if let Ok(true) = window_hide.is_minimized() {
+                            let _ = window_hide.unminimize();
+                            let _ = window_hide.hide();
+                            let _ = app_handle_hide.emit("window-hidden", ());
+                            use tauri_plugin_notification::NotificationExt;
+                            let _ = app_handle_hide
+                                .notification()
+                                .builder()
+                                .title("Inverter Dashboard")
+                                .body("Continuing to work in background, minimized to tray")
+                                .show();
+                        }
                         let _ = app_handle_hide.emit("window-blurred", ());
                     }
                     WindowEvent::Focused(true) => {
