@@ -27,13 +27,13 @@ For the **web dashboard** (Python/FastAPI), see **[inverter-dashboard](https://g
 
 ## Supported Platforms
 
-| Platform | Installation | Notes |
-|----------|--------------|-------|
-| **macOS** | `.dmg` installer from Releases | Universal binary (Apple Silicon + Intel) |
-| **Windows** | `.msi` or `.exe` installer | x64 |
-| **Linux** | `.AppImage`, `.deb`, `.rpm` | Various distributions |
-| **iOS** | AltStore, TestFlight, Xcode | Requires Apple Developer account for AltStore |
-| **Android** | APK (direct install or ADB) | arm64-v8a, armeabi-v7a, x86_64 |
+| Platform    | Installation                   | Notes                                         |
+| ----------- | ------------------------------ | --------------------------------------------- |
+| **macOS**   | `.dmg` installer from Releases | Universal binary (Apple Silicon + Intel)      |
+| **Windows** | `.msi` or `.exe` installer     | x64                                           |
+| **Linux**   | `.AppImage`, `.deb`, `.rpm`    | Various distributions                         |
+| **iOS**     | AltStore, TestFlight, Xcode    | Requires Apple Developer account for AltStore |
+| **Android** | APK (direct install or ADB)    | arm64-v8a, armeabi-v7a, x86_64                |
 
 ---
 
@@ -55,18 +55,21 @@ For the **web dashboard** (Python/FastAPI), see **[inverter-dashboard](https://g
 ### Linux
 
 **AppImage (recommended):**
+
 ```bash
 chmod +x Inverter-Dashboard_*.AppImage
 ./Inverter-Dashboard_*.AppImage
 ```
 
 ** Debian/Ubuntu (.deb):**
+
 ```bash
 sudo dpkg -i inverter-dashboard_*.deb
 sudo apt-get install -f  # install dependencies if needed
 ```
 
 ** RHEL/Fedora (.rpm):**
+
 ```bash
 sudo rpm -i inverter-dashboard_*.rpm
 ```
@@ -82,6 +85,7 @@ iOS requires sideloading since the app is not on the App Store. Two options:
 AltStore allows sideloading apps with a free Apple ID (no paid developer account needed).
 
 **Prerequisites:**
+
 - iPhone/iPad running iOS 14 or later
 - A free [Apple ID](https://appleid.apple.com/) account
 - AltServer installed on your Mac or PC
@@ -112,6 +116,7 @@ AltStore allows sideloading apps with a free Apple ID (no paid developer account
 4. Wait for installation to complete
 
 **Refresh requirement:** AltStore apps expire after 7 days. Keep AltServer running to auto-refresh, or:
+
 - Right-click AltStore icon → Refresh apps
 - Or right-click the app in AltStore → Refresh
 
@@ -124,6 +129,7 @@ AltStore allows sideloading apps with a free Apple ID (no paid developer account
 #### Option 2: TestFlight (If available)
 
 If a TestFlight beta is available:
+
 1. Accept the TestFlight invite
 2. Install TestFlight from App Store
 3. Open the beta link and tap "Install"
@@ -134,9 +140,10 @@ If a TestFlight beta is available:
 2. Connect your device via USB
 3. Open Xcode → Window → Devices and Simulators
 4. Select your device → Click "+" → Select the `.ipa`
-5. On first install, enable "信任此应用" in device settings
+5. On first install, enable "Trust this app" in device settings
 
 **Troubleshooting iOS:**
+
 - App won't open: Settings → General → Device Management → Trust the app
 - AltStore offline: Ensure AltServer is running and device connected
 - Refresh failed: Check internet connection, try again
@@ -160,6 +167,7 @@ If a TestFlight beta is available:
 ADB gives you more control and is useful for debugging.
 
 **Prerequisites:**
+
 ```bash
 # Install ADB (macOS)
 brew install android-platform-tools
@@ -244,10 +252,10 @@ Edit `src-tauri/capabilities/default.json` and `src/config.ts` for MQTT settings
 
 ```typescript
 const config = {
-  mqttHost: "192.168.1.100",
+  mqttHost: '192.168.1.100',
   mqttPort: 1883,
   // ... other settings
-};
+}
 ```
 
 ---
@@ -255,10 +263,12 @@ const config = {
 ## MQTT Topics
 
 ### Subscribed (incoming data)
+
 - `inverter/state` - JSON with current system state
 - `inverter/console` - Console log messages
 
 ### Published (commands)
+
 - `inverter/cmd/toggle` - Toggle boolean entities
 - `inverter/cmd/press` - Press button entities
 - `inverter/cmd/setpoint` - Set power setpoint
@@ -349,12 +359,14 @@ npm run tauri build
 ### Building for Mobile
 
 **Android:**
+
 ```bash
 ./build-android-local.sh        # Release build
 ./build-android-local.sh --dev  # Debug build
 ```
 
 **iOS:**
+
 ```bash
 ./build-ios-local.sh            # Unsigned build (for AltStore)
 ./build-ios-local.sh --sign     # Signed build (requires Apple Developer)
@@ -366,17 +378,17 @@ npm run tauri build
 
 This project is part of the Victron Venus OS integration suite:
 
-| Project | Description |
-|---------|-------------|
-| [inverter-control](https://github.com/victron-venus/inverter-control) | Advanced ESS external control system with grid-zero targeting |
-| [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) | Real-time web dashboard (Python/FastAPI) via MQTT |
-| [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go) | High-performance Go rewrite of the web dashboard |
-| **inverter-desktop** (this) | Native desktop and mobile application (Rust/Tauri) for system monitoring |
-| [dbus-mqtt-battery](https://github.com/victron-venus/dbus-mqtt-battery) | MQTT to D-Bus bridge for JBD BMS battery integration |
-| [dbus-tasmota-pv](https://github.com/victron-venus/dbus-tasmota-pv) | Tasmota smart plug integration as a PV inverter on D-Bus |
-| [esphome-jbd-bms-mqtt](https://github.com/victron-venus/esphome-jbd-bms-mqtt) | ESP32 Bluetooth monitor for JBD BMS batteries |
-| [inverter-monitoring](https://github.com/victron-venus/inverter-monitoring) | TIG (Telegraf, InfluxDB, Grafana) monitoring stack |
-| [terraform-github-victron](https://github.com/4alvit/terraform-github-victron) | Infrastructure as Code for the GitHub organization |
+| Project                                                                         | Description                                                              |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [inverter-control](https://github.com/victron-venus/inverter-control)           | Advanced ESS external control system with grid-zero targeting            |
+| [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard)       | Real-time web dashboard (Python/FastAPI) via MQTT                        |
+| [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go) | High-performance Go rewrite of the web dashboard                         |
+| **inverter-desktop** (this)                                                     | Native desktop and mobile application (Rust/Tauri) for system monitoring |
+| [dbus-mqtt-battery](https://github.com/victron-venus/dbus-mqtt-battery)         | MQTT to D-Bus bridge for JBD BMS battery integration                     |
+| [dbus-tasmota-pv](https://github.com/victron-venus/dbus-tasmota-pv)             | Tasmota smart plug integration as a PV inverter on D-Bus                 |
+| [esphome-jbd-bms-mqtt](https://github.com/victron-venus/esphome-jbd-bms-mqtt)   | ESP32 Bluetooth monitor for JBD BMS batteries                            |
+| [inverter-monitoring](https://github.com/victron-venus/inverter-monitoring)     | TIG (Telegraf, InfluxDB, Grafana) monitoring stack                       |
+| [terraform-github-victron](https://github.com/4alvit/terraform-github-victron)  | Infrastructure as Code for the GitHub organization                       |
 
 ---
 
@@ -403,6 +415,7 @@ MIT License - see [LICENSE](LICENSE).
 ## Support
 
 For issues specific to:
+
 - **MQTT connectivity**: Check broker reachability and topic subscriptions
 - **Desktop app crashes**: Review Tauri logs and system requirements
 - **iOS installation**: Check AltStore/AltServer status and device trust settings
