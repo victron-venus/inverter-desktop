@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { type Ref, ref, watch } from 'vue'
 import { state } from './useInverterState'
 
-async function notify(title: string, body: string) {
+export async function notify(title: string, body: string) {
   try {
     await invoke('send_notification', { title, body })
   } catch {
