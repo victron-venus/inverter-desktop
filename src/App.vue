@@ -1,163 +1,165 @@
 <template>
-  <div
-    id="app"
-    class="h-screen flex flex-col p-1 select-none overflow-hidden"
-    @contextmenu.prevent="onContextMenu"
-  >
-    <!-- Dashboard Header: Compact buttons and theme switcher -->
-    <div class="flex items-center justify-between mb-1">
-      <AppHeader
-        :dryRun="coerceBool(state.dry_run)"
-        :essClass="essClass"
-        :essText="essText"
-        :headerToggles="headerToggles"
-        :toggleStates="headerToggleStates"
-        :isDark="isDark"
-        :showHeaderToggles="appConfig?.show_header_toggles !== false"
-        @send="send"
-        @toggle-theme="toggleTheme"
-      />
-    </div>
-
-    <!-- Dashboard Content: Grid and Panels -->
-    <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1 scrollbar-hide">
-      <DailyStats v-if="appConfig?.show_daily_stats !== false" />
-
-      <StatCards
-        :gt="state.gt"
-        :g1="state.g1"
-        :g2="state.g2"
-        :tt="state.tt"
-        :t1="state.t1"
-        :t2="state.t2"
-        :solarTotal="state.solar_total"
-        :mpptTotal="mpptTotal"
-        :tasmotaTotal="tasmotaTotal"
-        :batterySoc="state.battery_soc"
-        :batteryPower="state.battery_power"
-        :batteryVoltage="state.battery_voltage"
-        :batteryCurrent="state.battery_current"
-        :setpoint="state.setpoint"
-        :inverterState="state.inverter_state"
-      />
-
-      <div class="grid grid-cols-1 md:grid-cols-12 gap-1">
-        <div class="md:col-span-8 h-[280px]">
-          <ChartPanel :chartOption="chartOption" />
-        </div>
-        <div class="md:col-span-4">
-          <SidePanel
-            :features="state.features"
-            :evCharging="evCharging"
-            :evPower="evPower"
-            :evPowerWatts="evPowerWatts"
-            :evChargingKw="evChargingKw"
-            :evLoadPower="evLoadPower"
-            :carSoc="state.car_soc"
-            :waterLevel="state.water_level"
-            :waterValve="waterValveState"
-            :pumpSwitch="pumpSwitchState"
-            :pumpSwitchEntity="pumpSwitchEntity"
-            :waterValveEntity="waterValveEntity"
-            :dishwasherRunning="dishwasherRunning"
-            :dishwasherDuration="state.dishwasher_duration"
-            :washerRunning="washerRunning"
-            :washerTime="state.washer_time"
-            :washerPower="state.washer_power"
-            :dryerRunning="dryerRunning"
-            :dryerTime="state.dryer_time"
-            :dryerPower="state.dryer_power"
-            :homeButtons="homeButtons"
-            :buttonStates="buttonStates"
-            :haSensors="haSensors"
-            :haNumbers="haNumbers"
-            :haCovers="haCovers"
-            :haMediaPlayers="haMediaPlayers"
-            :haScenes="haScenes"
-            :haWeather="haWeather"
-            :showEv="appConfig?.show_ev !== false"
-            :showWasher="appConfig?.show_washer !== false"
-            :showDryer="appConfig?.show_dryer !== false"
-            :showDishwasher="appConfig?.show_dishwasher !== false"
-            :showHomeSection="appConfig?.show_home_section !== false"
-            :appConfig="appConfig"
-            @send="send"
-            @number-set="onNumberSet"
-            @cover-position="onCoverPosition"
-            @media-control="onMediaControl"
-            @scene-activate="onSceneActivate"
-          />
-        </div>
-      </div>
-
-      <BatterySolarPanel
-        v-if="appConfig?.show_batteries !== false || appConfig?.show_solar_production !== false"
-        :batteries="batteries"
-        :solarSources="solarSources"
-        :showBatteries="appConfig?.show_batteries !== false"
-        :showSolar="appConfig?.show_solar_production !== false"
-      />
-
-      <LoadsTable v-if="appConfig?.show_active_loads !== false" :sortedLoads="sortedLoads" />
-    </div>
-
-    <!-- Bottom Status Bar: Classic dot layout -->
-    <StatusBar
-      :haEnabled="haEnabled"
-      :haConnected="haConnected"
-      :mqttConnected="mqttConnected"
-      :haMqttConnected="haMqttConnected"
-      :uptime="state.uptime"
-      :appVersion="appVersion"
-      :stateVersion="state.version"
-    />
-
-    <ConsoleLog v-if="appConfig?.show_console !== false" :lines="state.console || []" />
-
-    <ContextMenu
-      :show="contextMenu.show"
-      :x="contextMenu.x"
-      :y="contextMenu.y"
-      @open-config="openConfig"
-    />
-
-    <!-- Video Popup Overlay -->
+  <ErrorBoundary>
     <div
-      v-if="videoPopup.show"
-      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+      id="app"
+      class="h-screen flex flex-col p-1 select-none overflow-hidden"
+      @contextmenu.prevent="onContextMenu"
     >
-      <div
-        class="relative w-full max-w-4xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl border border-slate-800"
-      >
-        <!-- Camera Name Header -->
-        <div
-          class="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-center"
-        >
-          <div class="flex items-center gap-2">
-            <div class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
-            <span class="text-xs font-bold text-white uppercase tracking-widest"
-              >LIVE: {{ videoPopup.cameraName }}</span
-            >
+      <!-- Dashboard Header: Compact buttons and theme switcher -->
+      <div class="flex items-center justify-between mb-1">
+        <AppHeader
+          :dryRun="coerceBool(state.dry_run)"
+          :essClass="essClass"
+          :essText="essText"
+          :headerToggles="headerToggles"
+          :toggleStates="headerToggleStates"
+          :isDark="isDark"
+          :showHeaderToggles="appConfig?.show_header_toggles !== false"
+          @send="send"
+          @toggle-theme="toggleTheme"
+        />
+      </div>
+
+      <!-- Dashboard Content: Grid and Panels -->
+      <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1 scrollbar-hide">
+        <DailyStats v-if="appConfig?.show_daily_stats !== false" />
+
+        <StatCards
+          :gt="state.gt"
+          :g1="state.g1"
+          :g2="state.g2"
+          :tt="state.tt"
+          :t1="state.t1"
+          :t2="state.t2"
+          :solarTotal="state.solar_total"
+          :mpptTotal="mpptTotal"
+          :tasmotaTotal="tasmotaTotal"
+          :batterySoc="state.battery_soc"
+          :batteryPower="state.battery_power"
+          :batteryVoltage="state.battery_voltage"
+          :batteryCurrent="state.battery_current"
+          :setpoint="state.setpoint"
+          :inverterState="state.inverter_state"
+        />
+
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-1">
+          <div class="md:col-span-8 h-[280px]">
+            <ChartPanel :chartOption="chartOption" />
           </div>
-          <button
-            type="button"
-            @click="videoPopup.show = false"
-            class="p-1.5 rounded-full bg-white/10 text-white hover:bg-red-500 transition-colors"
-          >
-            <X :size="20" />
-          </button>
+          <div class="md:col-span-4">
+            <SidePanel
+              :features="state.features"
+              :evCharging="evCharging"
+              :evPower="evPower"
+              :evPowerWatts="evPowerWatts"
+              :evChargingKw="evChargingKw"
+              :evLoadPower="evLoadPower"
+              :carSoc="state.car_soc"
+              :waterLevel="state.water_level"
+              :waterValve="waterValveState"
+              :pumpSwitch="pumpSwitchState"
+              :pumpSwitchEntity="pumpSwitchEntity"
+              :waterValveEntity="waterValveEntity"
+              :dishwasherRunning="dishwasherRunning"
+              :dishwasherDuration="state.dishwasher_duration"
+              :washerRunning="washerRunning"
+              :washerTime="state.washer_time"
+              :washerPower="state.washer_power"
+              :dryerRunning="dryerRunning"
+              :dryerTime="state.dryer_time"
+              :dryerPower="state.dryer_power"
+              :homeButtons="homeButtons"
+              :buttonStates="buttonStates"
+              :haSensors="haSensors"
+              :haNumbers="haNumbers"
+              :haCovers="haCovers"
+              :haMediaPlayers="haMediaPlayers"
+              :haScenes="haScenes"
+              :haWeather="haWeather"
+              :showEv="appConfig?.show_ev !== false"
+              :showWasher="appConfig?.show_washer !== false"
+              :showDryer="appConfig?.show_dryer !== false"
+              :showDishwasher="appConfig?.show_dishwasher !== false"
+              :showHomeSection="appConfig?.show_home_section !== false"
+              :appConfig="appConfig"
+              @send="send"
+              @number-set="onNumberSet"
+              @cover-position="onCoverPosition"
+              @media-control="onMediaControl"
+              @scene-activate="onSceneActivate"
+            />
+          </div>
         </div>
 
-        <video autoplay controls class="w-full h-full" :src="videoPopup.url">
-          <track kind="captions" />
-          Your browser does not support the video tag.
-        </video>
-      </div>
-    </div>
+        <BatterySolarPanel
+          v-if="appConfig?.show_batteries !== false || appConfig?.show_solar_production !== false"
+          :batteries="batteries"
+          :solarSources="solarSources"
+          :showBatteries="appConfig?.show_batteries !== false"
+          :showSolar="appConfig?.show_solar_production !== false"
+        />
 
-    <!-- Auth Screen Overlay -->
-    <AuthScreen v-if="showAuthScreen" @authenticated="handleAuthenticated" />
-  </div>
+        <LoadsTable v-if="appConfig?.show_active_loads !== false" :sortedLoads="sortedLoads" />
+      </div>
+
+      <!-- Bottom Status Bar: Classic dot layout -->
+      <StatusBar
+        :haEnabled="haEnabled"
+        :haConnected="haConnected"
+        :mqttConnected="mqttConnected"
+        :haMqttConnected="haMqttConnected"
+        :uptime="state.uptime"
+        :appVersion="appVersion"
+        :stateVersion="state.version"
+      />
+
+      <ConsoleLog v-if="appConfig?.show_console !== false" :lines="state.console || []" />
+
+      <ContextMenu
+        :show="contextMenu.show"
+        :x="contextMenu.x"
+        :y="contextMenu.y"
+        @open-config="openConfig"
+      />
+
+      <!-- Video Popup Overlay -->
+      <div
+        v-if="videoPopup.show"
+        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+      >
+        <div
+          class="relative w-full max-w-4xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl border border-slate-800"
+        >
+          <!-- Camera Name Header -->
+          <div
+            class="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-center"
+          >
+            <div class="flex items-center gap-2">
+              <div class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+              <span class="text-xs font-bold text-white uppercase tracking-widest"
+                >LIVE: {{ videoPopup.cameraName }}</span
+              >
+            </div>
+            <button
+              type="button"
+              @click="videoPopup.show = false"
+              class="p-1.5 rounded-full bg-white/10 text-white hover:bg-red-500 transition-colors"
+            >
+              <X :size="20" />
+            </button>
+          </div>
+
+          <video autoplay controls class="w-full h-full" :src="videoPopup.url">
+            <track kind="captions" />
+            Your browser does not support the video tag.
+          </video>
+        </div>
+      </div>
+
+      <!-- Auth Screen Overlay -->
+      <AuthScreen v-if="showAuthScreen" @authenticated="handleAuthenticated" />
+    </div>
+  </ErrorBoundary>
 </template>
 
 <script setup lang="ts">
@@ -183,6 +185,7 @@ import ContextMenu from './components/ContextMenu.vue'
 import DailyStats from './components/DailyStats.vue'
 import ConsoleLog from './components/ConsoleLog.vue'
 import AuthScreen from './components/AuthScreen.vue'
+import ErrorBoundary from './components/ErrorBoundary.vue'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 
 const {

@@ -104,10 +104,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD || '' }}
         with:
           tagName: v${{ needs.check-version-change.outputs.new_version }}
           releaseName: Release v${{ needs.check-version-change.outputs.new_version }}
           args: ${{ matrix.args }}
+          notarize: ${{ secrets.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_NOTARIZE == 'true' && matrix.platform == 'macos-latest' }}
 
   mobile:
     needs: [check-version-change, release]
@@ -151,7 +159,7 @@ jobs:
       - name: iOS – init project
         if: matrix.type == 'ios'
         env:
-          SERVER_ADDR_FILE: ""
+          SERVER_ADDR_FILE: ''
         run: pnpm tauri ios init --ci
 
       - name: iOS – ensure Archive config is Release
