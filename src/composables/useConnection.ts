@@ -12,14 +12,9 @@ import {
   mqttConnected,
   state,
 } from './useInverterState'
+import { notify } from './useSystemNotifications'
 
-export async function notify(title: string, body: string) {
-  try {
-    await invoke('send_notification', { title, body })
-  } catch {
-    // Plugin may not be available — ignore
-  }
-}
+export { notify }
 
 async function ensureNotificationPermission() {
   try {
