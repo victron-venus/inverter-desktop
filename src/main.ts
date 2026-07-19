@@ -4,6 +4,7 @@ import App from './App.vue'
 import Config from './Config.vue'
 import { i18n } from './i18n'
 
+import { logger } from './logger'
 import './style.css'
 
 const path = globalThis.location.pathname
@@ -21,4 +22,7 @@ if (isConfigWindow) {
 
 const app = createApp(rootComponent)
 app.use(i18n)
+app.config.errorHandler = (err, instance, info) => {
+  logger.error('Unhandled Vue error:', err, 'Component:', instance, 'Info:', info)
+}
 app.mount('#app')
