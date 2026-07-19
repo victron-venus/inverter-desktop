@@ -13,6 +13,14 @@ import {
   state,
 } from './useInverterState'
 
+export async function notify(title: string, body: string) {
+  try {
+    await invoke('send_notification', { title, body })
+  } catch {
+    // Plugin may not be available — ignore
+  }
+}
+
 async function ensureNotificationPermission() {
   try {
     const granted = await isPermissionGranted()
@@ -86,6 +94,7 @@ export function useConnection() {
         portalId: config.portal_id || null,
         cameraTopic: null,
       })
+      notify('MQTT', 'Connected to inverter')
 
       if (config.camera_enabled && config.mqtt_ha_host && config.mqtt_ha_port) {
         try {
@@ -98,6 +107,7 @@ export function useConnection() {
           })
           haMqttConnected.value = true
           logger.log('Connected to HA MQTT broker for cameras')
+          notify('Home Assistant', 'Connected to HA MQTT')
         } catch (e) {
           haMqttConnected.value = false
           logger.error('Failed to connect to HA MQTT:', e)
