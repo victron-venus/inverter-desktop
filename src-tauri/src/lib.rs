@@ -1156,7 +1156,11 @@ pub fn run() {
                             .show();
                     }
                     WindowEvent::Focused(false) => {
-                        // Minimize button → hide to tray instead of dock
+
+                        // macOS: Accessory mode has no dock icon, so minimize to dock is useless.
+                        // Convert minimize to hide-to-tray instead.
+                        #[cfg(target_os = "macos")]
+
                         if let Ok(true) = window_hide.is_minimized() {
                             let _ = window_hide.unminimize();
                             let _ = window_hide.hide();
