@@ -170,7 +170,7 @@ import { formatPower } from './utils'
 import { logger } from './logger'
 import { listen } from '@tauri-apps/api/event'
 import { X } from '@lucide/vue'
-import { useConnection } from './composables/useConnection'
+import { useConnection, notify } from './composables/useConnection'
 import { useHA } from './composables/useHA'
 import { useTheme } from './composables/useTheme'
 import { useChart, addHistoryPoint } from './composables/useChart'
@@ -400,6 +400,7 @@ onMounted(async () => {
     appVersion.value = 'unknown'
   }
   await ensureNotificationPermission()
+  notify('Inverter Desktop', 'App started')
 
   // Check if authentication is enabled
   try {
