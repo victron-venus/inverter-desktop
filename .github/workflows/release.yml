@@ -83,7 +83,7 @@ jobs:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -153,7 +153,7 @@ jobs:
           targets: ${{ matrix.type == 'ios' && 'aarch64-apple-ios' || 'aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android' }}
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       # --------- iOS specific ---------
       - name: iOS – init project
