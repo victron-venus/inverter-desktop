@@ -19,25 +19,23 @@
 		90143CC5C3463D90377279BE /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 98A09541EF9CE7834F442F31 /* CoreGraphics.framework */; };
 		9C4808FCEDF8EE4BF5D82980 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F42FEF4E1A5E8398073A769C /* QuartzCore.framework */; };
 		BFF8B24FC37148E04090F08B /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 74186E5DA6F57E0A1497DD00 /* UIKit.framework */; };
-		E0156EC61FE9A82C513CA223 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 3EA55E041542AE29743D9DEE /* LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		070DA153EB1FA671D9744757 /* lib.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = lib.rs; sourceTree = "<group>"; };
+		070DA153EB1FA671D9744757 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		0F2F5A24B2E77E61F205E502 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2042E31E263E20D957B685A9 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
-		3439BD1F12DCB31A6E994435 /* main.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = main.rs; sourceTree = "<group>"; };
+		3439BD1F12DCB31A6E994435 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		35DE1F26B404D40B179E771B /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
-		3EA55E041542AE29743D9DEE /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		74186E5DA6F57E0A1497DD00 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		7A41023AB0C5E19C791F1C2E /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
-		8398D7DEDCB7904AD5DE6165 /* Inverter Dashboard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Inverter Dashboard.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		8398D7DEDCB7904AD5DE6165 /* inverter-dashboard_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "inverter-dashboard_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A87EFB5B07D8028985C9E09 /* inverter-dashboard_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "inverter-dashboard_iOS.entitlements"; sourceTree = "<group>"; };
-		944173FC827E8010E725F6A5 /* tray_icon.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = tray_icon.rs; sourceTree = "<group>"; };
+		944173FC827E8010E725F6A5 /* tray_icon.rs */ = {isa = PBXFileReference; path = tray_icon.rs; sourceTree = "<group>"; };
 		98A09541EF9CE7834F442F31 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		9E47E35BEA31C5D824C2BBD2 /* mqtt.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mqtt.rs; sourceTree = "<group>"; };
+		9E47E35BEA31C5D824C2BBD2 /* mqtt.rs */ = {isa = PBXFileReference; path = mqtt.rs; sourceTree = "<group>"; };
 		9EA0014341B30B2F5C9F4B51 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
-		A180707E7B9AE8291D303A75 /* ha_api.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = ha_api.rs; sourceTree = "<group>"; };
+		A180707E7B9AE8291D303A75 /* ha_api.rs */ = {isa = PBXFileReference; path = ha_api.rs; sourceTree = "<group>"; };
 		AF2F32F4DFD89BD33BCDFEE7 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		C43A10CCCCD3236C2F644DA2 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		CF9484BFC0945644598403B9 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
@@ -159,7 +157,6 @@
 			children = (
 				C43A10CCCCD3236C2F644DA2 /* assets */,
 				0F2F5A24B2E77E61F205E502 /* Assets.xcassets */,
-				3EA55E041542AE29743D9DEE /* LaunchScreen.storyboard */,
 				436DAA77C85813ABD8729EE7 /* Externals */,
 				9D72BA2092257D49F73C998D /* inverter-dashboard_iOS */,
 				9B91B16C477573550199A6D8 /* Sources */,
@@ -172,9 +169,16 @@
 		F4F827DA30AD451AD5274E09 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				8398D7DEDCB7904AD5DE6165 /* Inverter Dashboard.app */,
+				8398D7DEDCB7904AD5DE6165 /* inverter-dashboard_iOS.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		"TEMP_1F96AF08-AE52-4722-9AAA-E80382254065" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -197,7 +201,7 @@
 			packageProductDependencies = (
 			);
 			productName = "inverter-dashboard_iOS";
-			productReference = 8398D7DEDCB7904AD5DE6165 /* Inverter Dashboard.app */;
+			productReference = 8398D7DEDCB7904AD5DE6165 /* inverter-dashboard_iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -207,7 +211,9 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2630;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
 			};
 			buildConfigurationList = 14E82B0894D763E807BDA6BD /* Build configuration list for PBXProject "inverter-dashboard" */;
 			developmentRegion = en;
@@ -234,7 +240,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				2853A88103EAC7679724FF1F /* Assets.xcassets in Resources */,
-				E0156EC61FE9A82C513CA223 /* LaunchScreen.storyboard in Resources */,
 				695002045B73102169A5956E /* assets in Resources */,
 				01A22767F9F00509C2729F99 /* libapp.a in Resources */,
 			);
@@ -317,7 +322,6 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -326,14 +330,13 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
@@ -343,6 +346,10 @@
 		766FB0031DF342BE367B7E19 /* release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "inverter-dashboard_iOS/inverter-dashboard_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "-";
@@ -357,20 +364,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.alvit.inverter-dashboard";
 				PRODUCT_NAME = "Inverter Dashboard";
 				SDKROOT = iphoneos;
@@ -418,7 +413,6 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -433,7 +427,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -441,7 +435,6 @@
 				SDKROOT = iphoneos;
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -451,6 +444,10 @@
 		D5A7927175468FF5ED233044 /* debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "inverter-dashboard_iOS/inverter-dashboard_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "-";
@@ -465,20 +462,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.alvit.inverter-dashboard";
 				PRODUCT_NAME = "Inverter Dashboard";
 				SDKROOT = iphoneos;
