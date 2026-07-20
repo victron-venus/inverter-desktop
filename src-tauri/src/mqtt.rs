@@ -561,6 +561,9 @@ impl MqttClient {
                 if console.len() > CONSOLE_MAX_LINES {
                     console.remove(0);
                 }
+                if let Some(ref handle) = app_handle {
+                    let _ = handle.emit("mqtt-state-update", &*guard);
+                }
             }
         } else if let Some(ref cam_t) = camera_topic {
             if match_mqtt_topic(topic, cam_t) {
@@ -588,6 +591,8 @@ impl MqttClient {
         app_handle: Option<tauri::AppHandle>,
         notifications: Arc<Mutex<NotificationState>>,
     ) {
+        let existing_console = state.lock().ok().and_then(|g| g.console.clone());
+
         let new_state = InverterState {
             gt: raw.gt,
             g1: raw.g1,
@@ -635,7 +640,7 @@ impl MqttClient {
             dryer_time: raw.dryer_time,
             dryer_power: raw.dryer_power.as_ref().map(coerce_bool),
             latest_version: raw.latest_version,
-            console: raw.console,
+            console: raw.console.or(existing_console),
         };
 
         // Skip alert/notification processing when window hidden (CPU/battery optimization)

@@ -81,9 +81,10 @@ pub struct HaFilteredData {
     pub weather: Option<HaWeatherDisplay>,
 }
 
-pub(crate) struct HaEntityEntry {
-    state: String,
-    attributes: Option<serde_json::Value>,
+#[derive(Clone)]
+pub struct HaEntityEntry {
+    pub state: String,
+    pub attributes: Option<serde_json::Value>,
 }
 
 pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> HaFilteredData {
@@ -467,7 +468,14 @@ pub struct HaWebSocketClient {
 }
 
 impl HaWebSocketClient {
-    pub async fn connect(url: &str, token: &str, app: tauri::AppHandle) -> Result<Self, String> {
+    pub async fn connect(
+        url: &str,
+        token: &str,
+        app: tauri::AppHandle,
+        entity_states: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashMap<String, HaEntityEntry>>,
+        >,
+    ) -> Result<Self, String> {
         let (ws_stream, _) = tokio_tungstenite::connect_async(url)
             .await
             .map_err(|e| format!("WS connect failed: {}", e))?;
@@ -545,13 +553,61 @@ impl HaWebSocketClient {
             return Err(format!("HA WS subscription failed: {}", sub_text));
         }
 
+        // === Fetch initial state to prevent empty entity map on first events ===
+        // WS URL: ws://host:port/api/websocket -> HTTP URL: http://host:port
+        let http_base = url
+            .replace("ws://", "http://")
+            .replace("wss://", "https://")
+            .replace("/api/websocket", "");
+
+        let http_client = reqwest::Client::new();
+        if let Ok(response) = http_client
+            .get(format!("{}/api/states", http_base))
+            .header("Authorization", format!("Bearer {}", token))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                if let Ok(states) = response.json::<Vec<serde_json::Value>>().await {
+                    if let Ok(mut states_guard) = entity_states.lock() {
+                        for state in states {
+                            if let (Some(eid), Some(state_val)) =
+                                (state.get("entity_id"), state.get("state"))
+                            {
+                                if let (Ok(eid_str), Ok(state_str)) = (
+                                    serde_json::from_value::<String>(eid.clone()),
+                                    serde_json::from_value::<String>(state_val.clone()),
+                                ) {
+                                    let attrs = state.get("attributes").cloned();
+                                    states_guard.insert(
+                                        eid_str,
+                                        HaEntityEntry {
+                                            state: state_str,
+                                            attributes: attrs,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Emit initial filtered data immediately after populating state map
+        // This ensures frontend has full data on WS connect
+        if let Ok(states_guard) = entity_states.lock() {
+            let filtered = compute_filtered_data(&*states_guard);
+            let _ = app.emit("ha-filtered-update", &filtered);
+        }
+
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel::<()>();
 
         // Spawn read loop with timeout and shutdown signal
         let app_clone = app.clone();
         tokio::spawn(async move {
             const READ_TIMEOUT_SECS: u64 = 60;
-            let mut entity_states: HashMap<String, HaEntityEntry> = HashMap::new();
             loop {
                 // Check for external shutdown signal (from set_window_hidden)
                 if HA_WS_SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
@@ -563,10 +619,6 @@ impl HaWebSocketClient {
                     msg = read.next() => {
                         match msg {
                             Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-                                // When window is hidden, skip processing entirely (CPU optimization)
-                                if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
-                                    continue;
-                                }
                                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
                                     if val.get("type").and_then(|v| v.as_str()) == Some("event") {
                                         if let Some(event) = val.get("event") {
@@ -579,24 +631,29 @@ impl HaWebSocketClient {
                                                     let attrs = new_state.get("attributes").cloned();
 
                                                     // Update state map
-                                                    entity_states.insert(eid.clone(), HaEntityEntry {
-                                                        state: state.to_string(),
-                                                        attributes: attrs.clone(),
-                                                    });
+                                                    if let Ok(mut states_guard) = entity_states.lock() {
+                                                        states_guard.insert(eid.clone(), HaEntityEntry {
+                                                            state: state.to_string(),
+                                                            attributes: attrs.clone(),
+                                                        });
 
-                                                    // Emit individual update (backward compat for buttonStates, etc.)
-                                                    let _ = app_clone.emit(
-                                                        "ha-state-update",
-                                                        serde_json::json!({
-                                                            "entity_id": eid,
-                                                            "state": state,
-                                                            "attributes": attrs.unwrap_or(serde_json::Value::Null),
-                                                        }),
-                                                    );
+                                                        // Skip expensive processing and emits when window is hidden
+                                                        if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+                                                            // Emit individual update (backward compat for buttonStates, etc.)
+                                                            let _ = app_clone.emit(
+                                                                "ha-state-update",
+                                                                serde_json::json!({
+                                                                    "entity_id": eid,
+                                                                    "state": state,
+                                                                    "attributes": attrs.unwrap_or(serde_json::Value::Null),
+                                                                }),
+                                                            );
 
-                                                    // Compute and emit pre-filtered entity data
-                                                    let filtered = compute_filtered_data(&entity_states);
-                                                    let _ = app_clone.emit("ha-filtered-update", &filtered);
+                                                            // Compute and emit pre-filtered entity data
+                                                            let filtered = compute_filtered_data(&*states_guard);
+                                                            let _ = app_clone.emit("ha-filtered-update", &filtered);
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

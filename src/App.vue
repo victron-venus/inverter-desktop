@@ -168,6 +168,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { formatPower } from './utils'
 import { logger } from './logger'
+import { getAppConfig } from './config'
 import { listen } from '@tauri-apps/api/event'
 import { X } from '@lucide/vue'
 import { useConnection, notify } from './composables/useConnection'
@@ -402,9 +403,19 @@ onMounted(async () => {
   await ensureNotificationPermission()
   notify('Inverter Desktop', 'App started')
 
+  // Load configuration first to check auth status
+  let cfg = appConfig.value
+  if (!cfg) {
+    try {
+      cfg = await getAppConfig()
+      appConfig.value = cfg
+    } catch (e) {
+      logger.warn('Failed to load config for auth check:', e)
+    }
+  }
+
   // Check if authentication is enabled
   try {
-    const cfg = appConfig.value
     if (cfg?.auth_enabled) {
       // Check for existing session
       const storedToken = sessionStorage.getItem('auth_token')
