@@ -194,7 +194,7 @@ jobs:
       - name: iOS – pre-build Rust library
         if: matrix.type == 'ios'
         run: |
-          cargo build --target aarch64-apple-ios --release \
+          cargo build --locked --target aarch64-apple-ios --release \
             --package inverter-dashboard --lib \
             --manifest-path src-tauri/Cargo.toml
           mkdir -p src-tauri/gen/apple/Externals/arm64/release
