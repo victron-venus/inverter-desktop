@@ -550,13 +550,11 @@ impl HaWebSocketClient {
         {
             return Err(format!("HA WS subscription failed: {}", sub_text));
         }
-
         // Clear stale entity data from a previous connection/config before repopulating,
         // so entities removed or renamed in HA don't linger in the shared map forever.
         if let Ok(mut states_guard) = entity_states.lock() {
             states_guard.clear();
         }
-
         // === Fetch initial state to prevent empty entity map on first events ===
         // WS URL: ws://host:port/api/websocket -> HTTP URL: http://host:port
         let http_base = url
