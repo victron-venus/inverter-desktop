@@ -40,6 +40,7 @@ struct DiscoveredEntity {
 // Global state for the MQTT clients
 struct MqttState(Arc<Mutex<Option<MqttClient>>>);
 struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
+pub(crate) struct HaEntityStates(pub(crate) Arc<Mutex<HashMap<String, ha_api::HaEntityEntry>>>);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HaEntityConfig {
@@ -323,12 +324,6 @@ fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
 fn start_ha_polling(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            // Skip reconnecting when window is hidden to save CPU/battery
-            if ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-
             let config = {
                 let store = app.store_builder("config.json").build();
                 match store {
@@ -353,8 +348,12 @@ fn start_ha_polling(app: tauri::AppHandle) {
             let token = config.ha_longlived_token.clone().unwrap();
             let ws_url = build_ws_url(&base, config.ha_port);
 
+            let entity_states = app.state::<HaEntityStates>().0.clone();
+
             info!("HA WS connecting to {}", ws_url);
-            match ha_api::HaWebSocketClient::connect(&ws_url, &token, app.clone()).await {
+            match ha_api::HaWebSocketClient::connect(&ws_url, &token, app.clone(), entity_states)
+                .await
+            {
                 Ok(mut ws_client) => {
                     info!("HA WebSocket connected");
                     let _ = app.emit("ha-connection-status", true);
@@ -552,12 +551,22 @@ async fn get_ha_appliance_states(
 ) -> Result<Vec<ha_api::HaState>, String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
     let entity_ids = [
+        // Dishwasher
         "binary_sensor.dishwasher_running",
+        "sensor.dishwasher_status",
+        "switch.dishwasher",
+        // Appliance states from individual sensors
         "sensor.dishwasher_duration",
         "sensor.washer_remaining_time",
         "sensor.dryer_remaining_time",
         "sensor.washer_power_estimate",
         "sensor.dryer_power_estimate",
+        // Washer
+        "binary_sensor.washer_running",
+        "switch.washer",
+        // Dryer
+        "binary_sensor.dryer_running",
+        "switch.dryer",
     ];
     client.get_entities(&entity_ids).await
 }
@@ -837,10 +846,12 @@ async fn send_notification(
 #[tauri::command]
 fn set_window_hidden(hidden: bool) {
     ha_api::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
-    if hidden {
-        // Signal the HA WS read loop to stop (will be checked on next select! cycle)
-        ha_api::HA_WS_SHUTDOWN.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
+}
+
+#[tauri::command]
+fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_api::HaFilteredData {
+    let guard = entity_states.0.lock().unwrap();
+    ha_api::compute_filtered_data(&*guard)
 }
 
 #[tauri::command]
@@ -922,13 +933,16 @@ pub fn run() {
     let mqtt_state = MqttState(Arc::new(Mutex::new(None)));
     let ha_mqtt_state = HaMqttState(Arc::new(Mutex::new(None)));
 
+    let ha_entity_states = HaEntityStates(Arc::new(Mutex::new(HashMap::new())));
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .manage(mqtt_state)
-        .manage(ha_mqtt_state);
+        .manage(ha_mqtt_state)
+        .manage(ha_entity_states);
 
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::new().build());
@@ -955,7 +969,8 @@ pub fn run() {
             auth_biometric_available,
             auth_biometric,
             send_notification,
-            set_window_hidden
+            set_window_hidden,
+            get_ha_filtered_data
         ])
         .setup(|app| {
             // Start background HA polling
