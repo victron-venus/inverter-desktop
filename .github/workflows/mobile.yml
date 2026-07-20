@@ -68,12 +68,9 @@ jobs:
               f.write(c)
           print('Code signing disabled')
           "
-      - name: Fetch Rust dependencies
-        run: cargo fetch --locked --manifest-path src-tauri/Cargo.toml
-
       - name: Pre-build Rust library for iOS
         run: |
-          cargo build --target aarch64-apple-ios --release \
+          cargo build --locked --target aarch64-apple-ios --release \
             --package inverter-dashboard --lib \
             --manifest-path src-tauri/Cargo.toml
           mkdir -p src-tauri/gen/apple/Externals/arm64/release
