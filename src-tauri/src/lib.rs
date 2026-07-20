@@ -851,7 +851,7 @@ fn set_window_hidden(hidden: bool) {
 #[tauri::command]
 fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_api::HaFilteredData {
     let guard = entity_states.0.lock().unwrap();
-    ha_api::compute_filtered_data(&*guard)
+    ha_api::compute_filtered_data(&guard)
 }
 
 #[tauri::command]
