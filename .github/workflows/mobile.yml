@@ -80,6 +80,14 @@ jobs:
       - name: Patch Xcode build phase to skip xcode-script if lib exists
         run: python3 scripts/patch_pbxproj.py
 
+      - name: Sync IPHONEOS_DEPLOYMENT_TARGET with installed SDK
+        run: |
+          SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+          PBPROJ="src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj"
+          sed -i.bak "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = ${SDK_VERSION};/" "$PBPROJ"
+          rm -f "$PBPROJ.bak"
+          echo "✓ Deployment target set to $SDK_VERSION"
+
       - name: Build iOS (unsigned .app)
         env:
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
