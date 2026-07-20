@@ -6,8 +6,6 @@ use std::time::Duration;
 use tauri::Emitter;
 
 pub static WINDOW_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-pub static HA_WS_SHUTDOWN: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HaState {
@@ -552,7 +550,11 @@ impl HaWebSocketClient {
         {
             return Err(format!("HA WS subscription failed: {}", sub_text));
         }
-
+        // Clear stale entity data from a previous connection/config before repopulating,
+        // so entities removed or renamed in HA don't linger in the shared map forever.
+        if let Ok(mut states_guard) = entity_states.lock() {
+            states_guard.clear();
+        }
         // === Fetch initial state to prevent empty entity map on first events ===
         // WS URL: ws://host:port/api/websocket -> HTTP URL: http://host:port
         let http_base = url
@@ -598,23 +600,17 @@ impl HaWebSocketClient {
         // Emit initial filtered data immediately after populating state map
         // This ensures frontend has full data on WS connect
         if let Ok(states_guard) = entity_states.lock() {
-            let filtered = compute_filtered_data(&*states_guard);
+            let filtered = compute_filtered_data(&states_guard);
             let _ = app.emit("ha-filtered-update", &filtered);
         }
 
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel::<()>();
 
-        // Spawn read loop with timeout and shutdown signal
+        // Spawn read loop with timeout
         let app_clone = app.clone();
         tokio::spawn(async move {
             const READ_TIMEOUT_SECS: u64 = 60;
             loop {
-                // Check for external shutdown signal (from set_window_hidden)
-                if HA_WS_SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
-                    HA_WS_SHUTDOWN.store(false, std::sync::atomic::Ordering::Relaxed);
-                    break;
-                }
-
                 tokio::select! {
                     msg = read.next() => {
                         match msg {
@@ -650,7 +646,7 @@ impl HaWebSocketClient {
                                                             );
 
                                                             // Compute and emit pre-filtered entity data
-                                                            let filtered = compute_filtered_data(&*states_guard);
+                                                            let filtered = compute_filtered_data(&states_guard);
                                                             let _ = app_clone.emit("ha-filtered-update", &filtered);
                                                         }
                                                     }
