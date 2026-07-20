@@ -51,6 +51,9 @@ build*.sh
 DEBUG.md
 PLAN.md
 
+# Local Xcode backup
+src-tauri/gen/apple.bak/
+
 # Local version scripts
 bump.sh
 scripts/bump.js

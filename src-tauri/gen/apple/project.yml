@@ -2,7 +2,7 @@ name: inverter-dashboard
 options:
   bundleIdPrefix: com.alvit.inverter-dashboard
   deploymentTarget:
-    iOS: 14.0
+    iOS: 26.0
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -35,12 +35,11 @@ targets:
       - path: assets
         buildPhase: resources
         type: folder
-      - path: LaunchScreen.storyboard
     info:
       path: inverter-dashboard_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
-        UILaunchStoryboardName: LaunchScreen
+        UILaunchScreen: {}
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
