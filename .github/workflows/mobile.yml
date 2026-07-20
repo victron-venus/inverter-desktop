@@ -37,10 +37,10 @@ jobs:
       - name: Get version
         id: version
         run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Init iOS project
         env:
-          SERVER_ADDR_FILE: ""
+          SERVER_ADDR_FILE: ''
         run: pnpm tauri ios init --ci
       - name: Ensure Archive config is Release
         run: |
@@ -140,7 +140,7 @@ jobs:
       - name: Get version
         id: version
         run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install system deps
         run: |
           sudo apt-get update
