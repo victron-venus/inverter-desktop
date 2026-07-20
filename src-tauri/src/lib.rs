@@ -339,6 +339,9 @@ fn start_ha_polling(app: tauri::AppHandle) {
                 || config.ha_url.is_none()
                 || config.ha_longlived_token.is_none()
             {
+                if let Ok(mut states_guard) = app.state::<HaEntityStates>().0.lock() {
+                    states_guard.clear();
+                }
                 let _ = app.emit("ha-connection-status", false);
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
@@ -850,8 +853,11 @@ fn set_window_hidden(hidden: bool) {
 
 #[tauri::command]
 fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_api::HaFilteredData {
-    let guard = entity_states.0.lock().unwrap();
-    ha_api::compute_filtered_data(&*guard)
+    let guard = match entity_states.0.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    ha_api::compute_filtered_data(&guard)
 }
 
 #[tauri::command]
