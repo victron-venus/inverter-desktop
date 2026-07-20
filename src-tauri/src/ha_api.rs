@@ -598,7 +598,7 @@ impl HaWebSocketClient {
         // Emit initial filtered data immediately after populating state map
         // This ensures frontend has full data on WS connect
         if let Ok(states_guard) = entity_states.lock() {
-            let filtered = compute_filtered_data(&*states_guard);
+            let filtered = compute_filtered_data(&states_guard);
             let _ = app.emit("ha-filtered-update", &filtered);
         }
 
@@ -650,7 +650,7 @@ impl HaWebSocketClient {
                                                             );
 
                                                             // Compute and emit pre-filtered entity data
-                                                            let filtered = compute_filtered_data(&*states_guard);
+                                                            let filtered = compute_filtered_data(&states_guard);
                                                             let _ = app_clone.emit("ha-filtered-update", &filtered);
                                                         }
                                                     }
