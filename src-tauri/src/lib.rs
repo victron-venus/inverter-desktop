@@ -857,7 +857,7 @@ fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_a
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    ha_api::compute_filtered_data(&guar
+    ha_api::compute_filtered_data(&guard)
 }
 
 #[tauri::command]
