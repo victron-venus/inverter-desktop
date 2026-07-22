@@ -9,17 +9,18 @@ interface LogEntry {
 
 const buffer: LogEntry[] = []
 
-function push(level: LogEntry['level'], args: unknown[]) {
+function push(level: LogEntry['level'], args: unknown[]): void {
   buffer.push({
     level,
     args: args.map((a) => {
       if (a instanceof Error) return a.stack || a.message
-      if (typeof a === 'object')
+      if (typeof a === 'object') {
         try {
           return JSON.stringify(a)
         } catch {
           return a === null ? 'null' : `[${(a as object).constructor?.name || 'Object'}]`
         }
+      }
       return a
     }),
     ts: Date.now(),
