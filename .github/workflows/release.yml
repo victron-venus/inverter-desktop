@@ -23,7 +23,7 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
       - name: Check version change or manual dispatch
@@ -64,7 +64,7 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install frontend dependencies
         uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
@@ -128,7 +128,7 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Install pnpm
         uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
         with:
@@ -197,8 +197,14 @@ jobs:
         if: matrix.type == 'ios'
         run: python3 scripts/patch_pbxproj.py
 
-      # Keep a fixed minimum deployment target rather than the SDK version
-      # IPHONEOS_DEPLOYMENT_TARGET = 14.0
+      - name: iOS – pin IPHONEOS_DEPLOYMENT_TARGET
+        if: matrix.type == 'ios'
+        run: |
+          DEPLOYMENT_TARGET="26.0"
+          PBPROJ="src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj"
+          sed -i.bak "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = ${DEPLOYMENT_TARGET};/" "$PBPROJ"
+          rm -f "$PBPROJ.bak"
+          echo "✓ Deployment target set to $DEPLOYMENT_TARGET"
 
       - name: iOS – build (unsigned .app)
         if: matrix.type == 'ios'
