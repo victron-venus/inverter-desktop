@@ -17,6 +17,18 @@ const prevHomeStates = ref<Record<string, string>>({})
 const lastNotifyTime = new Map<string, number>()
 const NOTIFY_COOLDOWN_MS = 5000
 let initialized = false
+const NOTIFIABLE_DOMAINS = new Set(['switch', 'input_boolean', 'light', 'fan', 'binary_sensor'])
+
+function shouldNotifyEntity(domain: string, st: string, entityId: string, now: number): boolean {
+  if (!NOTIFIABLE_DOMAINS.has(domain)) return false
+  if (domain === 'binary_sensor' && st !== 'on') return false
+  const lastTime = lastNotifyTime.get(entityId) || 0
+  return now - lastTime >= NOTIFY_COOLDOWN_MS
+}
+
+function getEntityName(entityId: string, attrs?: Record<string, unknown>): string {
+  return (attrs?.friendly_name as string) || entityId.split('.').pop() || entityId
+}
 
 export function initSystemNotifications(
   haEntityStates: Ref<Record<string, string>>,
@@ -68,29 +80,12 @@ export function initSystemNotifications(
       const prev = prevHomeStates.value
       const now = Date.now()
       for (const [entityId, st] of Object.entries(states) as [string, string][]) {
-        const prevSt = prev[entityId]
-        if (prevSt !== undefined && prevSt !== st) {
-          const domain = entityId.split('.')[0]
-          if (
-            domain === 'switch' ||
-            domain === 'input_boolean' ||
-            domain === 'light' ||
-            domain === 'fan' ||
-            domain === 'binary_sensor'
-          ) {
-            if (domain === 'binary_sensor' && st !== 'on') {
-              continue
-            }
-            const lastTime = lastNotifyTime.get(entityId) || 0
-            if (now - lastTime < NOTIFY_COOLDOWN_MS) {
-              continue
-            }
-            lastNotifyTime.set(entityId, now)
-            const attrs = haEntityAttributes.value[entityId]
-            const name = (attrs?.friendly_name as string) || entityId.split('.').pop() || entityId
-            notify('Home Control', `${name}: ${st.toUpperCase()}`)
-          }
-        }
+        if (prev[entityId] === st) continue
+        const domain = entityId.split('.')[0]
+        if (!shouldNotifyEntity(domain, st, entityId, now)) continue
+        lastNotifyTime.set(entityId, now)
+        const name = getEntityName(entityId, haEntityAttributes.value[entityId])
+        notify('Home Control', `${name}: ${st.toUpperCase()}`)
       }
       prevHomeStates.value = { ...states }
     },
