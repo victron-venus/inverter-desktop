@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { ref } from 'vue'
 
 import type { AppConfig } from '../config'
+import { logger } from '../logger'
 
 export interface DiscoveredEntity {
   entity_id: string
@@ -55,27 +56,21 @@ export function useHAEntityManager() {
     const toAdd = discoveredEntities.value.filter((e) =>
       selectedDiscovery.value.includes(e.entity_id)
     )
+    const targetList = target === 'home' ? haEntitiesList.value : headerTogglesList.value
+    const existingKey = target === 'home' ? 'entity' : 'entity'
 
-    if (target === 'home') {
-      toAdd.forEach((de) => {
-        if (haEntitiesList.value.some((e) => e.entity === de.entity_id)) return
-        haEntitiesList.value.push({
-          id: de.entity_id.replace(/\./g, '_'),
-          label: de.friendly_name || de.entity_id,
-          entity: de.entity_id,
-          domain: de.domain,
-          enabled: true,
-        })
-      })
-    } else {
-      toAdd.forEach((de) => {
-        if (headerTogglesList.value.some((t) => t.entity === de.entity_id)) return
-        headerTogglesList.value.push({
-          id: de.entity_id.replace(/\./g, '_'),
-          label: de.friendly_name || de.entity_id,
-          entity: de.entity_id,
-        })
-      })
+    for (const de of toAdd) {
+      if (targetList.some((e) => e[existingKey] === de.entity_id)) continue
+      const base = {
+        id: de.entity_id.replace(/\./g, '_'),
+        label: de.friendly_name || de.entity_id,
+        entity: de.entity_id,
+      }
+      if (target === 'home') {
+        haEntitiesList.value.push({ ...base, domain: de.domain, enabled: true })
+      } else {
+        headerTogglesList.value.push(base)
+      }
     }
     discoveryDialog.value = false
   }
@@ -137,7 +132,7 @@ export function useHAEntityManager() {
       })
       discoveredEntities.value = entities
     } catch (e) {
-      console.error('Failed to auto-fetch HA entities:', e)
+      logger.error('Failed to auto-fetch HA entities:', e)
     } finally {
       discoveryLoading.value = false
     }

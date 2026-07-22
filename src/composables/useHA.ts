@@ -11,12 +11,10 @@ import type {
   HaSensorDisplay,
   HaWeatherDisplay,
 } from '../types/ha'
-import { appConfig, state } from './useInverterState'
+import { appConfig, state, type InverterState } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
-  if (v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online')
-    return true
-  return false
+  return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
 }
 
 export function useHA() {
@@ -66,6 +64,17 @@ export function useHA() {
     return !!state.value.ha_connected
   })
 
+  function storeEntityStates(
+    states: Array<{ entity_id: string; state: string; attributes?: Record<string, unknown> }>
+  ) {
+    for (const s of states) {
+      haEntityStates.value = { ...haEntityStates.value, [s.entity_id]: s.state }
+      if (s.attributes) {
+        haEntityAttributes.value = { ...haEntityAttributes.value, [s.entity_id]: s.attributes }
+      }
+    }
+  }
+
   async function fetchHaStates() {
     const cfg = appConfig.value
     if (!cfg?.ha_url || !cfg?.ha_longlived_token) return
@@ -81,12 +90,7 @@ export function useHA() {
         port: cfg.ha_port || 8123,
         token: cfg.ha_longlived_token,
       })
-      for (const s of states) {
-        haEntityStates.value = { ...haEntityStates.value, [s.entity_id]: s.state }
-        if (s.attributes) {
-          haEntityAttributes.value = { ...haEntityAttributes.value, [s.entity_id]: s.attributes }
-        }
-      }
+      storeEntityStates(states)
     } catch (e) {
       logger.warn('Failed to fetch HA states:', e)
     }
@@ -109,12 +113,7 @@ export function useHA() {
         token: cfg.ha_longlived_token,
         entityIds,
       })
-      for (const s of states) {
-        haEntityStates.value = { ...haEntityStates.value, [s.entity_id]: s.state }
-        if (s.attributes) {
-          haEntityAttributes.value = { ...haEntityAttributes.value, [s.entity_id]: s.attributes }
-        }
-      }
+      storeEntityStates(states)
     } catch (e) {
       logger.warn('Failed to fetch HA entity states:', e)
     }
@@ -128,7 +127,7 @@ export function useHA() {
       await invoke('set_window_hidden', { hidden })
       if (!hidden) {
         fetchHaStates()
-        const initial = await invoke<any>('get_state')
+        const initial = await invoke<InverterState>('get_state')
         if (initial) {
           state.value = initial
         }
@@ -386,10 +385,7 @@ export function useHA() {
     return states
   })
 
-  async function sendHaOrMqtt(
-    action: string,
-    payload: Record<string, unknown> = {} as Record<string, unknown>
-  ) {
+  async function sendHaOrMqtt(action: string, payload: Record<string, unknown> = {}) {
     try {
       await invoke('perform_action', { action, payload })
     } catch (e) {
@@ -406,6 +402,8 @@ export function useHA() {
   function recomputeFilteredFromEntityMaps() {
     const states = haEntityStates.value
     const attrs = haEntityAttributes.value
+    const getName = (entityId: string, a?: Record<string, unknown>) =>
+      (a?.friendly_name as string) || entityId
 
     const sensors: HaSensorDisplay[] = []
     const numbers: HaNumberDisplay[] = []
@@ -414,40 +412,35 @@ export function useHA() {
     const scenes: HaSceneDisplay[] = []
     let weather: HaWeatherDisplay | null = null
 
-    for (const [entityId, state] of Object.entries(states)) {
-      if (state === 'unavailable' || state === 'unknown') continue
+    for (const [entityId, st] of Object.entries(states)) {
+      if (st === 'unavailable' || st === 'unknown') continue
       const domain = entityId.split('.')[0]
-      const entityAttrs = attrs[entityId] || {}
+      const a = attrs[entityId] || {}
+      const name = getName(entityId, a)
 
       if (domain === 'sensor' || domain === 'binary_sensor') {
-        const name = (entityAttrs.friendly_name as string) || entityId
-        const unit = (entityAttrs.unit_of_measurement as string) || ''
-        sensors.push({ entity_id: entityId, name, state, unit })
+        const unit = (a.unit_of_measurement as string) || ''
+        sensors.push({ entity_id: entityId, name, state: st, unit })
       } else if (domain === 'number') {
-        const name = (entityAttrs.friendly_name as string) || entityId
-        const value = Number.parseFloat(state) || 0
-        const min = (entityAttrs.min as number) ?? 0
-        const max = (entityAttrs.max as number) ?? 100
-        const step = (entityAttrs.step as number) ?? 1
-        const unit = (entityAttrs.unit_of_measurement as string) || ''
+        const value = Number.parseFloat(st) || 0
+        const min = (a.min as number) ?? 0
+        const max = (a.max as number) ?? 100
+        const step = (a.step as number) ?? 1
+        const unit = (a.unit_of_measurement as string) || ''
         numbers.push({ entity_id: entityId, name, value, min, max, step, unit })
       } else if (domain === 'cover') {
-        const name = (entityAttrs.friendly_name as string) || entityId
-        const position = (entityAttrs.current_position as number) ?? 0
+        const position = (a.current_position as number) ?? 0
         covers.push({ entity_id: entityId, name, position })
       } else if (domain === 'media_player') {
-        const name = (entityAttrs.friendly_name as string) || entityId
-        mediaPlayers.push({ entity_id: entityId, name, state })
+        mediaPlayers.push({ entity_id: entityId, name, state: st })
       } else if (domain === 'scene') {
-        const name =
-          (entityAttrs.friendly_name as string) || entityId.replace('scene.', '').replace(/_/g, ' ')
-        scenes.push({ entity_id: entityId, name })
+        const sceneName = getName(entityId.replace('scene.', '').replace(/_/g, ' '), a)
+        scenes.push({ entity_id: entityId, name: sceneName })
       } else if (domain === 'weather' && !weather) {
-        const name = (entityAttrs.friendly_name as string) || 'Weather'
-        const temperature = (entityAttrs.temperature as number) ?? null
-        const unit = (entityAttrs.temperature_unit as string) || '°C'
-        const forecast = (entityAttrs.forecast as Array<Record<string, unknown>>) ?? []
-        weather = { entity_id: entityId, name, state, temperature, unit, forecast }
+        const temperature = (a.temperature as number) ?? null
+        const unit = (a.temperature_unit as string) || '°C'
+        const forecast = (a.forecast as Array<Record<string, unknown>>) ?? []
+        weather = { entity_id: entityId, name, state: st, temperature, unit, forecast }
       }
     }
 

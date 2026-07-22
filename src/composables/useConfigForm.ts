@@ -15,13 +15,20 @@ export function useConfigForm() {
       Object.assign(config, loaded)
       if (!config.color_scheme) config.color_scheme = 'dark'
       // Ensure new boolean fields have defaults if missing from store
-      if (config.show_ha_sensors === undefined) config.show_ha_sensors = true
-      if (config.show_ha_numbers === undefined) config.show_ha_numbers = true
-      if (config.show_ha_covers === undefined) config.show_ha_covers = true
-      if (config.show_ha_media === undefined) config.show_ha_media = true
-      if (config.show_ha_scenes === undefined) config.show_ha_scenes = true
-      if (config.show_ha_weather === undefined) config.show_ha_weather = true
-      if (config.show_console === undefined) config.show_console = true
+      const boolDefaults: Record<string, boolean> = {
+        show_ha_sensors: true,
+        show_ha_numbers: true,
+        show_ha_covers: true,
+        show_ha_media: true,
+        show_ha_scenes: true,
+        show_ha_weather: true,
+        show_console: true,
+      }
+      for (const [key, val] of Object.entries(boolDefaults)) {
+        if (config[key as keyof AppConfig] === undefined) {
+          ;(config as Record<string, unknown>)[key] = val
+        }
+      }
       message.value = ''
     } catch (e) {
       message.value = `Failed to load config: ${e}`
