@@ -14,9 +14,14 @@ const prevEvChargingKw = ref<number | undefined>(undefined)
 const prevWaterValve = ref<boolean | undefined>(undefined)
 const prevPumpSwitch = ref<boolean | undefined>(undefined)
 const prevHomeStates = ref<Record<string, string>>({})
+const lastNotifyTime = new Map<string, number>()
+const NOTIFY_COOLDOWN_MS = 5000
 let initialized = false
 
-export function initSystemNotifications(haEntityStates: Ref<Record<string, string>>) {
+export function initSystemNotifications(
+  haEntityStates: Ref<Record<string, string>>,
+  haEntityAttributes: Ref<Record<string, Record<string, unknown>>>
+) {
   if (initialized) return
   initialized = true
 
@@ -61,6 +66,7 @@ export function initSystemNotifications(haEntityStates: Ref<Record<string, strin
     haEntityStates,
     (states) => {
       const prev = prevHomeStates.value
+      const now = Date.now()
       for (const [entityId, st] of Object.entries(states) as [string, string][]) {
         const prevSt = prev[entityId]
         if (prevSt !== undefined && prevSt !== st) {
@@ -69,9 +75,19 @@ export function initSystemNotifications(haEntityStates: Ref<Record<string, strin
             domain === 'switch' ||
             domain === 'input_boolean' ||
             domain === 'light' ||
-            domain === 'fan'
+            domain === 'fan' ||
+            domain === 'binary_sensor'
           ) {
-            const name = entityId.split('.').pop() || entityId
+            if (domain === 'binary_sensor' && st !== 'on') {
+              continue
+            }
+            const lastTime = lastNotifyTime.get(entityId) || 0
+            if (now - lastTime < NOTIFY_COOLDOWN_MS) {
+              continue
+            }
+            lastNotifyTime.set(entityId, now)
+            const attrs = haEntityAttributes.value[entityId]
+            const name = (attrs?.friendly_name as string) || entityId.split('.').pop() || entityId
             notify('Home Control', `${name}: ${st.toUpperCase()}`)
           }
         }
