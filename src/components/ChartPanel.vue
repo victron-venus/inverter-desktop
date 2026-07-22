@@ -20,7 +20,7 @@ import VChart from 'vue-echarts'
 use([CanvasRenderer, LineChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent])
 
 defineProps<{
-  chartOption: any
+  chartOption: Record<string, unknown>
 }>()
 </script>
 

@@ -83,10 +83,7 @@ const mpptDaily = computed(() => ds.value.mppt_daily || [])
 const pvTotalDaily = computed(() => ds.value.pv_total_daily || 0)
 
 const solarStr = computed(() => {
-  const parts: string[] = []
-  tasmotaDaily.value.forEach((v) => {
-    if (v > 0) parts.push(v.toFixed(2))
-  })
+  const parts: string[] = tasmotaDaily.value.filter((v) => v > 0).map((v) => v.toFixed(2))
   const mpptPart =
     mpptDaily.value.length > 0 ? mpptDaily.value.map((v) => v.toFixed(2)).join('+') : '0.00'
   parts.push(pvTotalDaily.value.toFixed(2) + '(' + mpptPart + ')')
