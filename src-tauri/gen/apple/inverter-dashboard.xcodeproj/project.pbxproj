@@ -87,7 +87,7 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		436DAA77C85813ABD8729EE7 /* Externals */ = {
+		436DATA77C85813ABD8729EE7 /* Externals */ = {
 			isa = PBXGroup;
 			children = (
 				0A119D5E363A1A12E79A79F8 /* arm64 */,
@@ -188,7 +188,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 43F411386B642BE2AEDA9A59 /* Build configuration list for PBXNativeTarget "inverter-dashboard_iOS" */;
 			buildPhases = (
-				330A9B455DAA871E389919A1 /* Build Rust Code */,
+				330A9B455DATA871E389919A1 /* Build Rust Code */,
 				1CC6A394B301994F36EF91BB /* Sources */,
 				1E0F0336894AB53694374FBA /* Resources */,
 				CE610273A5AD6421C8D86DE6 /* Frameworks */,
@@ -248,7 +248,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		330A9B455DAA871E389919A1 /* Build Rust Code */ = {
+		330A9B455DATA871E389919A1 /* Build Rust Code */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;

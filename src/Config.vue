@@ -271,7 +271,7 @@
                   <button
                     type="button"
                     @click="handleFetchHaEntities"
-                    :disabled="discoveryLoading || !isHaConfigured"
+                    :disabled="discoveryLoading || !haDirectMonitoringEnabled"
                     class="classic-btn flex-1 !normal-case"
                   >
                     Fetch Entities
@@ -973,8 +973,6 @@ const haDirectMonitoringEnabled = computed(() => {
   )
 })
 
-const isHaConfigured = computed(() => haDirectMonitoringEnabled.value)
-
 watch(
   [() => config.ha_longlived_token, () => config.ha_url],
   ([token, url]) => {
@@ -1045,11 +1043,11 @@ async function handleClose() {
     const win = getCurrentWindow()
     await win.close()
   } catch (e) {
-    console.warn('Frontend close failed, trying backend:', e)
+    logger.warn('Frontend close failed, trying backend:', e)
     try {
       await invoke('close_config_window')
     } catch (err) {
-      console.error('Close failed:', err)
+      logger.error('Close failed:', err)
     }
   }
 }
@@ -1070,7 +1068,7 @@ const toggleSelection = (id: string) => {
 
 const applyTheme = (scheme: string | null | undefined) => {
   const isDark = scheme === 'dark'
-  console.log('Applying theme to Config window:', scheme, isDark)
+  logger.log('Applying theme to Config window:', scheme, isDark)
   document.documentElement.classList.toggle('dark', isDark)
   document.body.classList.toggle('dark', isDark)
 
@@ -1109,7 +1107,7 @@ onMounted(async () => {
     // Re-apply after loading to be absolutely sure
     applyTheme(cfg.color_scheme)
   } catch (err) {
-    console.error('Config init failed:', err)
+    logger.error('Config init failed:', err)
   }
 })
 
