@@ -437,7 +437,7 @@ onMounted(async () => {
 
   await connectMqtt()
   await initHa()
-  initSystemNotifications(haEntityStates)
+  initSystemNotifications(haEntityStates, haEntityAttributes)
   document.addEventListener('click', onDocumentClick)
   globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 

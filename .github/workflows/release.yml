@@ -197,14 +197,14 @@ jobs:
         if: matrix.type == 'ios'
         run: python3 scripts/patch_pbxproj.py
 
-      - name: iOS – sync IPHONEOS_DEPLOYMENT_TARGET with installed SDK
+      - name: iOS – pin IPHONEOS_DEPLOYMENT_TARGET
         if: matrix.type == 'ios'
         run: |
-          SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+          DEPLOYMENT_TARGET="26.0"
           PBPROJ="src-tauri/gen/apple/inverter-dashboard.xcodeproj/project.pbxproj"
-          sed -i.bak "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = ${SDK_VERSION};/" "$PBPROJ"
+          sed -i.bak "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = ${DEPLOYMENT_TARGET};/" "$PBPROJ"
           rm -f "$PBPROJ.bak"
-          echo "✓ Deployment target set to $SDK_VERSION"
+          echo "✓ Deployment target set to $DEPLOYMENT_TARGET"
 
       - name: iOS – build (unsigned .app)
         if: matrix.type == 'ios'
