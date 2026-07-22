@@ -1,18 +1,18 @@
-export function formatPower(w: number | undefined) {
-  const v = Math.abs(Math.floor(w || 0))
+export function formatPower(w: number | undefined): string {
+  const abs = Math.abs(Math.floor(w || 0))
   const sign = w && w < 0 ? '-' : ''
-  return v >= 1000 ? sign + (v / 1000).toFixed(1) + 'kW' : sign + v + 'W'
+  return abs >= 1000 ? sign + (abs / 1000).toFixed(1) + 'kW' : sign + abs + 'W'
 }
 
-export function formatUptime(s: number) {
+export function formatUptime(s: number): string {
   if (s < 60) return s + 's'
   if (s < 3600) return Math.floor(s / 60) + 'm'
-  const h = Math.floor(s / 3600),
-    m = Math.floor((s % 3600) / 60)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
   return h + 'h ' + m + 'm'
 }
 
-export function formatDuration(s: number | undefined) {
+export function formatDuration(s: number | undefined): string {
   if (!s || s <= 0) return '0:00'
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)

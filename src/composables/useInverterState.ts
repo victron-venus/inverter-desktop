@@ -103,8 +103,8 @@ export function addNotification(title: string, body: string) {
 }
 
 export function markNotificationRead(id: number) {
-  const n = notifications.value.find((n) => n.id === id)
-  if (n) n.read = true
+  const entry = notifications.value.find((n) => n.id === id)
+  if (entry) entry.read = true
 }
 
 export function markAllNotificationsRead() {

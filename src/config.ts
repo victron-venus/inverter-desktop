@@ -112,7 +112,7 @@ export async function getAppConfig(): Promise<AppConfig> {
     return config
   } catch (e) {
     logger.warn('Failed to load config, using defaults', e)
-    return config
+    return { ...defaultConfig }
   }
 }
 

@@ -178,30 +178,23 @@ export function useConnection() {
   }
 
   function cleanup() {
-    if (unlistenStateUpdate) {
-      unlistenStateUpdate()
-      unlistenStateUpdate = null
+    for (const fn of [
+      unlistenStateUpdate,
+      unlistenConnectionStatus,
+      unlistenCamera,
+      unlistenNotification,
+      unlistenHaMqttStatus,
+      wakeUnlisten,
+    ]) {
+      fn?.()
     }
-    if (unlistenConnectionStatus) {
-      unlistenConnectionStatus()
-      unlistenConnectionStatus = null
-    }
-    if (unlistenCamera) {
-      unlistenCamera()
-      unlistenCamera = null
-    }
-    if (unlistenNotification) {
-      unlistenNotification()
-      unlistenNotification = null
-    }
-    if (unlistenHaMqttStatus) {
-      unlistenHaMqttStatus()
-      unlistenHaMqttStatus = null
-    }
-    if (wakeUnlisten) {
-      wakeUnlisten()
-      wakeUnlisten = null
-    }
+    unlistenStateUpdate = null
+    unlistenConnectionStatus = null
+    unlistenCamera = null
+    unlistenNotification = null
+    unlistenHaMqttStatus = null
+    wakeUnlisten = null
+
     if (mqttReconnectTimer) {
       clearTimeout(mqttReconnectTimer)
       mqttReconnectTimer = null
