@@ -1,13 +1,16 @@
 use ab_glyph::{point, Font, FontRef, GlyphId, PxScale, ScaleFont};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 
 const FONT_DATA: &[u8] = include_bytes!("/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf");
 
+static FONT: LazyLock<FontRef<'static>> =
+    LazyLock::new(|| FontRef::try_from_slice(FONT_DATA).expect("Arial Narrow Bold"));
+
 static NEXT_DIM: AtomicBool = AtomicBool::new(true);
 
-pub const W: u32 = 332;
-pub const H: u32 = 84;
-
+const W: u32 = 332;
+const H: u32 = 84;
 const TEXT_X: i32 = 2;
 const TEXT_W: i32 = 181;
 const BAR_X: i32 = 187;
@@ -214,8 +217,6 @@ const MAX_SOLAR: f64 = 10_000.0;
 const MAX_GRID: f64 = 5_000.0;
 
 pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> (Vec<u8>, u32, u32) {
-    let font = FontRef::try_from_slice(FONT_DATA).expect("Arial Narrow Bold");
-
     let prev = NEXT_DIM.load(Ordering::Relaxed);
     NEXT_DIM.store(!prev, Ordering::Relaxed);
     let alpha: u8 = if prev { 170 } else { 200 };
@@ -245,10 +246,10 @@ pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> (Vec<u8>, u3
         }
 
         let label = &labels[row as usize];
-        let tw = layout_text_width(FONT_SCALE, &font, label);
+        let tw = layout_text_width(FONT_SCALE, &FONT, label);
         let tx = TEXT_X + TEXT_W - tw as i32 - 19;
         let ty = y - 4;
-        draw_text(&mut pixels, tx, ty, FONT_SCALE, &font, label, TEXT_COLOR);
+        draw_text(&mut pixels, tx, ty, FONT_SCALE, &FONT, label, TEXT_COLOR);
     }
 
     (pixels, W, H)

@@ -9,7 +9,7 @@ const KEEPALIVE_INTERVAL_SECS: u64 = 45;
 const MQTT_QUEUE_CAPACITY: usize = 10;
 const CONSOLE_MAX_LINES: usize = 50;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
     pub gt: Option<f64>,
     pub g1: Option<f64>,
@@ -117,13 +117,13 @@ fn coerce_bool(v: &serde_json::Value) -> bool {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EssMode {
     pub mode_name: Option<String>,
     pub is_external: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MpptCharger {
     pub name: Option<String>,
     pub pv_voltage: Option<f64>,
@@ -131,7 +131,7 @@ pub struct MpptCharger {
     pub power: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Battery {
     pub name: Option<String>,
     pub voltage: Option<f64>,
@@ -142,14 +142,14 @@ pub struct Battery {
     pub time_to_go: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UiConfig {
     pub loads: Option<LoadsConfig>,
     pub home_buttons: Option<Vec<HomeButton>>,
     pub header_toggles: Option<Vec<HeaderToggle>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LoadsConfig {
     pub hidden: Option<Vec<String>>,
     pub min_watts: Option<f64>,
@@ -170,7 +170,7 @@ pub struct HeaderToggle {
     pub entity: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DailyStats {
     pub produced_today: Option<f64>,
     pub produced_dollars: Option<f64>,
@@ -259,7 +259,7 @@ fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
     let p_parts: Vec<&str> = pattern.split('/').collect();
 
     if t_parts.len() != p_parts.len() && !pattern.ends_with("/#") {
-        // Simple match, might need adjustment for #
+        return false;
     }
 
     // Very basic MQTT wildcard matching for +
@@ -299,53 +299,7 @@ impl MqttClient {
     ) -> Self {
         Self {
             client: None,
-            state: Arc::new(Mutex::new(InverterState {
-                gt: None,
-                g1: None,
-                g2: None,
-                tt: None,
-                t1: None,
-                t2: None,
-                solar_total: None,
-                mppt_total: None,
-                tasmota_total: None,
-                battery_soc: None,
-                battery_power: None,
-                battery_voltage: None,
-                battery_current: None,
-                setpoint: None,
-                inverter_state: None,
-                version: None,
-                dashboard_version: None,
-                uptime: None,
-                ha_connected: None,
-                ha_direct_connected: None,
-                dry_run: None,
-                ess_mode: None,
-                booleans: None,
-                features: None,
-                mppt_individual: None,
-                tasmota_individual: None,
-                mppt_chargers: None,
-                batteries: None,
-                loads: None,
-                ui_config: None,
-                daily_stats: None,
-                ev_charging_kw: None,
-                ev_power: None,
-                car_soc: None,
-                water_level: None,
-                water_valve: None,
-                pump_switch: None,
-                dishwasher_running: None,
-                dishwasher_duration: None,
-                washer_time: None,
-                washer_power: None,
-                dryer_time: None,
-                dryer_power: None,
-                latest_version: None,
-                console: None,
-            })),
+            state: Arc::new(Mutex::new(InverterState::default())),
             host,
             port,
             username,
@@ -395,12 +349,6 @@ impl MqttClient {
         let cam_topic_owned = self.camera_topic.clone();
         let notifications = self.notifications.clone();
         let status_event = self.status_event.clone();
-
-        // Keep a client handle so publish_command can work while connected
-        let self_client = self.client.clone();
-        if let Some(ref c) = self_client {
-            self.client = Some(c.clone());
-        }
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -657,10 +605,9 @@ impl MqttClient {
         if !hidden {
             let mut alert_notifications: Vec<(String, String)> = Vec::new();
             if let Ok(mut alert_state) = notifications.lock() {
-                let loads_clone = new_state.loads.clone();
-                if let Some(loads) = loads_clone {
-                    let mut active_loads = std::collections::HashSet::new();
-                    for (name, power) in &loads {
+                let mut active_loads = std::collections::HashSet::new();
+                if let Some(ref loads) = new_state.loads {
+                    for (name, power) in loads {
                         if *power > THRESHOLD_LOAD_W {
                             active_loads.insert(name.clone());
                             let alert = alert_state
@@ -732,13 +679,13 @@ impl MqttClient {
             }
         }
 
-        if let Ok(mut guard) = state.lock() {
-            *guard = new_state.clone();
-        }
         if let Some(ref handle) = app_handle {
             if !hidden {
                 let _ = handle.emit("mqtt-state-update", &new_state);
             }
+        }
+        if let Ok(mut guard) = state.lock() {
+            *guard = new_state;
         }
     }
 
