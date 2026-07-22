@@ -437,10 +437,11 @@ export function useHA() {
         const sceneName = getName(entityId.replace('scene.', '').replace(/_/g, ' '), a)
         scenes.push({ entity_id: entityId, name: sceneName })
       } else if (domain === 'weather' && !weather) {
+        const weatherName = (a.friendly_name as string) || 'Weather'
         const temperature = (a.temperature as number) ?? null
         const unit = (a.temperature_unit as string) || '°C'
         const forecast = (a.forecast as Array<Record<string, unknown>>) ?? []
-        weather = { entity_id: entityId, name, state: st, temperature, unit, forecast }
+        weather = { entity_id: entityId, name: weatherName, state: st, temperature, unit, forecast }
       }
     }
 
