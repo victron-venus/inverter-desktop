@@ -282,6 +282,14 @@ const THRESHOLD_WATER_CM: f64 = 23.0;
 const THRESHOLD_SOLAR_W: f64 = 3000.0;
 const NOTIFICATION_COOLDOWN_SECS: u64 = 300;
 
+fn fmt_watts(v: f64) -> String {
+    if v >= 1000.0 {
+        format!("{:.1}kW", v / 1000.0)
+    } else {
+        format!("{:.0}W", v)
+    }
+}
+
 impl MqttClient {
     pub fn new(
         host: String,
@@ -662,7 +670,7 @@ impl MqttClient {
                             if alert.should_alert() {
                                 alert_notifications.push((
                                     "High Load".to_string(),
-                                    format!("{}: {}W", name, power),
+                                    format!("{}: {}", name, fmt_watts(*power)),
                                 ));
                             }
                         }
@@ -677,7 +685,7 @@ impl MqttClient {
                         if alert_state.high_consumption.should_alert() {
                             alert_notifications.push((
                                 "High Consumption".to_string(),
-                                format!("Consumption: {}W", tt),
+                                format!("Consumption: {}", fmt_watts(tt)),
                             ));
                         }
                     } else {
@@ -697,8 +705,10 @@ impl MqttClient {
                 if let Some(st) = new_state.solar_total {
                     if st > THRESHOLD_SOLAR_W {
                         if alert_state.high_solar.should_alert() {
-                            alert_notifications
-                                .push(("High Solar".to_string(), format!("Solar: {}W", st)));
+                            alert_notifications.push((
+                                "High Solar".to_string(),
+                                format!("Solar: {}", fmt_watts(st)),
+                            ));
                         }
                     } else {
                         alert_state.high_solar.check_resolved();
