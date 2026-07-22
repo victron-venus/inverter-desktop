@@ -13,7 +13,11 @@
 
 Desktop and mobile application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
-For the **web dashboard** (Python/FastAPI), see **[inverter-dashboard](https://github.com/victron-venus/inverter-dashboard)** — Docker image **`alvit/inverter-dashboard`**.
+| Surface | Recommended project |
+|---------|---------------------|
+| Cerbo GX (web) | [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go) |
+| Docker / NAS | [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) (`alvit/inverter-dashboard`) |
+| Desktop / mobile (this app) | **inverter-desktop** |
 
 ## Features
 
