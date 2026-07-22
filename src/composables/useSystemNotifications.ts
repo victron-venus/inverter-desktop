@@ -80,7 +80,8 @@ export function initSystemNotifications(
       const prev = prevHomeStates.value
       const now = Date.now()
       for (const [entityId, st] of Object.entries(states) as [string, string][]) {
-        if (prev[entityId] === st) continue
+        const prevSt = prev[entityId]
+        if (prevSt === undefined || prevSt === st) continue
         const domain = entityId.split('.')[0]
         if (!shouldNotifyEntity(domain, st, entityId, now)) continue
         lastNotifyTime.set(entityId, now)
