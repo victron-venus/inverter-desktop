@@ -7,6 +7,14 @@ use tauri::Emitter;
 
 pub static WINDOW_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+fn attr_str<'a>(attrs: Option<&'a serde_json::Value>, key: &str) -> Option<&'a str> {
+    attrs.and_then(|a| a.get(key)).and_then(|v| v.as_str())
+}
+
+fn attr_f64(attrs: Option<&serde_json::Value>, key: &str) -> Option<f64> {
+    attrs.and_then(|a| a.get(key)).and_then(|v| v.as_f64())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HaState {
     pub entity_id: String,
@@ -99,17 +107,11 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
         }
         let domain = entity_id.split('.').next().unwrap_or("");
         let attrs = entry.attributes.as_ref();
+        let name = attr_str(attrs, "friendly_name").unwrap_or(entity_id);
 
         match domain {
             "sensor" | "binary_sensor" => {
-                let name = attrs
-                    .and_then(|a| a.get("friendly_name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(entity_id);
-                let unit = attrs
-                    .and_then(|a| a.get("unit_of_measurement"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let unit = attr_str(attrs, "unit_of_measurement").unwrap_or("");
                 sensors.push(HaSensorDisplay {
                     entity_id: entity_id.clone(),
                     name: name.to_string(),
@@ -118,27 +120,11 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                 });
             }
             "number" => {
-                let name = attrs
-                    .and_then(|a| a.get("friendly_name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(entity_id);
                 let value = entry.state.parse::<f64>().unwrap_or(0.0);
-                let min = attrs
-                    .and_then(|a| a.get("min"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                let max = attrs
-                    .and_then(|a| a.get("max"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(100.0);
-                let step = attrs
-                    .and_then(|a| a.get("step"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(1.0);
-                let unit = attrs
-                    .and_then(|a| a.get("unit_of_measurement"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let min = attr_f64(attrs, "min").unwrap_or(0.0);
+                let max = attr_f64(attrs, "max").unwrap_or(100.0);
+                let step = attr_f64(attrs, "step").unwrap_or(1.0);
+                let unit = attr_str(attrs, "unit_of_measurement").unwrap_or("");
                 numbers.push(HaNumberDisplay {
                     entity_id: entity_id.clone(),
                     name: name.to_string(),
@@ -150,10 +136,6 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                 });
             }
             "cover" => {
-                let name = attrs
-                    .and_then(|a| a.get("friendly_name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(entity_id);
                 let position = attrs
                     .and_then(|a| a.get("current_position"))
                     .and_then(|v| v.as_i64())
@@ -165,10 +147,6 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                 });
             }
             "media_player" => {
-                let name = attrs
-                    .and_then(|a| a.get("friendly_name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(entity_id);
                 media_players.push(HaMediaPlayerDisplay {
                     entity_id: entity_id.clone(),
                     name: name.to_string(),
@@ -176,9 +154,7 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                 });
             }
             "scene" => {
-                let name = attrs
-                    .and_then(|a| a.get("friendly_name"))
-                    .and_then(|v| v.as_str())
+                let scene_name = attr_str(attrs, "friendly_name")
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| {
                         entity_id
@@ -188,20 +164,12 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                     });
                 scenes.push(HaSceneDisplay {
                     entity_id: entity_id.clone(),
-                    name,
+                    name: scene_name,
                 });
             }
             "weather" if weather.is_none() => {
-                let name = attrs
-                    .and_then(|a| a.get("friendly_name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Weather");
-                let temperature = attrs
-                    .and_then(|a| a.get("temperature"))
-                    .and_then(|v| v.as_f64());
-                let unit = attrs
-                    .and_then(|a| a.get("temperature_unit"))
-                    .and_then(|v| v.as_str())
+                let temperature = attr_f64(attrs, "temperature");
+                let unit = attr_str(attrs, "temperature_unit")
                     .unwrap_or("°C")
                     .to_string();
                 let forecast = attrs
@@ -297,10 +265,7 @@ impl HaApiClient {
         let mut result = Vec::new();
         for item in states {
             if let (Some(entity_id), Some(state)) = (item.get("entity_id"), item.get("state")) {
-                if let (Ok(entity_id_str), Ok(state_str)) = (
-                    serde_json::from_value::<String>(entity_id.clone()),
-                    serde_json::from_value::<String>(state.clone()),
-                ) {
+                if let (Some(eid_str), Some(state_str)) = (entity_id.as_str(), state.as_str()) {
                     let attributes = item.get("attributes").cloned();
                     let last_changed = item
                         .get("last_changed")
@@ -309,8 +274,8 @@ impl HaApiClient {
                         .get("last_updated")
                         .and_then(|v| v.as_str().map(String::from));
                     result.push(HaState {
-                        entity_id: entity_id_str,
-                        state: state_str,
+                        entity_id: eid_str.to_string(),
+                        state: state_str.to_string(),
                         attributes,
                         last_changed,
                         last_updated,
@@ -345,13 +310,10 @@ impl HaApiClient {
             }
             if let Ok(item) = response.json::<serde_json::Value>().await {
                 if let (Some(entity_id), Some(state)) = (item.get("entity_id"), item.get("state")) {
-                    if let (Ok(eid_str), Ok(state_str)) = (
-                        serde_json::from_value::<String>(entity_id.clone()),
-                        serde_json::from_value::<String>(state.clone()),
-                    ) {
+                    if let (Some(eid_str), Some(state_str)) = (entity_id.as_str(), state.as_str()) {
                         result.push(HaState {
-                            entity_id: eid_str,
-                            state: state_str,
+                            entity_id: eid_str.to_string(),
+                            state: state_str.to_string(),
                             attributes: item.get("attributes").cloned(),
                             last_changed: item
                                 .get("last_changed")
@@ -577,15 +539,14 @@ impl HaWebSocketClient {
                             if let (Some(eid), Some(state_val)) =
                                 (state.get("entity_id"), state.get("state"))
                             {
-                                if let (Ok(eid_str), Ok(state_str)) = (
-                                    serde_json::from_value::<String>(eid.clone()),
-                                    serde_json::from_value::<String>(state_val.clone()),
-                                ) {
+                                if let (Some(eid_str), Some(state_str)) =
+                                    (eid.as_str(), state_val.as_str())
+                                {
                                     let attrs = state.get("attributes").cloned();
                                     states_guard.insert(
-                                        eid_str,
+                                        eid_str.to_string(),
                                         HaEntityEntry {
-                                            state: state_str,
+                                            state: state_str.to_string(),
                                             attributes: attrs,
                                         },
                                     );

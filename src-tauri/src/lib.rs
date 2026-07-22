@@ -1,5 +1,5 @@
 mod ha_api;
-pub mod mqtt;
+pub(crate) mod mqtt;
 #[cfg(target_os = "macos")]
 mod tray_icon;
 
@@ -15,9 +15,34 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+fn load_config(app: &tauri::AppHandle) -> FullConfig {
+    match app.store_builder("config.json").build() {
+        Ok(store) => match store.get("config") {
+            Some(v) => serde_json::from_value::<FullConfig>(v).unwrap_or_default(),
+            None => FullConfig::default(),
+        },
+        Err(_) => FullConfig::default(),
+    }
+}
+
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
 const DEFAULT_MQTT_PORT: u16 = 1883;
 const DEFAULT_HA_PORT: u16 = 8123;
+const HA_ENTITY_DOMAINS: &[&str] = &[
+    "switch",
+    "light",
+    "input_boolean",
+    "fan",
+    "cover",
+    "lock",
+    "media_player",
+    "scene",
+    "script",
+    "number",
+    "sensor",
+    "binary_sensor",
+    "climate",
+];
 const ABOUT_WINDOW_W: f64 = 380.0;
 const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
@@ -146,15 +171,7 @@ async fn perform_action(
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
     info!("perform_action: action={}, payload={}", action, payload);
-    let store = app
-        .store_builder("config.json")
-        .build()
-        .map_err(|e| format!("Failed to build store: {}", e))?;
-
-    let config: FullConfig = match store.get("config") {
-        Some(value) => serde_json::from_value(value).unwrap_or_default(),
-        None => FullConfig::default(),
-    };
+    let config = load_config(&app);
 
     let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
@@ -266,23 +283,8 @@ async fn perform_action(
 }
 
 fn is_ha_entity(entity_id: &str) -> bool {
-    let domains = [
-        "switch",
-        "light",
-        "input_boolean",
-        "fan",
-        "cover",
-        "lock",
-        "media_player",
-        "scene",
-        "script",
-        "number",
-        "sensor",
-        "binary_sensor",
-        "climate",
-    ];
     let domain = entity_id.split('.').next().unwrap_or("");
-    domains.contains(&domain)
+    HA_ENTITY_DOMAINS.contains(&domain)
 }
 
 /// Build HA WebSocket URL from config, handling host:port format properly.
@@ -324,16 +326,7 @@ fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
 fn start_ha_polling(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            let config = {
-                let store = app.store_builder("config.json").build();
-                match store {
-                    Ok(s) => match s.get("config") {
-                        Some(v) => serde_json::from_value::<FullConfig>(v).unwrap_or_default(),
-                        None => FullConfig::default(),
-                    },
-                    Err(_) => FullConfig::default(),
-                }
-            };
+            let config = load_config(&app);
 
             if !config.ha_use_direct_api
                 || config.ha_url.is_none()
@@ -594,21 +587,6 @@ async fn discover_ha_entities(
 ) -> Result<Vec<DiscoveredEntity>, String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
     let states = client.get_states().await?;
-    let toggleable = [
-        "switch",
-        "light",
-        "input_boolean",
-        "fan",
-        "cover",
-        "lock",
-        "media_player",
-        "scene",
-        "script",
-        "number",
-        "sensor",
-        "binary_sensor",
-        "climate",
-    ];
     let mut result = Vec::new();
     for ha_state in states {
         let entity_id = ha_state.entity_id.clone();
@@ -623,7 +601,7 @@ async fn discover_ha_entities(
             entity_id.clone()
         };
         if let Some(domain_str) = domain {
-            if toggleable.contains(&domain_str.as_str()) {
+            if HA_ENTITY_DOMAINS.contains(&domain_str.as_str()) {
                 result.push(DiscoveredEntity {
                     entity_id,
                     friendly_name,
@@ -795,14 +773,7 @@ async fn auth_login(
     password: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let store = app
-        .store_builder("config.json")
-        .build()
-        .map_err(|e| e.to_string())?;
-    let config: FullConfig = match store.get("config") {
-        Some(v) => serde_json::from_value(v).unwrap_or_default(),
-        None => FullConfig::default(),
-    };
+    let config = load_config(&app);
     if !config.auth_enabled.unwrap_or(false) {
         return Ok("disabled".to_string());
     }
