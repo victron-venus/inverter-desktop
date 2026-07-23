@@ -168,6 +168,7 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                 });
             }
             "weather" if weather.is_none() => {
+                let weather_name = attr_str(attrs, "friendly_name").unwrap_or("Weather");
                 let temperature = attr_f64(attrs, "temperature");
                 let unit = attr_str(attrs, "temperature_unit")
                     .unwrap_or("°C")
@@ -179,7 +180,7 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                     .unwrap_or_default();
                 weather = Some(HaWeatherDisplay {
                     entity_id: entity_id.clone(),
-                    name: name.to_string(),
+                    name: weather_name.to_string(),
                     state: entry.state.clone(),
                     temperature,
                     unit,
