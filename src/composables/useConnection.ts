@@ -35,6 +35,8 @@ async function send(action: string, payload: Record<string, unknown> = {}) {
   }
 }
 
+const OFFLINE_DELAY_MS = 10_000
+
 export function useConnection() {
   let unlistenStateUpdate: (() => void) | null = null
   let unlistenConnectionStatus: (() => void) | null = null
@@ -42,6 +44,8 @@ export function useConnection() {
   let unlistenNotification: (() => void) | null = null
   let unlistenHaMqttStatus: (() => void) | null = null
   let wakeUnlisten: (() => void) | null = null
+  let mqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
+  let haMqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
 
   function processState(newState: InverterState) {
     state.value = markRaw(newState)
@@ -64,7 +68,18 @@ export function useConnection() {
       })
 
       unlistenConnectionStatus = await listen<boolean>('mqtt-connection-status', (event) => {
-        mqttConnected.value = event.payload
+        if (event.payload) {
+          if (mqttOfflineTimer) {
+            clearTimeout(mqttOfflineTimer)
+            mqttOfflineTimer = null
+          }
+          mqttConnected.value = true
+        } else if (!mqttOfflineTimer) {
+          mqttOfflineTimer = setTimeout(() => {
+            mqttOfflineTimer = null
+            mqttConnected.value = false
+          }, OFFLINE_DELAY_MS)
+        }
       })
 
       unlistenCamera = await listen<{ video_url: string; agent_name?: string }>(
@@ -113,10 +128,20 @@ export function useConnection() {
 
       // Listen for HA MQTT connection status changes
       unlistenHaMqttStatus = await listen<boolean>('ha-mqtt-connection-status', (event) => {
-        haMqttConnected.value = event.payload
-        // Force reconnect on unexpected HA MQTT disconnect
-        if (!event.payload && config.camera_enabled && config.mqtt_ha_host) {
-          reconnectHaMqttAfterDelay()
+        if (event.payload) {
+          if (haMqttOfflineTimer) {
+            clearTimeout(haMqttOfflineTimer)
+            haMqttOfflineTimer = null
+          }
+          haMqttConnected.value = true
+        } else if (!haMqttOfflineTimer) {
+          haMqttOfflineTimer = setTimeout(() => {
+            haMqttOfflineTimer = null
+            haMqttConnected.value = false
+            if (config.camera_enabled && config.mqtt_ha_host) {
+              reconnectHaMqttAfterDelay()
+            }
+          }, OFFLINE_DELAY_MS)
         }
       })
 
@@ -202,6 +227,14 @@ export function useConnection() {
     if (haMqttReconnectTimer) {
       clearTimeout(haMqttReconnectTimer)
       haMqttReconnectTimer = null
+    }
+    if (mqttOfflineTimer) {
+      clearTimeout(mqttOfflineTimer)
+      mqttOfflineTimer = null
+    }
+    if (haMqttOfflineTimer) {
+      clearTimeout(haMqttOfflineTimer)
+      haMqttOfflineTimer = null
     }
   }
 

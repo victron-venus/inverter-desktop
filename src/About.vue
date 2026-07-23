@@ -13,10 +13,10 @@
           width="64"
           height="64"
           class="mb-4 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800"
-          alt="Inverter Dashboard"
+          alt="Inverter Desktop"
         />
 
-        <h2 class="text-lg font-bold tracking-tight mb-0.5">Inverter Dashboard</h2>
+        <h2 class="text-lg font-bold tracking-tight mb-0.5">Inverter Desktop</h2>
         <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">
           Version {{ appVersion }}
         </div>

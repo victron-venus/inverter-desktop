@@ -847,7 +847,7 @@ async fn auth_biometric_available() -> Result<bool, String> {
 async fn auth_biometric(_app: tauri::AppHandle) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        let reason = std::ffi::CString::new("Authenticate to access Inverter Dashboard")
+        let reason = std::ffi::CString::new("Authenticate to access Inverter Desktop")
             .map_err(|e| format!("CString error: {}", e))?;
         let ok = unsafe { biometric_authenticate(reason.as_ptr()) };
         if ok {
@@ -956,16 +956,11 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 // Setup app menu with About, Edit and Window menus
-                let about_item = MenuItem::with_id(
-                    app,
-                    "about",
-                    "About Inverter Dashboard",
-                    true,
-                    None::<&str>,
-                )?;
+                let about_item =
+                    MenuItem::with_id(app, "about", "About Inverter Desktop", true, None::<&str>)?;
                 let app_submenu = Submenu::with_items(
                     app,
-                    "Inverter Dashboard",
+                    "Inverter Desktop",
                     true,
                     &[
                         &about_item,
@@ -1006,7 +1001,7 @@ pub fn run() {
                 // Setup system tray with configuration menu
                 info!("Building system tray...");
                 TrayIconBuilder::with_id("main-tray")
-                    .tooltip("Inverter Dashboard")
+                    .tooltip("Inverter Desktop")
                     .icon({
                         #[cfg(target_os = "macos")]
                         {
@@ -1143,7 +1138,7 @@ pub fn run() {
                         let _ = app_handle_hide
                             .notification()
                             .builder()
-                            .title("Inverter Dashboard")
+                            .title("Inverter Desktop")
                             .body("Continuing to work in background, minimized to tray")
                             .show();
                     }
@@ -1159,7 +1154,7 @@ pub fn run() {
                             let _ = app_handle_hide
                                 .notification()
                                 .builder()
-                                .title("Inverter Dashboard")
+                                .title("Inverter Desktop")
                                 .body("Continuing to work in background, minimized to tray")
                                 .show();
                         }
@@ -1191,7 +1186,7 @@ pub fn run() {
                             "about",
                             tauri::WebviewUrl::App("about".into()),
                         )
-                        .title("About Inverter Dashboard")
+                        .title("About Inverter Desktop")
                         .inner_size(ABOUT_WINDOW_W, ABOUT_WINDOW_H)
                         .resizable(false)
                         .center()
