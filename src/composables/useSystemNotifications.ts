@@ -15,7 +15,7 @@ const prevWaterValve = ref<boolean | undefined>(undefined)
 const prevPumpSwitch = ref<boolean | undefined>(undefined)
 const prevHomeStates = ref<Record<string, string>>({})
 const lastNotifyTime = new Map<string, number>()
-const NOTIFY_COOLDOWN_MS = 5000
+const NOTIFY_COOLDOWN_MS = 60_000
 let initialized = false
 const NOTIFIABLE_DOMAINS = new Set(['switch', 'input_boolean', 'light', 'fan', 'binary_sensor'])
 

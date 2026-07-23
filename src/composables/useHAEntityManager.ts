@@ -57,9 +57,10 @@ export function useHAEntityManager() {
       selectedDiscovery.value.includes(e.entity_id)
     )
     const targetList = target === 'home' ? haEntitiesList.value : headerTogglesList.value
+    const existingKey = 'entity'
 
     for (const de of toAdd) {
-      if (targetList.some((e) => e.entity === de.entity_id)) continue
+      if (targetList.some((e) => e[existingKey] === de.entity_id)) continue
       const base = {
         id: de.entity_id.replace(/\./g, '_'),
         label: de.friendly_name || de.entity_id,
