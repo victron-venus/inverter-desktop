@@ -194,6 +194,7 @@ pub struct CameraEvent {
 struct AlertState {
     triggered: bool,
     last_alert: Option<std::time::Instant>,
+    last_notified_value: Option<f64>,
 }
 
 impl AlertState {
@@ -201,6 +202,7 @@ impl AlertState {
         Self {
             triggered: false,
             last_alert: None,
+            last_notified_value: None,
         }
     }
 
@@ -222,10 +224,30 @@ impl AlertState {
         }
     }
 
+    fn should_alert_value(&mut self, value: f64) -> bool {
+        match self.last_notified_value {
+            None => {
+                self.triggered = true;
+                self.last_notified_value = Some(value);
+                true
+            }
+            Some(prev) => {
+                if (prev - value).abs() > f64::EPSILON {
+                    self.triggered = true;
+                    self.last_notified_value = Some(value);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     fn check_resolved(&mut self) {
         if self.triggered {
             self.triggered = false;
             self.last_alert = None;
+            self.last_notified_value = None;
         }
     }
 }
@@ -641,7 +663,7 @@ impl MqttClient {
                 }
                 if let Some(wl) = new_state.water_level {
                     if wl < THRESHOLD_WATER_CM {
-                        if alert_state.low_water.should_alert() {
+                        if alert_state.low_water.should_alert_value(wl) {
                             alert_notifications
                                 .push(("Low Water".to_string(), format!("Water level: {} cm", wl)));
                         }

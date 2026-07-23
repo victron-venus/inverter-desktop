@@ -9,7 +9,7 @@
           Authentication Required
         </h2>
         <p class="text-[11px] text-slate-500 text-center">
-          Enter your credentials to access Inverter Dashboard
+          Enter your credentials to access Inverter Desktop
         </p>
       </div>
 
