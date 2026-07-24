@@ -7,10 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		01A22767F9F00509C2729F99 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 2042E31E263E20D957B685A9 /* libapp.a */; };
+
 		177094C9B6BE6D51B5EEB72B /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = AF2F32F4DFD89BD33BCDFEE7 /* main.mm */; };
 		2853A88103EAC7679724FF1F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0F2F5A24B2E77E61F205E502 /* Assets.xcassets */; };
-		2C574BA13F95B7AE2E7DF4FB /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = CF9484BFC0945644598403B9 /* libapp.a */; };
+
 		2C7A2935C7365D5E45684318 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9EA0014341B30B2F5C9F4B51 /* Security.framework */; };
 		58F96AF30B340385A8DEFC89 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 35DE1F26B404D40B179E771B /* MetalKit.framework */; };
 		695002045B73102169A5956E /* assets in Resources */ = {isa = PBXBuildFile; fileRef = C43A10CCCCD3236C2F644DA2 /* assets */; };
@@ -24,7 +24,7 @@
 /* Begin PBXFileReference section */
 		070DA153EB1FA671D9744757 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		0F2F5A24B2E77E61F205E502 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		2042E31E263E20D957B685A9 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		2042E31E263E20D957B685A9 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libapp.a; path = Externals/arm64/release/libapp.a; sourceTree = SOURCE_ROOT; };
 		3439BD1F12DCB31A6E994435 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		35DE1F26B404D40B179E771B /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		74186E5DA6F57E0A1497DD00 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -38,7 +38,7 @@
 		A180707E7B9AE8291D303A75 /* ha_api.rs */ = {isa = PBXFileReference; path = ha_api.rs; sourceTree = "<group>"; };
 		AF2F32F4DFD89BD33BCDFEE7 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		C43A10CCCCD3236C2F644DA2 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
-		CF9484BFC0945644598403B9 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+
 		D33CABBE8B13BB9C63FD2E33 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		DF4C230A6B55E8C3704E0A17 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F42FEF4E1A5E8398073A769C /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
@@ -51,7 +51,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2C574BA13F95B7AE2E7DF4FB /* libapp.a in Frameworks */,
 				90143CC5C3463D90377279BE /* CoreGraphics.framework in Frameworks */,
 				861B199AB306B204A97DFE44 /* Metal.framework in Frameworks */,
 				58F96AF30B340385A8DEFC89 /* MetalKit.framework in Frameworks */,
@@ -99,7 +98,6 @@
 			isa = PBXGroup;
 			children = (
 				98A09541EF9CE7834F442F31 /* CoreGraphics.framework */,
-				CF9484BFC0945644598403B9 /* libapp.a */,
 				D33CABBE8B13BB9C63FD2E33 /* Metal.framework */,
 				35DE1F26B404D40B179E771B /* MetalKit.framework */,
 				F42FEF4E1A5E8398073A769C /* QuartzCore.framework */,
@@ -157,7 +155,7 @@
 			children = (
 				C43A10CCCCD3236C2F644DA2 /* assets */,
 				0F2F5A24B2E77E61F205E502 /* Assets.xcassets */,
-				436DAA77C85813ABD8729EE7 /* Externals */,
+				436DATA77C85813ABD8729EE7 /* Externals */,
 				9D72BA2092257D49F73C998D /* inverter-dashboard_iOS */,
 				9B91B16C477573550199A6D8 /* Sources */,
 				29705CA09E824FC8191D8F66 /* src */,
@@ -241,7 +239,6 @@
 			files = (
 				2853A88103EAC7679724FF1F /* Assets.xcassets in Resources */,
 				695002045B73102169A5956E /* assets in Resources */,
-				01A22767F9F00509C2729F99 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -366,6 +363,7 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = "-lapp";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.alvit.inverter-dashboard";
 				PRODUCT_NAME = "Inverter Dashboard";
 				SDKROOT = iphoneos;
@@ -464,6 +462,7 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = "-lapp";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.alvit.inverter-dashboard";
 				PRODUCT_NAME = "Inverter Dashboard";
 				SDKROOT = iphoneos;
