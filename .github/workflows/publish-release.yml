@@ -13,25 +13,36 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
 
-    - name: Create Release Archive
-      run: |
-        PKG_NAME="inverter-desktop"
-        ARCHIVE="${PKG_NAME}-${GITHUB_REF#refs/tags/}.tar.gz"
-        mkdir -p "${PKG_NAME}"
-        cp -r src package.json tsconfig.json vite.config.ts README.md LICENSE "${PKG_NAME}/" 2>/dev/null || true
-        tar -czf "$ARCHIVE" "${PKG_NAME}/"
-        echo "ARCHIVE=$ARCHIVE" >> $GITHUB_OUTPUT
+      - name: Create Release Archive
+        run: |
+          PKG_NAME="inverter-desktop"
+          ARCHIVE="${PKG_NAME}-${GITHUB_REF#refs/tags/}.tar.gz"
+          mkdir -p "${PKG_NAME}"
+          cp -r src package.json tsconfig.json vite.config.ts README.md LICENSE "${PKG_NAME}/" 2>/dev/null || true
+          tar -czf "$ARCHIVE" "${PKG_NAME}/"
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_OUTPUT
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
-      with:
-        body_path: release.txt
-        files: ${{ steps.archive.outputs.ARCHIVE }}
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Detect Prerelease
+        id: detect
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" =~ -(alpha|beta|rc)\.[0-9]+ || "$TAG" =~ - ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        with:
+          body_path: release.txt
+          files: ${{ steps.archive.outputs.ARCHIVE }}
+          prerelease: ${{ steps.detect.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

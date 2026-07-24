@@ -13,11 +13,11 @@
 
 Desktop and mobile application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
-| Surface | Recommended project |
-|---------|---------------------|
-| Cerbo GX (web) | [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go) |
-| Docker / NAS | [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) (`alvit/inverter-dashboard`) |
-| Desktop / mobile (this app) | **inverter-desktop** |
+| Surface                     | Recommended project                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Cerbo GX (web)              | [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go)                        |
+| Docker / NAS                | [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) (`alvit/inverter-dashboard`) |
+| Desktop / mobile (this app) | **inverter-desktop**                                                                                   |
 
 ## Features
 
@@ -38,6 +38,16 @@ Desktop and mobile application for monitoring Victron inverter systems via MQTT.
 | **Linux**   | `.AppImage`, `.deb`, `.rpm`    | Various distributions                         |
 | **iOS**     | AltStore, TestFlight, Xcode    | Requires Apple Developer account for AltStore |
 | **Android** | APK (direct install or ADB)    | arm64-v8a, armeabi-v7a, x86_64                |
+
+---
+
+## Release Channels & CI/CD
+
+This repository follows a multi-channel release strategy managed by GitHub Actions:
+
+- **Stable Releases**: Tagged as `vX.Y.Z` (e.g., `v1.0.0`). Includes signed/unsigned installers for macOS, Windows, Linux, Android, and iOS.
+- **Pre-releases**: Tagged with release candidate or beta suffixes like `vX.Y.Z-rc.1` or `vX.Y.Z-beta.1`. Flagged automatically as Pre-release on GitHub Releases to isolate test builds.
+- **Nightly Builds**: Built daily at 02:00 UTC from the `main` branch. Artifacts are published to the rolling **[Nightly Build Release](https://github.com/victron-venus/inverter-desktop/releases/tag/nightly)**.
 
 ---
 
