@@ -17,6 +17,7 @@ jobs:
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       new_version: ${{ steps.check.outputs.new_version }}
+      is_prerelease: ${{ steps.check.outputs.is_prerelease }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -39,6 +40,11 @@ jobs:
             echo "new_version=$version" >> $GITHUB_OUTPUT
           else
             echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+          if [[ "$version" =~ -(alpha|beta|rc)\.[0-9]+ || "$version" =~ - ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
           fi
 
   release:
