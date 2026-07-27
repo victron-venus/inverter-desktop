@@ -44,7 +44,7 @@ fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, Strin
     rand::rng().fill_bytes(&mut key);
 
     // Store base64-encoded key
-    let key_b64 = general_purpose::STANDARD.encode(&key);
+    let key_b64 = general_purpose::STANDARD.encode(key);
     store.set(STORE_ENCRYPTION_KEY, serde_json::json!(key_b64));
     store
         .save()
@@ -109,7 +109,7 @@ fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
                 let config: FullConfig = serde_json::from_value(v).unwrap_or_default();
                 // Save as encrypted for next time
                 if let Ok(encrypted) = encrypt_config(&config, &key) {
-                    let _ = store.set("config", serde_json::json!(encrypted));
+                    store.set("config", serde_json::json!(encrypted));
                     let _ = store.save();
                 }
                 Ok(config)
