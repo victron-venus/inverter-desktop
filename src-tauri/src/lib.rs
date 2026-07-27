@@ -1181,11 +1181,15 @@ pub fn run() {
                 // Background task: update tray icon with live MQTT state
                 // macOS: renders custom bar-chart icon + tooltip
                 // Other platforms: updates tooltip text only (no system font dependency)
+                // Also monitors for critical alerts: low battery SoC, grid disconnection
                 {
                     let mqtt_for_tray = app.state::<MqttState>().0.clone();
                     let app_for_tray = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         let mut interval = tokio::time::interval(Duration::from_millis(1500));
+                        // Track notification state to avoid spam
+                        let mut low_battery_notified = false;
+                        let mut grid_lost_notified = false;
                         loop {
                             interval.tick().await;
                             let state = {
@@ -1195,7 +1199,8 @@ pub fn run() {
                             if let Some(s) = state {
                                 let solar = s.solar_total.unwrap_or(0.0) / 1000.0;
                                 let batt = s.battery_soc.unwrap_or(0.0);
-                                let grid = s.gt.unwrap_or(0.0) / 1000.0;
+                                let grid_reading = s.gt.map(|v| v / 1000.0);
+                                let grid = grid_reading.unwrap_or(0.0);
                                 let tip = format!(
                                     "PV {:.1}kW  Battery {:.0}%  Grid {:+.1}kW",
                                     solar, batt, grid
@@ -1209,6 +1214,42 @@ pub fn run() {
                                         let _ = tray.set_icon(Some(tauri_img));
                                     }
                                     let _ = tray.set_tooltip(Some(&tip));
+                                }
+
+                                // Check for critical alerts
+                                use tauri_plugin_notification::NotificationExt;
+
+                                // Low battery alert (< 20%)
+                                if batt > 0.0 && batt < 20.0 {
+                                    if !low_battery_notified {
+                                        let _ = app_for_tray
+                                            .notification()
+                                            .builder()
+                                            .title("Inverter Desktop - Low Battery")
+                                            .body(format!("Battery SoC dropped to {:.0}%!", batt))
+                                            .show();
+                                        low_battery_notified = true;
+                                    }
+                                } else {
+                                    low_battery_notified = false;
+                                }
+
+                                // Grid connection lost (no grid power reading for extended period)
+                                // gt = 0 means no grid import/export - could be disconnection
+                                if grid_reading == Some(0.0) && solar > 0.1 && batt < 95.0 {
+                                    // Only alert if solar is producing but grid shows 0 and battery not full
+                                    // (indicates potential grid disconnection while consuming)
+                                    if !grid_lost_notified {
+                                        let _ = app_for_tray
+                                            .notification()
+                                            .builder()
+                                            .title("Inverter Desktop - Grid Disconnected")
+                                            .body("Grid connection appears to be lost. Check your setup.")
+                                            .show();
+                                        grid_lost_notified = true;
+                                    }
+                                } else {
+                                    grid_lost_notified = false;
                                 }
                             }
                         }
