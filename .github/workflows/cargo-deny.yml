@@ -55,7 +55,7 @@ jobs:
         working-directory: src-tauri
         run: |
           mkdir -p target/deny
-          cargo deny check --config cargo-deny.toml --format sarif advisories bans licenses sources > target/deny/cargo-deny.sarif || true
+          cargo deny --format sarif check --config cargo-deny.toml advisories bans licenses sources > target/deny/cargo-deny.sarif || true
 
       - name: Upload SARIF
         if: always()
