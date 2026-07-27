@@ -1,0 +1,25 @@
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db.git"]
+db-path = "advisory-db"
+
+[bans]
+deny = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "0BSD",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+include-dev = true
+
+[sources]
+allow-git = []

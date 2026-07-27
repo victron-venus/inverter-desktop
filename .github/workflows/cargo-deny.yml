@@ -1,0 +1,77 @@
+name: Cargo Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1' # Weekly on Mondays at 6:00 AM UTC
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  cargo-deny:
+    name: Cargo Deny Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.1
+
+      - name: Cache cargo-deny
+        uses: actions/cache@a7b3d8e37528993d7d5f98d7f9a39c04d9c0e1a2 # v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cache/cargo-deny
+          key: cargo-deny-${{ runner.os }}-${{ hashFiles('src-tauri/cargo-deny.toml') }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-deny-${{ runner.os }}-
+
+      - name: Install cargo-deny
+        if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: |
+          cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Run cargo deny check
+        working-directory: src-tauri
+        run: |
+          cargo deny check -c cargo-deny.toml advisories bans licenses sources
+
+      - name: Upload SARIF (advisories)
+        if: always()
+        uses: github/codeql-action/upload-sarif@7fd177fa680c9881b53cdab4d346d32574c9f7f4 # v3.35.4
+        with:
+          sarif_file: src-tauri/target/deny/advisories.sarif
+          category: cargo-deny-advisories
+
+      - name: Upload SARIF (bans)
+        if: always()
+        uses: github/codeql-action/upload-sarif@7fd177fa680c9881b53cdab4d346d32574c9f7f4 # v3.35.4
+        with:
+          sarif_file: src-tauri/target/deny/bans.sarif
+          category: cargo-deny-bans
+
+      - name: Comment PR with results
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '⚠️ **cargo-deny found issues!** Please review the security/license scan results in the Actions tab.'
+            })
