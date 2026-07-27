@@ -1104,7 +1104,8 @@ pub fn run() {
                             if let Some(s) = state {
                                 let solar = s.solar_total.unwrap_or(0.0) / 1000.0;
                                 let batt = s.battery_soc.unwrap_or(0.0);
-                                let grid = s.gt.unwrap_or(0.0) / 1000.0;
+                                let grid_reading = s.gt.map(|v| v / 1000.0);
+                                let grid = grid_reading.unwrap_or(0.0);
                                 let tip = format!(
                                     "PV {:.1}kW  Battery {:.0}%  Grid {:+.1}kW",
                                     solar, batt, grid
@@ -1130,7 +1131,7 @@ pub fn run() {
                                             .notification()
                                             .builder()
                                             .title("Inverter Desktop - Low Battery")
-                                            .body(&format!("Battery SoC dropped to {:.0}%!", batt))
+                                            .body(format!("Battery SoC dropped to {:.0}%!", batt))
                                             .show();
                                         low_battery_notified = true;
                                     }
@@ -1140,7 +1141,7 @@ pub fn run() {
 
                                 // Grid connection lost (no grid power reading for extended period)
                                 // gt = 0 means no grid import/export - could be disconnection
-                                if grid == 0.0 && solar > 100.0 && batt < 95.0 {
+                                if grid_reading == Some(0.0) && solar > 0.1 && batt < 95.0 {
                                     // Only alert if solar is producing but grid shows 0 and battery not full
                                     // (indicates potential grid disconnection while consuming)
                                     if !grid_lost_notified {
