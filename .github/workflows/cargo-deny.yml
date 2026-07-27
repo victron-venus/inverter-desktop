@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.85.1
+        uses: dtolnay/rust-toolchain@b0480e2d44a72e89a62650e223ba831cbca8d2be # 1.85.1
 
       - name: Cache cargo-deny
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -42,7 +42,7 @@ jobs:
       - name: Install cargo-deny
         if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
         run: |
-          cargo install cargo-deny --version 0.20.2 --locked
+          cargo install cargo-deny --version 0.18.3 --locked
 
       - name: Run cargo deny check
         working-directory: src-tauri
