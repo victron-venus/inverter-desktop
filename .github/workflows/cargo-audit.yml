@@ -66,7 +66,12 @@ jobs:
         # auditing. Without this, a stale cached index (from rust-cache) can
         # cause cargo-audit to panic while building its dependency tree with
         # "invalid Cargo.lock dependency tree: Resolution(...)".
-        run: cargo fetch --locked
+        # --locked is intentionally omitted: a stale restored rust-cache
+        # registry can make even a plain fetch look like it needs to change
+        # Cargo.lock, which --locked would then hard-fail on. Cargo.lock
+        # itself is never modified by `cargo fetch` unless it is genuinely
+        # incompatible with Cargo.toml.
+        run: cargo fetch
 
       - name: Run cargo audit
         if: steps.changed.outputs.any_changed == 'true'
