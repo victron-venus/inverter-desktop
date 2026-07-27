@@ -61,3 +61,11 @@ repos:
     rev: v2.17.2
     hooks:
       - id: pylint
+  - repo: local
+    hooks:
+      - id: sonar-scanner
+        name: Run SonarQube Analysis
+        entry: sonar-scanner
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
