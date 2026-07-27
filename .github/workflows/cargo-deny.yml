@@ -49,14 +49,14 @@ jobs:
       - name: Run cargo deny check
         working-directory: src-tauri
         run: |
-          cargo deny check --config cargo-deny.toml advisories bans licenses sources
+          cargo deny --config cargo-deny.toml check advisories bans licenses sources
 
       - name: Generate SARIF report
         if: always()
         working-directory: src-tauri
         run: |
           mkdir -p target/deny
-          cargo deny --format sarif check --config cargo-deny.toml advisories bans licenses sources > target/deny/cargo-deny.sarif || true
+          cargo deny --config cargo-deny.toml --format sarif check advisories bans licenses sources > target/deny/cargo-deny.sarif || true
 
       - name: Upload SARIF
         if: always()
