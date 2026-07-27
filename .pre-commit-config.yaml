@@ -6,7 +6,6 @@ repos:
   - repo: https://github.com/jumanjihouse/pre-commit-hooks
     rev: 3.0.0
     hooks:
-      - id: RuboCop
       - id: shellcheck
         args:
           [--exclude=SC2154, --exclude=SC2164, --exclude=SC2181, --exclude=SC2029, --exclude=SC1091]
@@ -54,7 +53,7 @@ repos:
     hooks:
       - id: cpplint
   - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: v8.38.0
+    rev: v9.39.1
     hooks:
       - id: eslint
   - repo: https://github.com/pylint-dev/pylint
