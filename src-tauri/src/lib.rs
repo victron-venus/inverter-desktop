@@ -29,9 +29,13 @@ fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, Strin
 
     if let Some(key_value) = store.get(STORE_ENCRYPTION_KEY) {
         if let Some(key_str) = key_value.as_str() {
-            return general_purpose::STANDARD
+            let key = general_purpose::STANDARD
                 .decode(key_str)
-                .map_err(|e| format!("Failed to decode encryption key: {}", e));
+                .map_err(|e| format!("Failed to decode encryption key: {}", e))?;
+            if key.len() != 32 {
+                return Err("Invalid encryption key length".to_string());
+            }
+            return Ok(key);
         }
     }
 
@@ -88,21 +92,18 @@ fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
     serde_json::from_slice(&plaintext).map_err(|e| format!("JSON parse failed: {}", e))
 }
 
-fn load_config(app: &tauri::AppHandle) -> FullConfig {
-    let key = match get_or_create_encryption_key(app) {
-        Ok(k) => k,
-        Err(_) => return FullConfig::default(),
-    };
+fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
+    let key = get_or_create_encryption_key(app)?;
 
-    let store = match app.store_builder("config.json").build() {
-        Ok(s) => s,
-        Err(_) => return FullConfig::default(),
-    };
+    let store = app
+        .store_builder("config.json")
+        .build()
+        .map_err(|e| format!("Failed to build store: {}", e))?;
 
     match store.get("config") {
         Some(v) => {
             if let Some(encrypted_str) = v.as_str() {
-                decrypt_config(encrypted_str, &key).unwrap_or_default()
+                decrypt_config(encrypted_str, &key)
             } else {
                 // Legacy unencrypted config - migrate
                 let config: FullConfig = serde_json::from_value(v).unwrap_or_default();
@@ -111,10 +112,10 @@ fn load_config(app: &tauri::AppHandle) -> FullConfig {
                     let _ = store.set("config", serde_json::json!(encrypted));
                     let _ = store.save();
                 }
-                config
+                Ok(config)
             }
         }
-        None => FullConfig::default(),
+        None => Ok(FullConfig::default()),
     }
 }
 
@@ -281,7 +282,7 @@ async fn perform_action(
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
     info!("perform_action: action={}, payload={}", action, payload);
-    let config = load_config(&app);
+    let config = load_config(&app)?;
 
     let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
@@ -436,7 +437,14 @@ fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
 fn start_ha_polling(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            let config = load_config(&app);
+            let config = match load_config(&app) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to load config for HA polling: {}", e);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
 
             if !config.ha_use_direct_api
                 || config.ha_url.is_none()
@@ -481,7 +489,7 @@ fn start_ha_polling(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
-    let mut config = load_config(&app);
+    let mut config = load_config(&app)?;
 
     // Check if this is first run (config not yet saved)
     let store = app
@@ -860,7 +868,7 @@ async fn auth_login(
     password: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let config = load_config(&app);
+    let config = load_config(&app)?;
     if !config.auth_enabled.unwrap_or(false) {
         return Ok("disabled".to_string());
     }
