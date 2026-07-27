@@ -9,20 +9,130 @@ extern "C" {
     fn biometric_authenticate(reason: *const std::os::raw::c_char) -> bool;
 }
 
+use aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::{engine::general_purpose, Engine as _};
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-fn load_config(app: &tauri::AppHandle) -> FullConfig {
-    match app.store_builder("config.json").build() {
-        Ok(store) => match store.get("config") {
-            Some(v) => serde_json::from_value::<FullConfig>(v).unwrap_or_default(),
-            None => FullConfig::default(),
-        },
-        Err(_) => FullConfig::default(),
+const STORE_ENCRYPTION_KEY: &str = "inverter-desktop-encryption-key";
+
+fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
+    let store = app
+        .store_builder(".keychain.json")
+        .build()
+        .map_err(|e| format!("Failed to build keychain store: {}", e))?;
+
+    if let Some(key_value) = store.get(STORE_ENCRYPTION_KEY) {
+        if let Some(key_str) = key_value.as_str() {
+            return general_purpose::STANDARD
+                .decode(key_str)
+                .map_err(|e| format!("Failed to decode encryption key: {}", e));
+        }
     }
+
+    // Generate new encryption key (32 bytes = 256 bits for AES-256-GCM)
+    let mut key = [0u8; 32];
+    rand::rng().fill_bytes(&mut key);
+
+    // Store base64-encoded key
+    let key_b64 = general_purpose::STANDARD.encode(&key);
+    store.set(STORE_ENCRYPTION_KEY, serde_json::json!(key_b64));
+    store
+        .save()
+        .map_err(|e| format!("Failed to save encryption key: {}", e))?;
+
+    Ok(key.to_vec())
+}
+
+fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
+    let cipher = Aes256Gcm::new(key.into());
+    let plaintext = serde_json::to_vec(config).map_err(|e| e.to_string())?;
+
+    // Generate random 12-byte nonce for AES-GCM
+    let mut nonce_bytes = [0u8; 12];
+    rand::rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    // Prepend nonce to ciphertext and encode as base64
+    let mut result = nonce_bytes.to_vec();
+    result.extend_from_slice(&ciphertext);
+    Ok(general_purpose::STANDARD.encode(&result))
+}
+
+fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
+    let data = general_purpose::STANDARD
+        .decode(encrypted)
+        .map_err(|e| format!("Base64 decode failed: {}", e))?;
+
+    if data.len() < 12 {
+        return Err("Invalid encrypted data: too short".to_string());
+    }
+
+    let (nonce_bytes, ciphertext) = data.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let cipher = Aes256Gcm::new(key.into());
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    serde_json::from_slice(&plaintext).map_err(|e| format!("JSON parse failed: {}", e))
+}
+
+fn load_config(app: &tauri::AppHandle) -> FullConfig {
+    let key = match get_or_create_encryption_key(app) {
+        Ok(k) => k,
+        Err(_) => return FullConfig::default(),
+    };
+
+    let store = match app.store_builder("config.json").build() {
+        Ok(s) => s,
+        Err(_) => return FullConfig::default(),
+    };
+
+    match store.get("config") {
+        Some(v) => {
+            if let Some(encrypted_str) = v.as_str() {
+                decrypt_config(encrypted_str, &key).unwrap_or_default()
+            } else {
+                // Legacy unencrypted config - migrate
+                let config: FullConfig = serde_json::from_value(v).unwrap_or_default();
+                // Save as encrypted for next time
+                if let Ok(encrypted) = encrypt_config(&config, &key) {
+                    let _ = store.set("config", serde_json::json!(encrypted));
+                    let _ = store.save();
+                }
+                config
+            }
+        }
+        None => FullConfig::default(),
+    }
+}
+
+fn save_config_encrypted(app: &tauri::AppHandle, config: &FullConfig) -> Result<(), String> {
+    let key = get_or_create_encryption_key(app)?;
+    let encrypted = encrypt_config(config, &key)?;
+
+    let store = app
+        .store_builder("config.json")
+        .build()
+        .map_err(|e| format!("Failed to build store: {}", e))?;
+
+    store.set("config", serde_json::json!(encrypted));
+    store
+        .save()
+        .map_err(|e| format!("Failed to save config: {}", e))?;
+
+    Ok(())
 }
 
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
@@ -371,19 +481,15 @@ fn start_ha_polling(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
+    let mut config = load_config(&app);
+
+    // Check if this is first run (config not yet saved)
     let store = app
         .store_builder("config.json")
         .build()
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
-    let mut is_first_run = false;
-    let mut config = match store.get("config") {
-        Some(value) => serde_json::from_value(value).unwrap_or_default(),
-        None => {
-            is_first_run = true;
-            FullConfig::default()
-        }
-    };
+    let is_first_run = store.get("config").is_none();
 
     let mut changed = false;
 
@@ -478,13 +584,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
     }
 
     if changed {
-        store.set(
-            "config",
-            serde_json::to_value(&config).map_err(|e| e.to_string())?,
-        );
-        store
-            .save()
-            .map_err(|e| format!("Failed to save config: {}", e))?;
+        save_config_encrypted(&app, &config)?;
     }
 
     Ok(config)
@@ -492,20 +592,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 
 #[tauri::command]
 async fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
-    let store = app
-        .store_builder("config.json")
-        .build()
-        .map_err(|e| format!("Failed to build store: {}", e))?;
-
-    store.set(
-        "config",
-        serde_json::to_value(&config).map_err(|e| e.to_string())?,
-    );
-    store
-        .save()
-        .map_err(|e| format!("Failed to save config: {}", e))?;
-
-    Ok(())
+    save_config_encrypted(&app, &config)
 }
 
 #[tauri::command]
