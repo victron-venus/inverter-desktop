@@ -1,7 +1,7 @@
 <template>
   <div
     v-if="show"
-    class="fixed z-[100] min-w-[140px] apple-card p-1 shadow-2xl animate-in fade-in zoom-in duration-100"
+    class="fixed z-[100] min-w-[160px] apple-card p-1 shadow-2xl animate-in fade-in zoom-in duration-100"
     :style="{ left: x + 'px', top: y + 'px' }"
     @click.stop
   >
@@ -13,11 +13,22 @@
       <Settings :size="14" class="group-hover:text-white transition-colors" />
       Settings
     </button>
+
+    <hr class="my-1 border-apple-border border-opacity-30" />
+
+    <button
+      type="button"
+      class="w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 hover:bg-apple-blue hover:text-white transition-colors group"
+      @click="$emit('check-updates')"
+    >
+      <Download :size="14" class="group-hover:text-white transition-colors" />
+      Check for Updates
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Settings } from '@lucide/vue'
+import { Settings, Download } from '@lucide/vue'
 
 defineProps<{
   show: boolean
@@ -26,5 +37,6 @@ defineProps<{
 }>()
 defineEmits<{
   'open-config': []
+  'check-updates': []
 }>()
 </script>
