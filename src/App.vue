@@ -120,6 +120,7 @@
         :x="contextMenu.x"
         :y="contextMenu.y"
         @open-config="openConfig"
+        @check-updates="checkForUpdates"
       />
 
       <!-- Video Popup Overlay -->
@@ -175,6 +176,7 @@ import { useConnection, notify } from './composables/useConnection'
 import { useHA } from './composables/useHA'
 import { useTheme } from './composables/useTheme'
 import { useChart, addHistoryPoint } from './composables/useChart'
+import { checkForUpdates, checkForUpdatesSilent } from './composables/useAutoUpdate'
 import AppHeader from './components/AppHeader.vue'
 import StatCards from './components/StatCards.vue'
 import ChartPanel from './components/ChartPanel.vue'
@@ -438,6 +440,10 @@ onMounted(async () => {
   await connectMqtt()
   await initHa()
   initSystemNotifications(haEntityStates, haEntityAttributes)
+
+  // Check for updates on startup (silent check)
+  checkForUpdatesSilent().catch((e) => logger.warn('Update check failed:', e))
+
   document.addEventListener('click', onDocumentClick)
   globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 

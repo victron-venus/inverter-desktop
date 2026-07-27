@@ -41,6 +41,10 @@ export const logger = {
     if (isDev) console.log(...args)
     push('log', args)
   },
+  info: (...args: unknown[]) => {
+    if (isDev) console.info(...args)
+    push('log', args)
+  },
   getBuffer: (): ReadonlyArray<LogEntry> => buffer,
   clearBuffer: () => {
     buffer.length = 0
