@@ -49,19 +49,19 @@ jobs:
         run: |
           cargo deny check -c cargo-deny.toml advisories bans licenses sources
 
-      - name: Upload SARIF (advisories)
+      - name: Generate SARIF report
         if: always()
-        uses: github/codeql-action/upload-sarif@7fd177fa680c9881b53cdab4d346d32574c9f7f4 # v3.35.4
-        with:
-          sarif_file: src-tauri/target/deny/advisories.sarif
-          category: cargo-deny-advisories
+        working-directory: src-tauri
+        run: |
+          mkdir -p target/deny
+          cargo deny check -c cargo-deny.toml --format sarif advisories bans licenses sources > target/deny/cargo-deny.sarif || true
 
-      - name: Upload SARIF (bans)
+      - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@7fd177fa680c9881b53cdab4d346d32574c9f7f4 # v3.35.4
         with:
-          sarif_file: src-tauri/target/deny/bans.sarif
-          category: cargo-deny-bans
+          sarif_file: src-tauri/target/deny/cargo-deny.sarif
+          category: cargo-deny
 
       - name: Comment PR with results
         if: failure() && github.event_name == 'pull_request'
