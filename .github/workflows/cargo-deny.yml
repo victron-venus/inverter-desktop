@@ -35,14 +35,14 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-deny
             ~/.cache/cargo-deny
-          key: cargo-deny-${{ runner.os }}-0.18.3-${{ hashFiles('src-tauri/cargo-deny.toml') }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: cargo-deny-${{ runner.os }}-0.18.9-${{ hashFiles('src-tauri/cargo-deny.toml') }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            cargo-deny-${{ runner.os }}-0.18.3-
+            cargo-deny-${{ runner.os }}-0.18.9-
 
       - name: Install cargo-deny
         if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
         run: |
-          cargo install cargo-deny --version 0.18.3 --locked
+          cargo install cargo-deny --version 0.18.9 --locked
 
       - name: Run cargo deny check
         working-directory: src-tauri
@@ -54,7 +54,7 @@ jobs:
         working-directory: src-tauri
         run: |
           mkdir -p target/deny
-          cargo deny --config cargo-deny.toml check --format sarif advisories bans licenses sources > target/deny/cargo-deny.sarif || true
+          cargo deny --format sarif --config cargo-deny.toml check advisories bans licenses sources > target/deny/cargo-deny.sarif || true
 
       - name: Upload SARIF
         if: always()
