@@ -14,7 +14,7 @@ use aes_gcm::Aes256Gcm;
 use base64::{engine::general_purpose, Engine as _};
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
-use rand::RngExt;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
