@@ -2103,7 +2103,7 @@ dependencies = [
  "futures-util",
  "image",
  "log",
- "rand 0.9.5",
+ "rand 0.10.2",
  "reqwest",
  "rumqttc-v4-next",
  "serde",
