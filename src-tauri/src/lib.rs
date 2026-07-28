@@ -10,11 +10,11 @@ extern "C" {
 }
 
 use aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::Aes256Gcm;
 use base64::{engine::general_purpose, Engine as _};
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
-use rand::RngCore;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -41,7 +41,7 @@ fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, Strin
 
     // Generate new encryption key (32 bytes = 256 bits for AES-256-GCM)
     let mut key = [0u8; 32];
-    rand::rng().fill_bytes(&mut key);
+    rand::rng().fill(&mut key);
 
     // Store base64-encoded key
     let key_b64 = general_purpose::STANDARD.encode(key);
@@ -54,13 +54,14 @@ fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, Strin
 }
 
 fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
-    let cipher = Aes256Gcm::new(key.into());
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
     let plaintext = serde_json::to_vec(config).map_err(|e| e.to_string())?;
 
     // Generate random 12-byte nonce for AES-GCM
     let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    rand::rng().fill(&mut nonce_bytes);
+    let nonce = <aes_gcm::Nonce<aead::consts::U12>>::try_from(nonce_bytes.as_slice())
+        .map_err(|e| format!("Nonce error: {}", e))?;
 
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
@@ -82,9 +83,10 @@ fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
     }
 
     let (nonce_bytes, ciphertext) = data.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = <aes_gcm::Nonce<aead::consts::U12>>::try_from(nonce_bytes)
+        .map_err(|e| format!("Nonce error: {}", e))?;
 
-    let cipher = Aes256Gcm::new(key.into());
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|e| format!("Decryption failed: {}", e))?;
