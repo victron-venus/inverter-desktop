@@ -30,6 +30,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.85.1
 
       - name: Cache cargo-deny
+        id: cache-cargo-deny
         uses: actions/cache@a7b3d8e37528993d7d5f98d7f9a39c04d9c0e1a2 # v4
         with:
           path: |
