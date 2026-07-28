@@ -26,6 +26,7 @@ dist-ssr
 # Rust/Cargo
 target/
 Cargo.lock
+src-tauri/advisory-db/
 
 # Fuzzing artifacts
 src-tauri/fuzz/artifacts/

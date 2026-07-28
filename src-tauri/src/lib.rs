@@ -9,20 +9,133 @@ extern "C" {
     fn biometric_authenticate(reason: *const std::os::raw::c_char) -> bool;
 }
 
+use aead::{Aead, KeyInit};
+use aes_gcm::Aes256Gcm;
+use base64::{engine::general_purpose, Engine as _};
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-fn load_config(app: &tauri::AppHandle) -> FullConfig {
-    match app.store_builder("config.json").build() {
-        Ok(store) => match store.get("config") {
-            Some(v) => serde_json::from_value::<FullConfig>(v).unwrap_or_default(),
-            None => FullConfig::default(),
-        },
-        Err(_) => FullConfig::default(),
+const STORE_ENCRYPTION_KEY: &str = "inverter-desktop-encryption-key";
+
+fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
+    let store = app
+        .store_builder(".keychain.json")
+        .build()
+        .map_err(|e| format!("Failed to build keychain store: {}", e))?;
+
+    if let Some(key_value) = store.get(STORE_ENCRYPTION_KEY) {
+        if let Some(key_str) = key_value.as_str() {
+            let key = general_purpose::STANDARD
+                .decode(key_str)
+                .map_err(|e| format!("Failed to decode encryption key: {}", e))?;
+            if key.len() != 32 {
+                return Err("Invalid encryption key length".to_string());
+            }
+            return Ok(key);
+        }
     }
+
+    // Generate new encryption key (32 bytes = 256 bits for AES-256-GCM)
+    let mut key = [0u8; 32];
+    rand::rng().fill(&mut key);
+
+    // Store base64-encoded key
+    let key_b64 = general_purpose::STANDARD.encode(key);
+    store.set(STORE_ENCRYPTION_KEY, serde_json::json!(key_b64));
+    store
+        .save()
+        .map_err(|e| format!("Failed to save encryption key: {}", e))?;
+
+    Ok(key.to_vec())
+}
+
+fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
+    let plaintext = serde_json::to_vec(config).map_err(|e| e.to_string())?;
+
+    // Generate random 12-byte nonce for AES-GCM
+    let mut nonce_bytes = [0u8; 12];
+    rand::rng().fill(&mut nonce_bytes);
+    let nonce = <aes_gcm::Nonce<aead::consts::U12>>::try_from(nonce_bytes.as_slice())
+        .map_err(|e| format!("Nonce error: {}", e))?;
+
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    // Prepend nonce to ciphertext and encode as base64
+    let mut result = nonce_bytes.to_vec();
+    result.extend_from_slice(&ciphertext);
+    Ok(general_purpose::STANDARD.encode(&result))
+}
+
+fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
+    let data = general_purpose::STANDARD
+        .decode(encrypted)
+        .map_err(|e| format!("Base64 decode failed: {}", e))?;
+
+    if data.len() < 12 {
+        return Err("Invalid encrypted data: too short".to_string());
+    }
+
+    let (nonce_bytes, ciphertext) = data.split_at(12);
+    let nonce = <aes_gcm::Nonce<aead::consts::U12>>::try_from(nonce_bytes)
+        .map_err(|e| format!("Nonce error: {}", e))?;
+
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
+    let plaintext = cipher
+        .decrypt(&nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    serde_json::from_slice(&plaintext).map_err(|e| format!("JSON parse failed: {}", e))
+}
+
+fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
+    let key = get_or_create_encryption_key(app)?;
+
+    let store = app
+        .store_builder("config.json")
+        .build()
+        .map_err(|e| format!("Failed to build store: {}", e))?;
+
+    match store.get("config") {
+        Some(v) => {
+            if let Some(encrypted_str) = v.as_str() {
+                decrypt_config(encrypted_str, &key)
+            } else {
+                // Legacy unencrypted config - migrate
+                let config: FullConfig = serde_json::from_value(v).unwrap_or_default();
+                // Save as encrypted for next time
+                if let Ok(encrypted) = encrypt_config(&config, &key) {
+                    store.set("config", serde_json::json!(encrypted));
+                    let _ = store.save();
+                }
+                Ok(config)
+            }
+        }
+        None => Ok(FullConfig::default()),
+    }
+}
+
+fn save_config_encrypted(app: &tauri::AppHandle, config: &FullConfig) -> Result<(), String> {
+    let key = get_or_create_encryption_key(app)?;
+    let encrypted = encrypt_config(config, &key)?;
+
+    let store = app
+        .store_builder("config.json")
+        .build()
+        .map_err(|e| format!("Failed to build store: {}", e))?;
+
+    store.set("config", serde_json::json!(encrypted));
+    store
+        .save()
+        .map_err(|e| format!("Failed to save config: {}", e))?;
+
+    Ok(())
 }
 
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
@@ -171,7 +284,7 @@ async fn perform_action(
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
     info!("perform_action: action={}, payload={}", action, payload);
-    let config = load_config(&app);
+    let config = load_config(&app)?;
 
     let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
@@ -326,7 +439,14 @@ fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
 fn start_ha_polling(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            let config = load_config(&app);
+            let config = match load_config(&app) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to load config for HA polling: {}", e);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
 
             if !config.ha_use_direct_api
                 || config.ha_url.is_none()
@@ -371,19 +491,15 @@ fn start_ha_polling(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
+    let mut config = load_config(&app)?;
+
+    // Check if this is first run (config not yet saved)
     let store = app
         .store_builder("config.json")
         .build()
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
-    let mut is_first_run = false;
-    let mut config = match store.get("config") {
-        Some(value) => serde_json::from_value(value).unwrap_or_default(),
-        None => {
-            is_first_run = true;
-            FullConfig::default()
-        }
-    };
+    let is_first_run = store.get("config").is_none();
 
     let mut changed = false;
 
@@ -478,13 +594,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
     }
 
     if changed {
-        store.set(
-            "config",
-            serde_json::to_value(&config).map_err(|e| e.to_string())?,
-        );
-        store
-            .save()
-            .map_err(|e| format!("Failed to save config: {}", e))?;
+        save_config_encrypted(&app, &config)?;
     }
 
     Ok(config)
@@ -492,20 +602,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 
 #[tauri::command]
 async fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
-    let store = app
-        .store_builder("config.json")
-        .build()
-        .map_err(|e| format!("Failed to build store: {}", e))?;
-
-    store.set(
-        "config",
-        serde_json::to_value(&config).map_err(|e| e.to_string())?,
-    );
-    store
-        .save()
-        .map_err(|e| format!("Failed to save config: {}", e))?;
-
-    Ok(())
+    save_config_encrypted(&app, &config)
 }
 
 #[tauri::command]
@@ -773,7 +870,7 @@ async fn auth_login(
     password: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let config = load_config(&app);
+    let config = load_config(&app)?;
     if !config.auth_enabled.unwrap_or(false) {
         return Ok("disabled".to_string());
     }
@@ -1086,11 +1183,15 @@ pub fn run() {
                 // Background task: update tray icon with live MQTT state
                 // macOS: renders custom bar-chart icon + tooltip
                 // Other platforms: updates tooltip text only (no system font dependency)
+                // Also monitors for critical alerts: low battery SoC, grid disconnection
                 {
                     let mqtt_for_tray = app.state::<MqttState>().0.clone();
                     let app_for_tray = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         let mut interval = tokio::time::interval(Duration::from_millis(1500));
+                        // Track notification state to avoid spam
+                        let mut low_battery_notified = false;
+                        let mut grid_lost_notified = false;
                         loop {
                             interval.tick().await;
                             let state = {
@@ -1100,7 +1201,8 @@ pub fn run() {
                             if let Some(s) = state {
                                 let solar = s.solar_total.unwrap_or(0.0) / 1000.0;
                                 let batt = s.battery_soc.unwrap_or(0.0);
-                                let grid = s.gt.unwrap_or(0.0) / 1000.0;
+                                let grid_reading = s.gt.map(|v| v / 1000.0);
+                                let grid = grid_reading.unwrap_or(0.0);
                                 let tip = format!(
                                     "PV {:.1}kW  Battery {:.0}%  Grid {:+.1}kW",
                                     solar, batt, grid
@@ -1114,6 +1216,42 @@ pub fn run() {
                                         let _ = tray.set_icon(Some(tauri_img));
                                     }
                                     let _ = tray.set_tooltip(Some(&tip));
+                                }
+
+                                // Check for critical alerts
+                                use tauri_plugin_notification::NotificationExt;
+
+                                // Low battery alert (< 20%)
+                                if batt > 0.0 && batt < 20.0 {
+                                    if !low_battery_notified {
+                                        let _ = app_for_tray
+                                            .notification()
+                                            .builder()
+                                            .title("Inverter Desktop - Low Battery")
+                                            .body(format!("Battery SoC dropped to {:.0}%!", batt))
+                                            .show();
+                                        low_battery_notified = true;
+                                    }
+                                } else {
+                                    low_battery_notified = false;
+                                }
+
+                                // Grid connection lost (no grid power reading for extended period)
+                                // gt = 0 means no grid import/export - could be disconnection
+                                if grid_reading == Some(0.0) && solar > 0.1 && batt < 95.0 {
+                                    // Only alert if solar is producing but grid shows 0 and battery not full
+                                    // (indicates potential grid disconnection while consuming)
+                                    if !grid_lost_notified {
+                                        let _ = app_for_tray
+                                            .notification()
+                                            .builder()
+                                            .title("Inverter Desktop - Grid Disconnected")
+                                            .body("Grid connection appears to be lost. Check your setup.")
+                                            .show();
+                                        grid_lost_notified = true;
+                                    }
+                                } else {
+                                    grid_lost_notified = false;
                                 }
                             }
                         }

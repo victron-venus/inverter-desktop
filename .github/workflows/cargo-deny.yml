@@ -1,0 +1,80 @@
+name: Cargo Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1' # Weekly on Mondays at 6:00 AM UTC
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+
+jobs:
+  cargo-deny:
+    name: Cargo Deny Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo-deny
+        id: cache-cargo-deny
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cache/cargo-deny
+          key: cargo-deny-${{ runner.os }}-0.20.2-${{ hashFiles('src-tauri/cargo-deny.toml') }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-deny-${{ runner.os }}-0.20.2-
+
+      - name: Install cargo-deny
+        if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: |
+          cargo install cargo-deny --version 0.20.2 --locked --force
+
+      - name: Run cargo deny check
+        working-directory: src-tauri
+        run: |
+          cargo deny --config cargo-deny.toml check advisories bans licenses sources
+
+      - name: Generate SARIF report
+        if: always()
+        working-directory: src-tauri
+        run: |
+          mkdir -p target/deny
+          cargo deny --config cargo-deny.toml --format sarif check advisories bans licenses sources > target/deny/cargo-deny.sarif || true
+
+      - name: Upload SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: src-tauri/target/deny/cargo-deny.sarif
+          category: cargo-deny
+
+      - name: Comment PR with results
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '⚠️ **cargo-deny found issues!** Please review the security/license scan results in the Actions tab.'
+            })
