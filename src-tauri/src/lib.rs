@@ -64,7 +64,7 @@ fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
         .map_err(|e| format!("Nonce error: {}", e))?;
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
+        .encrypt(&nonce, plaintext.as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
 
     // Prepend nonce to ciphertext and encode as base64
@@ -88,7 +88,7 @@ fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
 
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     serde_json::from_slice(&plaintext).map_err(|e| format!("JSON parse failed: {}", e))
