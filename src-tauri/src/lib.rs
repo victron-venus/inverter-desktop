@@ -22,6 +22,12 @@ use std::time::Duration;
 const STORE_ENCRYPTION_KEY: &str = "inverter-desktop-encryption-key";
 
 fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
+    // NOTE: The encryption key is stored in a separate, OS-protected app data
+    // store (`.keychain.json`) from the encrypted config (`config.json`).
+    // On desktop OSes without OS-level keychain integration this still lives
+    // on disk, but keeping it in a dedicated file (rather than alongside the
+    // encrypted payload) at least avoids trivially bundling key + ciphertext
+    // together and allows tightening permissions/location independently.
     let store = app
         .store_builder(".keychain.json")
         .build()
@@ -29,9 +35,16 @@ fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, Strin
 
     if let Some(key_value) = store.get(STORE_ENCRYPTION_KEY) {
         if let Some(key_str) = key_value.as_str() {
-            return general_purpose::STANDARD
+            let decoded = general_purpose::STANDARD
                 .decode(key_str)
-                .map_err(|e| format!("Failed to decode encryption key: {}", e));
+                .map_err(|e| format!("Failed to decode encryption key: {}", e))?;
+            if decoded.len() != 32 {
+                return Err(format!(
+                    "Stored encryption key has invalid length: expected 32 bytes, got {}",
+                    decoded.len()
+                ));
+            }
+            return Ok(decoded);
         }
     }
 
@@ -50,7 +63,7 @@ fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, Strin
 }
 
 fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
-    let cipher = Aes256Gcm::new(key.into());
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
     let plaintext = serde_json::to_vec(config).map_err(|e| e.to_string())?;
 
     // Generate random 12-byte nonce for AES-GCM
@@ -80,7 +93,7 @@ fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
     let (nonce_bytes, ciphertext) = data.split_at(12);
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    let cipher = Aes256Gcm::new(key.into());
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|e| format!("Decryption failed: {}", e))?;
@@ -88,21 +101,56 @@ fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
     serde_json::from_slice(&plaintext).map_err(|e| format!("JSON parse failed: {}", e))
 }
 
-fn load_config(app: &tauri::AppHandle) -> FullConfig {
+// Result of loading the config: the config itself, and whether it is safe
+// to persist changes back to disk. `ok` is `false` when decryption failed,
+// so callers must not overwrite the still-intact encrypted data on disk
+// with a freshly-generated default config.
+struct LoadedConfig {
+    config: FullConfig,
+    ok: bool,
+}
+
+fn load_config(app: &tauri::AppHandle) -> LoadedConfig {
     let key = match get_or_create_encryption_key(app) {
         Ok(k) => k,
-        Err(_) => return FullConfig::default(),
+        Err(e) => {
+            warn!("Failed to obtain encryption key: {}", e);
+            return LoadedConfig {
+                config: FullConfig::default(),
+                ok: false,
+            };
+        }
     };
 
     let store = match app.store_builder("config.json").build() {
         Ok(s) => s,
-        Err(_) => return FullConfig::default(),
+        Err(e) => {
+            warn!("Failed to build config store: {}", e);
+            return LoadedConfig {
+                config: FullConfig::default(),
+                ok: false,
+            };
+        }
     };
 
     match store.get("config") {
         Some(v) => {
             if let Some(encrypted_str) = v.as_str() {
-                decrypt_config(encrypted_str, &key).unwrap_or_default()
+                match decrypt_config(encrypted_str, &key) {
+                    Ok(cfg) => LoadedConfig {
+                        config: cfg,
+                        ok: true,
+                    },
+                    Err(e) => {
+                        warn!("Failed to decrypt config, keeping stored data intact: {}", e);
+                        // Return defaults but signal callers not to overwrite
+                        // the on-disk (still-intact) encrypted config.
+                        LoadedConfig {
+                            config: FullConfig::default(),
+                            ok: false,
+                        }
+                    }
+                }
             } else {
                 // Legacy unencrypted config - migrate
                 let config: FullConfig = serde_json::from_value(v).unwrap_or_default();
@@ -111,10 +159,13 @@ fn load_config(app: &tauri::AppHandle) -> FullConfig {
                     let _ = store.set("config", serde_json::json!(encrypted));
                     let _ = store.save();
                 }
-                config
+                LoadedConfig { config, ok: true }
             }
         }
-        None => FullConfig::default(),
+        None => LoadedConfig {
+            config: FullConfig::default(),
+            ok: true,
+        },
     }
 }
 
@@ -281,7 +332,7 @@ async fn perform_action(
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
     info!("perform_action: action={}, payload={}", action, payload);
-    let config = load_config(&app);
+    let config = load_config(&app).config;
 
     let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
@@ -436,7 +487,7 @@ fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
 fn start_ha_polling(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            let config = load_config(&app);
+            let config = load_config(&app).config;
 
             if !config.ha_use_direct_api
                 || config.ha_url.is_none()
@@ -481,7 +532,13 @@ fn start_ha_polling(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
-    let mut config = load_config(&app);
+    let loaded = load_config(&app);
+    let mut config = loaded.config;
+    // Only allow writing back changes (env seeding, defaults, migrations)
+    // if the config was loaded successfully. If decryption failed, `config`
+    // is just a default placeholder and must not be persisted over the
+    // still-intact encrypted data on disk.
+    let can_save = loaded.ok;
 
     // Check if this is first run (config not yet saved)
     let store = app
@@ -583,7 +640,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
         changed = true;
     }
 
-    if changed {
+    if changed && can_save {
         save_config_encrypted(&app, &config)?;
     }
 
@@ -860,7 +917,7 @@ async fn auth_login(
     password: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let config = load_config(&app);
+    let config = load_config(&app).config;
     if !config.auth_enabled.unwrap_or(false) {
         return Ok("disabled".to_string());
     }
