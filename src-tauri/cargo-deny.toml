@@ -1,11 +1,11 @@
 [graph]
-# Only check targets we actually build for. This excludes Linux-only transitive
-# dependencies (GTK3 tray-icon bindings, etc.) from the dependency graph entirely.
+# Only check targets we actually build for.
 targets = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
 ]
 
 [advisories]
