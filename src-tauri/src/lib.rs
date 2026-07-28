@@ -1103,11 +1103,13 @@ pub fn run() {
                             };
                             if let Some(s) = state {
                                 let solar = s.solar_total.unwrap_or(0.0) / 1000.0;
-                                let batt = s.battery_soc.unwrap_or(0.0);
-                                let grid = s.gt.unwrap_or(0.0) / 1000.0;
+                                let batt = s.battery_soc;
+                                let grid = s.gt.map(|v| v / 1000.0);
                                 let tip = format!(
                                     "PV {:.1}kW  Battery {:.0}%  Grid {:+.1}kW",
-                                    solar, batt, grid
+                                    solar,
+                                    batt.unwrap_or(0.0),
+                                    grid.unwrap_or(0.0)
                                 );
                                 if let Some(tray) = app_for_tray.tray_by_id("main-tray") {
                                     #[cfg(target_os = "macos")]
@@ -1124,15 +1126,19 @@ pub fn run() {
                                 use tauri_plugin_notification::NotificationExt;
 
                                 // Low battery alert (< 20%)
-                                if batt > 0.0 && batt < 20.0 {
-                                    if !low_battery_notified {
-                                        let _ = app_for_tray
-                                            .notification()
-                                            .builder()
-                                            .title("Inverter Desktop - Low Battery")
-                                            .body(&format!("Battery SoC dropped to {:.0}%!", batt))
-                                            .show();
-                                        low_battery_notified = true;
+                                if let Some(batt) = batt {
+                                    if batt < 20.0 {
+                                        if !low_battery_notified {
+                                            let _ = app_for_tray
+                                                .notification()
+                                                .builder()
+                                                .title("Inverter Desktop - Low Battery")
+                                                .body(&format!("Battery SoC dropped to {:.0}%!", batt))
+                                                .show();
+                                            low_battery_notified = true;
+                                        }
+                                    } else {
+                                        low_battery_notified = false;
                                     }
                                 } else {
                                     low_battery_notified = false;
@@ -1140,17 +1146,21 @@ pub fn run() {
 
                                 // Grid connection lost (no grid power reading for extended period)
                                 // gt = 0 means no grid import/export - could be disconnection
-                                if grid == 0.0 && solar > 100.0 && batt < 95.0 {
-                                    // Only alert if solar is producing but grid shows 0 and battery not full
-                                    // (indicates potential grid disconnection while consuming)
-                                    if !grid_lost_notified {
-                                        let _ = app_for_tray
-                                            .notification()
-                                            .builder()
-                                            .title("Inverter Desktop - Grid Disconnected")
-                                            .body("Grid connection appears to be lost. Check your setup.")
-                                            .show();
-                                        grid_lost_notified = true;
+                                if let (Some(grid), Some(batt)) = (grid, batt) {
+                                    if grid.abs() < 0.001 && solar > 0.1 && batt < 95.0 {
+                                        // Only alert if solar is producing but grid shows 0 and battery not full
+                                        // (indicates potential grid disconnection while consuming)
+                                        if !grid_lost_notified {
+                                            let _ = app_for_tray
+                                                .notification()
+                                                .builder()
+                                                .title("Inverter Desktop - Grid Disconnected")
+                                                .body("Grid connection appears to be lost. Check your setup.")
+                                                .show();
+                                            grid_lost_notified = true;
+                                        }
+                                    } else {
+                                        grid_lost_notified = false;
                                     }
                                 } else {
                                     grid_lost_notified = false;
