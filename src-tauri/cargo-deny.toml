@@ -1,0 +1,57 @@
+[graph]
+# Only check targets we actually build for.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+
+[advisories]
+# ttf-parser (via ab_glyph): unmaintained, no upstream fix yet
+# unic-* crates (via urlpattern in tauri): unmaintained, no upstream fix yet
+# gtk-rs GTK3 bindings (via tauri's Linux tray-icon dependency chain): unmaintained, no safe upgrade available
+# proc-macro-error (transitive dependency): unmaintained, no safe upgrade available
+ignore = [
+    "RUSTSEC-2026-0192", # ttf-parser: unmaintained (via ab_glyph)
+    "RUSTSEC-2025-0081", # unic-char-property: unmaintained (via urlpattern/tauri)
+    "RUSTSEC-2025-0075", # unic-char-range: unmaintained (via urlpattern/tauri)
+    "RUSTSEC-2025-0080", # unic-common: unmaintained (via urlpattern/tauri)
+    "RUSTSEC-2025-0100", # unic-ucd-ident: unmaintained (via urlpattern/tauri)
+    "RUSTSEC-2025-0098", # unic-ucd-version: unmaintained (via urlpattern/tauri)
+    "RUSTSEC-2024-0413", # atk: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0416", # atk-sys: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0412", # gdk: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0418", # gdk-sys: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0411", # gdkwayland-sys: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0417", # gdkx11: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0414", # gdkx11-sys: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0415", # gtk: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0420", # gtk-sys: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0419", # gtk3-macros: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
+    "RUSTSEC-2024-0370", # proc-macro-error: unmaintained (transitive dependency)
+]
+
+[bans]
+deny = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+include-dev = true
+
+[sources]
+allow-git = []
