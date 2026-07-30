@@ -121,10 +121,11 @@ fn fmt_grid(val: Option<f64>) -> String {
     match val {
         Some(v) => {
             let a = v.abs();
-            let s = if v < 0.0 { "-" } else { "" };
             if a < 1000.0 {
+                let s = if v < 0.0 && a.round() > 0.0 { "-" } else { "" };
                 format!("{}{:.0}W", s, a)
             } else {
+                let s = if v < 0.0 { "-" } else { "" };
                 format!("{}{:.1}kW", s, a / 1000.0)
             }
         }
