@@ -63,3 +63,5 @@ scripts/bump.js
 __pycache__/
 
 AGENTS.md
+
+commit.txt
