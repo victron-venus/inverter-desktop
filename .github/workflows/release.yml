@@ -274,13 +274,27 @@ jobs:
           TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
         run: pnpm tauri android build --ci
 
+      - name: Android – sign APK
+        if: matrix.type == 'android' && github.repository_owner == 'victron-venus'
+        uses: rkkautsar/sign-sdk-android-action@v1
+        env:
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        with:
+          releaseDirectory: src-tauri/gen/android/app/build/outputs/apk/universal/release
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          alias: ${{ env.ALIAS }}
+          keyStorePassword: ${{ env.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ env.KEY_PASSWORD }}
+
       - name: Android – upload artifact to release
         if: matrix.type == 'android'
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: v${{ needs.check-version-change.outputs.new_version }}
           files: |
-            src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
             src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
           token: ${{ secrets.GITHUB_TOKEN }}
           overwrite_files: true
