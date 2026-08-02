@@ -274,19 +274,37 @@ jobs:
           TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
         run: pnpm tauri android build --ci
 
-      - name: Android – sign APK
+      - name: Android – sign & upload artifacts
         if: matrix.type == 'android' && github.repository_owner == 'victron-venus'
-        uses: rkkautsar/sign-sdk-android-action@v1
+        uses: r0adkll/sign-android-release@8e1c886061b87217ef9b39a7d1a7a6b77e8c3b5e # v1.3.0
         env:
-          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SIGN_KEY_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SIGN_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SIGN_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SIGN_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         with:
           releaseDirectory: src-tauri/gen/android/app/build/outputs/apk/universal/release
-          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          alias: ${{ env.ALIAS }}
-          keyStorePassword: ${{ env.KEY_STORE_PASSWORD }}
-          keyPassword: ${{ env.KEY_PASSWORD }}
+          signingKeyBase64: ${{ env.SIGN_KEY_BASE64 }}
+          alias: ${{ env.SIGN_KEY_ALIAS }}
+          keyStorePassword: ${{ env.SIGN_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ env.SIGN_KEY_PASSWORD }}
+
+      - name: Android – rename artifacts for release
+        if: matrix.type == 'android'
+        run: |
+          VERSION="${{ needs.check-version-change.outputs.new_version }}"
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
+          AAB_DIR="src-tauri/gen/android/app/build/outputs/bundle/universalRelease"
+
+          # Rename signed APK
+          if [ -f "$APK_DIR/app-universal-release-unsigned-signed.apk" ]; then
+            mv "$APK_DIR/app-universal-release-unsigned-signed.apk" "$APK_DIR/Inverter.Desktop_${VERSION}_signed.apk"
+          fi
+
+          # Rename AAB
+          if [ -f "$AAB_DIR/app-universal-release.aab" ]; then
+            mv "$AAB_DIR/app-universal-release.aab" "$AAB_DIR/Inverter.Desktop_${VERSION}.aab"
+          fi
 
       - name: Android – upload artifact to release
         if: matrix.type == 'android'
@@ -294,7 +312,7 @@ jobs:
         with:
           tag_name: v${{ needs.check-version-change.outputs.new_version }}
           files: |
-            src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
-            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/Inverter.Desktop_${{ needs.check-version-change.outputs.new_version }}_signed.apk
+            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/Inverter.Desktop_${{ needs.check-version-change.outputs.new_version }}.aab
           token: ${{ secrets.GITHUB_TOKEN }}
           overwrite_files: true
