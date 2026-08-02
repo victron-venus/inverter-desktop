@@ -67,3 +67,4 @@ AGENTS.md
 commit.txt
 .env*
 release.keystore
+*.ipa
