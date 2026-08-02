@@ -120,6 +120,7 @@ jobs:
     if: needs.check-version-change.outputs.should_release == 'true'
     name: Build & upload mobile artifacts
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
