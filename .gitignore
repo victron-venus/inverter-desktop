@@ -65,3 +65,5 @@ __pycache__/
 AGENTS.md
 
 commit.txt
+.env*
+release.keystore
