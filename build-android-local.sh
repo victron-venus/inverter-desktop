@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gh workflow run Release --repo victron-venus/inverter-desktop --ref main
 set -uo pipefail
 
 OUTPUT_DIR="dist/android"
