@@ -159,6 +159,19 @@
 
       <!-- Auth Screen Overlay -->
       <AuthScreen v-if="showAuthScreen" @authenticated="handleAuthenticated" />
+
+      <!-- Toast Notification -->
+      <div
+        v-if="message"
+        class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full shadow-lg text-[10px] font-bold border animate-in slide-in-from-bottom duration-200 uppercase tracking-wider"
+        :class="
+          messageType === 'error'
+            ? 'bg-red-500 border-red-600 text-white'
+            : 'bg-green-500 border-green-600 text-white'
+        "
+      >
+        {{ message }}
+      </div>
     </div>
   </ErrorBoundary>
 </template>
@@ -236,8 +249,26 @@ const contextMenu = ref({ show: false, x: 0, y: 0 })
 const videoPopup = ref({ show: false, url: '', cameraName: '' })
 const authToken = ref<string | null>(null)
 const showAuthScreen = ref(false)
+const message = ref('')
+const messageType = ref<'success' | 'error'>('success')
 let unlistenConfig: (() => void) | null = null
 let unlistenWindowEvents: (() => void) | null = null
+
+function clearMessage() {
+  message.value = ''
+}
+
+function showError(msg: string) {
+  message.value = msg
+  messageType.value = 'error'
+  setTimeout(clearMessage, 3000)
+}
+
+function showSuccess(msg: string) {
+  message.value = msg
+  messageType.value = 'success'
+  setTimeout(clearMessage, 2000)
+}
 
 function handleAuthenticated(token: string) {
   authToken.value = token
@@ -280,11 +311,17 @@ async function openConfig() {
     await invoke('open_config_window')
   } catch (e) {
     logger.error('Failed to open config window:', e)
+    showError(`Failed to open config: ${e?.toString() || e}`)
   }
 }
 
 async function send(action: string, payload: Record<string, unknown> = {}) {
-  return sendHaOrMqtt(action, payload)
+  try {
+    await sendHaOrMqtt(action, payload)
+  } catch (e) {
+    logger.error('Action failed:', action, payload, e)
+    showError(`Failed: ${e?.toString() || e}`)
+  }
 }
 
 async function onNumberSet(entityId: string, value: number) {
