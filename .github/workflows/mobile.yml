@@ -82,7 +82,7 @@ jobs:
         # update on a fresh runner. Cargo.lock itself is never modified by
         # this build unless it is genuinely incompatible with Cargo.toml.
         env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: 1
+          CARGO_NET_GIT_FETCH_WITH_CLI: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cargo build --locked --target aarch64-apple-ios --release \
