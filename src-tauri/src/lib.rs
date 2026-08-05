@@ -12,6 +12,7 @@ extern "C" {
 use aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
 use base64::{engine::general_purpose, Engine as _};
+use keyring::Entry;
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
 use rand::RngExt;
@@ -19,45 +20,40 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const STORE_ENCRYPTION_KEY: &str = "inverter-desktop-encryption-key";
+const KEYRING_SERVICE: &str = "inverter-desktop";
+const KEYRING_USERNAME: &str = "victron";
 
-fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
-    let store = app
-        .store_builder(".keychain.json")
-        .build()
-        .map_err(|e| format!("Failed to build keychain store: {}", e))?;
+fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
+    let entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME);
 
-    if let Some(key_value) = store.get(STORE_ENCRYPTION_KEY) {
-        if let Some(key_str) = key_value.as_str() {
+    match entry.get_password() {
+        Ok(key_b64) => {
             let key = general_purpose::STANDARD
-                .decode(key_str)
+                .decode(key_b64)
                 .map_err(|e| format!("Failed to decode encryption key: {}", e))?;
             if key.len() != 32 {
                 return Err("Invalid encryption key length".to_string());
             }
-            return Ok(key);
+            Ok(key)
         }
+        Err(keyring::Error::NoEntry) => {
+            // Generate new encryption key
+            let mut key = [0u8; 32];
+            rand::rng().fill(&mut key);
+            let key_b64 = general_purpose::STANDARD.encode(key);
+            entry
+                .set_password(&key_b64)
+                .map_err(|e| format!("Failed to save encryption key: {}", e))?;
+            Ok(key.to_vec())
+        }
+        Err(e) => Err(format!("Keyring error: {}", e)),
     }
-
-    // Generate new encryption key (32 bytes = 256 bits for AES-256-GCM)
-    let mut key = [0u8; 32];
-    rand::rng().fill(&mut key);
-
-    // Store base64-encoded key
-    let key_b64 = general_purpose::STANDARD.encode(key);
-    store.set(STORE_ENCRYPTION_KEY, serde_json::json!(key_b64));
-    store
-        .save()
-        .map_err(|e| format!("Failed to save encryption key: {}", e))?;
-
-    Ok(key.to_vec())
 }
 
 fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
     let plaintext = serde_json::to_vec(config).map_err(|e| e.to_string())?;
 
-    // Generate random 12-byte nonce for AES-GCM
     let mut nonce_bytes = [0u8; 12];
     rand::rng().fill(&mut nonce_bytes);
     let nonce = <aes_gcm::Nonce<aead::consts::U12>>::try_from(nonce_bytes.as_slice())
@@ -67,7 +63,6 @@ fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
         .encrypt(&nonce, plaintext.as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
 
-    // Prepend nonce to ciphertext and encode as base64
     let mut result = nonce_bytes.to_vec();
     result.extend_from_slice(&ciphertext);
     Ok(general_purpose::STANDARD.encode(&result))
@@ -95,7 +90,7 @@ fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
 }
 
 fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
-    let key = get_or_create_encryption_key(app)?;
+    let key = get_or_create_encryption_key()?;
 
     let store = app
         .store_builder("config.json")
@@ -109,7 +104,6 @@ fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
             } else {
                 // Legacy unencrypted config - migrate
                 let config: FullConfig = serde_json::from_value(v).unwrap_or_default();
-                // Save as encrypted for next time
                 if let Ok(encrypted) = encrypt_config(&config, &key) {
                     store.set("config", serde_json::json!(encrypted));
                     let _ = store.save();
@@ -122,7 +116,7 @@ fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
 }
 
 fn save_config_encrypted(app: &tauri::AppHandle, config: &FullConfig) -> Result<(), String> {
-    let key = get_or_create_encryption_key(app)?;
+    let key = get_or_create_encryption_key()?;
     let encrypted = encrypt_config(config, &key)?;
 
     let store = app
@@ -741,112 +735,35 @@ async fn close_config_window(window: tauri::Window) -> Result<(), String> {
 
 // === Auto-start management ===
 
+fn get_autolaunch() -> Result<auto_launch::AutoLaunch, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_path = exe.to_string_lossy().to_string();
+    auto_launch::AutoLaunchBuilder::new()
+        .set_app_name("Inverter Desktop")
+        .set_app_path(&exe_path)
+        .set_macos_launch_mode(auto_launch::MacOSLaunchMode::LaunchAgent)
+        .build()
+        .map_err(|e| format!("Failed to create auto-launch: {}", e))
+}
+
 #[tauri::command]
 async fn set_auto_start(enable: bool) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let exe_path = exe.to_string_lossy().to_string();
-        let label = "com.victron.inverter-desktop";
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>ProcessType</key>
-    <string>Interactive</string>
-</dict>
-</plist>"#,
-            label, exe_path
-        );
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let launch_agents = format!("{}/Library/LaunchAgents", home);
-        std::fs::create_dir_all(&launch_agents).map_err(|e| e.to_string())?;
-        let plist_path = format!("{}/{}.plist", launch_agents, label);
-        if enable {
-            std::fs::write(&plist_path, plist).map_err(|e| e.to_string())?;
-        } else {
-            let _ = std::fs::remove_file(&plist_path);
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use winreg::enums::*;
-        use winreg::RegKey;
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let exe_path = exe.to_string_lossy().to_string();
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let path = r#"Software\Microsoft\Windows\CurrentVersion\Run"#;
-        let (key, _) = hkcu.create_subkey(path).map_err(|e| e.to_string())?;
-        if enable {
-            key.set_value("InverterDesktop", &exe_path)
-                .map_err(|e| e.to_string())?;
-        } else {
-            let _ = key.delete_value("InverterDesktop");
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let exe_path = exe.to_string_lossy().to_string();
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let autostart_dir = format!("{}/.config/autostart", home);
-        std::fs::create_dir_all(&autostart_dir).map_err(|e| e.to_string())?;
-        let desktop_path = format!("{}/inverter-desktop.desktop", autostart_dir);
-        if enable {
-            let desktop = format!(
-                r#"[Desktop Entry]
-Type=Application
-Name=Inverter Desktop
-Exec={}
-Terminal=false
-X-GNOME-Autostart-enabled=true"#,
-                exe_path
-            );
-            std::fs::write(&desktop_path, desktop).map_err(|e| e.to_string())?;
-        } else {
-            let _ = std::fs::remove_file(&desktop_path);
-        }
+    let auto = get_autolaunch()?;
+    if enable {
+        auto.enable()
+            .map_err(|e| format!("Failed to enable auto-start: {}", e))?;
+    } else {
+        auto.disable()
+            .map_err(|e| format!("Failed to disable auto-start: {}", e))?;
     }
     Ok(())
 }
 
 #[tauri::command]
 async fn get_auto_start() -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let plist_path = format!(
-            "{}/Library/LaunchAgents/com.victron.inverter-desktop.plist",
-            home
-        );
-        return Ok(std::path::Path::new(&plist_path).exists());
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use winreg::enums::*;
-        use winreg::RegKey;
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let path = r#"Software\Microsoft\Windows\CurrentVersion\Run"#;
-        let key = hkcu.open_subkey(path).map_err(|e| e.to_string())?;
-        return Ok(key.get_value::<String, _>("InverterDesktop").is_ok());
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let desktop_path = format!("{}/.config/autostart/inverter-desktop.desktop", home);
-        return Ok(std::path::Path::new(&desktop_path).exists());
-    }
-    #[allow(unreachable_code)]
-    Ok(false)
+    let auto = get_autolaunch()?;
+    auto.is_enabled()
+        .map_err(|e| format!("Failed to check auto-start: {}", e))
 }
 
 // === Authentication ===
