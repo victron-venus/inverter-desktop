@@ -11,7 +11,7 @@ import type {
   HaSensorDisplay,
   HaWeatherDisplay,
 } from '../types/ha'
-import { appConfig, state, type InverterState } from './useInverterState'
+import { appConfig, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
@@ -173,7 +173,6 @@ export function useHA() {
 
     // Fetch initial state on mount
     await fetchHaStates()
-    recomputeFilteredFromEntityMaps()
 
     // Fetch button/switch states so UI shows correct on/off at startup
     const buttonEntityIds = [
@@ -188,7 +187,6 @@ export function useHA() {
       'input_boolean.minimize_charging',
     ]
     await fetchHaEntityStates(buttonEntityIds)
-    recomputeFilteredFromEntityMaps()
 
     // Check HA connection status via HTTP
     await checkHaConnection()
@@ -393,64 +391,6 @@ export function useHA() {
       // Re-throw so UI can show error
       throw e
     }
-  }
-
-  /**
-   * Fallback: compute filtered display data on frontend from entity state maps.
-   * Called once after initial REST fetch (before WS is fully streaming).
-   */
-  function recomputeFilteredFromEntityMaps() {
-    const states = haEntityStates.value
-    const attrs = haEntityAttributes.value
-    const getName = (entityId: string, a?: Record<string, unknown>) =>
-      (a?.friendly_name as string) || entityId
-
-    const sensors: HaSensorDisplay[] = []
-    const numbers: HaNumberDisplay[] = []
-    const covers: HaCoverDisplay[] = []
-    const mediaPlayers: HaMediaPlayerDisplay[] = []
-    const scenes: HaSceneDisplay[] = []
-    let weather: HaWeatherDisplay | null = null
-
-    for (const [entityId, st] of Object.entries(states)) {
-      if (st === 'unavailable' || st === 'unknown') continue
-      const domain = entityId.split('.')[0]
-      const a = attrs[entityId] || {}
-      const name = getName(entityId, a)
-
-      if (domain === 'sensor' || domain === 'binary_sensor') {
-        const unit = (a.unit_of_measurement as string) || ''
-        sensors.push({ entity_id: entityId, name, state: st, unit })
-      } else if (domain === 'number') {
-        const value = Number.parseFloat(st) || 0
-        const min = (a.min as number) ?? 0
-        const max = (a.max as number) ?? 100
-        const step = (a.step as number) ?? 1
-        const unit = (a.unit_of_measurement as string) || ''
-        numbers.push({ entity_id: entityId, name, value, min, max, step, unit })
-      } else if (domain === 'cover') {
-        const position = (a.current_position as number) ?? 0
-        covers.push({ entity_id: entityId, name, position })
-      } else if (domain === 'media_player') {
-        mediaPlayers.push({ entity_id: entityId, name, state: st })
-      } else if (domain === 'scene') {
-        const sceneName = getName(entityId.replace('scene.', '').replace(/_/g, ' '), a)
-        scenes.push({ entity_id: entityId, name: sceneName })
-      } else if (domain === 'weather' && !weather) {
-        const weatherName = (a.friendly_name as string) || 'Weather'
-        const temperature = (a.temperature as number) ?? null
-        const unit = (a.temperature_unit as string) || '°C'
-        const forecast = (a.forecast as Array<Record<string, unknown>>) ?? []
-        weather = { entity_id: entityId, name: weatherName, state: st, temperature, unit, forecast }
-      }
-    }
-
-    haSensors.value = sensors
-    haNumbers.value = numbers
-    haCovers.value = covers
-    haMediaPlayers.value = mediaPlayers
-    haScenes.value = scenes
-    haWeather.value = weather
   }
 
   function cleanupHa() {
