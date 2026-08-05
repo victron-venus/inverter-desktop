@@ -68,12 +68,22 @@ jobs:
               f.write(c)
           print('Code signing disabled')
           "
+      - name: Configure git for non-interactive GitHub clones
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global --add safe.directory $PWD
+
       - name: Pre-build Rust library for iOS
         # --locked is intentionally omitted: `tauri ios init` runs before this
         # step and can shift target-specific dependency resolution, which can
         # make even a lockfile that matches Cargo.toml look like it needs an
         # update on a fresh runner. Cargo.lock itself is never modified by
         # this build unless it is genuinely incompatible with Cargo.toml.
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cargo build --locked --target aarch64-apple-ios --release \
             --package inverter-dashboard --lib \
