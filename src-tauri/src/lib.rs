@@ -12,7 +12,6 @@ extern "C" {
 use aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
 use base64::{engine::general_purpose, Engine as _};
-use keyring::Entry;
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
 use rand::RngExt;
@@ -20,9 +19,15 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+// Desktop-only imports
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use keyring::Entry;
+
 const KEYRING_SERVICE: &str = "inverter-desktop";
 const KEYRING_USERNAME: &str = "victron";
 
+// Desktop-only: OS keychain for encryption key
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
     let entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME);
 
@@ -48,6 +53,25 @@ fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
         }
         Err(e) => Err(format!("Keyring error: {}", e)),
     }
+}
+
+// Mobile fallback: use a fixed derivation (less secure but functional)
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
+    // For mobile, derive key from app identifier (deterministic, no keychain)
+    // This is less secure but allows the app to function on mobile
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    "inverter-desktop-victron-encryption-key".hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let mut key = [0u8; 32];
+    for (i, b) in hash.to_le_bytes().iter().cycle().take(32).enumerate() {
+        key[i] = *b;
+    }
+    Ok(key.to_vec())
 }
 
 fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
@@ -735,6 +759,7 @@ async fn close_config_window(window: tauri::Window) -> Result<(), String> {
 
 // === Auto-start management ===
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_autolaunch() -> Result<auto_launch::AutoLaunch, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_path = exe.to_string_lossy().to_string();
@@ -746,6 +771,7 @@ fn get_autolaunch() -> Result<auto_launch::AutoLaunch, String> {
         .map_err(|e| format!("Failed to create auto-launch: {}", e))
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 async fn set_auto_start(enable: bool) -> Result<(), String> {
     let auto = get_autolaunch()?;
@@ -759,11 +785,25 @@ async fn set_auto_start(enable: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 async fn get_auto_start() -> Result<bool, String> {
     let auto = get_autolaunch()?;
     auto.is_enabled()
         .map_err(|e| format!("Failed to check auto-start: {}", e))
+}
+
+// Mobile stubs - auto-start not supported on mobile
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+async fn set_auto_start(_enable: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+async fn get_auto_start() -> Result<bool, String> {
+    Ok(false)
 }
 
 // === Authentication ===
