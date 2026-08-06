@@ -76,16 +76,11 @@ jobs:
           git config --global --add safe.directory $PWD
 
       - name: Pre-build Rust library for iOS
-        # --locked is intentionally omitted: `tauri ios init` runs before this
-        # step and can shift target-specific dependency resolution, which can
-        # make even a lockfile that matches Cargo.toml look like it needs an
-        # update on a fresh runner. Cargo.lock itself is never modified by
-        # this build unless it is genuinely incompatible with Cargo.toml.
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cargo build --locked --target aarch64-apple-ios --release \
+          cargo build --target aarch64-apple-ios --release \
             --package inverter-dashboard --lib \
             --manifest-path src-tauri/Cargo.toml
           mkdir -p src-tauri/gen/apple/Externals/arm64/release
