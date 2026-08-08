@@ -68,3 +68,8 @@ commit.txt
 .env*
 release.keystore
 *.ipa
+
+# Release scripts (local only)
+release.sh
+release.txt
+C*.md
