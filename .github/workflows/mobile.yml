@@ -155,6 +155,13 @@ jobs:
           java-version: '17'
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      - name: Install required Android SDK components (compileSdk 36, build-tools 34.0.0)
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" \
+            "platforms;android-36" \
+            "build-tools;34.0.0" \
+            "platform-tools" 2>&1 | tail -5
+          echo "✓ Android SDK components installed"
       - name: Get version
         id: version
         run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
