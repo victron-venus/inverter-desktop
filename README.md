@@ -19,7 +19,18 @@ Desktop and mobile application for monitoring Victron inverter systems via MQTT.
 | Docker / NAS                | [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) (`alvit/inverter-dashboard`) |
 | Desktop / mobile (this app) | **inverter-desktop**                                                                                   |
 
-## Features
+---
+
+## Project Role
+
+**Native desktop application for Victron inverter monitoring.** Built with Vue 3 + Electron/Tauri. Uses shared components from [inverter-dashboard-vue](https://github.com/victron-venus/inverter-dashboard-vue).
+
+| Use Case                   | Recommended                                                                                                             |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Cerbo GX / embedded        | [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go) — single binary, minimal footprint      |
+| Docker / NAS               | [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) — Python/FastAPI (`alvit/inverter-dashboard`) |
+| Native desktop/mobile      | **inverter-desktop** (this) — Rust/Tauri app with offline support                                                       |
+| Building custom dashboards | [inverter-dashboard-vue](https://github.com/victron-venus/inverter-dashboard-vue) — shared Vue 3 component library      |
 
 - Real-time power monitoring (Grid, Solar, Battery, Consumption)
 - Interactive controls via MQTT
