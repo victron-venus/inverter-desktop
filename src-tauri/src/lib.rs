@@ -29,7 +29,8 @@ const KEYRING_USERNAME: &str = "victron";
 // Desktop-only: OS keychain for encryption key
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
-    let entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME);
+    let entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME)
+        .map_err(|e| format!("Keyring error: {}", e))?;
 
     match entry.get_password() {
         Ok(key_b64) => {
