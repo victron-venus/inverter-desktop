@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatPower, formatUptime, formatDuration } from '../utils'
+import { formatPower, formatUptime, formatDuration, formatInverterState } from '../utils'
 
 describe('formatPower', () => {
   it('formats watts below 1000', () => {
@@ -38,6 +38,24 @@ describe('formatUptime', () => {
     expect(formatUptime(3600)).toBe('1h 0m')
     expect(formatUptime(3661)).toBe('1h 1m')
     expect(formatUptime(7260)).toBe('2h 1m')
+  })
+})
+
+describe('formatInverterState', () => {
+  it('maps off codes to Off', () => {
+    expect(formatInverterState('OF')).toBe('Off')
+    expect(formatInverterState('of')).toBe('Off')
+    expect(formatInverterState('off')).toBe('Off')
+  })
+
+  it('passes through other states', () => {
+    expect(formatInverterState('Bulk')).toBe('Bulk')
+    expect(formatInverterState('Absorbing')).toBe('Absorbing')
+    expect(formatInverterState('Inverting')).toBe('Inverting')
+  })
+
+  it('returns Bulk for undefined', () => {
+    expect(formatInverterState(undefined)).toBe('Bulk')
   })
 })
 
