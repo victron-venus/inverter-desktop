@@ -340,7 +340,15 @@ async function onSceneActivate(entityId: string) {
   await send('scene_activate', { entity: entityId })
 }
 
+const isInverterOff = computed(() => {
+  const s = state.value.inverter_state
+  if (!s) return false
+  const normalized = s.trim().toLowerCase()
+  return normalized === 'of' || normalized === 'off'
+})
+
 const essClass = computed(() => {
+  if (isInverterOff.value) return 'off'
   const m = state.value.ess_mode
   if (!m) return 'off'
   if (m.mode_name === 'Off' || m.mode_name === 'Charger only') return 'off'
@@ -348,8 +356,10 @@ const essClass = computed(() => {
 })
 
 const essText = computed(() => {
+  if (isInverterOff.value) return 'Off'
   const m = state.value.ess_mode
   if (!m) return 'ESS'
+  if (m.mode_name === 'Off' || m.mode_name === 'Charger only') return m.mode_name
   if (m.is_external) return 'External'
   return m.mode_name || 'ESS'
 })

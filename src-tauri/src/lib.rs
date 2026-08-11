@@ -641,6 +641,7 @@ async fn connect_mqtt(
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     let mut client = MqttClient::new(host, port, username, password);
+    client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
     client.set_camera_topic(camera_topic);
@@ -948,6 +949,7 @@ async fn connect_ha_mqtt(
         *client_guard = None;
     }
     let mut client = MqttClient::new(host, port, username, password);
+    client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app.clone());
     client.set_camera_topic(camera_topic);
     client.set_status_event("ha-mqtt-connection-status".to_string());

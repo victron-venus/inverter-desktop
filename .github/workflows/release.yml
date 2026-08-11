@@ -225,13 +225,13 @@ jobs:
             -scheme "inverter-dashboard_iOS" \
             -sdk iphoneos \
             -configuration release \
-            -archivePath "src-tauri/gen/apple/build/InverterDashboard.xcarchive" \
+            -archivePath "src-tauri/gen/apple/build/InverterDesktop.xcarchive" \
             -derivedDataPath "src-tauri/gen/apple/build/DerivedData" \
             ONLY_ACTIVE_ARCH=NO \
             ARCHS=arm64
 
           # Package .app into a sideload-ready .ipa
-          XCA="src-tauri/gen/apple/build/InverterDashboard.xcarchive"
+          XCA="src-tauri/gen/apple/build/InverterDesktop.xcarchive"
           APP_DIR="$XCA/Products/Applications"
           if [ ! -d "$APP_DIR" ]; then
             echo "No .app found in archive at $APP_DIR"

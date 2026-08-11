@@ -78,14 +78,14 @@
       <div
         class="text-[11px] text-slate-500 dark:text-slate-300 font-bold truncate w-full text-center uppercase tracking-tighter"
       >
-        {{ inverterState || 'Bulk' }}
+        {{ formatInverterState(inverterState) }}
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { formatPower } from '../utils'
+import { formatInverterState, formatPower } from '../utils'
 
 defineProps<{
   gt?: number

@@ -12,6 +12,13 @@ export function formatUptime(s: number): string {
   return h + 'h ' + m + 'm'
 }
 
+export function formatInverterState(state: string | undefined): string {
+  if (!state) return 'Bulk'
+  const normalized = state.trim().toLowerCase()
+  if (normalized === 'of' || normalized === 'off') return 'Off'
+  return state
+}
+
 export function formatDuration(s: number | undefined): string {
   if (!s || s <= 0) return '0:00'
   const h = Math.floor(s / 3600)

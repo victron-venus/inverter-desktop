@@ -10,7 +10,7 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: Inverter Dashboard
+      PRODUCT_NAME: Inverter Desktop
       PRODUCT_BUNDLE_IDENTIFIER: com.alvit.inverter-dashboard
 targetTemplates:
   app:

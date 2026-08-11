@@ -1,8 +1,11 @@
 use rumqttc::{Client, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Emitter;
+
+use crate::ha_api::HaEntityEntry;
 
 const MQTT_KEEP_ALIVE_SECS: u64 = 60;
 const KEEPALIVE_INTERVAL_SECS: u64 = 45;
@@ -271,6 +274,7 @@ pub struct MqttClient {
     camera_topic: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     status_event: String,
+    ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
 }
 
 fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
@@ -319,6 +323,41 @@ fn fmt_watts(v: f64) -> String {
     }
 }
 
+/// Resolve an HA entity's friendly_name, falling back to the entity_id.
+fn entity_friendly_name(entry: &HaEntityEntry) -> Option<String> {
+    entry
+        .attributes
+        .as_ref()
+        .and_then(|a| a.get("friendly_name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Find the HA friendly name for a load key (e.g. `stove` → `sensor.stove_power`'s friendly name).
+/// Matches full entity ids, exact trailing segments, or ids containing the load as a segment,
+/// preferring the most specific (shortest) entity id.
+fn load_friendly_name(
+    load: &str,
+    entity_states: &HashMap<String, HaEntityEntry>,
+) -> Option<String> {
+    let load_lower = load.to_lowercase();
+    let mut best: Option<(String, usize)> = None;
+    for (entity_id, entry) in entity_states {
+        let Some(name) = entity_friendly_name(entry) else {
+            continue;
+        };
+        let eid_lower = entity_id.to_lowercase();
+        let matches = eid_lower == load_lower
+            || eid_lower.ends_with(&load_lower)
+            || eid_lower.ends_with(&format!(".{}", load_lower))
+            || eid_lower.contains(&format!(".{}", load_lower));
+        if matches && best.as_ref().is_none_or(|(_, len)| entity_id.len() < *len) {
+            best = Some((name, entity_id.len()));
+        }
+    }
+    best.map(|(name, _)| name)
+}
+
 impl MqttClient {
     pub fn new(
         host: String,
@@ -343,11 +382,16 @@ impl MqttClient {
                 high_load: std::collections::HashMap::new(),
             })),
             status_event: "mqtt-connection-status".to_string(),
+            ha_entity_states: None,
         }
     }
 
     pub fn set_app_handle(&mut self, handle: tauri::AppHandle) {
         self.app_handle = Some(handle);
+    }
+
+    pub fn set_ha_entity_states(&mut self, states: Arc<Mutex<HashMap<String, HaEntityEntry>>>) {
+        self.ha_entity_states = Some(states);
     }
 
     pub fn set_portal_id(&mut self, id: Option<String>) {
@@ -378,6 +422,7 @@ impl MqttClient {
         let cam_topic_owned = self.camera_topic.clone();
         let notifications = self.notifications.clone();
         let status_event = self.status_event.clone();
+        let ha_entity_states = self.ha_entity_states.clone();
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -393,6 +438,7 @@ impl MqttClient {
                         portal_id.clone(),
                         cam_topic_owned.clone(),
                         notifications.clone(),
+                        ha_entity_states.clone(),
                         &status_event,
                     )
                     .await
@@ -425,6 +471,7 @@ impl MqttClient {
         portal_id: Option<String>,
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
+        ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         status_event: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
@@ -476,6 +523,7 @@ impl MqttClient {
         let app_c = app_handle.clone();
         let cam_c = camera_topic.clone();
         let notif_c = notifications.clone();
+        let ha_states_c = ha_entity_states.clone();
         let se = status_event.to_string();
         let con_result = tokio::task::spawn_blocking(move || {
             for event in connection.iter() {
@@ -486,7 +534,15 @@ impl MqttClient {
                         let payload = String::from_utf8(publish.payload.to_vec())
                             .unwrap_or_else(|_| String::new());
 
-                        Self::handle_message(&topic, &payload, &state_c, &app_c, &cam_c, &notif_c);
+                        Self::handle_message(
+                            &topic,
+                            &payload,
+                            &state_c,
+                            &app_c,
+                            &cam_c,
+                            &notif_c,
+                            &ha_states_c,
+                        );
                     }
                     Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
                         if let Some(ref handle) = app_c {
@@ -529,6 +585,7 @@ impl MqttClient {
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
         notifications: &Arc<Mutex<NotificationState>>,
+        ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
     ) {
         if topic == "inverter/state" {
             if let Ok(raw) = serde_json::from_str::<RawInverterState>(payload) {
@@ -537,6 +594,7 @@ impl MqttClient {
                     state.clone(),
                     app_handle.clone(),
                     notifications.clone(),
+                    ha_entity_states.clone(),
                 );
             }
         } else if topic == "inverter/console" {
@@ -570,11 +628,28 @@ impl MqttClient {
         }
     }
 
+    /// Display name for a load in notifications: HA friendly name when available,
+    /// otherwise the raw load key.
+    fn load_display_name(
+        load: &str,
+        ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
+    ) -> String {
+        if let Some(states) = ha_entity_states {
+            if let Ok(guard) = states.lock() {
+                if let Some(name) = load_friendly_name(load, &guard) {
+                    return name;
+                }
+            }
+        }
+        load.to_string()
+    }
+
     fn process_state_update(
         raw: RawInverterState,
         state: Arc<Mutex<InverterState>>,
         app_handle: Option<tauri::AppHandle>,
         notifications: Arc<Mutex<NotificationState>>,
+        ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
     ) {
         let existing_console = state.lock().ok().and_then(|g| g.console.clone());
 
@@ -644,9 +719,10 @@ impl MqttClient {
                                 .entry(name.clone())
                                 .or_insert_with(AlertState::new);
                             if alert.should_alert() {
+                                let display_name = Self::load_display_name(name, &ha_entity_states);
                                 alert_notifications.push((
                                     "High Load".to_string(),
-                                    format!("{}: {}", name, fmt_watts(*power)),
+                                    format!("{}: {}", display_name, fmt_watts(*power)),
                                 ));
                             }
                         }
@@ -733,5 +809,70 @@ impl MqttClient {
             client.publish(topic, QoS::AtLeastOnce, false, payload_str)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(friendly_name: &str) -> HaEntityEntry {
+        HaEntityEntry {
+            state: "on".to_string(),
+            attributes: Some(serde_json::json!({ "friendly_name": friendly_name })),
+        }
+    }
+
+    fn states() -> HashMap<String, HaEntityEntry> {
+        let mut map = HashMap::new();
+        map.insert("sensor.stove_power".to_string(), entry("Stove Power"));
+        map.insert("switch.stove".to_string(), entry("Stove"));
+        map.insert("sensor.washer_power_estimate".to_string(), entry("Washer"));
+        map.insert("binary_sensor.dryer_running".to_string(), entry("Dryer"));
+        map.insert("switch.shutoff_valve".to_string(), entry("Shutoff Valve"));
+        map
+    }
+
+    #[test]
+    fn resolves_friendly_name_from_entity_id() {
+        let map = states();
+        assert_eq!(
+            load_friendly_name("sensor.washer_power_estimate", &map).as_deref(),
+            Some("Washer")
+        );
+    }
+
+    #[test]
+    fn resolves_friendly_name_from_bare_load_key() {
+        let map = states();
+        assert_eq!(load_friendly_name("stove", &map).as_deref(), Some("Stove"));
+        assert_eq!(load_friendly_name("dryer", &map).as_deref(), Some("Dryer"));
+    }
+
+    #[test]
+    fn prefers_most_specific_matching_entity() {
+        let map = states();
+        // Both switch.stove (Stove) and sensor.stove_power (Stove Power) match "stove";
+        // switch.stove is the shorter/more specific entity id.
+        assert_eq!(load_friendly_name("stove", &map).as_deref(), Some("Stove"));
+    }
+
+    #[test]
+    fn returns_none_when_no_match() {
+        let map = states();
+        assert_eq!(load_friendly_name("no_such_load", &map), None);
+    }
+
+    #[test]
+    fn falls_back_when_friendly_name_missing() {
+        let mut map = HashMap::new();
+        map.insert(
+            "sensor.plain".to_string(),
+            HaEntityEntry {
+                state: "on".to_string(),
+                attributes: None,
+            },
+        );
+        assert_eq!(load_friendly_name("plain", &map), None);
     }
 }
