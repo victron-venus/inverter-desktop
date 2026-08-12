@@ -37,9 +37,7 @@ export interface InverterState {
     state?: string
     time_to_go?: string
   }>
-  loads?: Record<string, number>
   ui_config?: {
-    loads?: { hidden?: string[]; min_watts?: number }
     home_buttons?: Array<{ id: string; label: string; entity: string; state_key?: string }>
     header_toggles?: Array<{ id: string; label: string; entity: string }>
   }
@@ -55,18 +53,6 @@ export interface InverterState {
     mppt_daily?: number[]
     pv_total_daily?: number
   }
-  ev_charging_kw?: number
-  ev_power?: number
-  car_soc?: number
-  water_level?: number
-  water_valve?: boolean
-  pump_switch?: boolean
-  dishwasher_running?: boolean
-  dishwasher_duration?: number
-  washer_time?: number
-  washer_power?: boolean
-  dryer_time?: number
-  dryer_power?: boolean
   latest_version?: string
   console?: string[]
 }
@@ -74,7 +60,6 @@ export interface InverterState {
 export const state = shallowRef<InverterState>({
   booleans: {},
   features: {},
-  loads: {},
   ui_config: {},
 })
 

@@ -7,12 +7,13 @@ vi.mock('vue-i18n', () => ({
 }))
 
 const baseProps = {
-  evCharging: '0',
+  showEv: true,
+  evSectionVisible: true,
+  evSoc: 80,
+  evChargingKw: 0,
   evPower: '0',
   evPowerWatts: 0,
-  evChargingKw: 0,
-  evLoadPower: 0,
-  carSoc: 80,
+  waterVisible: true,
   waterLevel: 42,
   waterValve: false,
   pumpSwitch: false,

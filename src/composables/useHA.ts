@@ -12,6 +12,7 @@ import type {
   HaWeatherDisplay,
 } from '../types/ha'
 import { appConfig, type InverterState, state } from './useInverterState'
+import { formatPower } from '../utils'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
@@ -25,6 +26,17 @@ export function useHA() {
   let unlistenHaConn: (() => void) | null = null
   let unlistenHaFiltered: (() => void) | null = null
 
+  /** Parse an HA state string into a number; excludes unavailable/unknown states */
+  function parseNumberState(entity: string): number | null {
+    const stateVal = haEntityStates.value[entity]
+    if (!stateVal) return null
+    const raw = String(stateVal).trim()
+    const lower = raw.toLowerCase()
+    if (!lower || lower === 'unavailable' || lower === 'unknown') return null
+    const n = Number.parseFloat(raw)
+    return Number.isNaN(n) ? null : n
+  }
+
   // Pre-filtered HA entity data from Rust (replaces 6 computed properties)
   const haSensors = ref<HaSensorDisplay[]>([])
   const haNumbers = ref<HaNumberDisplay[]>([])
@@ -37,6 +49,34 @@ export function useHA() {
     const cfg = appConfig.value
     return !!(cfg?.ha_use_direct_api && cfg.ha_url && cfg.ha_longlived_token)
   })
+
+  /** Entity IDs tracked for dashboard sections (appliances, water, EV, loads clamps) */
+  function configuredSectionEntities(): string[] {
+    const cfg = appConfig.value
+    const ids: string[] = []
+    const singles = [
+      cfg?.ha_dryer_entity,
+      cfg?.ha_washer_entity,
+      cfg?.ha_dishwasher_running_entity,
+      cfg?.ha_dishwasher_duration_entity,
+      cfg?.ha_pump_switch_entity,
+      cfg?.ha_valve_switch_entity,
+      cfg?.ha_water_level_entity,
+      cfg?.ha_ev_soc_entity,
+      cfg?.ha_ev_charging_entity,
+      cfg?.ha_ev_clamp_entity,
+    ]
+    const all = [
+      ...singles,
+      ...(cfg?.ha_consumption_clamps || []),
+      ...(cfg?.ha_generation_clamps || []),
+    ]
+    for (const v of all) {
+      const t = (v || '').trim()
+      if (t && !ids.includes(t)) ids.push(t)
+    }
+    return ids
+  }
 
   async function checkHaConnection() {
     const cfg = appConfig.value
@@ -127,6 +167,8 @@ export function useHA() {
       await invoke('set_window_hidden', { hidden })
       if (!hidden) {
         fetchHaStates()
+        const applianceEntities = configuredSectionEntities()
+        if (applianceEntities.length > 0) fetchHaEntityStates(applianceEntities)
         const initial = await invoke<InverterState>('get_state')
         if (initial) {
           state.value = initial
@@ -176,8 +218,6 @@ export function useHA() {
 
     // Fetch button/switch states so UI shows correct on/off at startup
     const buttonEntityIds = [
-      'switch.shutoff_valve',
-      'switch.pump_switch',
       'input_boolean.only_charging',
       'input_boolean.no_feed',
       'input_boolean.house_support',
@@ -187,6 +227,12 @@ export function useHA() {
       'input_boolean.minimize_charging',
     ]
     await fetchHaEntityStates(buttonEntityIds)
+
+    // Fetch dashboard section entities (washer/dryer/dishwasher/water/EV/clamps) immediately
+    const applianceEntities = configuredSectionEntities()
+    if (applianceEntities.length > 0) {
+      await fetchHaEntityStates(applianceEntities)
+    }
 
     // Check HA connection status via HTTP
     await checkHaConnection()
@@ -201,15 +247,23 @@ export function useHA() {
     // Store interval for cleanup
     ;(globalThis as unknown as Record<string, unknown>).__haConnInterval = connInterval
 
+    // Poll appliance entities so their state stays fresh even if WS events are missed
+    const appliancePoll = setInterval(() => {
+      const entities = configuredSectionEntities()
+      if (haEnabled.value && entities.length > 0) {
+        fetchHaEntityStates(entities)
+      }
+    }, 30000)
+    ;(globalThis as unknown as Record<string, unknown>).__haAppliancePoll = appliancePoll
+
     // Watch for config/state changes to fetch dynamic entity IDs (home buttons, header toggles)
     watch(
       [appConfig, () => state.value.ui_config],
       () => {
         if (!haEnabled.value) return
         const ids = new Set<string>()
-        // Water/pump
-        ids.add('switch.shutoff_valve')
-        ids.add('switch.pump_switch')
+        // Dashboard section entities (washer/dryer/dishwasher/water/EV/clamps)
+        for (const entity of configuredSectionEntities()) ids.add(entity)
         // Header toggles from config or ui_config
         const toggles =
           appConfig.value?.header_toggles_config || state.value.ui_config?.header_toggles || []
@@ -232,70 +286,207 @@ export function useHA() {
     )
   }
 
-  const waterValveEntity = computed(() => 'switch.shutoff_valve')
+  const haValveSwitchEntity = computed(() => (appConfig.value?.ha_valve_switch_entity || '').trim())
 
-  const pumpSwitchEntity = computed(() => 'switch.pump_switch')
+  const haPumpSwitchEntity = computed(() => (appConfig.value?.ha_pump_switch_entity || '').trim())
+
+  const haWaterLevelEntity = computed(() => (appConfig.value?.ha_water_level_entity || '').trim())
+
+  const waterValveEntity = haValveSwitchEntity
+
+  const pumpSwitchEntity = haPumpSwitchEntity
+
+  function entityStateIsOn(entity: string): boolean | null {
+    if (!entity) return null
+    const stateVal = haEntityStates.value[entity]
+    if (stateVal === undefined || stateVal === null) return null
+    const lower = String(stateVal).trim().toLowerCase()
+    if (!lower || lower === 'unavailable' || lower === 'unknown') return null
+    return lower === 'on' || lower === 'running'
+  }
 
   const waterValveState = computed(() => {
-    if (haEnabled.value) {
-      const haVal = haEntityStates.value[waterValveEntity.value]
-      if (haVal !== undefined) return haVal === 'on'
-    }
-    return coerceBool(state.value.water_valve)
+    if (!haEnabled.value) return null
+    return entityStateIsOn(haValveSwitchEntity.value)
   })
 
   const pumpSwitchState = computed(() => {
-    if (haEnabled.value) {
-      const haVal = haEntityStates.value[pumpSwitchEntity.value]
-      if (haVal !== undefined) return haVal === 'on'
-    }
-    return coerceBool(state.value.pump_switch)
+    if (!haEnabled.value) return null
+    return entityStateIsOn(haPumpSwitchEntity.value)
   })
 
-  const dishwasherRunning = computed(() => {
-    if (haEnabled.value) {
-      const haVal =
-        haEntityStates.value['binary_sensor.dishwasher_running'] ??
-        haEntityStates.value['sensor.dishwasher_status'] ??
-        haEntityStates.value['switch.dishwasher']
-      if (haVal !== undefined) return haVal === 'on' || haVal === 'running'
-    }
-    const power = state.value.loads?.dishwasher
-    return power !== undefined && (power as number) > 10
+  const waterLevel = computed(() => {
+    if (!haEnabled.value) return null
+    const entity = haWaterLevelEntity.value
+    if (!entity) return null
+    const n = parseNumberState(entity)
+    return n
   })
 
-  const washerRunning = computed(() => {
-    if (haEnabled.value) {
-      // Check binary_sensor or switch for running state
-      const runVal =
-        haEntityStates.value['binary_sensor.washer_running'] ??
-        haEntityStates.value['switch.washer']
-      if (runVal !== undefined) return runVal === 'on'
-      // Fallback: check remaining time sensor (time > 0 means running)
-      const timeVal = haEntityStates.value['sensor.washer_remaining_time']
-      if (timeVal !== undefined) {
-        const time = Number.parseFloat(timeVal)
-        return !Number.isNaN(time) && time > 0
+  const waterSectionVisible = computed(() => {
+    if (!haEnabled.value) return false
+    return !!(haPumpSwitchEntity.value || haValveSwitchEntity.value || haWaterLevelEntity.value)
+  })
+
+  const haEvSocEntity = computed(() => (appConfig.value?.ha_ev_soc_entity || '').trim())
+
+  const haEvChargingEntity = computed(() => (appConfig.value?.ha_ev_charging_entity || '').trim())
+
+  const haEvClampEntity = computed(() => (appConfig.value?.ha_ev_clamp_entity || '').trim())
+
+  const evSoc = computed(() => {
+    if (!haEnabled.value) return null
+    const entity = haEvSocEntity.value
+    if (!entity) return null
+    const n = parseNumberState(entity)
+    if (n === null) return null
+    return Math.max(0, Math.min(100, n))
+  })
+
+  /** EV car charging power in watts (HA power sensors report W) */
+  const evChargingWatts = computed(() => {
+    if (!haEnabled.value) return null
+    const entity = haEvChargingEntity.value
+    if (!entity) return null
+    return parseNumberState(entity)
+  })
+
+  const evClampWatts = computed(() => {
+    if (!haEnabled.value) return null
+    const entity = haEvClampEntity.value
+    if (!entity) return null
+    return parseNumberState(entity)
+  })
+
+  const evChargingKw = computed(() => {
+    const w = evChargingWatts.value
+    return w === null ? null : w / 1000
+  })
+
+  const evPowerWatts = computed(() => {
+    const w = evClampWatts.value
+    return w === null ? null : Math.abs(w)
+  })
+
+  const evPower = computed(() => {
+    const w = evClampWatts.value
+    if (w === null) return ''
+    return formatPower(Math.abs(w))
+  })
+
+  const evSectionVisible = computed(() => {
+    if (!haEnabled.value) return false
+    if (!(haEvSocEntity.value || haEvChargingEntity.value || haEvClampEntity.value)) return false
+    return evSoc.value !== null || evChargingWatts.value !== null || evClampWatts.value !== null
+  })
+
+  const MIN_CLAMP_WATTS = 10
+
+  function clampDisplayName(entity: string): string {
+    const attrs = haEntityAttributes.value[entity]
+    const friendly = attrs?.friendly_name
+    const raw =
+      typeof friendly === 'string' && friendly.trim()
+        ? friendly
+        : (entity.split('.').pop() || entity).replace(/_/g, ' ')
+    const cleaned = raw.replace(/ power 1s/gi, '').trim()
+    return cleaned || raw
+  }
+
+  /** Active loads from HA clamps: consumption (positive) + generation (negative) */
+  const haLoads = computed(() => {
+    if (!haEnabled.value) return []
+    const items: Array<{ name: string; value: number; isGeneration: boolean }> = []
+    for (const entity of appConfig.value?.ha_consumption_clamps || []) {
+      const e = (entity || '').trim()
+      if (!e) continue
+      const v = parseNumberState(e)
+      if (v !== null && Math.abs(v) > MIN_CLAMP_WATTS) {
+        items.push({ name: clampDisplayName(e), value: v, isGeneration: false })
       }
     }
-    const power = state.value.loads?.washer
-    return power !== undefined && (power as number) > 10
-  })
-
-  const dryerRunning = computed(() => {
-    if (haEnabled.value) {
-      const runVal =
-        haEntityStates.value['binary_sensor.dryer_running'] ?? haEntityStates.value['switch.dryer']
-      if (runVal !== undefined) return runVal === 'on'
-      const timeVal = haEntityStates.value['sensor.dryer_remaining_time']
-      if (timeVal !== undefined) {
-        const time = Number.parseFloat(timeVal)
-        return !Number.isNaN(time) && time > 0
+    for (const entity of appConfig.value?.ha_generation_clamps || []) {
+      const e = (entity || '').trim()
+      if (!e) continue
+      const v = parseNumberState(e)
+      if (v !== null && Math.abs(v) > MIN_CLAMP_WATTS) {
+        items.push({ name: clampDisplayName(e), value: -Math.abs(v), isGeneration: true })
       }
     }
-    const power = state.value.loads?.dryer
-    return power !== undefined && (power as number) > 10
+    items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    return items
   })
+
+  const dishwasherActive = computed(() => {
+    if (!haEnabled.value) return false
+    const entity = (appConfig.value?.ha_dishwasher_running_entity || '').trim()
+    if (!entity) return false
+    const stateVal = haEntityStates.value[entity]
+    if (stateVal === undefined || stateVal === null) return false
+    const lower = String(stateVal).trim().toLowerCase()
+    if (!lower || lower === 'unavailable' || lower === 'unknown') return false
+    return lower === 'on' || lower === 'running'
+  })
+
+  const dishwasherRemainingTime = computed(() => {
+    if (!haEnabled.value) return null
+    const entity = (appConfig.value?.ha_dishwasher_duration_entity || '').trim()
+    if (!entity) return null
+    const stateVal = haEntityStates.value[entity]
+    if (!stateVal) return null
+    const val = String(stateVal).trim()
+    const lower = val.toLowerCase()
+    if (
+      !lower ||
+      lower === 'unavailable' ||
+      lower === 'unknown' ||
+      lower === 'off' ||
+      lower === 'idle'
+    )
+      return null
+    return val
+  })
+
+  const haDryerEntity = computed(() => (appConfig.value?.ha_dryer_entity || '').trim())
+
+  const haWasherEntity = computed(() => (appConfig.value?.ha_washer_entity || '').trim())
+
+  function remainingTimeFromState(entity: string): string | null {
+    const stateVal = haEntityStates.value[entity]
+    if (!stateVal) return null
+    const val = String(stateVal).trim()
+    const lower = val.toLowerCase()
+    if (
+      !lower ||
+      lower === 'unavailable' ||
+      lower === 'unknown' ||
+      lower === 'off' ||
+      lower === 'idle'
+    )
+      return null
+    return val
+  }
+
+  function hasNonZeroTime(time: string | null): boolean {
+    if (time === null) return false
+    return ![...time.replace(/[^0-9]/g, '')].every((c) => c === '0')
+  }
+
+  const dryerRemainingTime = computed(() => {
+    if (!haEnabled.value) return null
+    if (!haDryerEntity.value) return null
+    return remainingTimeFromState(haDryerEntity.value)
+  })
+
+  const dryerActive = computed(() => hasNonZeroTime(dryerRemainingTime.value))
+
+  const washerRemainingTime = computed(() => {
+    if (!haEnabled.value) return null
+    if (!haWasherEntity.value) return null
+    return remainingTimeFromState(haWasherEntity.value)
+  })
+
+  const washerActive = computed(() => hasNonZeroTime(washerRemainingTime.value))
 
   const homeButtons = computed(() => {
     const cfg = appConfig.value
@@ -401,6 +592,10 @@ export function useHA() {
     if (typeof interval === 'number') {
       clearInterval(interval)
     }
+    const appliancePoll = (globalThis as unknown as Record<string, unknown>).__haAppliancePoll
+    if (typeof appliancePoll === 'number') {
+      clearInterval(appliancePoll)
+    }
   }
 
   return {
@@ -417,15 +612,27 @@ export function useHA() {
     pumpSwitchEntity,
     waterValveState,
     pumpSwitchState,
+    waterLevel,
+    waterSectionVisible,
+    evSoc,
+    evChargingKw,
+    evClampWatts,
+    evPower,
+    evPowerWatts,
+    evSectionVisible,
+    haLoads,
     haSensors,
     haNumbers,
     haCovers,
     haMediaPlayers,
     haScenes,
     haWeather,
-    dishwasherRunning,
-    washerRunning,
-    dryerRunning,
+    dishwasherActive,
+    dishwasherRemainingTime,
+    washerActive,
+    washerRemainingTime,
+    dryerActive,
+    dryerRemainingTime,
     coerceBool,
     initHa,
     sendHaOrMqtt,

@@ -210,9 +210,34 @@ pub struct HaApiClient {
 
 impl HaApiClient {
     pub async fn new(url: &str, port: Option<u16>, token: &str) -> Result<Self, String> {
-        let host = url.trim_end_matches('/');
+        let host = url.trim_end_matches('/').trim();
         let port = port.unwrap_or(8123);
-        let base_url = format!("{}:{}", host, port);
+
+        let (prefix, rest) = if let Some(stripped) = host.strip_prefix("https://") {
+            ("https://", stripped)
+        } else if let Some(stripped) = host.strip_prefix("http://") {
+            ("http://", stripped)
+        } else {
+            ("http://", host)
+        };
+        let host_part = rest.split('/').next().unwrap_or(rest);
+        let authority = if host_part.starts_with('[') {
+            let bracket_end = host_part.find(']');
+            let has_port = bracket_end.is_some_and(|i| {
+                host_part.len() > i + 1 && host_part.as_bytes().get(i + 1) == Some(&b':')
+            });
+            if has_port {
+                host_part.to_string()
+            } else {
+                format!("{}:{}", host_part, port)
+            }
+        } else if host_part.contains(':') {
+            host_part.to_string()
+        } else {
+            format!("{}:{}", host_part, port)
+        };
+
+        let base_url = format!("{}{}", prefix, authority);
 
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
