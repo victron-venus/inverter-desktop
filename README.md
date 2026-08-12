@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub stars](https://img.shields.io/github/stars/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/victron-venus/inverter-desktop/network/members)](https://github.com/victron-venus/inverter-desktop/network/members)
+[![GitHub forks](https://img.shields.io/github/forks/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/network/members)
 [![GitHub last commit](https://img.shields.io/github/last-commit/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/commits/main)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/victron-venus/inverter-desktop/graphs/commit-activity)
 [![CI](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml)
