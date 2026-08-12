@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import type { AppConfig } from '../config'
 import { logger } from '../logger'
@@ -21,6 +21,14 @@ export function useHAEntityManager() {
   const selectedDiscovery = ref<string[]>([])
   const discoveryLoading = ref(false)
   const discoveryTargetGroup = ref<'home' | 'toggle'>('home')
+  const discoverySearch = ref('')
+  const filteredDiscoveredEntities = computed(() => {
+    const q = discoverySearch.value.trim().toLowerCase()
+    if (!q) return discoveredEntities.value
+    return discoveredEntities.value.filter(
+      (e) => e.entity_id.toLowerCase().includes(q) || e.friendly_name.toLowerCase().includes(q)
+    )
+  })
   const dragOverIndex = ref<number | null>(null)
   const dragTarget = ref<'home' | 'toggle' | null>(null)
 
@@ -45,6 +53,7 @@ export function useHAEntityManager() {
       discoveredEntities.value = entities
       selectedDiscovery.value = []
       discoveryTargetGroup.value = 'home'
+      discoverySearch.value = ''
       discoveryDialog.value = true
     } finally {
       discoveryLoading.value = false
@@ -145,6 +154,8 @@ export function useHAEntityManager() {
     selectedDiscovery,
     discoveryLoading,
     discoveryTargetGroup,
+    discoverySearch,
+    filteredDiscoveredEntities,
     dragOverIndex,
     dragTarget,
     loadFromConfig,

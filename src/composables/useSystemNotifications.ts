@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
 import { type Ref, ref, watch } from 'vue'
-import { state } from './useInverterState'
 
 export async function notify(title: string, body: string) {
   try {
@@ -10,9 +9,9 @@ export async function notify(title: string, body: string) {
   }
 }
 
-const prevEvChargingKw = ref<number | undefined>(undefined)
-const prevWaterValve = ref<boolean | undefined>(undefined)
-const prevPumpSwitch = ref<boolean | undefined>(undefined)
+const prevEvChargingKw = ref<number | null>(null)
+const prevWaterValve = ref<boolean | null>(null)
+const prevPumpSwitch = ref<boolean | null>(null)
 const prevHomeStates = ref<Record<string, string>>({})
 const lastNotifyTime = new Map<string, number>()
 const NOTIFY_COOLDOWN_MS = 60_000
@@ -32,47 +31,44 @@ function getEntityName(entityId: string, attrs?: Record<string, unknown>): strin
 
 export function initSystemNotifications(
   haEntityStates: Ref<Record<string, string>>,
-  haEntityAttributes: Ref<Record<string, Record<string, unknown>>>
+  haEntityAttributes: Ref<Record<string, Record<string, unknown>>>,
+  haEvChargingKw: Ref<number | null>,
+  haWaterValve: Ref<boolean | null>,
+  haPumpSwitch: Ref<boolean | null>
 ) {
   if (initialized) return
   initialized = true
 
-  watch(
-    () => state.value.ev_charging_kw,
-    (val) => {
-      const prev = prevEvChargingKw.value
-      if (prev !== undefined && val !== undefined) {
-        if (prev === 0 && val > 0) {
-          notify('EV Charging Started', `Charging at ${val.toFixed(1)} kW`)
-        } else if (prev > 0 && val === 0) {
-          notify('EV Charging Stopped', 'Charging has ended')
-        }
+  watch(haEvChargingKw, (val) => {
+    if (val === null || val === undefined) return
+    const prev = prevEvChargingKw.value
+    if (prev !== null && prev !== undefined) {
+      if (prev === 0 && val > 0) {
+        notify('EV Charging Started', `Charging at ${val.toFixed(1)} kW`)
+      } else if (prev > 0 && val === 0) {
+        notify('EV Charging Stopped', 'Charging has ended')
       }
-      prevEvChargingKw.value = val
     }
-  )
+    prevEvChargingKw.value = val
+  })
 
-  watch(
-    () => state.value.water_valve,
-    (val) => {
-      const prev = prevWaterValve.value
-      if (prev !== undefined && val !== prev) {
-        notify('Water Valve', val ? 'Valve OPENED' : 'Valve CLOSED')
-      }
-      prevWaterValve.value = val
+  watch(haWaterValve, (val) => {
+    if (val === null || val === undefined) return
+    const prev = prevWaterValve.value
+    if (prev !== null && prev !== undefined && val !== prev) {
+      notify('Water Valve', val ? 'Valve OPENED' : 'Valve CLOSED')
     }
-  )
+    prevWaterValve.value = val
+  })
 
-  watch(
-    () => state.value.pump_switch,
-    (val) => {
-      const prev = prevPumpSwitch.value
-      if (prev !== undefined && val !== prev) {
-        notify('Water Pump', val ? 'Pump ON' : 'Pump OFF')
-      }
-      prevPumpSwitch.value = val
+  watch(haPumpSwitch, (val) => {
+    if (val === null || val === undefined) return
+    const prev = prevPumpSwitch.value
+    if (prev !== null && prev !== undefined && val !== prev) {
+      notify('Water Pump', val ? 'Pump ON' : 'Pump OFF')
     }
-  )
+    prevPumpSwitch.value = val
+  })
 
   watch(
     haEntityStates,

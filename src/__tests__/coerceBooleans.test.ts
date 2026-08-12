@@ -10,13 +10,7 @@ function coerceBooleans(newState: InverterState) {
       }
     }
   }
-  const BOOL_FIELDS: Array<keyof InverterState> = [
-    'pump_switch',
-    'water_valve',
-    'washer_power',
-    'dryer_power',
-    'dry_run',
-  ]
+  const BOOL_FIELDS: Array<keyof InverterState> = ['dry_run']
   for (const field of BOOL_FIELDS) {
     const val = newState[field]
     if (typeof val === 'string') {
@@ -38,29 +32,19 @@ describe('coerceBooleans (inline, matches useConnection.ts logic)', () => {
 
   it('converts string boolean fields', () => {
     const state: Record<string, unknown> = {
-      pump_switch: 'true',
-      water_valve: 'false',
-      washer_power: '1',
-      dryer_power: '0',
       dry_run: 'true',
     }
     coerceBooleans(state as InverterState)
-    expect(state.pump_switch).toBe(true)
-    expect(state.water_valve).toBe(false)
-    expect(state.washer_power).toBe(true)
-    expect(state.dryer_power).toBe(false)
     expect(state.dry_run).toBe(true)
   })
 
   it('leaves actual booleans unchanged', () => {
     const state: InverterState = {
-      pump_switch: true,
-      water_valve: false,
+      dry_run: true,
       booleans: { x: true, y: false },
     }
     coerceBooleans(state)
-    expect(state.pump_switch).toBe(true)
-    expect(state.water_valve).toBe(false)
+    expect(state.dry_run).toBe(true)
     expect(state.booleans!.x).toBe(true)
     expect(state.booleans!.y).toBe(false)
   })
