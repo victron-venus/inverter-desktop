@@ -1092,7 +1092,9 @@
             </div>
             <template v-else>
               <div class="p-1 sticky top-0 bg-[#121212] dark:bg-[#121212]">
+                <label for="discovery_search" class="sr-only">Search entities</label>
                 <input
+                  id="discovery_search"
                   v-model="discoverySearch"
                   type="text"
                   placeholder="Search entities..."

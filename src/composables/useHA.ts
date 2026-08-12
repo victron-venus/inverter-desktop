@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
 import { logger } from '../logger'
+import type { AppConfig } from '../config'
 import type {
   HaCoverDisplay,
   HaFilteredData,
@@ -16,6 +17,38 @@ import { formatPower } from '../utils'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
+}
+
+function configuredSectionEntities(appConfig: Ref<AppConfig | null>): string[] {
+  const cfg = appConfig.value
+  const ids: string[] = []
+  const singles = [
+    cfg?.ha_dryer_entity,
+    cfg?.ha_washer_entity,
+    cfg?.ha_dishwasher_running_entity,
+    cfg?.ha_dishwasher_duration_entity,
+    cfg?.ha_pump_switch_entity,
+    cfg?.ha_valve_switch_entity,
+    cfg?.ha_water_level_entity,
+    cfg?.ha_ev_soc_entity,
+    cfg?.ha_ev_charging_entity,
+    cfg?.ha_ev_clamp_entity,
+  ]
+  const all = [
+    ...singles,
+    ...(cfg?.ha_consumption_clamps || []),
+    ...(cfg?.ha_generation_clamps || []),
+  ]
+  for (const v of all) {
+    const t = (v || '').trim()
+    if (t && !ids.includes(t)) ids.push(t)
+  }
+  return ids
+}
+
+function hasNonZeroTime(time: string | null): boolean {
+  if (time === null) return false
+  return ![...time.replace(/\D/g, '')].every((c) => c === '0')
 }
 
 export function useHA() {
@@ -51,33 +84,6 @@ export function useHA() {
   })
 
   /** Entity IDs tracked for dashboard sections (appliances, water, EV, loads clamps) */
-  function configuredSectionEntities(): string[] {
-    const cfg = appConfig.value
-    const ids: string[] = []
-    const singles = [
-      cfg?.ha_dryer_entity,
-      cfg?.ha_washer_entity,
-      cfg?.ha_dishwasher_running_entity,
-      cfg?.ha_dishwasher_duration_entity,
-      cfg?.ha_pump_switch_entity,
-      cfg?.ha_valve_switch_entity,
-      cfg?.ha_water_level_entity,
-      cfg?.ha_ev_soc_entity,
-      cfg?.ha_ev_charging_entity,
-      cfg?.ha_ev_clamp_entity,
-    ]
-    const all = [
-      ...singles,
-      ...(cfg?.ha_consumption_clamps || []),
-      ...(cfg?.ha_generation_clamps || []),
-    ]
-    for (const v of all) {
-      const t = (v || '').trim()
-      if (t && !ids.includes(t)) ids.push(t)
-    }
-    return ids
-  }
-
   async function checkHaConnection() {
     const cfg = appConfig.value
     if (!cfg?.ha_url || !cfg?.ha_longlived_token) {
@@ -167,7 +173,7 @@ export function useHA() {
       await invoke('set_window_hidden', { hidden })
       if (!hidden) {
         fetchHaStates()
-        const applianceEntities = configuredSectionEntities()
+        const applianceEntities = configuredSectionEntities(appConfig)
         if (applianceEntities.length > 0) fetchHaEntityStates(applianceEntities)
         const initial = await invoke<InverterState>('get_state')
         if (initial) {
@@ -229,7 +235,7 @@ export function useHA() {
     await fetchHaEntityStates(buttonEntityIds)
 
     // Fetch dashboard section entities (washer/dryer/dishwasher/water/EV/clamps) immediately
-    const applianceEntities = configuredSectionEntities()
+    const applianceEntities = configuredSectionEntities(appConfig)
     if (applianceEntities.length > 0) {
       await fetchHaEntityStates(applianceEntities)
     }
@@ -249,7 +255,7 @@ export function useHA() {
 
     // Poll appliance entities so their state stays fresh even if WS events are missed
     const appliancePoll = setInterval(() => {
-      const entities = configuredSectionEntities()
+      const entities = configuredSectionEntities(appConfig)
       if (haEnabled.value && entities.length > 0) {
         fetchHaEntityStates(entities)
       }
@@ -263,7 +269,7 @@ export function useHA() {
         if (!haEnabled.value) return
         const ids = new Set<string>()
         // Dashboard section entities (washer/dryer/dishwasher/water/EV/clamps)
-        for (const entity of configuredSectionEntities()) ids.add(entity)
+        for (const entity of configuredSectionEntities(appConfig)) ids.add(entity)
         // Header toggles from config or ui_config
         const toggles =
           appConfig.value?.header_toggles_config || state.value.ui_config?.header_toggles || []
@@ -465,11 +471,6 @@ export function useHA() {
     )
       return null
     return val
-  }
-
-  function hasNonZeroTime(time: string | null): boolean {
-    if (time === null) return false
-    return ![...time.replace(/[^0-9]/g, '')].every((c) => c === '0')
   }
 
   const dryerRemainingTime = computed(() => {
