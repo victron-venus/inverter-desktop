@@ -222,6 +222,18 @@ struct FullConfig {
     ha_url: Option<String>,
     ha_port: Option<u16>,
     ha_use_direct_api: bool,
+    ha_dryer_entity: Option<String>,
+    ha_washer_entity: Option<String>,
+    ha_dishwasher_running_entity: Option<String>,
+    ha_dishwasher_duration_entity: Option<String>,
+    ha_pump_switch_entity: Option<String>,
+    ha_valve_switch_entity: Option<String>,
+    ha_water_level_entity: Option<String>,
+    ha_ev_soc_entity: Option<String>,
+    ha_ev_charging_entity: Option<String>,
+    ha_ev_clamp_entity: Option<String>,
+    ha_consumption_clamps: Option<Vec<String>>,
+    ha_generation_clamps: Option<Vec<String>>,
     color_scheme: Option<String>,
     // unified entities config
     ha_entities: Option<Vec<HaEntityConfig>>,
@@ -229,6 +241,7 @@ struct FullConfig {
     portal_id: Option<String>,
     camera_topic: Option<String>,
     camera_enabled: bool,
+    show_advanced_settings: Option<bool>,
     show_ha_sensors: Option<bool>,
     show_ha_numbers: Option<bool>,
     show_ha_covers: Option<bool>,
@@ -259,12 +272,25 @@ impl Default for FullConfig {
             ha_url: None,
             ha_port: None,
             ha_use_direct_api: false,
+            ha_dryer_entity: None,
+            ha_washer_entity: None,
+            ha_dishwasher_running_entity: None,
+            ha_dishwasher_duration_entity: None,
+            ha_pump_switch_entity: None,
+            ha_valve_switch_entity: None,
+            ha_water_level_entity: None,
+            ha_ev_soc_entity: None,
+            ha_ev_charging_entity: None,
+            ha_ev_clamp_entity: None,
+            ha_consumption_clamps: None,
+            ha_generation_clamps: None,
             color_scheme: Some("dark".to_string()),
             ha_entities: None,
             header_toggles_config: None,
             portal_id: None,
             camera_topic: Some("frigate/+/events".to_string()),
             camera_enabled: false,
+            show_advanced_settings: Some(false),
             show_ha_sensors: Some(true),
             show_ha_numbers: Some(true),
             show_ha_covers: Some(true),
@@ -625,6 +651,56 @@ async fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), St
 }
 
 #[tauri::command]
+async fn backup_config(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let file = app
+        .dialog()
+        .file()
+        .set_file_name("config-backup.json")
+        .add_filter("JSON", &["json"])
+        .blocking_save_file();
+
+    let path = match file {
+        Some(FilePath::Path(p)) => p,
+        // User cancelled the dialog
+        _ => return Ok(false),
+    };
+
+    let config = load_config(&app)?;
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    std::fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
+    info!("Config backed up to {}", path.display());
+    Ok(true)
+}
+
+#[tauri::command]
+async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let file = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file();
+
+    let path = match file {
+        Some(FilePath::Path(p)) => p,
+        // User cancelled the dialog
+        _ => return Ok(false),
+    };
+
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read backup file: {}", e))?;
+    let config: FullConfig =
+        serde_json::from_str(&content).map_err(|e| format!("Invalid backup file: {}", e))?;
+    save_config_encrypted(&app, &config)?;
+    info!("Config restored from {}", path.display());
+    Ok(true)
+}
+
+#[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn connect_mqtt(
     host: String,
@@ -974,6 +1050,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(mqtt_state)
         .manage(ha_mqtt_state)
@@ -990,6 +1067,8 @@ pub fn run() {
             connect_ha_mqtt,
             get_config,
             save_config,
+            backup_config,
+            restore_config,
             test_ha_connection,
             get_ha_appliance_states,
             get_ha_entity_states,
@@ -1151,7 +1230,6 @@ pub fn run() {
                         let mut interval = tokio::time::interval(Duration::from_millis(1500));
                         // Track notification state to avoid spam
                         let mut low_battery_notified = false;
-                        let mut grid_lost_notified = false;
                         loop {
                             interval.tick().await;
                             let state = {
@@ -1194,24 +1272,6 @@ pub fn run() {
                                     }
                                 } else {
                                     low_battery_notified = false;
-                                }
-
-                                // Grid connection lost (no grid power reading for extended period)
-                                // gt = 0 means no grid import/export - could be disconnection
-                                if grid_reading == Some(0.0) && solar > 0.1 && batt < 95.0 {
-                                    // Only alert if solar is producing but grid shows 0 and battery not full
-                                    // (indicates potential grid disconnection while consuming)
-                                    if !grid_lost_notified {
-                                        let _ = app_for_tray
-                                            .notification()
-                                            .builder()
-                                            .title("Inverter Desktop - Grid Disconnected")
-                                            .body("Grid connection appears to be lost. Check your setup.")
-                                            .show();
-                                        grid_lost_notified = true;
-                                    }
-                                } else {
-                                    grid_lost_notified = false;
                                 }
                             }
                         }

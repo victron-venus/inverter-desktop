@@ -24,11 +24,24 @@ export interface AppConfig {
     domain: string
     enabled: boolean
   }>
+  ha_dryer_entity?: string
+  ha_washer_entity?: string
+  ha_dishwasher_running_entity?: string
+  ha_dishwasher_duration_entity?: string
+  ha_pump_switch_entity?: string
+  ha_valve_switch_entity?: string
+  ha_water_level_entity?: string
+  ha_ev_soc_entity?: string
+  ha_ev_charging_entity?: string
+  ha_ev_clamp_entity?: string
+  ha_consumption_clamps?: string[]
+  ha_generation_clamps?: string[]
   header_toggles_config?: Array<{ id: string; label: string; entity: string }>
   color_scheme?: string | null
   portal_id?: string | null
   camera_topic?: string | null
   camera_enabled?: boolean
+  show_advanced_settings?: boolean
 
   show_batteries?: boolean
   show_solar_production?: boolean
@@ -73,6 +86,7 @@ const SHOW_DEFAULTS = {
   show_ha_scenes: true,
   show_ha_weather: true,
   show_console: true,
+  show_advanced_settings: false,
   auto_start: false,
   auth_enabled: false,
   auth_username: null,

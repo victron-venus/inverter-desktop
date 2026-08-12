@@ -1,22 +1,12 @@
 <template>
   <div class="flex flex-col gap-1 h-full">
     <!-- EV Section -->
-    <div
-      v-if="
-        showEv !== false &&
-        (features?.ev !== false ||
-          evPowerWatts > 0 ||
-          evChargingKw > 0 ||
-          evLoadPower > 0 ||
-          (carSoc && carSoc > 0))
-      "
-      class="classic-card"
-    >
+    <div v-if="showEv !== false && evSectionVisible" class="classic-card">
       <div class="classic-header flex items-center gap-1.5">
         <Car :size="10" /> {{ $t('sections.ev') }}
       </div>
-      <div class="p-1 flex justify-between items-center gap-2">
-        <div v-if="evChargingKw > 0">
+      <div class="p-1 flex justify-between items-center gap-2 px-2">
+        <div v-if="evChargingKw !== null">
           <div class="text-xl font-bold text-solar leading-none">
             {{ evChargingKw.toFixed(1) }}kW
           </div>
@@ -24,16 +14,14 @@
             {{ $t('sections.charging') }}
           </div>
         </div>
-        <div class="text-center" v-if="evPowerWatts > 0">
+        <div class="text-center" v-if="evPowerWatts !== null">
           <div class="text-xl font-bold text-slate-500 leading-none">{{ evPower }}</div>
           <div class="text-[10px] text-slate-500 font-bold tracking-tighter">
             {{ $t('sections.vue') }}
           </div>
         </div>
-        <div class="text-right">
-          <div class="text-2xl font-bold text-accent leading-none">
-            {{ Math.floor(carSoc || 0) }}%
-          </div>
+        <div class="text-right" v-if="evSoc !== null && evSoc > 0">
+          <div class="text-xl font-bold text-accent leading-none">{{ Math.floor(evSoc) }}%</div>
           <div class="text-[10px] text-slate-500 font-bold text-center tracking-tighter">
             {{ $t('sections.soc') }}
           </div>
@@ -42,27 +30,33 @@
     </div>
 
     <!-- Water Section -->
-    <div v-if="features?.water !== false" class="classic-card">
+    <div v-if="waterVisible" class="classic-card">
       <div class="classic-header flex items-center gap-1.5">
         <Droplets :size="10" /> {{ $t('sections.water') }}
       </div>
       <div class="p-1 flex justify-between items-center gap-2 px-2">
-        <div class="text-xl font-bold" :class="waterValve ? 'text-red-500' : 'text-green-500'">
-          {{ waterLevel || 0 }} cm
+        <div
+          v-if="waterLevel !== null"
+          class="text-xl font-bold"
+          :class="waterValve === true ? 'text-red-500' : 'text-green-500'"
+        >
+          {{ Math.round(waterLevel) }} cm
         </div>
         <div class="flex gap-1">
           <button
+            v-if="pumpSwitchEntity"
             type="button"
             class="classic-btn"
-            :class="{ 'classic-btn-on': pumpSwitch }"
+            :class="{ 'classic-btn-on': pumpSwitch === true }"
             @click="$emit('send', 'toggle', { entity: pumpSwitchEntity })"
           >
             {{ $t('sections.pump') }}
           </button>
           <button
+            v-if="waterValveEntity"
             type="button"
             class="classic-btn"
-            :class="{ 'classic-btn-on': waterValve }"
+            :class="{ 'classic-btn-on': waterValve === true }"
             @click="$emit('send', 'toggle', { entity: waterValveEntity })"
           >
             {{ $t('sections.valve') }}
@@ -84,7 +78,7 @@
           type="button"
           v-for="btn in homeButtons"
           :key="btn.id"
-          class="classic-btn !flex-1 !min-w-[50px] !normal-case flex flex-col items-center gap-0.5"
+          class="classic-btn classic-btn-3d !flex-1 !min-w-[50px] !normal-case flex flex-col items-center gap-0.5"
           :class="{ 'classic-btn-on': buttonStates[btn.id] === 'on' }"
           @click="$emit('send', 'toggle', { entity: btn.entity })"
         >
@@ -289,77 +283,67 @@
 
     <!-- Appliances -->
     <div
-      v-if="showDishwasher !== false || showWasher !== false || showDryer !== false"
+      v-if="
+        (showDishwasher !== false && dishwasherActive) ||
+        (showWasher !== false && washerActive) ||
+        (showDryer !== false && dryerActive)
+      "
       class="flex flex-col gap-0.5"
     >
       <div
-        v-if="showDishwasher !== false"
+        v-if="showDishwasher !== false && dishwasherActive"
         class="classic-card px-2 py-0.5 flex justify-between items-center"
       >
         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
           $t('sections.dishwasher')
         }}</span>
         <div class="flex items-center gap-1.5">
+          <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+            $t('sections.running')
+          }}</span>
           <span
-            class="text-[10px] font-bold uppercase tracking-tighter"
-            :class="dishwasherRunning ? 'text-green-600' : 'text-slate-400'"
-            >{{ dishwasherRunning ? $t('sections.running') : 'Idle' }}</span
-          >
-          <span
-            v-if="dishwasherDuration"
+            v-if="dishwasherRemainingTime"
             class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-            >{{ formatDuration(dishwasherDuration) }}</span
+            >{{ dishwasherRemainingTime }}</span
           >
         </div>
       </div>
 
       <div
-        v-if="showWasher !== false"
+        v-if="showWasher !== false && washerActive"
         class="classic-card px-2 py-0.5 flex justify-between items-center"
       >
         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
           $t('sections.washer')
         }}</span>
         <div class="flex items-center gap-1.5">
+          <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+            $t('sections.running')
+          }}</span>
           <span
-            class="text-[10px] font-bold uppercase tracking-tighter"
-            :class="washerRunning ? 'text-green-600' : 'text-slate-400'"
-            >{{ washerRunning ? $t('sections.running') : 'Idle' }}</span
-          >
-          <span
-            v-if="washerTime"
+            v-if="washerRemainingTime"
             class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-            >{{ formatDuration(washerTime) }}</span
+            >{{ washerRemainingTime }}</span
           >
-          <div
-            v-if="washerPower !== undefined"
-            class="w-1.5 h-1.5 rounded-full"
-            :class="washerPower ? 'bg-green-500' : 'bg-slate-200'"
-          ></div>
         </div>
       </div>
 
       <div
-        v-if="showDryer !== false"
+        v-if="showDryer !== false && dryerActive"
         class="classic-card px-2 py-0.5 flex justify-between items-center"
       >
         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
           $t('sections.dryer')
         }}</span>
         <div class="flex items-center gap-1.5">
-          <span
-            class="text-[10px] font-bold uppercase tracking-tighter"
-            :class="dryerRunning ? 'text-green-600' : 'text-slate-400'"
-            >{{ dryerRunning ? $t('sections.running') : 'Idle' }}</span
-          >
-          <span v-if="dryerTime" class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
-            formatDuration(dryerTime)
+          <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+            $t('sections.running')
           }}</span>
-          <div
-            v-if="dryerPower !== undefined"
-            class="w-1.5 h-1.5 rounded-full"
-            :class="dryerPower ? 'bg-green-500' : 'bg-slate-200'"
-          ></div>
+          <span
+            v-if="dryerRemainingTime"
+            class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
+            >{{ dryerRemainingTime }}</span
+          >
         </div>
       </div>
     </div>
@@ -406,7 +390,6 @@ import {
   PlugZap,
   type LucideIcon,
 } from '@lucide/vue'
-import { formatDuration } from '../utils'
 import type {
   HaCoverDisplay,
   HaMediaPlayerDisplay,
@@ -418,25 +401,24 @@ import type {
 
 defineProps<{
   features?: Record<string, boolean>
-  evCharging: string
-  evPower: string
-  evPowerWatts: number
-  evChargingKw: number
-  evLoadPower: number
-  carSoc?: number
-  waterLevel?: number
-  waterValve?: boolean
-  pumpSwitch?: boolean
+  showEv?: boolean
+  evSectionVisible?: boolean
+  evSoc?: number | null
+  evChargingKw?: number | null
+  evPower?: string
+  evPowerWatts?: number | null
+  waterVisible?: boolean
+  waterValve?: boolean | null
+  pumpSwitch?: boolean | null
+  waterLevel?: number | null
   pumpSwitchEntity: string
   waterValveEntity: string
-  dishwasherRunning?: boolean
-  dishwasherDuration?: number
-  washerRunning?: boolean
-  washerTime?: number
-  washerPower?: boolean
-  dryerRunning?: boolean
-  dryerTime?: number
-  dryerPower?: boolean
+  washerActive?: boolean
+  washerRemainingTime?: string
+  dryerActive?: boolean
+  dryerRemainingTime?: string
+  dishwasherActive?: boolean
+  dishwasherRemainingTime?: string
   homeButtons: Array<{ id: string; label: string; entity: string }>
   buttonStates: Record<string, string>
   haSensors: HaSensorDisplay[]

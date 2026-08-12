@@ -42,32 +42,31 @@
           :inverterState="state.inverter_state"
         />
 
-        <div class="grid grid-cols-1 md:grid-cols-12 gap-1">
-          <div class="md:col-span-8 h-[280px]">
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-1 md:auto-rows-fr">
+          <div class="md:col-span-8 h-[280px] md:h-auto md:min-h-[280px]">
             <ChartPanel :chartOption="chartOption" />
           </div>
           <div class="md:col-span-4">
             <SidePanel
               :features="state.features"
-              :evCharging="evCharging"
+              :showEv="appConfig?.show_ev !== false"
+              :evSectionVisible="evSectionVisible"
+              :evSoc="evSoc"
+              :evChargingKw="evChargingKw"
               :evPower="evPower"
               :evPowerWatts="evPowerWatts"
-              :evChargingKw="evChargingKw"
-              :evLoadPower="evLoadPower"
-              :carSoc="state.car_soc"
-              :waterLevel="state.water_level"
+              :waterVisible="waterSectionVisible"
               :waterValve="waterValveState"
               :pumpSwitch="pumpSwitchState"
               :pumpSwitchEntity="pumpSwitchEntity"
               :waterValveEntity="waterValveEntity"
-              :dishwasherRunning="dishwasherRunning"
-              :dishwasherDuration="state.dishwasher_duration"
-              :washerRunning="washerRunning"
-              :washerTime="state.washer_time"
-              :washerPower="state.washer_power"
-              :dryerRunning="dryerRunning"
-              :dryerTime="state.dryer_time"
-              :dryerPower="state.dryer_power"
+              :waterLevel="waterLevel"
+              :washerActive="washerActive"
+              :washerRemainingTime="washerRemainingTime"
+              :dryerActive="dryerActive"
+              :dryerRemainingTime="dryerRemainingTime"
+              :dishwasherActive="dishwasherActive"
+              :dishwasherRemainingTime="dishwasherRemainingTime"
               :homeButtons="homeButtons"
               :buttonStates="buttonStates"
               :haSensors="haSensors"
@@ -76,7 +75,6 @@
               :haMediaPlayers="haMediaPlayers"
               :haScenes="haScenes"
               :haWeather="haWeather"
-              :showEv="appConfig?.show_ev !== false"
               :showWasher="appConfig?.show_washer !== false"
               :showDryer="appConfig?.show_dryer !== false"
               :showDishwasher="appConfig?.show_dishwasher !== false"
@@ -99,7 +97,7 @@
           :showSolar="appConfig?.show_solar_production !== false"
         />
 
-        <LoadsTable v-if="appConfig?.show_active_loads !== false" :sortedLoads="sortedLoads" />
+        <LoadsTable v-if="appConfig?.show_active_loads !== false" :loads="haLoads" />
       </div>
 
       <!-- Bottom Status Bar: Classic dot layout -->
@@ -180,7 +178,6 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
-import { formatPower } from './utils'
 import { logger } from './logger'
 import { getAppConfig } from './config'
 import { listen } from '@tauri-apps/api/event'
@@ -226,15 +223,26 @@ const {
   pumpSwitchEntity,
   waterValveState,
   pumpSwitchState,
+  waterLevel,
+  waterSectionVisible,
+  evSoc,
+  evChargingKw,
+  evPower,
+  evPowerWatts,
+  evSectionVisible,
+  haLoads,
   haSensors,
   haNumbers,
   haCovers,
   haMediaPlayers,
   haScenes,
   haWeather,
-  dishwasherRunning,
-  washerRunning,
-  dryerRunning,
+  washerActive,
+  washerRemainingTime,
+  dryerActive,
+  dryerRemainingTime,
+  dishwasherActive,
+  dishwasherRemainingTime,
   coerceBool,
   initHa,
   sendHaOrMqtt,
@@ -367,34 +375,6 @@ const essText = computed(() => {
 const mpptTotal = computed(() => state.value.mppt_total || 0)
 const tasmotaTotal = computed(() => state.value.tasmota_total || 0)
 
-const evCharging = computed(() => {
-  const kw = parseFloat(String(state.value.ev_charging_kw)) || 0
-  return kw > 0 ? kw.toFixed(1) + 'kW' : '0'
-})
-
-const evPower = computed(() => formatPower(state.value.ev_power))
-const evPowerWatts = computed(() => Math.abs(state.value.ev_power || 0))
-const evChargingKw = computed(() => Number.parseFloat(String(state.value.ev_charging_kw)) || 0)
-const evLoadPower = computed(() => {
-  const loads = state.value.loads
-  if (!loads) return 0
-  for (const [key, val] of Object.entries(loads)) {
-    if (key.toLowerCase().includes('ev') || key.toLowerCase().includes('charger')) return val
-  }
-  return 0
-})
-
-const sortedLoads = computed(() => {
-  const loads = state.value.loads || {}
-  const uiConfig = state.value.ui_config || {}
-  const loadsConfig = uiConfig.loads || {}
-  const hiddenLoads = loadsConfig.hidden || ['solar_shed']
-  const minWatts = loadsConfig.min_watts || 10
-  return Object.entries(loads)
-    .filter(([name, v]) => v > minWatts && !hiddenLoads.includes(name))
-    .sort((a, b) => b[1] - a[1])
-})
-
 const batteries = computed(() => {
   return (state.value.batteries || []).map((b) => ({
     name: b.name || 'Battery',
@@ -486,7 +466,13 @@ onMounted(async () => {
 
   await connectMqtt()
   await initHa()
-  initSystemNotifications(haEntityStates, haEntityAttributes)
+  initSystemNotifications(
+    haEntityStates,
+    haEntityAttributes,
+    evChargingKw,
+    waterValveState,
+    pumpSwitchState
+  )
 
   // Check for updates on startup (silent check)
   checkForUpdatesSilent().catch((e) => logger.warn('Update check failed:', e))

@@ -108,6 +108,37 @@
   color: #ffffff !important;
 }
 
+/* 3D raised look for Home section buttons */
+.classic-btn-3d {
+  border-bottom-width: 3px !important;
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.15)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 3px rgba(0, 0, 0, 0.4) !important;
+}
+
+.classic-btn-3d:hover {
+  transform: translateY(-1px) scale(1.02) !important;
+}
+
+.classic-btn-3d:active {
+  transform: translateY(1px) !important;
+  border-bottom-width: 1px !important;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5) !important;
+}
+
+.classic-btn-3d.classic-btn-on {
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.18), rgba(0, 0, 0, 0.08)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 2px 3px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Light mode 3D adjust */
+:not(.dark) .classic-btn-3d {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 2px 3px rgba(0, 0, 0, 0.15) !important;
+}
+
+:not(.dark) .classic-btn-3d.classic-btn-on {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 2px 3px rgba(0, 0, 0, 0.2) !important;
+}
+
 @layer components {
 
   /* Card Header Style: Increased to 11px to match 0.7rem from v1.0.9 */
@@ -116,7 +147,7 @@
     background-color: var(--color-bg-card);
     border-color: var(--color-border-card);
   }
-  
+
   .dark .classic-header {
     background-color: var(--color-dark-bg-card);
     border-color: var(--color-dark-border-card);

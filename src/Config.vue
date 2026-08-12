@@ -258,7 +258,6 @@
                     placeholder="Token"
                   />
                 </div>
-
                 <div class="flex gap-2 mt-1">
                   <button
                     type="button"
@@ -351,7 +350,19 @@
                     />
                   </div>
                 </div>
-                <div class="flex flex-col gap-1">
+                <label
+                  class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    v-model="config.show_advanced_settings"
+                    class="rounded border-slate-300 text-accent focus:ring-accent"
+                  />
+                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
+                    >Advanced settings</span
+                  >
+                </label>
+                <div v-if="config.show_advanced_settings" class="flex flex-col gap-1">
                   <span
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
                     >Camera Monitoring</span
@@ -369,7 +380,7 @@
                     >
                   </label>
                 </div>
-                <div class="flex flex-col gap-1">
+                <div v-if="config.show_advanced_settings" class="flex flex-col gap-1">
                   <label
                     for="camera_topic"
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
@@ -385,6 +396,239 @@
                   />
                   <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
                     MQTT topic with wildcard for camera events on HA broker.
+                  </p>
+                </div>
+              </div>
+
+              <!-- Appliance Entities -->
+              <div
+                v-if="config.show_advanced_settings"
+                class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
+              >
+                <h3
+                  class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
+                >
+                  Appliance Entities
+                </h3>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_dryer_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Dryer Entity</label
+                  >
+                  <input
+                    id="ha_dryer_entity"
+                    v-model="config.ha_dryer_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="sensor.dryer"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Remaining time sensor (e.g. 10:02). Section shows while the dryer is running.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_washer_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Washer Entity</label
+                  >
+                  <input
+                    id="ha_washer_entity"
+                    v-model="config.ha_washer_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="sensor.washer_remaining_time"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Remaining time sensor. Section shows while the washer is running.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_dishwasher_running_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Dishwasher Running Entity</label
+                  >
+                  <input
+                    id="ha_dishwasher_running_entity"
+                    v-model="config.ha_dishwasher_running_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="binary_sensor.dishwasher_is_running"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Binary sensor that turns on while the dishwasher runs.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_dishwasher_duration_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Dishwasher Duration Entity</label
+                  >
+                  <input
+                    id="ha_dishwasher_duration_entity"
+                    v-model="config.ha_dishwasher_duration_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="sensor.dishwasher_duration"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Runtime since midnight (e.g. 00:32:24), shown next to the section.
+                  </p>
+                </div>
+              </div>
+
+              <!-- Water & EV Entities -->
+              <div
+                v-if="config.show_advanced_settings"
+                class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
+              >
+                <h3
+                  class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
+                >
+                  Water &amp; EV Entities
+                </h3>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_pump_switch_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Pump Switch Entity</label
+                  >
+                  <input
+                    id="ha_pump_switch_entity"
+                    v-model="config.ha_pump_switch_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="switch.pump"
+                  />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_valve_switch_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Valve Switch Entity</label
+                  >
+                  <input
+                    id="ha_valve_switch_entity"
+                    v-model="config.ha_valve_switch_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="switch.water_valve"
+                  />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_water_level_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Water Level Sensor</label
+                  >
+                  <input
+                    id="ha_water_level_entity"
+                    v-model="config.ha_water_level_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="sensor.water_level"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Water section shows only when at least one of these entities is set.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_ev_soc_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >EV SOC Entity</label
+                  >
+                  <input
+                    id="ha_ev_soc_entity"
+                    v-model="config.ha_ev_soc_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="sensor.ev_soc"
+                  />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_ev_charging_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >EV Car Charging Value</label
+                  >
+                  <input
+                    id="ha_ev_charging_entity"
+                    v-model="config.ha_ev_charging_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="sensor.ev_charging_power"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Power sensor in watts (W); displayed as kW. EV section shows only when at least
+                    one of these entities is set.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_ev_clamp_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >EV Clamp Charger Value</label
+                  >
+                  <input
+                    id="ha_ev_clamp_entity"
+                    v-model="config.ha_ev_clamp_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="sensor.ev_clamp_power"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Clamp-measured power in watts (W).
+                  </p>
+                </div>
+              </div>
+
+              <!-- Active Loads Clamps -->
+              <div
+                v-if="config.show_advanced_settings"
+                class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
+              >
+                <h3
+                  class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
+                >
+                  Active Loads Clamps
+                </h3>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_consumption_clamps"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Consumption Clamps (positive)</label
+                  >
+                  <textarea
+                    id="ha_consumption_clamps"
+                    v-model="consumptionClampsText"
+                    rows="3"
+                    class="classic-input w-full font-mono text-[10px]"
+                    placeholder="sensor.clamp_kitchen&#10;sensor.clamp_office"
+                  ></textarea>
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    One entity ID per line. Positive power values are listed in Active Loads.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_generation_clamps"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Generation Clamps (negative)</label
+                  >
+                  <textarea
+                    id="ha_generation_clamps"
+                    v-model="generationClampsText"
+                    rows="3"
+                    class="classic-input w-full font-mono text-[10px]"
+                    placeholder="sensor.clamp_quattro_inverter&#10;sensor.clamp_solar_inline"
+                  ></textarea>
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    One entity ID per line. Negative values (generating, e.g. Victron Quattro /
+                    solar in-line inverter) are listed in Active Loads.
                   </p>
                 </div>
               </div>
@@ -725,6 +969,45 @@
               </div>
             </div>
 
+            <!-- Backup Section -->
+            <div v-if="activeTab === 'backup'" class="flex flex-col gap-4">
+              <header class="border-b border-slate-200 dark:border-slate-700 pb-2">
+                <h2
+                  class="text-sm font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
+                >
+                  Backup
+                </h2>
+              </header>
+
+              <div
+                class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
+              >
+                <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  Export the current configuration to a JSON file or import one previously saved.
+                </p>
+                <button
+                  type="button"
+                  @click="handleBackup"
+                  :disabled="backupBusy"
+                  class="classic-btn flex-1 !normal-case"
+                >
+                  <Download :size="12" v-if="!backupBusy" />
+                  <Loader2 :size="12" v-else class="animate-spin" />
+                  Save Configuration
+                </button>
+                <button
+                  type="button"
+                  @click="handleRestore"
+                  :disabled="backupBusy"
+                  class="classic-btn flex-1 !normal-case"
+                >
+                  <Upload :size="12" v-if="!backupBusy" />
+                  <Loader2 :size="12" v-else class="animate-spin" />
+                  Load Configuration
+                </button>
+              </div>
+            </div>
+
             <!-- Entities Section -->
             <div v-if="activeTab === 'entities'" class="flex flex-col gap-6">
               <header class="border-b border-slate-200 dark:border-slate-700 pb-2">
@@ -807,36 +1090,53 @@
                 >Fetching...</span
               >
             </div>
-            <div
-              v-else
-              v-for="e in discoveredEntities"
-              :key="e.entity_id"
-              @click="toggleSelection(e.entity_id)"
-              class="p-2 rounded border border-transparent cursor-pointer transition-all flex items-center justify-between group"
-              :class="
-                selectedDiscovery.includes(e.entity_id)
-                  ? 'bg-accent/10 border-accent/20'
-                  : 'hover:bg-slate-50 dark:hover:bg-slate-800'
-              "
-            >
-              <div>
-                <div
-                  class="text-[11px] font-bold group-hover:text-accent transition-colors"
-                  :class="{
-                    'text-accent': selectedDiscovery.includes(e.entity_id),
-                    'dark:text-slate-300': !selectedDiscovery.includes(e.entity_id),
-                  }"
-                >
-                  {{ e.friendly_name }}
+            <template v-else>
+              <div class="p-1 sticky top-0 bg-[#121212] dark:bg-[#121212]">
+                <label for="discovery_search" class="sr-only">Search entities</label>
+                <input
+                  id="discovery_search"
+                  v-model="discoverySearch"
+                  type="text"
+                  placeholder="Search entities..."
+                  class="classic-input w-full"
+                />
+              </div>
+              <div
+                v-if="filteredDiscoveredEntities.length === 0"
+                class="text-[10px] font-bold text-slate-500 dark:text-slate-500 uppercase text-center py-8"
+              >
+                No matches
+              </div>
+              <div
+                v-for="e in filteredDiscoveredEntities"
+                :key="e.entity_id"
+                @click="toggleSelection(e.entity_id)"
+                class="p-2 rounded border border-transparent cursor-pointer transition-all flex items-center justify-between group"
+                :class="
+                  selectedDiscovery.includes(e.entity_id)
+                    ? 'bg-accent/10 border-accent/20'
+                    : 'hover:bg-slate-50 dark:hover:bg-slate-800'
+                "
+              >
+                <div>
+                  <div
+                    class="text-[11px] font-bold group-hover:text-accent transition-colors"
+                    :class="{
+                      'text-accent': selectedDiscovery.includes(e.entity_id),
+                      'dark:text-slate-300': !selectedDiscovery.includes(e.entity_id),
+                    }"
+                  >
+                    {{ e.friendly_name }}
+                  </div>
+                  <div class="text-[9px] text-slate-500 dark:text-slate-500 font-mono">
+                    {{ e.entity_id }}
+                  </div>
                 </div>
-                <div class="text-[9px] text-slate-500 dark:text-slate-500 font-mono">
-                  {{ e.entity_id }}
+                <div v-if="selectedDiscovery.includes(e.entity_id)" class="text-accent">
+                  <Check :size="12" />
                 </div>
               </div>
-              <div v-if="selectedDiscovery.includes(e.entity_id)" class="text-accent">
-                <Check :size="12" />
-              </div>
-            </div>
+            </template>
           </div>
           <footer
             class="p-3 border-t border-slate-200 dark:border-slate-700 flex flex-col gap-2 bg-slate-50 dark:bg-black"
@@ -914,7 +1214,21 @@ import { emit } from '@tauri-apps/api/event'
 import { logger } from './logger'
 
 const { t: $t } = useI18n()
-import { Settings, Wifi, Home, Layout, Eye, Save, RotateCcw, X, Loader2, Check } from '@lucide/vue'
+import {
+  Settings,
+  Wifi,
+  Home,
+  Layout,
+  Eye,
+  Save,
+  RotateCcw,
+  X,
+  Loader2,
+  Check,
+  Archive,
+  Download,
+  Upload,
+} from '@lucide/vue'
 import { useConfigForm } from './composables/useConfigForm'
 import { useHAEntityManager } from './composables/useHAEntityManager'
 import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
@@ -938,6 +1252,8 @@ const {
   selectedDiscovery,
   discoveryLoading,
   discoveryTargetGroup,
+  discoverySearch,
+  filteredDiscoveredEntities,
   loadFromConfig,
   fetchHaEntities,
   addDiscoveredEntities,
@@ -958,11 +1274,13 @@ const sections = [
   { id: 'ha', label: 'Home Assistant', icon: Home },
   { id: 'entities', label: 'UI Controls', icon: Layout },
   { id: 'sections', label: 'Sections', icon: Eye },
+  { id: 'backup', label: 'Backup', icon: Archive },
 ]
 
 const testingHa = ref(false)
 const haTestResult = ref('')
 const haTestSuccess = ref(false)
+const backupBusy = ref(false)
 
 const haDirectMonitoringEnabled = computed(() => {
   return !!(
@@ -971,6 +1289,26 @@ const haDirectMonitoringEnabled = computed(() => {
     config.ha_url.trim() &&
     config.ha_longlived_token.trim()
   )
+})
+
+const consumptionClampsText = computed({
+  get: () => (config.ha_consumption_clamps || []).join('\n'),
+  set: (v: string) => {
+    config.ha_consumption_clamps = v
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  },
+})
+
+const generationClampsText = computed({
+  get: () => (config.ha_generation_clamps || []).join('\n'),
+  set: (v: string) => {
+    config.ha_generation_clamps = v
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  },
 })
 
 watch(
@@ -1036,6 +1374,47 @@ async function handleSave() {
   message.value = 'Settings saved successfully'
   messageType.value = 'success'
   setTimeout(clearMessage, 2000)
+}
+
+async function handleBackup() {
+  if (backupBusy.value) return
+  backupBusy.value = true
+  try {
+    const done = await invoke<boolean>('backup_config')
+    message.value = done ? 'Configuration saved' : 'Backup cancelled'
+    messageType.value = done ? 'success' : 'info'
+  } catch (e) {
+    message.value = `Backup failed: ${e?.toString() || e}`
+    messageType.value = 'error'
+  } finally {
+    backupBusy.value = false
+    setTimeout(clearMessage, 3000)
+  }
+}
+
+async function handleRestore() {
+  if (backupBusy.value) return
+  backupBusy.value = true
+  try {
+    const done = await invoke<boolean>('restore_config')
+    if (done) {
+      const cfg = await loadConfig()
+      loadFromConfig(cfg)
+      applyTheme(cfg.color_scheme)
+      await emit('config-saved', { color_scheme: cfg.color_scheme })
+      message.value = 'Configuration loaded'
+      messageType.value = 'success'
+    } else {
+      message.value = 'Load cancelled'
+      messageType.value = 'info'
+    }
+  } catch (e) {
+    message.value = `Restore failed: ${e?.toString() || e}`
+    messageType.value = 'error'
+  } finally {
+    backupBusy.value = false
+    setTimeout(clearMessage, 3000)
+  }
 }
 
 async function handleClose() {
