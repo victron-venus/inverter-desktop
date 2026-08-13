@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { computed, ref, watch, type Ref } from 'vue'
-import { logger } from '../logger'
+import { computed, type Ref, ref, watch } from 'vue'
 import type { AppConfig } from '../config'
+import { logger } from '../logger'
 import type {
   HaCoverDisplay,
   HaFilteredData,
@@ -12,8 +12,8 @@ import type {
   HaSensorDisplay,
   HaWeatherDisplay,
 } from '../types/ha'
-import { appConfig, type InverterState, state } from './useInverterState'
 import { formatPower } from '../utils'
+import { appConfig, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
@@ -66,8 +66,15 @@ export function useHA() {
     const raw = String(stateVal).trim()
     const lower = raw.toLowerCase()
     if (!lower || lower === 'unavailable' || lower === 'unknown') return null
-    const n = Number.parseFloat(raw)
-    return Number.isNaN(n) ? null : n
+    // Replace comma with dot to handle European decimal format, assuming no thousand separator
+    const normalized = raw.replace(/,/g, '.')
+    // Extract the first number from the string (handles cases like "10.1 kW", "OFF", etc.)
+    const match = normalized.match(/^[-+]?[0-9]*\.?[0-9]+/)
+    if (match) {
+      const n = Number.parseFloat(match[0])
+      return Number.isNaN(n) ? null : n
+    }
+    return null
   }
 
   // Pre-filtered HA entity data from Rust (replaces 6 computed properties)
@@ -349,19 +356,45 @@ export function useHA() {
     return Math.max(0, Math.min(100, n))
   })
 
-  /** EV car charging power in watts (HA power sensors report W) */
+  /** EV car charging power in watts (converts from kW if needed) */
   const evChargingWatts = computed(() => {
     if (!haEnabled.value) return null
     const entity = haEvChargingEntity.value
     if (!entity) return null
-    return parseNumberState(entity)
+    const stateNum = parseNumberState(entity)
+    if (stateNum === null) return null
+
+    // Check if we have attributes with unit information
+    const attrs = haEntityAttributes.value[entity]
+    const unit = attrs?.unit_of_measurement
+
+    // Convert to watts: if unit is kW, multiply by 1000; if unit is W or unset, use as-is (assume watts)
+    if (unit === 'kW') {
+      return stateNum * 1000 // Convert kW to watts
+    } else {
+      // Assume watts (covers W, empty/null, or any other unit)
+      return stateNum // Already in watts
+    }
   })
 
   const evClampWatts = computed(() => {
     if (!haEnabled.value) return null
     const entity = haEvClampEntity.value
     if (!entity) return null
-    return parseNumberState(entity)
+    const stateNum = parseNumberState(entity)
+    if (stateNum === null) return null
+
+    // Check if we have attributes with unit information
+    const attrs = haEntityAttributes.value[entity]
+    const unit = attrs?.unit_of_measurement
+
+    // Convert to watts: if unit is kW, multiply by 1000; if unit is W or unset, use as-is (assume watts)
+    if (unit === 'kW') {
+      return stateNum * 1000 // Convert kW to watts
+    } else {
+      // Assume watts (covers W, empty/null, or any other unit)
+      return stateNum // Already in watts
+    }
   })
 
   const evChargingKw = computed(() => {

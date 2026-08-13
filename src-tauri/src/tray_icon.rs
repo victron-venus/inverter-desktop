@@ -246,11 +246,24 @@ pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> (Vec<u8>, u3
             draw_seg(&mut pixels, x, y, fill, row == 0);
         }
 
-        let label = &labels[row as usize];
-        let tw = layout_text_width(FONT_SCALE, &FONT, label);
-        let tx = TEXT_X + TEXT_W - tw as i32 - 19;
+        let mut label = labels[row as usize].to_string();
+        // Ensure label fits within the text area with some padding
+        let max_text_width = TEXT_W - 4; // leave 2px padding each side
+        loop {
+            let tw = layout_text_width(FONT_SCALE, &FONT, &label);
+            if tw as i32 <= max_text_width {
+                break;
+            }
+            // Remove last character and try again
+            if label.pop().is_none() {
+                label = "".to_string();
+                break;
+            }
+        }
+        let tw = layout_text_width(FONT_SCALE, &FONT, &label);
+        let tx = (TEXT_X + TEXT_W - tw as i32 - 19).max(TEXT_X + 2);
         let ty = y - 4;
-        draw_text(&mut pixels, tx, ty, FONT_SCALE, &FONT, label, TEXT_COLOR);
+        draw_text(&mut pixels, tx, ty, FONT_SCALE, &FONT, &label, TEXT_COLOR);
     }
 
     (pixels, W, H)
