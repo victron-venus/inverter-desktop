@@ -15,7 +15,7 @@ export function formatUptime(s: number): string {
 export function formatInverterState(state: string | undefined): string {
   if (!state) return 'Bulk'
   const normalized = state.trim().toLowerCase()
-  if (normalized === 'of' || normalized === 'off') return 'Off'
+  if (normalized === 'off') return 'Off'
   return state
 }
 

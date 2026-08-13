@@ -81,6 +81,14 @@ This repository follows a multi-channel release strategy managed by GitHub Actio
 3. Drag **Inverter Dashboard.app** to Applications
 4. On first run: Right-click → Open → Open (bypasses Gatekeeper)
 
+> **Note:** If you see the message “Inverter Desktop.app is damaged and can’t be opened”, macOS has quarantined the downloaded app. Remove the quarantine attribute with:
+>
+> ```bash
+> xattr -d com.apple.quarantine "Inverter Desktop.app"
+> ```
+>
+> (If you copied the app to /Applications, use the full path.) After removing the attribute, the app will launch normally.
+
 ### Windows
 
 1. Download `.msi` or `.exe` installer from [Releases](https://github.com/victron-venus/inverter-desktop/releases/latest)

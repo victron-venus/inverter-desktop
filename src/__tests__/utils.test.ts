@@ -42,13 +42,12 @@ describe('formatUptime', () => {
 })
 
 describe('formatInverterState', () => {
-  it('maps off codes to Off', () => {
-    expect(formatInverterState('OF')).toBe('Off')
-    expect(formatInverterState('of')).toBe('Off')
+  it('maps off code to Off', () => {
     expect(formatInverterState('off')).toBe('Off')
   })
 
   it('passes through other states', () => {
+    expect(formatInverterState('OF')).toBe('OF')
     expect(formatInverterState('Bulk')).toBe('Bulk')
     expect(formatInverterState('Absorbing')).toBe('Absorbing')
     expect(formatInverterState('Inverting')).toBe('Inverting')

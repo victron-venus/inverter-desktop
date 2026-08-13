@@ -1279,6 +1279,38 @@ pub fn run() {
                 }
             }
 
+            // Attempt to connect MQTT if configured
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(config) = load_config(&app_handle) {
+                    let host = config.mqtt_host.trim().to_string();
+                    if !host.is_empty() {
+                        let port = if config.mqtt_port == 0 {
+                            DEFAULT_MQTT_PORT
+                        } else {
+                            config.mqtt_port
+                        };
+                        let username = config.mqtt_login.clone();
+                        let password = config.mqtt_password.clone();
+                        let portal_id = config.portal_id.clone();
+                        let camera_topic = config.camera_topic.clone();
+                        let connect_handle = app_handle.clone();
+                        let mqtt_state = app_handle.state::<MqttState>();
+                        let _ = connect_mqtt(
+                            host,
+                            port,
+                            username,
+                            password,
+                            portal_id,
+                            camera_topic,
+                            connect_handle,
+                            mqtt_state,
+                        )
+                        .await;
+                    }
+                }
+            });
+
             // Show window on startup
             info!("Showing main window...");
             let window = app.get_webview_window("main").unwrap();
