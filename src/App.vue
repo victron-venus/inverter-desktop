@@ -352,7 +352,7 @@ const isInverterOff = computed(() => {
   const s = state.value.inverter_state
   if (!s) return false
   const normalized = s.trim().toLowerCase()
-  return normalized === 'of' || normalized === 'off'
+  return normalized === 'off'
 })
 
 const essClass = computed(() => {
