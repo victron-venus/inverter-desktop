@@ -585,53 +585,6 @@
                   </p>
                 </div>
               </div>
-
-              <!-- Active Loads Clamps -->
-              <div
-                v-if="config.show_advanced_settings"
-                class="flex flex-col gap-3 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
-              >
-                <h3
-                  class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
-                >
-                  Active Loads Clamps
-                </h3>
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="ha_consumption_clamps"
-                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Consumption Clamps (positive)</label
-                  >
-                  <textarea
-                    id="ha_consumption_clamps"
-                    v-model="consumptionClampsText"
-                    rows="3"
-                    class="classic-input w-full font-mono text-[10px]"
-                    placeholder="sensor.clamp_kitchen&#10;sensor.clamp_office"
-                  ></textarea>
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
-                    One entity ID per line. Positive power values are listed in Active Loads.
-                  </p>
-                </div>
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="ha_generation_clamps"
-                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Generation Clamps (negative)</label
-                  >
-                  <textarea
-                    id="ha_generation_clamps"
-                    v-model="generationClampsText"
-                    rows="3"
-                    class="classic-input w-full font-mono text-[10px]"
-                    placeholder="sensor.clamp_quattro_inverter&#10;sensor.clamp_solar_inline"
-                  ></textarea>
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
-                    One entity ID per line. Negative values (generating, e.g. Victron Quattro /
-                    solar in-line inverter) are listed in Active Loads.
-                  </p>
-                </div>
-              </div>
             </div>
 
             <!-- Sections Visibility -->
@@ -1289,26 +1242,6 @@ const haDirectMonitoringEnabled = computed(() => {
     config.ha_url.trim() &&
     config.ha_longlived_token.trim()
   )
-})
-
-const consumptionClampsText = computed({
-  get: () => (config.ha_consumption_clamps || []).join('\n'),
-  set: (v: string) => {
-    config.ha_consumption_clamps = v
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean)
-  },
-})
-
-const generationClampsText = computed({
-  get: () => (config.ha_generation_clamps || []).join('\n'),
-  set: (v: string) => {
-    config.ha_generation_clamps = v
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean)
-  },
 })
 
 watch(

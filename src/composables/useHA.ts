@@ -419,37 +419,22 @@ export function useHA() {
     return evSoc.value !== null || evChargingWatts.value !== null || evClampWatts.value !== null
   })
 
-  const MIN_CLAMP_WATTS = 10
-
-  function clampDisplayName(entity: string): string {
-    const attrs = haEntityAttributes.value[entity]
-    const friendly = attrs?.friendly_name
-    const raw =
-      typeof friendly === 'string' && friendly.trim()
-        ? friendly
-        : (entity.split('.').pop() || entity).replace(/_/g, ' ')
-    const cleaned = raw.replace(/ power 1s/gi, '').trim()
-    return cleaned || raw
-  }
-
-  /** Active loads from HA clamps: consumption (positive) + generation (negative) */
+  /** Active loads strictly from Cerbo DBus -> MQTT (state.value.loads), zero HA fallback */
   const haLoads = computed(() => {
-    if (!haEnabled.value) return []
-    const items: Array<{ name: string; value: number; isGeneration: boolean }> = []
-    for (const entity of appConfig.value?.ha_consumption_clamps || []) {
-      const e = (entity || '').trim()
-      if (!e) continue
-      const v = parseNumberState(e)
-      if (v !== null && Math.abs(v) > MIN_CLAMP_WATTS) {
-        items.push({ name: clampDisplayName(e), value: v, isGeneration: false })
-      }
+    const mqttLoads = state.value.loads
+    if (!mqttLoads || Object.keys(mqttLoads).length === 0) {
+      return []
     }
-    for (const entity of appConfig.value?.ha_generation_clamps || []) {
-      const e = (entity || '').trim()
-      if (!e) continue
-      const v = parseNumberState(e)
-      if (v !== null && Math.abs(v) > MIN_CLAMP_WATTS) {
-        items.push({ name: clampDisplayName(e), value: -Math.abs(v), isGeneration: true })
+    const items: Array<{ name: string; value: number; isGeneration: boolean }> = []
+    for (const [key, val] of Object.entries(mqttLoads)) {
+      const v = typeof val === 'number' ? val : Number(val)
+      if (!isNaN(v) && Math.abs(v) > 2) {
+        const formattedName = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+        items.push({
+          name: formattedName,
+          value: v,
+          isGeneration: v < 0,
+        })
       }
     }
     items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
