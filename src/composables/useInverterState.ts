@@ -37,6 +37,7 @@ export interface InverterState {
     state?: string
     time_to_go?: string
   }>
+  loads?: Record<string, number>
   ui_config?: {
     home_buttons?: Array<{ id: string; label: string; entity: string; state_key?: string }>
     header_toggles?: Array<{ id: string; label: string; entity: string }>
