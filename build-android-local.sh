@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#set -x
 # gh workflow run Release --repo victron-venus/inverter-desktop --ref main
 set -uo pipefail
 
@@ -42,18 +43,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║  Inverter Dashboard — Android build script          ║"
+echo "║  Inverter Dashboard — Android build script           ║"
 echo "╠══════════════════════════════════════════════════════╣"
-echo "║  What this script does:                             ║"
-echo "║  1. Check & auto-install missing prerequisites:     ║"
-echo "║     • Java 17+ (brew install --cask temurin@21)    ║"
-echo "║     • Android SDK + NDK (sdkmanager)               ║"
-echo "║     • Rust Android targets (rustup)                ║"
-echo "║  2. Install JS dependencies (pnpm install)          ║"
-echo "║  3. Init Android project if needed                  ║"
-echo "║  4. Build APK (and AAB for release)                 ║"
+echo "║  What this script does:                              ║"
+echo "║  1. Check & auto-install missing prerequisites:      ║"
+echo "║     • Java 17+ (brew install --cask temurin@21)      ║"
+echo "║     • Android SDK + NDK (sdkmanager)                 ║"
+echo "║     • Rust Android targets (rustup)                  ║"
+echo "║  2. Install JS dependencies (pnpm install)           ║"
+echo "║  3. Init Android project if needed                   ║"
+echo "║  4. Build APK (and AAB for release)                  ║"
 if [ "$RELEASE" = true ] && [ "$SIGN_APK" = true ]; then
-echo "║  5. Sign & align APK                                ║"
+echo "║  5. Sign & align APK                                 ║"
 fi
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
