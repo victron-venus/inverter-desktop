@@ -232,6 +232,13 @@ struct FullConfig {
     ha_ev_soc_entity: Option<String>,
     ha_ev_charging_entity: Option<String>,
     ha_ev_clamp_entity: Option<String>,
+    // NOTE: Most fields now come from inverter-control MQTT (D-Bus sourced):
+    // gt, g1, g2, tt, t1, t2, solar_total, mppt_total, tasmota_total
+    // battery_soc, battery_power, battery_voltage, battery_current
+    // setpoint, daily_stats, mppt_chargers, batteries, mppt_individual, tasmota_individual
+    // loads (Vue circuits via D-Bus acload)
+    // Only configure fields NOT available from inverter-control:
+    // gt (if you prefer HA CT meter over Victron D-Bus)
     ha_consumption_clamps: Option<Vec<String>>,
     ha_generation_clamps: Option<Vec<String>>,
     color_scheme: Option<String>,
@@ -282,6 +289,7 @@ impl Default for FullConfig {
             ha_ev_soc_entity: None,
             ha_ev_charging_entity: None,
             ha_ev_clamp_entity: None,
+            // NOTE: Most fields now come from inverter-control MQTT (D-Bus sourced)
             ha_consumption_clamps: None,
             ha_generation_clamps: None,
             color_scheme: Some("dark".to_string()),
