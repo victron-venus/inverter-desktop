@@ -1,4 +1,5 @@
-import { ref, shallowRef } from 'vue'
+import { ref } from 'vue'
+// Use ref for deep reactivity so that nested properties (like state.value.loads) updates are tracked.
 import type { AppConfig } from '../config'
 
 export interface InverterState {
@@ -58,7 +59,7 @@ export interface InverterState {
   console?: string[]
 }
 
-export const state = shallowRef<InverterState>({
+export const state = ref<InverterState>({
   booleans: {},
   features: {},
   ui_config: {},
