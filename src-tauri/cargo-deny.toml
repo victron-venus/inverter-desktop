@@ -32,7 +32,6 @@ ignore = [
     "RUSTSEC-2024-0420", # gtk-sys: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
     "RUSTSEC-2024-0419", # gtk3-macros: unmaintained gtk-rs GTK3 binding (via tauri/tray-icon, Linux)
     "RUSTSEC-2024-0370", # proc-macro-error: unmaintained (transitive dependency)
-    "RUSTSEC-2024-0388", # derivative: unmaintained (via zbus/secret-service/keyring)
 ]
 
 [bans]
@@ -45,7 +44,6 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "CDLA-Permissive-2.0",
     "ISC",
     "MPL-2.0",
     "Unicode-3.0",
@@ -57,3 +55,12 @@ include-dev = true
 
 [sources]
 allow-git = []
+
+[duplicates]
+ignore = [
+    "aes",
+    "base64",
+    "block-buffer",
+    "cipher",
+    "core-foundation",
+]
