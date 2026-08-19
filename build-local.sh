@@ -5,7 +5,7 @@ APP_NAME="Inverter Desktop"
 BUNDLE_DIR="src-tauri/target/release/bundle"
 
 echo "===> Cleaning project (npm mode)..."
-rm -rf node_modules pnpm-lock.yaml package-lock.json dist src-tauri/target
+rm -rf node_modules dist src-tauri/target
 echo "  ✓ Cleaned"
 
 echo ""
