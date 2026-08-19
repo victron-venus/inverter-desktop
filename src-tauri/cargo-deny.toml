@@ -57,10 +57,4 @@ include-dev = true
 allow-git = []
 
 [duplicates]
-ignore = [
-    "aes",
-    "base64",
-    "block-buffer",
-    "cipher",
-    "core-foundation",
-]
+action = "allow"
