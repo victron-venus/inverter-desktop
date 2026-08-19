@@ -36,6 +36,7 @@ ignore = [
 
 [bans]
 deny = []
+multiple-versions = "allow"
 
 [licenses]
 allow = [
@@ -55,6 +56,3 @@ include-dev = true
 
 [sources]
 allow-git = []
-
-[duplicates]
-action = "allow"
