@@ -428,7 +428,7 @@ export function useHA() {
     const items: Array<{ name: string; value: number; isGeneration: boolean }> = []
     for (const [key, val] of Object.entries(mqttLoads)) {
       const v = typeof val === 'number' ? val : Number(val)
-      if (!isNaN(v) && Math.abs(v) > 2) {
+      if (!Number.isNaN(v) && Math.abs(v) > 2) {
         const formattedName = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
         items.push({
           name: formattedName,
@@ -617,6 +617,33 @@ export function useHA() {
     }
   }
 
+  const haLoadsForConfig = computed(() => {
+    const mqttLoads = state.value.loads
+    if (!mqttLoads || Object.keys(mqttLoads).length === 0) {
+      return []
+    }
+    const items: Array<{ key: string; name: string }> = []
+    for (const [key, val] of Object.entries(mqttLoads)) {
+      const v = typeof val === 'number' ? val : Number(val)
+      if (!Number.isNaN(v) && Math.abs(v) > 2) {
+        const formattedName = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+        items.push({
+          key,
+          name: formattedName,
+        })
+      }
+    }
+    // Sort by absolute value descending, matching haLoads order
+    items.sort((a, b) => {
+      const valA =
+        typeof mqttLoads[a.key] === 'number' ? mqttLoads[a.key] : Number(mqttLoads[a.key])
+      const valB =
+        typeof mqttLoads[b.key] === 'number' ? mqttLoads[b.key] : Number(mqttLoads[b.key])
+      return Math.abs(valB) - Math.abs(valA)
+    })
+    return items
+  })
+
   return {
     haEnabled,
     haConnected,
@@ -646,6 +673,7 @@ export function useHA() {
     haMediaPlayers,
     haScenes,
     haWeather,
+    haLoadsForConfig,
     dishwasherActive,
     dishwasherRemainingTime,
     washerActive,
