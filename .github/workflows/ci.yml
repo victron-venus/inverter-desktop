@@ -16,6 +16,6 @@ concurrency:
 jobs:
   ci:
     name: Rust CI (with frontend)
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/rust-ci.yml@main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/rust-ci.yml@c817fbf3741db55e1397da7b4c5f68d681bbec44
     with:
       enable-frontend: true
