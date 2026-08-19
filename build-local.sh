@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_NAME="Inverter Desktop"
+BUNDLE_DIR="src-tauri/target/release/bundle"
+
+echo "===> Cleaning project (npm mode)..."
+rm -rf node_modules pnpm-lock.yaml package-lock.json dist src-tauri/target
+echo "  ✓ Cleaned"
+
+echo ""
+echo "===> Installing dependencies using npm..."
+# We switch to npm because pnpm installation is broken on this system
+npm install
+
+echo ""
+echo "===> Building Tauri application..."
+# Use npm to run tauri build
+npm run tauri build -- --verbose
+
+echo "===> Killing running instances of '${APP_NAME}'..."
+pkill -f "${APP_NAME}" 2>/dev/null && echo "  ✓ Killed" || echo "  (not running)"
+
+echo ""
+echo "===> Installing ${APP_NAME} to /Applications..."
+APP_BUNDLE="${BUNDLE_DIR}/macos/${APP_NAME}.app"
+if [ -d "$APP_BUNDLE" ]; then
+  rm -rf "/Applications/${APP_NAME}.app"
+  cp -R "$APP_BUNDLE" "/Applications/${APP_NAME}.app"
+  echo "  ✓ Installed to /Applications/${APP_NAME}.app"
+else
+  echo "  ✗ Bundle not found at ${APP_BUNDLE}"
+  echo "    DMG available at: ${BUNDLE_DIR}/dmg/"
+  exit 1
+fi
+
+echo ""
+echo "========================================"
+echo "  Build complete!"
+echo "  App:  /Applications/${APP_NAME}.app"
+echo "  DMG:  ${BUNDLE_DIR}/dmg/"
+echo "========================================"
+
+# Launch the app
+open -a "${APP_NAME}"
+date

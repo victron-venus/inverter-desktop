@@ -665,6 +665,56 @@
                     >Daily Stats</span
                   >
                 </label>
+                <!-- Grid Smoothing with Home meter -->
+                <div
+                  class="flex flex-col gap-2 p-3 bg-slate-50 dark:bg-black rounded border border-slate-200 dark:border-slate-700"
+                >
+                  <h3
+                    class="text-[10px] font-bold uppercase tracking-widest text-slate-900 dark:text-slate-100"
+                  >
+                    Grid Smoothing
+                  </h3>
+                  <label
+                    class="flex items-center gap-2 px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1a1a] cursor-pointer group hover:border-accent/30 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      v-model="config.ha_grid_smoothing_enabled"
+                      class="rounded border-slate-300 text-accent focus:ring-accent"
+                    />
+                    <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
+                      >Use Home meter for grid smoothing</span
+                    >
+                  </label>
+                  <div class="flex flex-col gap-1 ml-8">
+                    <label
+                      for="ha_grid_smoothing_home_entity"
+                      class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                      >Home Load Entity</label
+                    >
+                    <select
+                      id="ha_grid_smoothing_home_entity"
+                      v-model="config.ha_grid_smoothing_home_entity"
+                      class="classic-input w-full"
+                    >
+                      <option v-if="!haLoadsForConfig.length" disabled>
+                        Loading active loads...
+                      </option>
+                      <option
+                        v-else
+                        v-for="load in haLoadsForConfig"
+                        :key="load.key"
+                        :value="load.key"
+                      >
+                        {{ load.name }}
+                      </option>
+                    </select>
+                    <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                      Select which active load to use for grid smoothing correction. Usually 'home'
+                      load.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <!-- Group 3: Home Area -->
@@ -1165,6 +1215,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit } from '@tauri-apps/api/event'
 import { logger } from './logger'
+import { useHA } from './composables/useHA'
 
 const { t: $t } = useI18n()
 import {
@@ -1220,6 +1271,7 @@ const {
   moveToggleDown,
   ensureEntitiesFetched,
 } = useHAEntityManager()
+const { haLoadsForConfig } = useHA()
 
 const activeTab = ref('mqtt')
 const sections = [
