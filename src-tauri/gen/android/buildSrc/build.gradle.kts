@@ -22,4 +22,3 @@ dependencies {
     compileOnly(gradleApi())
     implementation("com.android.tools.build:gradle:$agpVersion")
 }
-
