@@ -437,7 +437,12 @@ export function useHA() {
         })
       }
     }
-    items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    items.sort((a, b) => {
+      const absDiff = Math.abs(b.value) - Math.abs(a.value)
+      if (absDiff !== 0) return absDiff
+      // tie-break by name alphabetically (case-insensitive)
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    })
     return items
   })
 
@@ -633,13 +638,16 @@ export function useHA() {
         })
       }
     }
-    // Sort by absolute value descending, matching haLoads order
+    // Sort by absolute value descending, then by name alphabetically (case-insensitive)
     items.sort((a, b) => {
       const valA =
         typeof mqttLoads[a.key] === 'number' ? mqttLoads[a.key] : Number(mqttLoads[a.key])
       const valB =
         typeof mqttLoads[b.key] === 'number' ? mqttLoads[b.key] : Number(mqttLoads[b.key])
-      return Math.abs(valB) - Math.abs(valA)
+      const absDiff = Math.abs(valB) - Math.abs(valA)
+      if (absDiff !== 0) return absDiff
+      // tie-break by name alphabetically (case-insensitive)
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
     })
     return items
   })
