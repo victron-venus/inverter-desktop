@@ -18,6 +18,7 @@ repos:
     rev: v1
     hooks:
       - id: typos
+        exclude: '.github/secrets/ANDROID_KEYSTORE_BASE64'
   # TypeScript / Vue / JSON / YAML / Markdown formatting.
   - repo: local
     hooks:
