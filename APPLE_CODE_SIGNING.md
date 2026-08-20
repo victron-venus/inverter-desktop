@@ -46,12 +46,12 @@ base64 -i DeveloperIDApplication.p12 -o developer_id.p12.base64
 3. Go to your fork's **Settings** → **Secrets and variables** → **Actions**
 4. Add these repository secrets:
 
-| Name                      | Value                                                                 |
-|---------------------------|-----------------------------------------------------------------------|
-| `APPLE_CERTIFICATE`       | (paste base64 string from step above)                                |
-| `APPLE_CERTIFICATE_PASSWORD` | (password you set when exporting .p12)                              |
-| `APPLE_SIGNING_IDENTITY`  | (full name of certificate, e.g., `Developer ID Application: My Name (TEAMID)`) |
-| `APPLE_TEAM_ID`           | (your Apple Developer Team ID, e.g., `XXXXXXXXXX`)                  |
+| Name                         | Value                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| `APPLE_CERTIFICATE`          | (paste base64 string from step above)                                          |
+| `APPLE_CERTIFICATE_PASSWORD` | (password you set when exporting .p12)                                         |
+| `APPLE_SIGNING_IDENTITY`     | (full name of certificate, e.g., `Developer ID Application: My Name (TEAMID)`) |
+| `APPLE_TEAM_ID`              | (your Apple Developer Team ID, e.g., `XXXXXXXXXX`)                             |
 
 **Find `APPLE_SIGNING_IDENTITY`:**
 
@@ -146,12 +146,12 @@ xcrun stapler validate /Volumes/Inverter\ Dashboard/Inverter\ Dashboard.app
 
 ## Troubleshooting
 
-| Symptom                                      | Likely Cause                               |
-|-----------------------------------------------|--------------------------------------------|
-| "app is damaged" on launch (ARM64 only)      | App unsigned → Gatekeeper blocks           |
-| `codesign` reports "invalid identity"        | Wrong `APPLE_SIGNING_IDENTITY` or expired certificate |
-| Notarization fails with "invalid bundle"    | Missing required entitlements or corrupted bundle |
-| Build fails with `error: failed to run custom build command` | Missing Xcode command-line tools on runner |
+| Symptom                                                      | Likely Cause                                          |
+| ------------------------------------------------------------ | ----------------------------------------------------- |
+| "app is damaged" on launch (ARM64 only)                      | App unsigned → Gatekeeper blocks                      |
+| `codesign` reports "invalid identity"                        | Wrong `APPLE_SIGNING_IDENTITY` or expired certificate |
+| Notarization fails with "invalid bundle"                     | Missing required entitlements or corrupted bundle     |
+| Build fails with `error: failed to run custom build command` | Missing Xcode command-line tools on runner            |
 
 Check GitHub Actions logs for detailed error messages.
 
