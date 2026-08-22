@@ -107,3 +107,69 @@ export function clearNotifications() {
 export function unreadNotificationCount() {
   return notifications.value.filter((n) => !n.read).length
 }
+
+// ---------------------------------------------------------------------------
+// Persistent banner notifications (inverter/notifications MQTT topic + Victron alarms)
+// ---------------------------------------------------------------------------
+
+export interface BannerNotification {
+  id: string
+  level: 'info' | 'warning' | 'alarm'
+  title: string
+  body: string
+  source?: string
+  ts?: string
+}
+
+export const bannerNotifications = ref<BannerNotification[]>([])
+
+const DISMISSED_KEY = 'dismissed_banner_ids'
+const MAX_DISMISSED = 200
+
+function loadDismissedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_KEY)
+    const arr: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr)
+      ? new Set(arr.filter((x): x is string => typeof x === 'string'))
+      : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+const dismissedIds = loadDismissedIds()
+
+function saveDismissedIds() {
+  const arr = [...dismissedIds].slice(-MAX_DISMISSED)
+  dismissedIds.clear()
+  for (const id of arr) dismissedIds.add(id)
+  localStorage.setItem(DISMISSED_KEY, JSON.stringify(arr))
+}
+
+export function isBannerDismissed(id: string): boolean {
+  return dismissedIds.has(id)
+}
+
+/** User dismissed the banner — hidden until a new notification reuses a fresh id. */
+export function dismissBanner(id: string) {
+  dismissedIds.add(id)
+  saveDismissedIds()
+  clearBanner(id)
+}
+
+/** Add or replace by id (dedupe for hourly re-publishes). */
+export function upsertBanner(notification: BannerNotification) {
+  if (dismissedIds.has(notification.id)) return
+  const idx = bannerNotifications.value.findIndex((b) => b.id === notification.id)
+  if (idx >= 0) {
+    bannerNotifications.value[idx] = notification
+  } else {
+    bannerNotifications.value = [...bannerNotifications.value, notification]
+  }
+}
+
+/** Alarm resolved (value back to 0) — remove without recording a dismissal. */
+export function clearBanner(id: string) {
+  bannerNotifications.value = bannerNotifications.value.filter((b) => b.id !== id)
+}

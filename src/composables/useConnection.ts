@@ -7,10 +7,13 @@ import { logger } from '../logger'
 import {
   addNotification,
   appConfig,
+  type BannerNotification,
+  clearBanner,
   haMqttConnected,
   type InverterState,
   mqttConnected,
   state,
+  upsertBanner,
 } from './useInverterState'
 import { notify } from './useSystemNotifications'
 
@@ -42,6 +45,8 @@ export function useConnection() {
   let unlistenConnectionStatus: (() => void) | null = null
   let unlistenCamera: (() => void) | null = null
   let unlistenNotification: (() => void) | null = null
+  let unlistenBanner: (() => void) | null = null
+  let unlistenBannerClear: (() => void) | null = null
   let unlistenHaMqttStatus: (() => void) | null = null
   let wakeUnlisten: (() => void) | null = null
   let mqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
@@ -95,6 +100,15 @@ export function useConnection() {
           addNotification(event.payload.title, event.payload.body)
         }
       )
+
+      unlistenBanner = await listen<BannerNotification>('mqtt-notification', (event) => {
+        upsertBanner(event.payload)
+        addNotification(event.payload.title, event.payload.body)
+      })
+
+      unlistenBannerClear = await listen<{ id: string }>('mqtt-notification-clear', (event) => {
+        clearBanner(event.payload.id)
+      })
 
       await invoke('connect_mqtt', {
         host: config.mqtt_host,
@@ -208,6 +222,8 @@ export function useConnection() {
       unlistenConnectionStatus,
       unlistenCamera,
       unlistenNotification,
+      unlistenBanner,
+      unlistenBannerClear,
       unlistenHaMqttStatus,
       wakeUnlisten,
     ]) {
