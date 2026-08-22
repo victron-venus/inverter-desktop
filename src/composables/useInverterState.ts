@@ -45,6 +45,7 @@ export interface InverterState {
   }
   daily_stats?: {
     produced_today?: number
+    produced_yesterday?: number
     produced_dollars?: number
     grid_kwh?: number
     battery_in?: number
