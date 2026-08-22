@@ -273,8 +273,69 @@ pub struct MqttClient {
     portal_id: Option<String>,
     camera_topic: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
+    alarms: Arc<Mutex<HashMap<String, u8>>>,
     status_event: String,
     ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
+}
+
+/// Notification pushed by inverter-control on {prefix}/notifications.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct MqttNotification {
+    pub id: String,
+    pub level: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub ts: String,
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// "battery_512" -> "Battery 512", "vebus" -> "Vebus"
+fn pretty_service_name(service: &str) -> String {
+    match service.split_once('_') {
+        Some((name, inst)) if !inst.is_empty() && inst.chars().all(|c| c.is_ascii_digit()) => {
+            format!("{} {}", capitalize(name), inst)
+        }
+        _ => capitalize(service),
+    }
+}
+
+/// Split CamelCase into words: "HighCellVoltage" -> ["High", "Cell", "Voltage"]
+fn split_camel(s: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for ch in s.chars() {
+        if ch.is_uppercase() && !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+/// "HighVoltage" -> "High voltage alarm"
+fn pretty_alarm_name(alarm: &str) -> String {
+    let mut words = split_camel(alarm);
+    let mut out = words.first().cloned().unwrap_or_default();
+    for w in words.drain(1..) {
+        out.push(' ');
+        out.push_str(&w.to_lowercase());
+    }
+    out.push_str(" alarm");
+    out
 }
 
 fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
@@ -381,6 +442,7 @@ impl MqttClient {
                 high_solar: AlertState::new(),
                 high_load: std::collections::HashMap::new(),
             })),
+            alarms: Arc::new(Mutex::new(HashMap::new())),
             status_event: "mqtt-connection-status".to_string(),
             ha_entity_states: None,
         }
@@ -421,6 +483,7 @@ impl MqttClient {
         let portal_id = self.portal_id.clone();
         let cam_topic_owned = self.camera_topic.clone();
         let notifications = self.notifications.clone();
+        let alarms = self.alarms.clone();
         let status_event = self.status_event.clone();
         let ha_entity_states = self.ha_entity_states.clone();
 
@@ -438,6 +501,7 @@ impl MqttClient {
                         portal_id.clone(),
                         cam_topic_owned.clone(),
                         notifications.clone(),
+                        alarms.clone(),
                         ha_entity_states.clone(),
                         &status_event,
                     )
@@ -471,6 +535,7 @@ impl MqttClient {
         portal_id: Option<String>,
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
+        alarms: Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         status_event: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -492,6 +557,17 @@ impl MqttClient {
         // Subscribe to topics using QoS 1 (AtLeastOnce)
         client.subscribe("inverter/state", QoS::AtLeastOnce)?;
         client.subscribe("inverter/console", QoS::AtLeastOnce)?;
+        client.subscribe("inverter/notifications", QoS::AtLeastOnce)?;
+
+        // Victron alarms relayed by the GX MQTT gateway from D-Bus /Alarms paths
+        if let Some(ref id) = portal_id {
+            if !id.is_empty() {
+                let alarm_filter = format!("N/{}/+/Alarms/#", id);
+                if let Err(e) = client.subscribe(&alarm_filter, QoS::AtLeastOnce) {
+                    log::warn!("Failed to subscribe to {}: {:?}", alarm_filter, e);
+                }
+            }
+        }
 
         if let Some(ref cam_topic) = camera_topic {
             if !cam_topic.is_empty() {
@@ -523,6 +599,7 @@ impl MqttClient {
         let app_c = app_handle.clone();
         let cam_c = camera_topic.clone();
         let notif_c = notifications.clone();
+        let alarms_c = alarms.clone();
         let ha_states_c = ha_entity_states.clone();
         let se = status_event.to_string();
         let con_result = tokio::task::spawn_blocking(move || {
@@ -541,6 +618,7 @@ impl MqttClient {
                             &app_c,
                             &cam_c,
                             &notif_c,
+                            &alarms_c,
                             &ha_states_c,
                         );
                     }
@@ -585,6 +663,7 @@ impl MqttClient {
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
         notifications: &Arc<Mutex<NotificationState>>,
+        alarms: &Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
     ) {
         if topic == "inverter/state" {
@@ -597,6 +676,24 @@ impl MqttClient {
                     ha_entity_states.clone(),
                 );
             }
+        } else if topic == "inverter/notifications" {
+            match serde_json::from_str::<MqttNotification>(payload) {
+                Ok(notification) => {
+                    if let Some(ref handle) = app_handle {
+                        let _ = handle.emit("mqtt-notification", &notification);
+                        // Mirror to OS notification like local alerts
+                        let _ = handle
+                            .notification()
+                            .builder()
+                            .title(&notification.title)
+                            .body(&notification.body)
+                            .show();
+                    }
+                }
+                Err(e) => log::warn!("Bad notification payload on {}: {}", topic, e),
+            }
+        } else if topic.starts_with("N/") && topic.contains("/Alarms/") {
+            Self::handle_alarm_message(topic, payload, alarms, app_handle);
         } else if topic == "inverter/console" {
             if let Ok(mut guard) = state.lock() {
                 let console = guard.console.get_or_insert_with(Vec::new);
@@ -624,6 +721,61 @@ impl MqttClient {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    /// Track a Victron alarm topic (N/<portal>/<service>/Alarms/<Name>, value 0/1/2)
+    /// and emit banner notifications on transitions. Value 0 clears the banner.
+    fn handle_alarm_message(
+        topic: &str,
+        payload: &str,
+        alarms: &Arc<Mutex<HashMap<String, u8>>>,
+        app_handle: &Option<tauri::AppHandle>,
+    ) {
+        let value = serde_json::from_str::<serde_json::Value>(payload)
+            .ok()
+            .and_then(|v| v.get("value").and_then(|x| x.as_u64()))
+            .unwrap_or(0) as u8;
+
+        let prev = {
+            let mut map = match alarms.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            let entry = map.entry(topic.to_string()).or_insert(0);
+            let prev = *entry;
+            *entry = value;
+            prev
+        };
+
+        if prev == value {
+            return;
+        }
+
+        let parts: Vec<&str> = topic.split('/').collect();
+        // N/<portal>/<service_type>_<instance>/Alarms/<AlarmName>
+        let service = parts.get(2).copied().unwrap_or("device");
+        let alarm_name = parts.get(4).copied().unwrap_or(topic);
+        let id = format!("victron-{}", topic);
+
+        if let Some(ref handle) = app_handle {
+            if value == 1 || value == 2 {
+                let level = if value == 2 { "alarm" } else { "warning" };
+                let state_txt = if value == 2 { "Alarm" } else { "Warning" };
+                let _ = handle.emit(
+                    "mqtt-notification",
+                    MqttNotification {
+                        id,
+                        level: level.to_string(),
+                        title: pretty_service_name(service),
+                        body: format!("{}: {}", pretty_alarm_name(alarm_name), state_txt),
+                        source: "victron".to_string(),
+                        ts: String::new(),
+                    },
+                );
+            } else {
+                let _ = handle.emit("mqtt-notification-clear", serde_json::json!({ "id": id }));
             }
         }
     }

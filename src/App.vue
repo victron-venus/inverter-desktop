@@ -24,6 +24,8 @@
       <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1 scrollbar-hide">
         <DailyStats v-if="appConfig?.show_daily_stats !== false" />
 
+        <NotificationBanner />
+
         <StatCards
           :gt="state.gt"
           :g1="state.g1"
@@ -175,31 +177,32 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { X } from '@lucide/vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
-import { logger } from './logger'
-import { getAppConfig } from './config'
 import { listen } from '@tauri-apps/api/event'
-import { X } from '@lucide/vue'
-import { useConnection, notify } from './composables/useConnection'
-import { useHA } from './composables/useHA'
-import { useTheme } from './composables/useTheme'
-import { useChart, addHistoryPoint } from './composables/useChart'
-import { checkForUpdates, checkForUpdatesSilent } from './composables/useAutoUpdate'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
-import StatCards from './components/StatCards.vue'
-import ChartPanel from './components/ChartPanel.vue'
-import SidePanel from './components/SidePanel.vue'
+import AuthScreen from './components/AuthScreen.vue'
 import BatterySolarPanel from './components/BatterySolarPanel.vue'
-import LoadsTable from './components/LoadsTable.vue'
-import StatusBar from './components/StatusBar.vue'
+import ChartPanel from './components/ChartPanel.vue'
+import ConsoleLog from './components/ConsoleLog.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DailyStats from './components/DailyStats.vue'
-import ConsoleLog from './components/ConsoleLog.vue'
-import AuthScreen from './components/AuthScreen.vue'
 import ErrorBoundary from './components/ErrorBoundary.vue'
+import LoadsTable from './components/LoadsTable.vue'
+import NotificationBanner from './components/NotificationBanner.vue'
+import SidePanel from './components/SidePanel.vue'
+import StatCards from './components/StatCards.vue'
+import StatusBar from './components/StatusBar.vue'
+import { checkForUpdates, checkForUpdatesSilent } from './composables/useAutoUpdate'
+import { addHistoryPoint, useChart } from './composables/useChart'
+import { notify, useConnection } from './composables/useConnection'
+import { useHA } from './composables/useHA'
 import { initSystemNotifications } from './composables/useSystemNotifications'
+import { useTheme } from './composables/useTheme'
+import { getAppConfig } from './config'
+import { logger } from './logger'
 
 const {
   state,

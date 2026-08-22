@@ -63,6 +63,7 @@ export default {
     noNotifications: 'No notifications',
     markAllRead: 'Mark all read',
     clear: 'Clear',
+    dismiss: 'Dismiss',
   },
   chart: {
     grid: 'Grid',
