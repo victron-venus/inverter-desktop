@@ -32,12 +32,9 @@ jobs:
         uses: poseidon/wait-for-status-checks@e7e24423722c5b8e97a6dd5848827d2a412f812d # v0.7.0
         id: wait-for-checks
         with:
-          timeout: 600
+          timeout: 2400
           interval: 10
           token: ${{ secrets.BOT_PAT }}
-          check-names: |
-            CI
-            Python Security Scan
 
       - name: Auto-merge PR
         if: steps.wait-for-checks.outputs.status == 'success'
