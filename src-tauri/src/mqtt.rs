@@ -657,6 +657,7 @@ impl MqttClient {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_message(
         topic: &str,
         payload: &str,
