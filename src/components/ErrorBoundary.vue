@@ -57,7 +57,7 @@ onMounted(() => {
   showRetry.value = true
 })
 
-onErrorCaptured((err, instance, info) => {
+onErrorCaptured((err, _instance, info) => {
   hasError.value = true
   errorMessage.value = err?.message || String(err)
   errorStack.value = `${info}\n${err?.stack || ''}`

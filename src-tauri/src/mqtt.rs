@@ -176,6 +176,7 @@ pub struct HeaderToggle {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DailyStats {
     pub produced_today: Option<f64>,
+    pub produced_yesterday: Option<f64>,
     pub produced_dollars: Option<f64>,
     pub grid_kwh: Option<f64>,
     pub battery_in: Option<f64>,

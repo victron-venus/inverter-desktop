@@ -274,13 +274,6 @@ function showError(msg: string) {
   messageType.value = 'error'
   setTimeout(clearMessage, 3000)
 }
-
-function showSuccess(msg: string) {
-  message.value = msg
-  messageType.value = 'success'
-  setTimeout(clearMessage, 2000)
-}
-
 function handleAuthenticated(token: string) {
   authToken.value = token
   showAuthScreen.value = false

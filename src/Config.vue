@@ -1165,7 +1165,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit } from '@tauri-apps/api/event'
 import { logger } from './logger'
-import { useHA } from './composables/useHA'
 
 const { t: $t } = useI18n()
 import {
@@ -1221,7 +1220,6 @@ const {
   moveToggleDown,
   ensureEntitiesFetched,
 } = useHAEntityManager()
-const { haLoadsForConfig } = useHA()
 
 const activeTab = ref('mqtt')
 const sections = [

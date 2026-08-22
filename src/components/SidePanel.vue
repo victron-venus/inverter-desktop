@@ -6,7 +6,7 @@
         <Car :size="10" /> {{ $t('sections.ev') }}
       </div>
       <div class="p-1 flex justify-between items-center gap-2 px-2">
-        <div v-if="evChargingKw !== null">
+        <div v-if="evChargingKw != null">
           <div class="text-xl font-bold text-solar leading-none">
             {{ evChargingKw.toFixed(1) }}kW
           </div>
@@ -20,7 +20,7 @@
             {{ $t('sections.vue') }}
           </div>
         </div>
-        <div class="text-right" v-if="evSoc !== null && evSoc > 0">
+        <div class="text-right" v-if="evSoc != null && evSoc > 0">
           <div class="text-xl font-bold text-accent leading-none">{{ Math.floor(evSoc) }}%</div>
           <div class="text-[10px] text-slate-500 font-bold text-center tracking-tighter">
             {{ $t('sections.soc') }}
@@ -36,7 +36,7 @@
       </div>
       <div class="p-1 flex justify-between items-center gap-2 px-2">
         <div
-          v-if="waterLevel !== null"
+          v-if="waterLevel != null"
           class="text-xl font-bold"
           :class="waterValve === true ? 'text-red-500' : 'text-green-500'"
         >
@@ -414,11 +414,11 @@ defineProps<{
   pumpSwitchEntity: string
   waterValveEntity: string
   washerActive?: boolean
-  washerRemainingTime?: string
+  washerRemainingTime?: string | null
   dryerActive?: boolean
-  dryerRemainingTime?: string
+  dryerRemainingTime?: string | null
   dishwasherActive?: boolean
-  dishwasherRemainingTime?: string
+  dishwasherRemainingTime?: string | null
   homeButtons: Array<{ id: string; label: string; entity: string }>
   buttonStates: Record<string, string>
   haSensors: HaSensorDisplay[]
@@ -427,7 +427,6 @@ defineProps<{
   haMediaPlayers: HaMediaPlayerDisplay[]
   haScenes: HaSceneDisplay[]
   haWeather: HaWeatherDisplay | null
-  showEv?: boolean
   showWasher?: boolean
   showDryer?: boolean
   showDishwasher?: boolean
