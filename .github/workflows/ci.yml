@@ -16,7 +16,7 @@ concurrency:
 jobs:
   ci:
     name: Rust CI (with frontend)
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/rust-ci.yml@ad8ccacd304eb2d941798572c59b9794830350af
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/rust-ci.yml@5b18667880c7a0154b7c7e6686042eff5f47cdb7
     with:
       working-directory: src-tauri
       frontend-working-directory: .
