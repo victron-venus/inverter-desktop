@@ -8,9 +8,6 @@ on:
       - 'src-tauri/Cargo.toml'
   workflow_dispatch: {}
 
-permissions:
-  contents: write
-
 jobs:
   check-version-change:
     runs-on: ubuntu-latest
@@ -50,6 +47,8 @@ jobs:
   release:
     needs: check-version-change
     if: needs.check-version-change.outputs.should_release == 'true'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -119,6 +118,8 @@ jobs:
     needs: [check-version-change, release]
     if: needs.check-version-change.outputs.should_release == 'true'
     name: Build & upload mobile artifacts
+    permissions:
+      contents: write
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
     strategy:
