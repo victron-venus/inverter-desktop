@@ -13,6 +13,7 @@
       <span v-if="banner.body" class="opacity-80 truncate flex-1 min-w-0">{{ banner.body }}</span>
       <span class="flex-1" />
       <button
+        type="button"
         class="shrink-0 rounded p-0.5 opacity-50 transition-opacity hover:opacity-100 cursor-pointer"
         :title="$t('notifications.dismiss')"
         @click="dismissBanner(banner.id)"

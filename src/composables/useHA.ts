@@ -69,7 +69,7 @@ export function useHA() {
     // Replace comma with dot to handle European decimal format, assuming no thousand separator
     const normalized = raw.replace(/,/g, '.')
     // Extract the first number from the string (handles cases like "10.1 kW", "OFF", etc.)
-    const match = normalized.match(/^[-+]?[0-9]*\.?[0-9]+/)
+    const match = /^[-+]?\d*\.?\d+/.exec(normalized)
     if (match) {
       const n = Number.parseFloat(match[0])
       return Number.isNaN(n) ? null : n
