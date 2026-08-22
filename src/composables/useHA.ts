@@ -25,6 +25,10 @@ function configuredSectionEntities(appConfig: Ref<AppConfig | null>): string[] {
   const singles = [
     cfg?.ha_dryer_entity,
     cfg?.ha_washer_entity,
+    cfg?.ha_washer_start_entity,
+    cfg?.ha_washer_pause_entity,
+    cfg?.ha_dryer_start_entity,
+    cfg?.ha_dryer_pause_entity,
     cfg?.ha_dishwasher_running_entity,
     cfg?.ha_dishwasher_duration_entity,
     cfg?.ha_pump_switch_entity,
@@ -512,6 +516,11 @@ export function useHA() {
 
   const washerActive = computed(() => hasNonZeroTime(washerRemainingTime.value))
 
+  const haWasherStartEntity = computed(() => (appConfig.value?.ha_washer_start_entity || '').trim())
+  const haWasherPauseEntity = computed(() => (appConfig.value?.ha_washer_pause_entity || '').trim())
+  const haDryerStartEntity = computed(() => (appConfig.value?.ha_dryer_start_entity || '').trim())
+  const haDryerPauseEntity = computed(() => (appConfig.value?.ha_dryer_pause_entity || '').trim())
+
   const homeButtons = computed(() => {
     const cfg = appConfig.value
     if (cfg?.ha_entities && cfg.ha_entities.length > 0) {
@@ -688,6 +697,10 @@ export function useHA() {
     washerRemainingTime,
     dryerActive,
     dryerRemainingTime,
+    washerStartEntity: haWasherStartEntity,
+    washerPauseEntity: haWasherPauseEntity,
+    dryerStartEntity: haDryerStartEntity,
+    dryerPauseEntity: haDryerPauseEntity,
     coerceBool,
     initHa,
     sendHaOrMqtt,

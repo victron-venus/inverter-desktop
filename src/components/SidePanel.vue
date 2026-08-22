@@ -311,39 +311,79 @@
 
       <div
         v-if="showWasher !== false && washerActive"
-        class="classic-card px-2 py-0.5 flex justify-between items-center"
+        class="classic-card px-2 py-0.5 flex flex-col gap-0.5"
       >
-        <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
-          $t('sections.washer')
-        }}</span>
-        <div class="flex items-center gap-1.5">
-          <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
-            $t('sections.running')
+        <div class="flex justify-between items-center">
+          <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
+            $t('sections.washer')
           }}</span>
-          <span
-            v-if="washerRemainingTime"
-            class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-            >{{ washerRemainingTime }}</span
+          <div class="flex items-center gap-1.5">
+            <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+              $t('sections.running')
+            }}</span>
+            <span
+              v-if="washerRemainingTime"
+              class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
+              >{{ washerRemainingTime }}</span
+            >
+          </div>
+        </div>
+        <div v-if="washerStartEntity || washerPauseEntity" class="flex gap-1 justify-end">
+          <button
+            v-if="washerStartEntity"
+            type="button"
+            class="classic-btn"
+            @click="$emit('send', 'press', { entity: washerStartEntity })"
           >
+            {{ $t('sections.start') }}
+          </button>
+          <button
+            v-if="washerPauseEntity"
+            type="button"
+            class="classic-btn"
+            @click="$emit('send', 'press', { entity: washerPauseEntity })"
+          >
+            {{ $t('sections.pause') }}
+          </button>
         </div>
       </div>
 
       <div
         v-if="showDryer !== false && dryerActive"
-        class="classic-card px-2 py-0.5 flex justify-between items-center"
+        class="classic-card px-2 py-0.5 flex flex-col gap-0.5"
       >
-        <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
-          $t('sections.dryer')
-        }}</span>
-        <div class="flex items-center gap-1.5">
-          <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
-            $t('sections.running')
+        <div class="flex justify-between items-center">
+          <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
+            $t('sections.dryer')
           }}</span>
-          <span
-            v-if="dryerRemainingTime"
-            class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-            >{{ dryerRemainingTime }}</span
+          <div class="flex items-center gap-1.5">
+            <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+              $t('sections.running')
+            }}</span>
+            <span
+              v-if="dryerRemainingTime"
+              class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
+              >{{ dryerRemainingTime }}</span
+            >
+          </div>
+        </div>
+        <div v-if="dryerStartEntity || dryerPauseEntity" class="flex gap-1 justify-end">
+          <button
+            v-if="dryerStartEntity"
+            type="button"
+            class="classic-btn"
+            @click="$emit('send', 'press', { entity: dryerStartEntity })"
           >
+            {{ $t('sections.start') }}
+          </button>
+          <button
+            v-if="dryerPauseEntity"
+            type="button"
+            class="classic-btn"
+            @click="$emit('send', 'press', { entity: dryerPauseEntity })"
+          >
+            {{ $t('sections.pause') }}
+          </button>
         </div>
       </div>
     </div>
@@ -417,6 +457,10 @@ defineProps<{
   washerRemainingTime?: string | null
   dryerActive?: boolean
   dryerRemainingTime?: string | null
+  washerStartEntity?: string
+  washerPauseEntity?: string
+  dryerStartEntity?: string
+  dryerPauseEntity?: string
   dishwasherActive?: boolean
   dishwasherRemainingTime?: string | null
   homeButtons: Array<{ id: string; label: string; entity: string }>
