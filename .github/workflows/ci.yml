@@ -18,4 +18,6 @@ jobs:
     name: Rust CI (with frontend)
     uses: victron-venus/venus-os-ci-toolkit/.github/workflows/rust-ci.yml@2f679e8adc653a0d599fde5f627d387c6207a219
     with:
+      working-directory: src-tauri
+      frontend-working-directory: .
       enable-frontend: true
