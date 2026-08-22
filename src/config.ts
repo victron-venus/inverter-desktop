@@ -26,6 +26,10 @@ export interface AppConfig {
   }>
   ha_dryer_entity?: string
   ha_washer_entity?: string
+  ha_washer_start_entity?: string
+  ha_washer_pause_entity?: string
+  ha_dryer_start_entity?: string
+  ha_dryer_pause_entity?: string
   ha_dishwasher_running_entity?: string
   ha_dishwasher_duration_entity?: string
   ha_pump_switch_entity?: string

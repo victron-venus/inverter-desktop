@@ -67,6 +67,10 @@
               :washerRemainingTime="washerRemainingTime"
               :dryerActive="dryerActive"
               :dryerRemainingTime="dryerRemainingTime"
+              :washerStartEntity="washerStartEntity"
+              :washerPauseEntity="washerPauseEntity"
+              :dryerStartEntity="dryerStartEntity"
+              :dryerPauseEntity="dryerPauseEntity"
               :dishwasherActive="dishwasherActive"
               :dishwasherRemainingTime="dishwasherRemainingTime"
               :homeButtons="homeButtons"
@@ -244,6 +248,10 @@ const {
   washerRemainingTime,
   dryerActive,
   dryerRemainingTime,
+  washerStartEntity,
+  washerPauseEntity,
+  dryerStartEntity,
+  dryerPauseEntity,
   dishwasherActive,
   dishwasherRemainingTime,
   coerceBool,

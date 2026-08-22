@@ -421,10 +421,44 @@
                     v-model="config.ha_dryer_entity"
                     type="text"
                     class="classic-input w-full"
-                    placeholder="sensor.dryer"
+                    placeholder="sensor.dryer_remaining_time"
                   />
                   <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
                     Remaining time sensor (e.g. 10:02). Section shows while the dryer is running.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_dryer_start_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Dryer Start Entity</label
+                  >
+                  <input
+                    id="ha_dryer_start_entity"
+                    v-model="config.ha_dryer_start_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="button.dryer_remote_start"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Optional START button shown in the Dryer section.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_dryer_pause_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Dryer Pause Entity</label
+                  >
+                  <input
+                    id="ha_dryer_pause_entity"
+                    v-model="config.ha_dryer_pause_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="button.dryer_pause"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Optional PAUSE button shown in the Dryer section.
                   </p>
                 </div>
                 <div class="flex flex-col gap-1">
@@ -446,6 +480,40 @@
                 </div>
                 <div class="flex flex-col gap-1">
                   <label
+                    for="ha_washer_start_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Washer Start Entity</label
+                  >
+                  <input
+                    id="ha_washer_start_entity"
+                    v-model="config.ha_washer_start_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="button.washer_remote_start"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Optional START button shown in the Washer section.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="ha_washer_pause_entity"
+                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
+                    >Washer Pause Entity</label
+                  >
+                  <input
+                    id="ha_washer_pause_entity"
+                    v-model="config.ha_washer_pause_entity"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="button.washer_pause"
+                  />
+                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                    Optional PAUSE button shown in the Washer section.
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label
                     for="ha_dishwasher_running_entity"
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
                     >Dishwasher Running Entity</label
@@ -455,7 +523,7 @@
                     v-model="config.ha_dishwasher_running_entity"
                     type="text"
                     class="classic-input w-full"
-                    placeholder="binary_sensor.dishwasher_is_running"
+                    placeholder="binary_sensor.dishwasher_running"
                   />
                   <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
                     Binary sensor that turns on while the dishwasher runs.

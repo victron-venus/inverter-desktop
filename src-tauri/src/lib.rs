@@ -174,6 +174,7 @@ const HA_ENTITY_DOMAINS: &[&str] = &[
     "sensor",
     "binary_sensor",
     "climate",
+    "button",
 ];
 const ABOUT_WINDOW_W: f64 = 380.0;
 const ABOUT_WINDOW_H: f64 = 320.0;
@@ -224,6 +225,10 @@ struct FullConfig {
     ha_use_direct_api: bool,
     ha_dryer_entity: Option<String>,
     ha_washer_entity: Option<String>,
+    ha_washer_start_entity: Option<String>,
+    ha_washer_pause_entity: Option<String>,
+    ha_dryer_start_entity: Option<String>,
+    ha_dryer_pause_entity: Option<String>,
     ha_dishwasher_running_entity: Option<String>,
     ha_dishwasher_duration_entity: Option<String>,
     ha_pump_switch_entity: Option<String>,
@@ -281,6 +286,10 @@ impl Default for FullConfig {
             ha_use_direct_api: false,
             ha_dryer_entity: None,
             ha_washer_entity: None,
+            ha_washer_start_entity: None,
+            ha_washer_pause_entity: None,
+            ha_dryer_start_entity: None,
+            ha_dryer_pause_entity: None,
             ha_dishwasher_running_entity: None,
             ha_dishwasher_duration_entity: None,
             ha_pump_switch_entity: None,
@@ -398,6 +407,11 @@ async fn perform_action(
                     }
                     "scene" => {
                         client.scene_activate(entity).await?;
+                    }
+                    "button" => {
+                        client
+                            .call_service(entity, "button", "press", serde_json::json!({}))
+                            .await?;
                     }
                     _ => {
                         let states = client.get_states().await?;
