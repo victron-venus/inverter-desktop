@@ -299,6 +299,8 @@ jobs:
           alias: ${{ env.SIGN_KEY_ALIAS }}
           keyStorePassword: ${{ env.SIGN_KEY_STORE_PASSWORD }}
           keyPassword: ${{ env.SIGN_KEY_PASSWORD }}
+          # runner image no longer ships build-tools 29.0.3 (action default); use the version installed above
+          buildToolsVersion: 34.0.0
 
       - name: Android – rename artifacts for release
         if: matrix.type == 'android'
