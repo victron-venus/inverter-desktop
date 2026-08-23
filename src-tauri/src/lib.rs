@@ -1262,13 +1262,18 @@ pub fn run() {
                     let app_for_tray = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         let mut interval = tokio::time::interval(Duration::from_millis(1500));
+                        // After sleep/wake, don't fire a burst of catch-up renders.
+                        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         // Track notification state to avoid spam
                         let mut low_battery_notified = false;
-                        loop {
-                            interval.tick().await;
+                        // One tray update. The loop below catches panics so a single
+                        // bad tick can't silently kill the whole tray task.
+                        let mut update_tray = || {
                             let state = {
-                                let guard = mqtt_for_tray.lock().ok();
-                                guard.and_then(|g| g.as_ref().map(|c| c.get_state()))
+                                // Poisoned lock is not a broken client: the state is a
+                                // plain snapshot, keep going instead of skipping forever.
+                                let guard = mqtt_for_tray.lock().unwrap_or_else(|p| p.into_inner());
+                                guard.as_ref().map(|c| c.get_state())
                             };
                             if let Some(s) = state {
                                 let solar = s.solar_total.unwrap_or(0.0) / 1000.0;
@@ -1285,9 +1290,13 @@ pub fn run() {
                                         let (rgba, w, h) = tray_icon::render(s.solar_total, s.gt);
                                         let tauri_img = tauri::image::Image::new_owned(rgba, w, h);
                                         let _ = tray.set_title(None::<&str>);
-                                        let _ = tray.set_icon(Some(tauri_img));
+                                        if let Err(e) = tray.set_icon(Some(tauri_img)) {
+                                            log::warn!("Tray set_icon failed: {e}");
+                                        }
                                     }
-                                    let _ = tray.set_tooltip(Some(&tip));
+                                    if let Err(e) = tray.set_tooltip(Some(&tip)) {
+                                        log::warn!("Tray set_tooltip failed: {e}");
+                                    }
                                 }
 
                                 // Check for critical alerts
@@ -1307,6 +1316,19 @@ pub fn run() {
                                 } else {
                                     low_battery_notified = false;
                                 }
+                            }
+                        };
+                        loop {
+                            interval.tick().await;
+                            if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                &mut update_tray,
+                            )) {
+                                let msg = p
+                                    .downcast_ref::<String>()
+                                    .map(String::as_str)
+                                    .or_else(|| p.downcast_ref::<&str>().copied())
+                                    .unwrap_or("unknown panic");
+                                log::error!("Tray update tick panicked: {msg}");
                             }
                         }
                     });
