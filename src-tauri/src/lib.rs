@@ -251,6 +251,8 @@ struct FullConfig {
     ha_entities: Option<Vec<HaEntityConfig>>,
     header_toggles_config: Option<Vec<HeaderToggle>>,
     portal_id: Option<String>,
+    water_pump_instance: Option<u32>,
+    water_valve_instance: Option<u32>,
     camera_topic: Option<String>,
     camera_enabled: bool,
     show_advanced_settings: Option<bool>,
@@ -305,6 +307,9 @@ impl Default for FullConfig {
             ha_entities: None,
             header_toggles_config: None,
             portal_id: None,
+            // dbus-pump defaults on the GX (see dbus-pump local_config.example.py)
+            water_pump_instance: Some(1),
+            water_valve_instance: Some(2),
             camera_topic: Some("frigate/+/events".to_string()),
             camera_enabled: false,
             show_advanced_settings: Some(false),
@@ -730,6 +735,8 @@ async fn connect_mqtt(
     username: Option<String>,
     password: Option<String>,
     portal_id: Option<String>,
+    water_pump_instance: Option<u32>,
+    water_valve_instance: Option<u32>,
     camera_topic: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
@@ -742,6 +749,10 @@ async fn connect_mqtt(
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
+    client.set_water_instances(match (water_pump_instance, water_valve_instance) {
+        (Some(p), Some(v)) => Some((p, v)),
+        _ => None,
+    });
     client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
     *client_guard = Some(client);
@@ -1349,6 +1360,8 @@ pub fn run() {
                         let username = config.mqtt_login.clone();
                         let password = config.mqtt_password.clone();
                         let portal_id = config.portal_id.clone();
+                        let water_pump_instance = config.water_pump_instance;
+                        let water_valve_instance = config.water_valve_instance;
                         let camera_topic = config.camera_topic.clone();
                         let connect_handle = app_handle.clone();
                         let mqtt_state = app_handle.state::<MqttState>();
@@ -1358,6 +1371,8 @@ pub fn run() {
                             username,
                             password,
                             portal_id,
+                            water_pump_instance,
+                            water_valve_instance,
                             camera_topic,
                             connect_handle,
                             mqtt_state,

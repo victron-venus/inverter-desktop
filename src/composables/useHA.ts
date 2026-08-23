@@ -322,17 +322,29 @@ export function useHA() {
     return lower === 'on' || lower === 'running'
   }
 
+  // Cerbo GX MQTT values (published by dbus-pump) take precedence; the HA
+  // entity path stays as fallback for setups without Cerbo MQTT configured.
+  const waterFromMqtt = computed(
+    () =>
+      state.value.water_level != null ||
+      state.value.water_valve != null ||
+      state.value.pump_switch != null
+  )
+
   const waterValveState = computed(() => {
+    if (state.value.water_valve != null) return state.value.water_valve
     if (!haEnabled.value) return null
     return entityStateIsOn(haValveSwitchEntity.value)
   })
 
   const pumpSwitchState = computed(() => {
+    if (state.value.pump_switch != null) return state.value.pump_switch
     if (!haEnabled.value) return null
     return entityStateIsOn(haPumpSwitchEntity.value)
   })
 
   const waterLevel = computed(() => {
+    if (state.value.water_level != null) return state.value.water_level
     if (!haEnabled.value) return null
     const entity = haWaterLevelEntity.value
     if (!entity) return null
@@ -341,6 +353,7 @@ export function useHA() {
   })
 
   const waterSectionVisible = computed(() => {
+    if (waterFromMqtt.value) return true
     if (!haEnabled.value) return false
     return !!(haPumpSwitchEntity.value || haValveSwitchEntity.value || haWaterLevelEntity.value)
   })

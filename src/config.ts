@@ -35,6 +35,9 @@ export interface AppConfig {
   ha_pump_switch_entity?: string
   ha_valve_switch_entity?: string
   ha_water_level_entity?: string
+  /** dbus-pump startstop instances on the Cerbo GX (defaults 1/2) */
+  water_pump_instance?: number
+  water_valve_instance?: number
   ha_ev_soc_entity?: string
   ha_ev_charging_entity?: string
   ha_ev_clamp_entity?: string

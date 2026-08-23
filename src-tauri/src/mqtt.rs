@@ -282,6 +282,8 @@ pub struct MqttClient {
     password: Option<String>,
     app_handle: Option<tauri::AppHandle>,
     portal_id: Option<String>,
+    /// Cerbo GX startstop device instances for (pump, valve) water topics.
+    water_instances: Option<(u32, u32)>,
     camera_topic: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     alarms: Arc<Mutex<HashMap<String, u8>>>,
@@ -446,6 +448,7 @@ impl MqttClient {
             password,
             app_handle: None,
             portal_id: None,
+            water_instances: None,
             camera_topic: None,
             notifications: Arc::new(Mutex::new(NotificationState {
                 high_consumption: AlertState::new(),
@@ -471,6 +474,10 @@ impl MqttClient {
         self.portal_id = id;
     }
 
+    pub fn set_water_instances(&mut self, instances: Option<(u32, u32)>) {
+        self.water_instances = instances;
+    }
+
     pub fn set_camera_topic(&mut self, topic: Option<String>) {
         self.camera_topic = topic;
     }
@@ -492,6 +499,7 @@ impl MqttClient {
         let state = self.state.clone();
         let app_handle = self.app_handle.clone();
         let portal_id = self.portal_id.clone();
+        let water_instances_owned = self.water_instances;
         let cam_topic_owned = self.camera_topic.clone();
         let notifications = self.notifications.clone();
         let alarms = self.alarms.clone();
@@ -510,6 +518,7 @@ impl MqttClient {
                         state.clone(),
                         app_handle.clone(),
                         portal_id.clone(),
+                        water_instances_owned,
                         cam_topic_owned.clone(),
                         notifications.clone(),
                         alarms.clone(),
@@ -544,6 +553,7 @@ impl MqttClient {
         state: Arc<Mutex<InverterState>>,
         app_handle: Option<tauri::AppHandle>,
         portal_id: Option<String>,
+        water_instances: Option<(u32, u32)>,
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
         alarms: Arc<Mutex<HashMap<String, u8>>>,
@@ -577,6 +587,16 @@ impl MqttClient {
                 if let Err(e) = client.subscribe(&alarm_filter, QoS::AtLeastOnce) {
                     log::warn!("Failed to subscribe to {}: {:?}", alarm_filter, e);
                 }
+                // Water system published by dbus-pump on the GX (tank level %,
+                // pump/valve startstop state).
+                for filter in [
+                    format!("N/{}/tank/+/Level", id),
+                    format!("N/{}/pump/+/State", id),
+                ] {
+                    if let Err(e) = client.subscribe(&filter, QoS::AtLeastOnce) {
+                        log::warn!("Failed to subscribe to {}: {:?}", filter, e);
+                    }
+                }
             }
         }
 
@@ -609,6 +629,7 @@ impl MqttClient {
         let state_c = state.clone();
         let app_c = app_handle.clone();
         let cam_c = camera_topic.clone();
+        let water_c = water_instances;
         let notif_c = notifications.clone();
         let alarms_c = alarms.clone();
         let ha_states_c = ha_entity_states.clone();
@@ -628,6 +649,7 @@ impl MqttClient {
                             &state_c,
                             &app_c,
                             &cam_c,
+                            &water_c,
                             &notif_c,
                             &alarms_c,
                             &ha_states_c,
@@ -674,6 +696,7 @@ impl MqttClient {
         state: &Arc<Mutex<InverterState>>,
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
+        water_instances: &Option<(u32, u32)>,
         notifications: &Arc<Mutex<NotificationState>>,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
@@ -717,6 +740,26 @@ impl MqttClient {
                     let _ = handle.emit("mqtt-state-update", &*guard);
                 }
             }
+        } else if topic.starts_with("N/") && Self::parse_water_topic(topic).is_some() {
+            // dbus-pump on the GX: N/<portal>/tank/<i>/Level (%),
+            // N/<portal>/pump/<i>/State (0 stopped, 1 running).
+            if let (Some((kind, inst)), Some((pump_i, valve_i)), Some(value)) = (
+                Self::parse_water_topic(topic),
+                water_instances,
+                Self::parse_cerbo_value(payload),
+            ) {
+                if let Ok(mut guard) = state.lock() {
+                    match (kind, inst) {
+                        ("tank", _) => guard.water_level = Some(value),
+                        ("pump", i) if i == *pump_i => guard.pump_switch = Some(value >= 0.5),
+                        ("pump", i) if i == *valve_i => guard.water_valve = Some(value >= 0.5),
+                        _ => {}
+                    }
+                    if let Some(ref handle) = app_handle {
+                        let _ = handle.emit("mqtt-state-update", &*guard);
+                    }
+                }
+            }
         } else if let Some(ref cam_t) = camera_topic {
             if match_mqtt_topic(topic, cam_t) {
                 if let Some(ref handle) = app_handle {
@@ -735,6 +778,28 @@ impl MqttClient {
                 }
             }
         }
+    }
+
+    /// Parse a dbus-pump water topic: N/<portal>/tank/<i>/Level or
+    /// N/<portal>/pump/<i>/State -> Some((kind, instance)).
+    fn parse_water_topic(topic: &str) -> Option<(&str, u32)> {
+        let rest = topic.strip_prefix("N/")?;
+        let mut it = rest.split('/');
+        let _portal = it.next()?;
+        let kind = it.next()?;
+        let inst: u32 = it.next()?.parse().ok()?;
+        match (kind, it.next()?) {
+            ("tank", "Level") | ("pump", "State") => Some((kind, inst)),
+            _ => None,
+        }
+    }
+
+    /// Cerbo flashmq JSON envelope: {"value": <number>}.
+    fn parse_cerbo_value(payload: &str) -> Option<f64> {
+        serde_json::from_str::<serde_json::Value>(payload)
+            .ok()?
+            .get("value")?
+            .as_f64()
     }
 
     /// Track a Victron alarm topic (N/<portal>/<service>/Alarms/<Name>, value 0/1/2)
@@ -1026,6 +1091,42 @@ mod tests {
     fn returns_none_when_no_match() {
         let map = states();
         assert_eq!(load_friendly_name("no_such_load", &map), None);
+    }
+
+    #[test]
+    fn parses_tank_level_topic() {
+        assert_eq!(
+            MqttClient::parse_water_topic("N/abc123/tank/21/Level"),
+            Some(("tank", 21))
+        );
+    }
+
+    #[test]
+    fn parses_pump_state_topic() {
+        assert_eq!(
+            MqttClient::parse_water_topic("N/abc123/pump/2/State"),
+            Some(("pump", 2))
+        );
+    }
+
+    #[test]
+    fn rejects_other_paths_and_services() {
+        assert_eq!(MqttClient::parse_water_topic("N/abc/tank/21/Voltage"), None);
+        assert_eq!(
+            MqttClient::parse_water_topic("N/abc/solarcharger/0/State"),
+            None
+        );
+        assert_eq!(MqttClient::parse_water_topic("N/abc/pump/x/State"), None);
+    }
+
+    #[test]
+    fn parses_cerbo_envelope() {
+        assert_eq!(
+            MqttClient::parse_cerbo_value("{\"value\": 66.0}"),
+            Some(66.0)
+        );
+        assert_eq!(MqttClient::parse_cerbo_value("{\"value\": null}"), None);
+        assert_eq!(MqttClient::parse_cerbo_value("not json"), None);
     }
 
     #[test]

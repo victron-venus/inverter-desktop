@@ -558,11 +558,15 @@
                 >
                   Water &amp; EV Entities
                 </h3>
+                <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1">
+                  With a Cerbo GX portal ID configured, water data comes from the GX (MQTT, via
+                  dbus-pump). The entities below are only the HA fallback.
+                </p>
                 <div class="flex flex-col gap-1">
                   <label
                     for="ha_pump_switch_entity"
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Pump Switch Entity</label
+                    >Pump Switch Entity (fallback)</label
                   >
                   <input
                     id="ha_pump_switch_entity"
@@ -576,7 +580,7 @@
                   <label
                     for="ha_valve_switch_entity"
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Valve Switch Entity</label
+                    >Valve Switch Entity (fallback)</label
                   >
                   <input
                     id="ha_valve_switch_entity"
@@ -590,7 +594,7 @@
                   <label
                     for="ha_water_level_entity"
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Water Level Sensor</label
+                    >Water Level Sensor (fallback)</label
                   >
                   <input
                     id="ha_water_level_entity"
@@ -1226,34 +1230,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { emit } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ErrorBoundary from './components/ErrorBoundary.vue'
-import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import { emit } from '@tauri-apps/api/event'
 import { logger } from './logger'
 
 const { t: $t } = useI18n()
+
 import {
-  Settings,
-  Wifi,
+  Archive,
+  Check,
+  Download,
+  Eye,
   Home,
   Layout,
-  Eye,
-  Save,
-  RotateCcw,
-  X,
   Loader2,
-  Check,
-  Archive,
-  Download,
+  RotateCcw,
+  Save,
+  Settings,
   Upload,
+  Wifi,
+  X,
 } from '@lucide/vue'
-import { useConfigForm } from './composables/useConfigForm'
-import { useHAEntityManager } from './composables/useHAEntityManager'
 import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
 import HeaderTogglesEditor from './components/HeaderTogglesEditor.vue'
+import { useConfigForm } from './composables/useConfigForm'
+import { useHAEntityManager } from './composables/useHAEntityManager'
 
 const {
   config,

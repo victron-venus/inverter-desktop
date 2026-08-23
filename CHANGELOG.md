@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Water section reads tank level / pump / valve from Cerbo GX MQTT (dbus-pump),
+  with the Home Assistant entities kept as fallback (#258)
+
 ## [2.4.4] - 2026-08-23
 
 ### Added
