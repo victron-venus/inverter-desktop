@@ -843,10 +843,18 @@ async fn set_cover_position(
 
 #[tauri::command]
 async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
+    // Already open? Bring it to front instead of failing on duplicate label.
+    if let Some(window) = app.get_webview_window("config") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
     tauri::WebviewWindowBuilder::new(&app, "config", tauri::WebviewUrl::App("config".into()))
         .title("Configuration")
         .inner_size(CONFIG_WINDOW_W, CONFIG_WINDOW_H)
         .resizable(true)
+        .focused(true)
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
