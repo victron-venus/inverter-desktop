@@ -56,6 +56,11 @@ export interface InverterState {
     mppt_daily?: number[]
     pv_total_daily?: number
   }
+  solar_forecast?: {
+    date?: string
+    today_kwh?: number
+    tomorrow_kwh?: number
+  }
   latest_version?: string
   console?: string[]
 }

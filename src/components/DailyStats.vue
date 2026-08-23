@@ -4,7 +4,17 @@
   >
     <div v-if="hasSolar" class="flex items-center gap-1.5 mr-1">
       <span class="text-solar font-bold flex items-center gap-1">☀️ {{ prod }}kWh</span>
+      <span
+        v-if="fcToday"
+        class="text-slate-500 dark:text-slate-400 text-[10px] font-bold tracking-tighter"
+        >[{{ fcToday }}]</span
+      >
       <span class="text-slate-400 dark:text-slate-500 text-[10px] font-bold">({{ prodY }})</span>
+      <span
+        v-if="fcTomorrow"
+        class="text-slate-500 dark:text-slate-400 text-[10px] font-bold tracking-tighter"
+        >[{{ fcTomorrow }}]</span
+      >
       <span class="text-slate-600 dark:text-slate-400 font-medium text-[11px] tracking-tighter">{{
         solarStr
       }}</span>
@@ -66,6 +76,14 @@ const ds = computed(() => state.value.daily_stats || {})
 
 const prod = computed(() => (ds.value.produced_today || 0).toFixed(2))
 const prodY = computed(() => (ds.value.produced_yesterday || 0).toFixed(1))
+const fcToday = computed(() =>
+  ds.value.solar_forecast?.today_kwh != null ? ds.value.solar_forecast.today_kwh.toFixed(1) : ''
+)
+const fcTomorrow = computed(() =>
+  ds.value.solar_forecast?.tomorrow_kwh != null
+    ? ds.value.solar_forecast.tomorrow_kwh.toFixed(1)
+    : ''
+)
 const dollars = computed(() => (ds.value.produced_dollars || 0).toFixed(2))
 const grid = computed(() => (ds.value.grid_kwh || 0).toFixed(2))
 const gridCost = computed(() => (Number.parseFloat(grid.value) * GRID_COST_PER_KWH).toFixed(2))
