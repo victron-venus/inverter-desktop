@@ -45,6 +45,7 @@ pub struct InverterState {
     pub loads: Option<std::collections::HashMap<String, f64>>,
     pub ui_config: Option<UiConfig>,
     pub daily_stats: Option<DailyStats>,
+    pub solar_forecast: Option<SolarForecast>,
     pub ev_charging_kw: Option<f64>,
     pub ev_power: Option<f64>,
     pub car_soc: Option<f64>,
@@ -92,6 +93,7 @@ struct RawInverterState {
     loads: Option<std::collections::HashMap<String, f64>>,
     ui_config: Option<UiConfig>,
     daily_stats: Option<DailyStats>,
+    solar_forecast: Option<SolarForecast>,
     ev_charging_kw: Option<f64>,
     ev_power: Option<f64>,
     car_soc: Option<f64>,
@@ -186,6 +188,14 @@ pub struct DailyStats {
     pub tasmota_daily: Option<Vec<f64>>,
     pub mppt_daily: Option<Vec<f64>>,
     pub pv_total_daily: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SolarForecast {
+    pub date: Option<String>,
+    pub generated_at: Option<String>,
+    pub today_kwh: Option<f64>,
+    pub tomorrow_kwh: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -841,6 +851,7 @@ impl MqttClient {
             loads: raw.loads,
             ui_config: raw.ui_config,
             daily_stats: raw.daily_stats,
+            solar_forecast: raw.solar_forecast,
             ev_charging_kw: raw.ev_charging_kw,
             ev_power: raw.ev_power,
             car_soc: raw.car_soc,
