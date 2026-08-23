@@ -559,8 +559,8 @@
                   Water &amp; EV Entities
                 </h3>
                 <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1">
-                  With a Cerbo GX portal ID configured, water data comes from the GX (MQTT,
-                  via dbus-pump). The entities below are only the HA fallback.
+                  With a Cerbo GX portal ID configured, water data comes from the GX (MQTT, via
+                  dbus-pump). The entities below are only the HA fallback.
                 </p>
                 <div class="flex flex-col gap-1">
                   <label
