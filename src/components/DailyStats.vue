@@ -73,16 +73,14 @@ import { state } from '../composables/useInverterState'
 const GRID_COST_PER_KWH = 0.31
 
 const ds = computed(() => state.value.daily_stats || {})
+// solar_forecast is a top-level state key from inverter-control, not inside daily_stats
+const fc = computed(() => state.value.solar_forecast || {})
 
 const prod = computed(() => (ds.value.produced_today || 0).toFixed(2))
 const prodY = computed(() => (ds.value.produced_yesterday || 0).toFixed(1))
-const fcToday = computed(() =>
-  ds.value.solar_forecast?.today_kwh != null ? ds.value.solar_forecast.today_kwh.toFixed(1) : ''
-)
+const fcToday = computed(() => (fc.value.today_kwh != null ? fc.value.today_kwh.toFixed(1) : ''))
 const fcTomorrow = computed(() =>
-  ds.value.solar_forecast?.tomorrow_kwh != null
-    ? ds.value.solar_forecast.tomorrow_kwh.toFixed(1)
-    : ''
+  fc.value.tomorrow_kwh != null ? fc.value.tomorrow_kwh.toFixed(1) : ''
 )
 const dollars = computed(() => (ds.value.produced_dollars || 0).toFixed(2))
 const grid = computed(() => (ds.value.grid_kwh || 0).toFixed(2))
