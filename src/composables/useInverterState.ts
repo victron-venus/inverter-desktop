@@ -63,6 +63,10 @@ export interface InverterState {
   }
   latest_version?: string
   console?: string[]
+  /** Water system, fed by dbus-pump via Cerbo GX MQTT (fallback: HA entities) */
+  water_level?: number | null
+  water_valve?: boolean | null
+  pump_switch?: boolean | null
 }
 
 export const state = ref<InverterState>({
