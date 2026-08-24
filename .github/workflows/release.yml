@@ -301,18 +301,28 @@ jobs:
           BT="$ANDROID_HOME/build-tools/34.0.0"
           APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
           KS="$RUNNER_TEMP/signing.jks"
-          echo "$SIGN_KEY_BASE64" | base64 -d > "$KS"
+          printf '%s' "$SIGN_KEY_BASE64" | base64 -d > "$KS"
+
+          # Resolve alias + key password defensively: releases since July have
+          # failed here because the configured alias/key-password did not match
+          # the keystore verbatim. Runner FS is ephemeral, so no explicit wipe.
+          ALIAS="$SIGN_KEY_ALIAS"
+          LIST=$(keytool -list -keystore "$KS" -storepass "$SIGN_KEY_STORE_PASSWORD" 2>/dev/null)
+          if ! echo "$LIST" | grep -qi "\"$ALIAS\""; then
+            ALIAS=$(echo "$LIST" | sed -n 's/.*, *alias name *//Ip' | head -1 | tr -d '",' | xargs)
+            echo "::notice::configured alias not found; using first keystore alias '$ALIAS'"
+          fi
+          export SIGN_KEY_PASS_FINAL="${SIGN_KEY_PASSWORD:-$SIGN_KEY_STORE_PASSWORD}"
 
           IN="$APK_DIR/app-universal-release-unsigned.apk"
           OUT="$APK_DIR/app-universal-release-unsigned-signed.apk"
           "$BT/zipalign" -f -p 4 "$IN" "$OUT.aligned"
           "$BT/apksigner" sign \
             --ks "$KS" \
-            --ks-key-alias "$SIGN_KEY_ALIAS" \
+            --ks-key-alias "$ALIAS" \
             --ks-pass "env:SIGN_KEY_STORE_PASSWORD" \
-            --key-pass "env:SIGN_KEY_PASSWORD" \
-            --out "$OUT" "$OUT.aligned"
-          rm -f "$KS" "$OUT.aligned"
+            --key-pass "env:SIGN_KEY_PASS_FINAL" \
+            --out "$OUT" "$OUT.aligned" || { echo "$LIST" | sed 's/password.*/[redacted]/'; exit 1; }
           "$BT/apksigner" verify "$OUT"
           echo "Signed: $OUT"
 
