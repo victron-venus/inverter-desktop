@@ -308,21 +308,37 @@ jobs:
           MAGIC=$(head -c 5 "$KS" | od -An -tx1 | tr -d ' \n')
           echo "Keystore magic: $MAGIC"   # feedfeed=JKS, 308204..=PKCS12
           case "$MAGIC" in
-            feedfe*) STYPE="-storetype JKS" ;;
-            *)       STYPE="-storetype PKCS12" ;;
+            feedfe*) STYPE=JKS ;;
+            *)       STYPE=PKCS12 ;;
           esac
 
-          LIST=$(keytool -list "$STYPE" -keystore "$KS" -storepass "$SIGN_KEY_STORE_PASSWORD" 2>"$RUNNER_TEMP/keytool.err")
-          if [ -z "$LIST" ]; then
-            echo "::warning::keytool listing failed:"
-            sed 's/[A-Za-z0-9+/=]\{20,\}/[redacted]/g' "$RUNNER_TEMP/keytool.err"
+          # keytool exits non-zero on a wrong password/type while printing the
+          # error on STDOUT - under set -e the assignment kills this step
+          # silently unless the exit code is guarded (releases died here
+          # invisibly since July). Secrets are auto-masked by Actions.
+          if ! LIST=$(keytool -list -storetype "$STYPE" -keystore "$KS" -storepass "$SIGN_KEY_STORE_PASSWORD"); then
+            echo "::warning::keytool -list exited non-zero; output:"
+            echo "$LIST" | sed 's/[A-Za-z0-9+/=]\{20,\}/[masked]/g'
           fi
+          if [ -z "$LIST" ]; then
+            echo "::error::keystore listing empty; check ANDROID_KEYSTORE_* secrets"
+            exit 1
+          fi
+
+          # Plain keytool -list (JKS and PKCS12 alike) prints one line per
+          # entry: "<alias>, <date>, <EntryType>". Cut at the first comma.
+          NAMES=$(echo "$LIST" | sed -n '/,/s/,.*//p')
 
           # Resolve alias + key password defensively.
           ALIAS="$SIGN_KEY_ALIAS"
-          if [ -n "$LIST" ] && ! echo "$LIST" | grep -qi "\"$ALIAS\""; then
-            ALIAS=$(echo "$LIST" | sed -n 's/.*, *alias name *//Ip' | head -1 | tr -d '",' | xargs)
-            echo "::notice::configured alias not found; using first keystore alias '$ALIAS'"
+          if ! printf '%s\n' "$NAMES" | grep -qixF -- "$ALIAS"; then
+            ALIAS=$(printf '%s\n' "$NAMES" | head -1)
+            echo "::notice::configured alias '$SIGN_KEY_ALIAS' not found; using keystore alias '$ALIAS'"
+          fi
+          if [ -z "$ALIAS" ]; then
+            echo "::error::no alias resolved from listing:"
+            echo "$LIST" | sed 's/[A-Za-z0-9+/=]\{20,\}/[masked]/g'
+            exit 1
           fi
           export SIGN_KEY_PASS_FINAL="${SIGN_KEY_PASSWORD:-$SIGN_KEY_STORE_PASSWORD}"
 
