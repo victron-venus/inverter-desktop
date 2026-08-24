@@ -303,12 +303,24 @@ jobs:
           KS="$RUNNER_TEMP/signing.jks"
           printf '%s' "$SIGN_KEY_BASE64" | base64 -d > "$KS"
 
-          # Resolve alias + key password defensively: releases since July have
-          # failed here because the configured alias/key-password did not match
-          # the keystore verbatim. Runner FS is ephemeral, so no explicit wipe.
+          # Diagnose the keystore first: releases have shipped without an APK
+          # since July because signing fails here silently.
+          MAGIC=$(head -c 5 "$KS" | od -An -tx1 | tr -d ' \n')
+          echo "Keystore magic: $MAGIC"   # feedfeed=JKS, 308204..=PKCS12
+          case "$MAGIC" in
+            feedfe*) STYPE="-storetype JKS" ;;
+            *)       STYPE="-storetype PKCS12" ;;
+          esac
+
+          LIST=$(keytool -list "$STYPE" -keystore "$KS" -storepass "$SIGN_KEY_STORE_PASSWORD" 2>"$RUNNER_TEMP/keytool.err")
+          if [ -z "$LIST" ]; then
+            echo "::warning::keytool listing failed:"
+            sed 's/[A-Za-z0-9+/=]\{20,\}/[redacted]/g' "$RUNNER_TEMP/keytool.err"
+          fi
+
+          # Resolve alias + key password defensively.
           ALIAS="$SIGN_KEY_ALIAS"
-          LIST=$(keytool -list -keystore "$KS" -storepass "$SIGN_KEY_STORE_PASSWORD" 2>/dev/null)
-          if ! echo "$LIST" | grep -qi "\"$ALIAS\""; then
+          if [ -n "$LIST" ] && ! echo "$LIST" | grep -qi "\"$ALIAS\""; then
             ALIAS=$(echo "$LIST" | sed -n 's/.*, *alias name *//Ip' | head -1 | tr -d '",' | xargs)
             echo "::notice::configured alias not found; using first keystore alias '$ALIAS'"
           fi
@@ -322,7 +334,7 @@ jobs:
             --ks-key-alias "$ALIAS" \
             --ks-pass "env:SIGN_KEY_STORE_PASSWORD" \
             --key-pass "env:SIGN_KEY_PASS_FINAL" \
-            --out "$OUT" "$OUT.aligned" || { echo "$LIST" | sed 's/password.*/[redacted]/'; exit 1; }
+            --out "$OUT" "$OUT.aligned" || { echo "apksigner failed"; exit 1; }
           "$BT/apksigner" verify "$OUT"
           echo "Signed: $OUT"
 
