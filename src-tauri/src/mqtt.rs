@@ -579,48 +579,22 @@ impl MqttClient {
         client.subscribe("inverter/state", QoS::AtLeastOnce)?;
         client.subscribe("inverter/console", QoS::AtLeastOnce)?;
         client.subscribe("inverter/notifications", QoS::AtLeastOnce)?;
+        // Portal ID advertised by inverter-control (retained) - lets the app
+        // find the N/<portal>/... water/alarms topics with no manual config.
+        client.subscribe("inverter/portal", QoS::AtLeastOnce)?;
 
-        // Victron alarms relayed by the GX MQTT gateway from D-Bus /Alarms paths
-        if let Some(ref id) = portal_id {
-            if !id.is_empty() {
-                let alarm_filter = format!("N/{}/+/Alarms/#", id);
-                if let Err(e) = client.subscribe(&alarm_filter, QoS::AtLeastOnce) {
-                    log::warn!("Failed to subscribe to {}: {:?}", alarm_filter, e);
-                }
-                // Water system published by dbus-pump on the GX (tank level %,
-                // pump/valve startstop state).
-                for filter in [
-                    format!("N/{}/tank/+/Level", id),
-                    format!("N/{}/pump/+/State", id),
-                ] {
-                    if let Err(e) = client.subscribe(&filter, QoS::AtLeastOnce) {
-                        log::warn!("Failed to subscribe to {}: {:?}", filter, e);
-                    }
-                }
-            }
+        // Victron alarms + dbus-pump water topics for a configured portal
+        let mut active_portal: Option<String> = None;
+        if let Some(id) = portal_id.as_deref().filter(|s| !s.is_empty()) {
+            Self::subscribe_portal_topics(&client, id);
+            Self::spawn_keepalive(client.clone(), id.to_string());
+            active_portal = Some(id.to_string());
         }
 
         if let Some(ref cam_topic) = camera_topic {
             if !cam_topic.is_empty() {
                 client.subscribe(cam_topic, QoS::AtMostOnce)?;
             }
-        }
-
-        let keepalive_client = client.clone();
-
-        // Spawn keep-alive publisher for Cerbo GX (runs in background)
-        let pid = portal_id.clone();
-        let ka_client = keepalive_client.clone();
-        if let Some(ref id) = pid {
-            let topic = format!("R/{}/keepalive", id);
-            tauri::async_runtime::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
-                loop {
-                    interval.tick().await;
-                    let _ = ka_client.publish(&topic, QoS::AtMostOnce, false, "");
-                }
-            });
         }
 
         // NOTE: use tokio net (async) instead of blocking rumqttc sync iter.
@@ -635,6 +609,8 @@ impl MqttClient {
         let ha_states_c = ha_entity_states.clone();
         let se = status_event.to_string();
         let con_result = tokio::task::spawn_blocking(move || {
+            // Portal discovered at runtime via the retained inverter/portal
+            // topic (inverter-control publishes it when no ID is configured).
             for event in connection.iter() {
                 match event {
                     Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
@@ -642,6 +618,17 @@ impl MqttClient {
                         let topic = String::from_utf8_lossy(&publish.topic).to_string();
                         let payload = String::from_utf8(publish.payload.to_vec())
                             .unwrap_or_else(|_| String::new());
+
+                        if topic == "inverter/portal" {
+                            let id = payload.trim().to_string();
+                            if !id.is_empty() && active_portal.as_deref() != Some(id.as_str()) {
+                                log::info!("Discovered Cerbo portal ID {}", id);
+                                active_portal = Some(id.clone());
+                                Self::subscribe_portal_topics(&client, &id);
+                                Self::spawn_keepalive(client.clone(), id);
+                            }
+                            continue;
+                        }
 
                         Self::handle_message(
                             &topic,
@@ -687,6 +674,34 @@ impl MqttClient {
             let _ = handle.emit(status_event, false);
         }
         Ok(())
+    }
+
+    /// Subscribe the GX portal topics (alarms + dbus-pump water).
+    fn subscribe_portal_topics(client: &Client, id: &str) {
+        for filter in [
+            format!("N/{}/+/Alarms/#", id),
+            // Water system published by dbus-pump on the GX (tank level %,
+            // pump/valve startstop state).
+            format!("N/{}/tank/+/Level", id),
+            format!("N/{}/pump/+/State", id),
+        ] {
+            if let Err(e) = client.subscribe(&filter, QoS::AtLeastOnce) {
+                log::warn!("Failed to subscribe to {}: {:?}", filter, e);
+            }
+        }
+    }
+
+    /// Periodic R/<portal>/keepalive publisher so the Cerbo GX MQTT broker
+    /// keeps accepting this client.
+    fn spawn_keepalive(client: Client, id: String) {
+        let topic = format!("R/{}/keepalive", id);
+        tauri::async_runtime::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
+            loop {
+                interval.tick().await;
+                let _ = client.publish(&topic, QoS::AtMostOnce, false, "");
+            }
+        });
     }
 
     #[allow(clippy::too_many_arguments)]

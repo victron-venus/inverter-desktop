@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Portal ID auto-discovery: subscribes to the retained `inverter/portal`
+  topic published by inverter-control and arms water/alarm subscriptions and
+  the GX keepalive automatically - `portal_id` is now optional in app config.
+
 ### Changed
 - Water section now uses **only** Cerbo GX MQTT (dbus-pump): the Home Assistant
   entity fallback (`ha_water_level_entity` / `ha_valve_switch_entity` /
