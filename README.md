@@ -34,7 +34,7 @@ Desktop and mobile application for monitoring Victron inverter systems via MQTT.
 - Interactive controls via MQTT
 - Live power charts with ECharts
 - EV charging status
-- Water system monitoring
+- Water system monitoring (dbus-pump via Cerbo MQTT)
 - Home automation controls
 - Native application for all major platforms
 
@@ -307,6 +307,25 @@ const config = {
 
 - `inverter/state` - JSON with current system state
 - `inverter/console` - Console log messages
+- `N/<portal>/tank/+/Level` - Tank level % (dbus-pump on the Cerbo GX)
+- `N/<portal>/pump/+/State` - Pump/valve startstop state (dbus-pump)
+
+### Water system
+
+Water data comes **exclusively** from the [dbus-pump](https://github.com/victron-venus/dbus-pump)
+services via Cerbo MQTT — no Home Assistant involved. Configure the portal ID and the
+`water_pump_instance` / `water_valve_instance` (defaults 1/2) in the app config; they must match
+dbus-pump's `local_config.py`. Valve/pump automation lives in dbus-pump itself; this app is
+read-only (status badges only).
+
+```mermaid
+flowchart LR
+    DP["dbus-pump<br/>(Cerbo GX)"] -->|"D-Bus"| T["com.victronenergy.tank.ha_tank21"]
+    DP --> P["com.victronenergy.pump.startstop1/2"]
+    T --> MQB["Cerbo MQTT broker"]
+    P --> MQB
+    MQB -->|"N/&lt;portal&gt;/tank/+/Level<br/>N/&lt;portal&gt;/pump/+/State"| APP["inverter-desktop<br/>water card (level %, badges)"]
+```
 
 ### Published (commands)
 

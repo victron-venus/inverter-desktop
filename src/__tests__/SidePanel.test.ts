@@ -17,8 +17,6 @@ const baseProps = {
   waterLevel: 42,
   waterValve: false,
   pumpSwitch: false,
-  pumpSwitchEntity: 'switch.pump',
-  waterValveEntity: 'switch.valve',
   homeButtons: [],
   buttonStates: {},
   haSensors: [{ entity_id: 'sensor.temp', name: 'Temp', state: '23', unit: '°C' }],
@@ -66,16 +64,30 @@ describe('SidePanel', () => {
     expect(wrapper.text()).not.toContain('sections.ev')
   })
 
-  it('shows water section', () => {
+  it('shows water section with level in percent', () => {
     const wrapper = mount(SidePanel, { props: baseProps })
     expect(wrapper.text()).toContain('sections.water')
-    expect(wrapper.text()).toContain('42 cm')
+    expect(wrapper.text()).toContain('42 %')
   })
 
-  it('shows pump and valve buttons', () => {
+  it('shows pump and valve status badges without toggle buttons', () => {
     const wrapper = mount(SidePanel, { props: baseProps })
     expect(wrapper.text()).toContain('sections.pump')
     expect(wrapper.text()).toContain('sections.valve')
+    // dbus-pump owns control - no toggle buttons in the water card
+    expect(wrapper.find('.classic-btn[disabled]').exists()).toBe(false)
+    const waterCard = wrapper
+      .findAll('.classic-card')
+      .find((c) => c.text().includes('sections.water'))
+    expect(waterCard?.findAll('button').length).toBe(0)
+  })
+
+  it('hides pump badge when state unknown', () => {
+    const wrapper = mount(SidePanel, {
+      props: { ...baseProps, pumpSwitch: null, waterValve: null },
+    })
+    expect(wrapper.text()).not.toContain('sections.pump')
+    expect(wrapper.text()).not.toContain('sections.valve')
   })
 
   it('shows home buttons when provided', () => {
