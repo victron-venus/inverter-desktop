@@ -303,6 +303,16 @@ jobs:
           KS="$RUNNER_TEMP/signing.jks"
           printf '%s' "$SIGN_KEY_BASE64" | base64 -d > "$KS"
 
+          # Secrets pasted into the GitHub UI often carry a trailing newline
+          # or CR; a single stray byte makes key decryption fail with
+          # BadPaddingException ("Given final block not properly padded").
+          SIGN_KEY_STORE_PASSWORD="${SIGN_KEY_STORE_PASSWORD%$'\r'}"
+          SIGN_KEY_STORE_PASSWORD="${SIGN_KEY_STORE_PASSWORD%$'\n'}"
+          SIGN_KEY_PASSWORD="${SIGN_KEY_PASSWORD%$'\r'}"
+          SIGN_KEY_PASSWORD="${SIGN_KEY_PASSWORD%$'\n'}"
+          SIGN_KEY_ALIAS="${SIGN_KEY_ALIAS%$'\r'}"
+          SIGN_KEY_ALIAS="${SIGN_KEY_ALIAS%$'\n'}"
+
           # Diagnose the keystore first: releases have shipped without an APK
           # since July because signing fails here silently.
           MAGIC=$(head -c 5 "$KS" | od -An -tx1 | tr -d ' \n')
