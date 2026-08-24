@@ -247,12 +247,14 @@ jobs:
 
       - name: iOS – upload artifact to release
         if: matrix.type == 'ios'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: v${{ needs.check-version-change.outputs.new_version }}
-          files: ${{ github.workspace }}/inverter-dashboard-ios.ipa
-          token: ${{ secrets.GITHUB_TOKEN }}
-          overwrite_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # softprops/action-gh-release gets 403 on release update from
+          # workflow_dispatch runs; the gh CLI uploads to the existing
+          # release without that quirk.
+          gh release upload "v${{ needs.check-version-change.outputs.new_version }}" \
+            "${{ github.workspace }}/inverter-dashboard-ios.ipa" --clobber
 
       # --------- Android specific ---------
       - name: Android – setup Java
@@ -383,11 +385,13 @@ jobs:
 
       - name: Android – upload artifact to release
         if: matrix.type == 'android'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: v${{ needs.check-version-change.outputs.new_version }}
-          files: |
-            src-tauri/gen/android/app/build/outputs/apk/universal/release/Inverter.Desktop_${{ needs.check-version-change.outputs.new_version }}_signed.apk
-            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/Inverter.Desktop_${{ needs.check-version-change.outputs.new_version }}.aab
-          token: ${{ secrets.GITHUB_TOKEN }}
-          overwrite_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # See iOS upload step: gh CLI instead of action-gh-release (403).
+          APK_DIR="src-tauri/gen/android/app/build/outputs"
+          TAG="v${{ needs.check-version-change.outputs.new_version }}"
+          gh release upload "$TAG" \
+            "$APK_DIR/apk/universal/release/Inverter.Desktop_${{ needs.check-version-change.outputs.new_version }}_signed.apk" \
+            "$APK_DIR/bundle/universalRelease/Inverter.Desktop_${{ needs.check-version-change.outputs.new_version }}.aab" \
+            --clobber
