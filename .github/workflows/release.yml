@@ -285,22 +285,36 @@ jobs:
           TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
         run: pnpm tauri android build --ci
 
-      - name: Android – sign & upload artifacts
+      - name: Android – sign artifacts
         if: matrix.type == 'android' && github.repository_owner == 'victron-venus'
-        uses: r0adkll/sign-android-release@349ebdef58775b1e0d8099458af0816dc79b6407 # v1
         env:
           SIGN_KEY_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           SIGN_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           SIGN_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           SIGN_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        with:
-          releaseDirectory: src-tauri/gen/android/app/build/outputs/apk/universal/release
-          signingKeyBase64: ${{ env.SIGN_KEY_BASE64 }}
-          alias: ${{ env.SIGN_KEY_ALIAS }}
-          keyStorePassword: ${{ env.SIGN_KEY_STORE_PASSWORD }}
-          keyPassword: ${{ env.SIGN_KEY_PASSWORD }}
-          # runner image no longer ships build-tools 29.0.3 (action default); use the version installed above
-          buildToolsVersion: 34.0.0
+        run: |
+          # r0adkll/sign-android-release@349ebde has no buildToolsVersion input
+          # and hardcodes build-tools 29.0.3, which GitHub runners no longer
+          # ship - the step died with "Couldnt find the Android build tools".
+          # Sign inline with the 34.0.0 tools installed above; the output name
+          # matches what the rename step below expects.
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
+          KS="$RUNNER_TEMP/signing.jks"
+          echo "$SIGN_KEY_BASE64" | base64 -d > "$KS"
+
+          IN="$APK_DIR/app-universal-release-unsigned.apk"
+          OUT="$APK_DIR/app-universal-release-unsigned-signed.apk"
+          "$BT/zipalign" -f -p 4 "$IN" "$OUT.aligned"
+          "$BT/apksigner" sign \
+            --ks "$KS" \
+            --ks-key-alias "$SIGN_KEY_ALIAS" \
+            --ks-pass "env:SIGN_KEY_STORE_PASSWORD" \
+            --key-pass "env:SIGN_KEY_PASSWORD" \
+            --out "$OUT" "$OUT.aligned"
+          rm -f "$KS" "$OUT.aligned"
+          "$BT/apksigner" verify "$OUT"
+          echo "Signed: $OUT"
 
       - name: Android – rename artifacts for release
         if: matrix.type == 'android'
