@@ -585,11 +585,7 @@ impl MqttClient {
 
         // Victron alarms + dbus-pump water topics for a configured portal
         let mut active_portal: Option<String> = None;
-        if let Some(id) = portal_id
-            .as_ref()
-            .map(String::as_str)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(id) = portal_id.as_deref().filter(|s| !s.is_empty()) {
             Self::subscribe_portal_topics(&client, id);
             Self::spawn_keepalive(client.clone(), id.to_string());
             active_portal = Some(id.to_string());
