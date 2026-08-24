@@ -60,8 +60,6 @@
               :waterVisible="waterSectionVisible"
               :waterValve="waterValveState"
               :pumpSwitch="pumpSwitchState"
-              :pumpSwitchEntity="pumpSwitchEntity"
-              :waterValveEntity="waterValveEntity"
               :waterLevel="waterLevel"
               :washerActive="washerActive"
               :washerRemainingTime="washerRemainingTime"
@@ -226,8 +224,6 @@ const {
   buttonStates,
   headerToggles,
   headerToggleStates,
-  waterValveEntity,
-  pumpSwitchEntity,
   waterValveState,
   pumpSwitchState,
   waterLevel,

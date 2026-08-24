@@ -29,7 +29,7 @@
       </div>
     </div>
 
-    <!-- Water Section -->
+    <!-- Water Section (dbus-pump via Cerbo MQTT; control lives in dbus-pump) -->
     <div v-if="waterVisible" class="classic-card">
       <div class="classic-header flex items-center gap-1.5">
         <Droplets :size="10" /> {{ $t('sections.water') }}
@@ -40,27 +40,23 @@
           class="text-xl font-bold"
           :class="waterValve === true ? 'text-red-500' : 'text-green-500'"
         >
-          {{ Math.round(waterLevel) }} cm
+          {{ Math.round(waterLevel) }} %
         </div>
         <div class="flex gap-1">
-          <button
-            v-if="pumpSwitchEntity"
-            type="button"
-            class="classic-btn"
+          <span
+            v-if="pumpSwitch != null"
+            class="classic-btn pointer-events-none opacity-80"
             :class="{ 'classic-btn-on': pumpSwitch === true }"
-            @click="$emit('send', 'toggle', { entity: pumpSwitchEntity })"
           >
             {{ $t('sections.pump') }}
-          </button>
-          <button
-            v-if="waterValveEntity"
-            type="button"
-            class="classic-btn"
+          </span>
+          <span
+            v-if="waterValve != null"
+            class="classic-btn pointer-events-none opacity-80"
             :class="{ 'classic-btn-on': waterValve === true }"
-            @click="$emit('send', 'toggle', { entity: waterValveEntity })"
           >
             {{ $t('sections.valve') }}
-          </button>
+          </span>
         </div>
       </div>
     </div>
@@ -451,8 +447,6 @@ defineProps<{
   waterValve?: boolean | null
   pumpSwitch?: boolean | null
   waterLevel?: number | null
-  pumpSwitchEntity: string
-  waterValveEntity: string
   washerActive?: boolean
   washerRemainingTime?: string | null
   dryerActive?: boolean

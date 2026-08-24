@@ -31,9 +31,6 @@ function configuredSectionEntities(appConfig: Ref<AppConfig | null>): string[] {
     cfg?.ha_dryer_pause_entity,
     cfg?.ha_dishwasher_running_entity,
     cfg?.ha_dishwasher_duration_entity,
-    cfg?.ha_pump_switch_entity,
-    cfg?.ha_valve_switch_entity,
-    cfg?.ha_water_level_entity,
     cfg?.ha_ev_soc_entity,
     cfg?.ha_ev_charging_entity,
     cfg?.ha_ev_clamp_entity,
@@ -303,60 +300,20 @@ export function useHA() {
     )
   }
 
-  const haValveSwitchEntity = computed(() => (appConfig.value?.ha_valve_switch_entity || '').trim())
+  // Water comes exclusively from Cerbo GX MQTT (published by dbus-pump);
+  // pump/valve control lives in dbus-pump itself - no HA fallback, no toggles.
+  const waterValveState = computed(() => state.value.water_valve ?? null)
 
-  const haPumpSwitchEntity = computed(() => (appConfig.value?.ha_pump_switch_entity || '').trim())
+  const pumpSwitchState = computed(() => state.value.pump_switch ?? null)
 
-  const haWaterLevelEntity = computed(() => (appConfig.value?.ha_water_level_entity || '').trim())
+  const waterLevel = computed(() => state.value.water_level ?? null)
 
-  const waterValveEntity = haValveSwitchEntity
-
-  const pumpSwitchEntity = haPumpSwitchEntity
-
-  function entityStateIsOn(entity: string): boolean | null {
-    if (!entity) return null
-    const stateVal = haEntityStates.value[entity]
-    if (stateVal === undefined || stateVal === null) return null
-    const lower = String(stateVal).trim().toLowerCase()
-    if (!lower || lower === 'unavailable' || lower === 'unknown') return null
-    return lower === 'on' || lower === 'running'
-  }
-
-  // Cerbo GX MQTT values (published by dbus-pump) take precedence; the HA
-  // entity path stays as fallback for setups without Cerbo MQTT configured.
-  const waterFromMqtt = computed(
+  const waterSectionVisible = computed(
     () =>
       state.value.water_level != null ||
       state.value.water_valve != null ||
       state.value.pump_switch != null
   )
-
-  const waterValveState = computed(() => {
-    if (state.value.water_valve != null) return state.value.water_valve
-    if (!haEnabled.value) return null
-    return entityStateIsOn(haValveSwitchEntity.value)
-  })
-
-  const pumpSwitchState = computed(() => {
-    if (state.value.pump_switch != null) return state.value.pump_switch
-    if (!haEnabled.value) return null
-    return entityStateIsOn(haPumpSwitchEntity.value)
-  })
-
-  const waterLevel = computed(() => {
-    if (state.value.water_level != null) return state.value.water_level
-    if (!haEnabled.value) return null
-    const entity = haWaterLevelEntity.value
-    if (!entity) return null
-    const n = parseNumberState(entity)
-    return n
-  })
-
-  const waterSectionVisible = computed(() => {
-    if (waterFromMqtt.value) return true
-    if (!haEnabled.value) return false
-    return !!(haPumpSwitchEntity.value || haValveSwitchEntity.value || haWaterLevelEntity.value)
-  })
 
   const haEvSocEntity = computed(() => (appConfig.value?.ha_ev_soc_entity || '').trim())
 
@@ -684,8 +641,6 @@ export function useHA() {
     headerToggles,
     buttonStates,
     headerToggleStates,
-    waterValveEntity,
-    pumpSwitchEntity,
     waterValveState,
     pumpSwitchState,
     waterLevel,

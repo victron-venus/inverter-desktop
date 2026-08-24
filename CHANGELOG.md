@@ -4,9 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-- Water section reads tank level / pump / valve from Cerbo GX MQTT (dbus-pump),
-  with the Home Assistant entities kept as fallback (#258)
+### Changed
+- Water section now uses **only** Cerbo GX MQTT (dbus-pump): the Home Assistant
+  entity fallback (`ha_water_level_entity` / `ha_valve_switch_entity` /
+  `ha_pump_switch_entity`) is removed, along with its config fields
+- Water card shows level in % plus pump/valve status badges; toggle buttons
+  removed — pump/valve automation lives in dbus-pump
 
 ## [2.4.4] - 2026-08-23
 

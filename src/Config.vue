@@ -560,53 +560,8 @@
                 </h3>
                 <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1">
                   With a Cerbo GX portal ID configured, water data comes from the GX (MQTT, via
-                  dbus-pump). The entities below are only the HA fallback.
+                  dbus-pump). Pump/valve automation lives in dbus-pump - no manual control here.
                 </p>
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="ha_pump_switch_entity"
-                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Pump Switch Entity (fallback)</label
-                  >
-                  <input
-                    id="ha_pump_switch_entity"
-                    v-model="config.ha_pump_switch_entity"
-                    type="text"
-                    class="classic-input w-full"
-                    placeholder="switch.pump"
-                  />
-                </div>
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="ha_valve_switch_entity"
-                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Valve Switch Entity (fallback)</label
-                  >
-                  <input
-                    id="ha_valve_switch_entity"
-                    v-model="config.ha_valve_switch_entity"
-                    type="text"
-                    class="classic-input w-full"
-                    placeholder="switch.water_valve"
-                  />
-                </div>
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="ha_water_level_entity"
-                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >Water Level Sensor (fallback)</label
-                  >
-                  <input
-                    id="ha_water_level_entity"
-                    v-model="config.ha_water_level_entity"
-                    type="text"
-                    class="classic-input w-full"
-                    placeholder="sensor.water_level"
-                  />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
-                    Water section shows only when at least one of these entities is set.
-                  </p>
-                </div>
                 <div class="flex flex-col gap-1">
                   <label
                     for="ha_ev_soc_entity"
