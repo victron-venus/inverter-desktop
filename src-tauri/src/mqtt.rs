@@ -1,6 +1,6 @@
 use rumqttc::{Client, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Emitter;
@@ -130,21 +130,42 @@ pub struct EssMode {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MpptCharger {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pv_voltage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub power: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Battery {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub power: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub soc: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_go: Option<String>,
+}
+
+/// Devices discovered directly on the Cerbo GX MQTT broker
+/// (N/<portal>/battery/..., N/<portal>/solarcharger/...), independent of the
+/// inverter-control daemon's inverter/state payload. BTreeMap keeps a stable
+/// instance-ordered list for the UI.
+#[derive(Default)]
+struct CerboDevices {
+    batteries: BTreeMap<u32, Battery>,
+    chargers: BTreeMap<u32, MpptCharger>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -615,6 +636,8 @@ impl MqttClient {
         let notif_c = notifications.clone();
         let alarms_c = alarms.clone();
         let ha_states_c = ha_entity_states.clone();
+        let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
+        let cerbo_c = cerbo_devices.clone();
         let se = status_event.to_string();
         let con_result = tokio::task::spawn_blocking(move || {
             // Portal discovered at runtime via the retained inverter/portal
@@ -648,6 +671,7 @@ impl MqttClient {
                             &notif_c,
                             &alarms_c,
                             &ha_states_c,
+                            &cerbo_c,
                         );
                     }
                     Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
@@ -692,6 +716,10 @@ impl MqttClient {
             // pump/valve startstop state).
             format!("N/{}/tank/+/Level", id),
             format!("N/{}/pump/+/State", id),
+            // Directly discovered GX devices: battery bank(s) + MPPT chargers,
+            // so the app finds them even when inverter-control is down.
+            format!("N/{}/battery/+/#", id),
+            format!("N/{}/solarcharger/+/#", id),
         ] {
             if let Err(e) = client.subscribe(&filter, QoS::AtLeastOnce) {
                 log::warn!("Failed to subscribe to {}: {:?}", filter, e);
@@ -723,6 +751,7 @@ impl MqttClient {
         notifications: &Arc<Mutex<NotificationState>>,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
+        cerbo_devices: &Arc<Mutex<CerboDevices>>,
     ) {
         if topic == "inverter/state" {
             if let Ok(raw) = serde_json::from_str::<RawInverterState>(payload) {
@@ -732,6 +761,7 @@ impl MqttClient {
                     app_handle.clone(),
                     notifications.clone(),
                     ha_entity_states.clone(),
+                    Some(cerbo_devices.clone()),
                 );
             }
         } else if topic == "inverter/notifications" {
@@ -761,6 +791,25 @@ impl MqttClient {
                 }
                 if let Some(ref handle) = app_handle {
                     let _ = handle.emit("mqtt-state-update", &*guard);
+                }
+            }
+        } else if topic.starts_with("N/") && Self::parse_device_topic(topic).is_some() {
+            // Directly discovered GX device value (battery/solarcharger).
+            if let Some((kind, inst, path)) = Self::parse_device_topic(topic) {
+                let applied = cerbo_devices
+                    .lock()
+                    .ok()
+                    .map(|mut d| Self::apply_device_message(&mut d, kind, inst, path, payload))
+                    .unwrap_or(false);
+                if applied {
+                    if let Ok(mut guard) = state.lock() {
+                        if let Ok(d) = cerbo_devices.lock() {
+                            Self::apply_cerbo_to_state(&d, &mut guard);
+                        }
+                        if let Some(ref handle) = app_handle {
+                            let _ = handle.emit("mqtt-state-update", &*guard);
+                        }
+                    }
                 }
             }
         } else if topic.starts_with("N/") && Self::parse_water_topic(topic).is_some() {
@@ -823,6 +872,92 @@ impl MqttClient {
             .ok()?
             .get("value")?
             .as_f64()
+    }
+
+    /// Cerbo ProductName arrives as {"value": "<name>"}.
+    fn parse_cerbo_name(payload: &str) -> Option<String> {
+        let s = serde_json::from_str::<serde_json::Value>(payload)
+            .ok()
+            .and_then(|v| v.get("value").and_then(|x| x.as_str()).map(String::from))
+            .unwrap_or_else(|| payload.trim().to_string());
+        (!s.is_empty()).then_some(s)
+    }
+
+    /// Parse N/<portal>/<kind>/<instance>/<path> for GX devices we discover
+    /// ourselves (battery, solarcharger). Other kinds are left to their own
+    /// handlers (tank/pump) or ignored (vebus, pvinverter, ...).
+    fn parse_device_topic(topic: &str) -> Option<(&str, u32, &str)> {
+        let rest = topic.strip_prefix("N/")?;
+        let (portal, rest) = rest.split_once('/')?;
+        if portal.is_empty() {
+            return None;
+        }
+        let (kind, rest) = rest.split_once('/')?;
+        if kind != "battery" && kind != "solarcharger" {
+            return None;
+        }
+        let (inst, path) = rest.split_once('/')?;
+        Some((kind, inst.parse().ok()?, path))
+    }
+
+    /// Apply one GX device message to the discovered-device maps.
+    /// Returns true when the message mapped to a known value path.
+    fn apply_device_message(
+        devices: &mut CerboDevices,
+        kind: &str,
+        inst: u32,
+        path: &str,
+        payload: &str,
+    ) -> bool {
+        let val = Self::parse_cerbo_value(payload);
+        match kind {
+            "battery" => {
+                let b = devices.batteries.entry(inst).or_default();
+                match path {
+                    "Soc" => b.soc = val,
+                    "Dc/0/Voltage" => b.voltage = val,
+                    "Dc/0/Current" => b.current = val,
+                    "Dc/0/Power" => b.power = val,
+                    "ProductName" => b.name = Self::parse_cerbo_name(payload),
+                    _ => return false,
+                }
+                true
+            }
+            "solarcharger" => {
+                let m = devices.chargers.entry(inst).or_default();
+                match path {
+                    "Pv/V" => m.pv_voltage = val,
+                    "Dc/0/Current" => m.current = val,
+                    "Yield/Power" => m.power = val,
+                    "ProductName" => m.name = Self::parse_cerbo_name(payload),
+                    _ => return false,
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Overlay discovered GX devices onto a state snapshot. When anything was
+    /// found on the broker it wins over the daemon-provided arrays so the UI
+    /// stays correct even with inverter-control down; empty maps leave the
+    /// daemon data untouched.
+    fn apply_cerbo_to_state(devices: &CerboDevices, st: &mut InverterState) {
+        if !devices.batteries.is_empty() {
+            let batteries: Vec<Battery> = devices.batteries.values().cloned().collect();
+            st.battery_soc = batteries.iter().find_map(|b| b.soc).or(st.battery_soc);
+            st.battery_voltage = batteries
+                .iter()
+                .find_map(|b| b.voltage)
+                .or(st.battery_voltage);
+            st.battery_current = Some(batteries.iter().filter_map(|b| b.current).sum());
+            st.battery_power = Some(batteries.iter().filter_map(|b| b.power).sum());
+            st.batteries = Some(batteries);
+        }
+        if !devices.chargers.is_empty() {
+            st.mppt_total = Some(devices.chargers.values().filter_map(|c| c.power).sum());
+            st.mppt_chargers = Some(devices.chargers.values().cloned().collect());
+        }
     }
 
     /// Track a Victron alarm topic (N/<portal>/<service>/Alarms/<Name>, value 0/1/2)
@@ -902,10 +1037,11 @@ impl MqttClient {
         app_handle: Option<tauri::AppHandle>,
         notifications: Arc<Mutex<NotificationState>>,
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
+        cerbo_devices: Option<Arc<Mutex<CerboDevices>>>,
     ) {
         let existing_console = state.lock().ok().and_then(|g| g.console.clone());
 
-        let new_state = InverterState {
+        let mut new_state = InverterState {
             gt: raw.gt,
             g1: raw.g1,
             g2: raw.g2,
@@ -955,6 +1091,14 @@ impl MqttClient {
             latest_version: raw.latest_version,
             console: raw.console.or(existing_console),
         };
+
+        // GX-discovered devices win over daemon arrays (see
+        // apply_cerbo_to_state) so batteries/MPPTs survive daemon outages.
+        if let Some(cerbo) = cerbo_devices.as_ref() {
+            if let Ok(d) = cerbo.lock() {
+                Self::apply_cerbo_to_state(&d, &mut new_state);
+            }
+        }
 
         // Skip alert/notification processing when window hidden (CPU/battery optimization)
         let hidden = crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
@@ -1153,6 +1297,109 @@ mod tests {
     }
 
     #[test]
+    fn parses_device_topics() {
+        assert_eq!(
+            MqttClient::parse_device_topic("N/abc/battery/512/Soc"),
+            Some(("battery", 512, "Soc"))
+        );
+        assert_eq!(
+            MqttClient::parse_device_topic("N/abc/solarcharger/1/Dc/0/Current"),
+            Some(("solarcharger", 1, "Dc/0/Current"))
+        );
+        // Other kinds route elsewhere or are ignored.
+        assert_eq!(MqttClient::parse_device_topic("N/abc/tank/21/Level"), None);
+        assert_eq!(MqttClient::parse_device_topic("N/abc/vebus/256/Soc"), None);
+        assert_eq!(MqttClient::parse_device_topic("N/abc/battery/x/Soc"), None);
+    }
+
+    #[test]
+    fn discovers_battery_and_charger_from_gx() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "Soc",
+            "{\"value\": 87.5}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "Dc/0/Voltage",
+            "{\"value\": 51.2}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "ProductName",
+            "{\"value\": \"SmartShunt 500A\"}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "solarcharger",
+            2,
+            "Yield/Power",
+            "{\"value\": 1450}"
+        ));
+        // Unknown path ignored, alarms payload not a number.
+        assert!(!MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "Alarms/HighVoltage",
+            "{\"value\": 1}"
+        ));
+
+        let b = &d.batteries[&512];
+        assert_eq!(b.soc, Some(87.5));
+        assert_eq!(b.voltage, Some(51.2));
+        assert_eq!(b.name.as_deref(), Some("SmartShunt 500A"));
+
+        let mut st = InverterState::default();
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        assert_eq!(st.battery_soc, Some(87.5));
+        assert_eq!(st.batteries.as_ref().unwrap().len(), 1);
+        assert_eq!(st.mppt_chargers.as_ref().unwrap().len(), 1);
+        assert_eq!(st.mppt_total, Some(1450.0));
+    }
+
+    #[test]
+    fn cerbo_devices_override_daemon_but_empty_map_leaves_daemon_data() {
+        let mut st = InverterState {
+            batteries: Some(vec![Battery {
+                name: Some("daemon".into()),
+                soc: Some(10.0),
+                ..Default::default()
+            }]),
+            mppt_chargers: None,
+            battery_soc: Some(10.0),
+            ..Default::default()
+        };
+
+        // Empty discovery → daemon data untouched.
+        let empty = CerboDevices::default();
+        MqttClient::apply_cerbo_to_state(&empty, &mut st);
+        assert_eq!(
+            st.batteries.as_ref().unwrap()[0].name.as_deref(),
+            Some("daemon")
+        );
+        assert_eq!(st.battery_soc, Some(10.0));
+
+        // Discovered device wins.
+        let mut d = CerboDevices::default();
+        MqttClient::apply_device_message(&mut d, "battery", 1, "Soc", "{\"value\": 90}");
+        MqttClient::apply_device_message(&mut d, "battery", 1, "Dc/0/Current", "{\"value\": -3.5}");
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        let bats = st.batteries.unwrap();
+        assert_eq!(bats.len(), 1);
+        assert_eq!(bats[0].soc, Some(90.0));
+        assert_eq!(st.battery_soc, Some(90.0));
+        assert_eq!(st.battery_current, Some(-3.5));
+    }
+
+    #[test]
     fn falls_back_when_friendly_name_missing() {
         let mut map = HashMap::new();
         map.insert(
@@ -1163,5 +1410,23 @@ mod tests {
             },
         );
         assert_eq!(load_friendly_name("plain", &map), None);
+    }
+
+    #[test]
+    fn partial_device_serializes_without_nulls() {
+        // The UI guards optional battery fields with `!== undefined`; a JSON
+        // `null` passes that check and crashes rendering (null.toFixed).
+        // Partially-discovered GX devices must omit the fields instead.
+        assert_eq!(serde_json::to_string(&Battery::default()).unwrap(), "{}");
+        assert_eq!(
+            serde_json::to_string(&MpptCharger::default()).unwrap(),
+            "{}"
+        );
+        // Fully-populated values still serialize.
+        let b = Battery {
+            soc: Some(87.5),
+            ..Default::default()
+        };
+        assert_eq!(serde_json::to_string(&b).unwrap(), r#"{"soc":87.5}"#);
     }
 }
