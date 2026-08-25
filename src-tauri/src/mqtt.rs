@@ -275,6 +275,7 @@ struct NotificationState {
 
 pub struct MqttClient {
     client: Option<Client>,
+    client_id: String,
     state: Arc<Mutex<InverterState>>,
     host: String,
     port: u16,
@@ -438,9 +439,11 @@ impl MqttClient {
         port: u16,
         username: Option<String>,
         password: Option<String>,
+        client_id: String,
     ) -> Self {
         Self {
             client: None,
+            client_id,
             state: Arc::new(Mutex::new(InverterState::default())),
             host,
             port,
@@ -495,6 +498,7 @@ impl MqttClient {
         let port = self.port;
         let username = self.username.clone();
         let password = self.password.clone();
+        let client_id = self.client_id.clone();
 
         let state = self.state.clone();
         let app_handle = self.app_handle.clone();
@@ -515,6 +519,7 @@ impl MqttClient {
                         port,
                         &username,
                         &password,
+                        &client_id,
                         state.clone(),
                         app_handle.clone(),
                         portal_id.clone(),
@@ -550,6 +555,7 @@ impl MqttClient {
         port: u16,
         username: &Option<String>,
         password: &Option<String>,
+        client_id: &str,
         state: Arc<Mutex<InverterState>>,
         app_handle: Option<tauri::AppHandle>,
         portal_id: Option<String>,
@@ -563,8 +569,10 @@ impl MqttClient {
         let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
         let queue_cap = MQTT_QUEUE_CAPACITY;
 
-        let mut mqttoptions =
-            MqttOptions::new("inverter-dashboard-desktop", (host.to_string(), port));
+        // Random suffix keeps the client ID unique so a second instance or a
+        // stale broker session cannot kick this client off the broker.
+        let client_id = format!("{}-{:06x}", client_id, rand::random::<u32>() & 0xFF_FFFF);
+        let mut mqttoptions = MqttOptions::new(&client_id, (host.to_string(), port));
         mqttoptions.set_keep_alive(keepalive_secs as u16);
 
         if let (Some(u), Some(p)) = (username, password) {
