@@ -26,13 +26,24 @@ use keyring::Entry;
 const KEYRING_SERVICE: &str = "inverter-desktop";
 const KEYRING_USERNAME: &str = "victron";
 
-// Desktop-only: OS keychain for encryption key
+// Desktop-only: OS keychain for encryption key.
+// Key is cached in memory: keychain reads intermittently fail after sleep/wake
+// (errSecNoSuchKeychain), and load_config runs on every action button press.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static ENCRYPTION_KEY_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
+    if let Ok(cache) = ENCRYPTION_KEY_CACHE.lock() {
+        if let Some(key) = cache.as_ref() {
+            return Ok(key.clone());
+        }
+    }
+
     let entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME)
         .map_err(|e| format!("Keyring error: {}", e))?;
 
-    match entry.get_password() {
+    let key: Vec<u8> = match entry.get_password() {
         Ok(key_b64) => {
             let key = general_purpose::STANDARD
                 .decode(key_b64)
@@ -40,7 +51,7 @@ fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
             if key.len() != 32 {
                 return Err("Invalid encryption key length".to_string());
             }
-            Ok(key)
+            key
         }
         Err(keyring::Error::NoEntry) => {
             // Generate new encryption key
@@ -50,10 +61,15 @@ fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
             entry
                 .set_password(&key_b64)
                 .map_err(|e| format!("Failed to save encryption key: {}", e))?;
-            Ok(key.to_vec())
+            key.to_vec()
         }
-        Err(e) => Err(format!("Keyring error: {}", e)),
+        Err(e) => Err(format!("Keyring error: {}", e))?,
+    };
+
+    if let Ok(mut cache) = ENCRYPTION_KEY_CACHE.lock() {
+        *cache = Some(key.clone());
     }
+    Ok(key)
 }
 
 // Mobile fallback: use a fixed derivation (less secure but functional)
