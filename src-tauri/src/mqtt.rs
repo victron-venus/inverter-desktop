@@ -938,6 +938,21 @@ impl MqttClient {
         }
     }
 
+    /// The SmartShunt is the ground-truth meter for the whole battery bank:
+    /// the mqtt chains report per-string BMS views and virtual_chain is
+    /// derived from the shunt itself (shunt - chain1 - chain2), so summing
+    /// every battery service double-counts. The shunt's D-Bus/MQTT instance
+    /// can change across GX reboots, so match by product name, not instance.
+    fn find_shunt(batteries: &[Battery]) -> Option<&Battery> {
+        batteries.iter().find(|b| {
+            b.name
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("shunt")
+        })
+    }
+
     /// Overlay discovered GX devices onto a state snapshot. When anything was
     /// found on the broker it wins over the daemon-provided arrays so the UI
     /// stays correct even with inverter-control down; empty maps leave the
@@ -945,13 +960,15 @@ impl MqttClient {
     fn apply_cerbo_to_state(devices: &CerboDevices, st: &mut InverterState) {
         if !devices.batteries.is_empty() {
             let batteries: Vec<Battery> = devices.batteries.values().cloned().collect();
-            st.battery_soc = batteries.iter().find_map(|b| b.soc).or(st.battery_soc);
-            st.battery_voltage = batteries
-                .iter()
-                .find_map(|b| b.voltage)
-                .or(st.battery_voltage);
-            st.battery_current = Some(batteries.iter().filter_map(|b| b.current).sum());
-            st.battery_power = Some(batteries.iter().filter_map(|b| b.power).sum());
+            // Bank totals come from the shunt alone; without it, leave the
+            // daemon's system-aggregate values untouched rather than summing
+            // overlapping battery services.
+            if let Some(shunt) = Self::find_shunt(&batteries) {
+                st.battery_soc = shunt.soc.or(st.battery_soc);
+                st.battery_voltage = shunt.voltage.or(st.battery_voltage);
+                st.battery_current = Some(shunt.current.unwrap_or(0.0));
+                st.battery_power = Some(shunt.power.unwrap_or(0.0));
+            }
             st.batteries = Some(batteries);
         }
         if !devices.chargers.is_empty() {
@@ -1387,16 +1404,32 @@ mod tests {
         );
         assert_eq!(st.battery_soc, Some(10.0));
 
-        // Discovered device wins.
+        // Discovered non-shunt devices refresh the battery list but must NOT
+        // become bank totals (summing overlapping services double-counts);
+        // daemon totals stay untouched until a shunt shows up.
         let mut d = CerboDevices::default();
         MqttClient::apply_device_message(&mut d, "battery", 1, "Soc", "{\"value\": 90}");
         MqttClient::apply_device_message(&mut d, "battery", 1, "Dc/0/Current", "{\"value\": -3.5}");
         MqttClient::apply_cerbo_to_state(&d, &mut st);
-        let bats = st.batteries.unwrap();
+        let bats = st.batteries.clone().unwrap();
         assert_eq!(bats.len(), 1);
         assert_eq!(bats[0].soc, Some(90.0));
-        assert_eq!(st.battery_soc, Some(90.0));
-        assert_eq!(st.battery_current, Some(-3.5));
+        assert_eq!(st.battery_soc, Some(10.0));
+        assert_eq!(st.battery_current, None);
+
+        // Shunt-named device wins all bank totals.
+        MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            2,
+            "ProductName",
+            "\"SmartShunt 500A/50mV\"",
+        );
+        MqttClient::apply_device_message(&mut d, "battery", 2, "Soc", "{\"value\": 87}");
+        MqttClient::apply_device_message(&mut d, "battery", 2, "Dc/0/Power", "{\"value\": 672}");
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        assert_eq!(st.battery_soc, Some(87.0));
+        assert_eq!(st.battery_power, Some(672.0));
     }
 
     #[test]
@@ -1428,5 +1461,33 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(serde_json::to_string(&b).unwrap(), r#"{"soc":87.5}"#);
+    }
+
+    fn bat(name: &str, amps: f64) -> Battery {
+        Battery {
+            name: Some(name.to_string()),
+            current: Some(amps),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn finds_shunt_by_product_name_regardless_of_instance() {
+        // Instance numbers change across GX reboots; the product name is stable.
+        let batteries = vec![
+            bat("JBD Chain 1", 4.0),
+            bat("Virtual Battery", 4.4),
+            bat("SmartShunt 500A/50mV", 12.9),
+        ];
+        assert_eq!(
+            MqttClient::find_shunt(&batteries).unwrap().current,
+            Some(12.9)
+        );
+    }
+
+    #[test]
+    fn no_shunt_when_only_chains_present() {
+        let batteries = vec![bat("JBD Chain 1", 4.0), bat("JBD Chain 2", 4.3)];
+        assert!(MqttClient::find_shunt(&batteries).is_none());
     }
 }
