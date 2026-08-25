@@ -376,15 +376,38 @@ const mpptTotal = computed(() => state.value.mppt_total || 0)
 const tasmotaTotal = computed(() => state.value.tasmota_total || 0)
 
 const batteries = computed(() => {
-  return (state.value.batteries || []).map((b) => ({
-    name: b.name || 'Battery',
-    voltage: b.voltage || 0,
-    current: b.current,
-    power: b.power,
-    soc: b.soc || 0,
-    state: b.state || 'Unknown',
-    timeToGo: b.time_to_go || '',
-  }))
+  const tiles: Array<{
+    name: string
+    voltage: number
+    current?: number
+    power?: number
+    soc: number
+    state: string
+    timeToGo?: string
+  }> = []
+  // Bank totals (shunt V/I/P + voltage-derived SOC formula)
+  if (state.value.battery_soc !== undefined && state.value.battery_soc !== null) {
+    tiles.push({
+      name: 'Bank',
+      voltage: state.value.battery_voltage || 0,
+      current: state.value.battery_current,
+      power: state.value.battery_power,
+      soc: state.value.battery_soc,
+      state: 'Shunt',
+    })
+  }
+  for (const b of state.value.batteries || []) {
+    tiles.push({
+      name: b.name || 'Battery',
+      voltage: b.voltage || 0,
+      current: b.current,
+      power: b.power,
+      soc: b.soc || 0,
+      state: b.state || 'Unknown',
+      timeToGo: b.time_to_go || '',
+    })
+  }
+  return tiles
 })
 
 const solarSources = computed(() => {
