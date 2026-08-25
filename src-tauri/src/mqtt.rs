@@ -130,20 +130,31 @@ pub struct EssMode {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MpptCharger {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pv_voltage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub power: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Battery {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub power: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub soc: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_go: Option<String>,
 }
 
@@ -1399,5 +1410,23 @@ mod tests {
             },
         );
         assert_eq!(load_friendly_name("plain", &map), None);
+    }
+
+    #[test]
+    fn partial_device_serializes_without_nulls() {
+        // The UI guards optional battery fields with `!== undefined`; a JSON
+        // `null` passes that check and crashes rendering (null.toFixed).
+        // Partially-discovered GX devices must omit the fields instead.
+        assert_eq!(serde_json::to_string(&Battery::default()).unwrap(), "{}");
+        assert_eq!(
+            serde_json::to_string(&MpptCharger::default()).unwrap(),
+            "{}"
+        );
+        // Fully-populated values still serialize.
+        let b = Battery {
+            soc: Some(87.5),
+            ..Default::default()
+        };
+        assert_eq!(serde_json::to_string(&b).unwrap(), r#"{"soc":87.5}"#);
     }
 }

@@ -21,12 +21,12 @@
               >{{ bat.voltage.toFixed(2) }}V</span
             >
             <span
-              v-if="bat.current !== undefined"
+              v-if="bat.current != null"
               class="text-[11px] font-bold text-slate-500 dark:text-slate-300 leading-none"
               >{{ bat.current.toFixed(1) }}A</span
             >
             <span
-              v-if="bat.power !== undefined"
+              v-if="bat.power != null"
               class="text-[11px] font-bold text-slate-500 dark:text-slate-300 leading-none"
               >{{ Math.floor(bat.power) }}W</span
             >
