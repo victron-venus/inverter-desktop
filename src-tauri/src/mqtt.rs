@@ -122,6 +122,17 @@ fn coerce_bool(v: &serde_json::Value) -> bool {
     }
 }
 
+/// Bank % from pack voltage — same paradigm as the HA "Battery %" template
+/// sensor: linear 40-54.4 V, clamped to 0-100, rounded. The shunt's own SoC
+/// counter reads a bogus 100% while charging, so the UI never shows it.
+fn voltage_soc(voltage: f64) -> f64 {
+    const V_MIN: f64 = 40.0; // V -> 0%
+    const V_MAX: f64 = 54.4; // V -> 100% (absorption)
+    (((voltage - V_MIN) / (V_MAX - V_MIN)) * 100.0)
+        .clamp(0.0, 100.0)
+        .round()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EssMode {
     pub mode_name: Option<String>,
@@ -874,6 +885,22 @@ impl MqttClient {
             .as_f64()
     }
 
+    /// /TimeToGo arrives in seconds (null when idle -> parse_cerbo_value
+    /// already yields None). Format like the inverter-control daemon does.
+    fn format_time_to_go(secs: f64) -> Option<String> {
+        let s = secs as u64;
+        if s == 0 || s >= 86_400 * 14 {
+            return None;
+        }
+        let h = s / 3600;
+        let m = (s % 3600) / 60;
+        Some(if h > 0 {
+            format!("{h}h {m:02}m")
+        } else {
+            format!("{m}m")
+        })
+    }
+
     /// Cerbo ProductName arrives as {"value": "<name>"}.
     fn parse_cerbo_name(payload: &str) -> Option<String> {
         let s = serde_json::from_str::<serde_json::Value>(payload)
@@ -919,6 +946,15 @@ impl MqttClient {
                     "Dc/0/Current" => b.current = val,
                     "Dc/0/Power" => b.power = val,
                     "ProductName" => b.name = Self::parse_cerbo_name(payload),
+                    // Venus battery /State enum: 0=Idle, 1=Charging, 2=Discharging
+                    "State" => {
+                        b.state = val.map(|v| match v as u32 {
+                            1 => "Charging".to_string(),
+                            2 => "Discharging".to_string(),
+                            _ => "Idle".to_string(),
+                        })
+                    }
+                    "TimeToGo" => b.time_to_go = val.and_then(Self::format_time_to_go),
                     _ => return false,
                 }
                 true
@@ -964,7 +1000,10 @@ impl MqttClient {
             // daemon's system-aggregate values untouched rather than summing
             // overlapping battery services.
             if let Some(shunt) = Self::find_shunt(&batteries) {
-                st.battery_soc = shunt.soc.or(st.battery_soc);
+                // Bank % is computed from pack voltage (HA "Battery %" paradigm):
+                // the shunt's own SoC counter reads a bogus 100% while charging.
+                // Computed here, not in the daemon, so it works with inverter-control down.
+                st.battery_soc = shunt.voltage.map(voltage_soc).or(st.battery_soc);
                 st.battery_voltage = shunt.voltage.or(st.battery_voltage);
                 st.battery_current = Some(shunt.current.unwrap_or(0.0));
                 st.battery_power = Some(shunt.power.unwrap_or(0.0));
@@ -1355,6 +1394,35 @@ mod tests {
         ));
         assert!(MqttClient::apply_device_message(
             &mut d,
+            "battery",
+            512,
+            "State",
+            "{\"value\": 1}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "TimeToGo",
+            "{\"value\": 108110.0}"
+        ));
+        // Idle battery: Venus publishes null -> no time-to-go shown.
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            513,
+            "State",
+            "{\"value\": 0}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            513,
+            "TimeToGo",
+            "{\"value\": null}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
             "solarcharger",
             2,
             "Yield/Power",
@@ -1373,13 +1441,24 @@ mod tests {
         assert_eq!(b.soc, Some(87.5));
         assert_eq!(b.voltage, Some(51.2));
         assert_eq!(b.name.as_deref(), Some("SmartShunt 500A"));
+        assert_eq!(b.state.as_deref(), Some("Charging"));
+        assert_eq!(b.time_to_go.as_deref(), Some("30h 01m"));
+        assert_eq!(d.batteries[&513].state.as_deref(), Some("Idle"));
+        assert_eq!(d.batteries[&513].time_to_go, None);
 
         let mut st = InverterState::default();
         MqttClient::apply_cerbo_to_state(&d, &mut st);
-        assert_eq!(st.battery_soc, Some(87.5));
-        assert_eq!(st.batteries.as_ref().unwrap().len(), 1);
+        // Bank % is voltage-derived (HA paradigm), NOT the shunt's SoC counter
+        // which reads bogus 100% while charging: ((51.2-40)/14.4)*100 -> 78.
+        assert_eq!(st.battery_soc, Some(voltage_soc(51.2)));
+        assert_eq!(st.battery_soc, Some(78.0));
+        assert_eq!(st.batteries.as_ref().unwrap().len(), 2);
         assert_eq!(st.mppt_chargers.as_ref().unwrap().len(), 1);
         assert_eq!(st.mppt_total, Some(1450.0));
+
+        // Shunt SoC counter itself is untouched in the per-device tile list.
+        let bats = st.batteries.clone().unwrap();
+        assert_eq!(bats[0].soc, Some(87.5));
     }
 
     #[test]
@@ -1426,10 +1505,37 @@ mod tests {
             "\"SmartShunt 500A/50mV\"",
         );
         MqttClient::apply_device_message(&mut d, "battery", 2, "Soc", "{\"value\": 87}");
+        MqttClient::apply_device_message(&mut d, "battery", 2, "Dc/0/Voltage", "{\"value\": 53.2}");
         MqttClient::apply_device_message(&mut d, "battery", 2, "Dc/0/Power", "{\"value\": 672}");
         MqttClient::apply_cerbo_to_state(&d, &mut st);
-        assert_eq!(st.battery_soc, Some(87.0));
+        // Voltage-derived % wins over the shunt's SoC counter (87 here).
+        assert_eq!(st.battery_soc, Some(voltage_soc(53.2)));
+        assert_eq!(st.battery_soc, Some(92.0));
         assert_eq!(st.battery_power, Some(672.0));
+
+        // Missing voltage keeps the previous bank % instead of blanking it.
+        let mut d_no_v = CerboDevices::default();
+        MqttClient::apply_device_message(
+            &mut d_no_v,
+            "battery",
+            3,
+            "ProductName",
+            "\"SmartShunt 500A/50mV\"",
+        );
+        MqttClient::apply_device_message(&mut d_no_v, "battery", 3, "Soc", "{\"value\": 100}");
+        MqttClient::apply_cerbo_to_state(&d_no_v, &mut st);
+        assert_eq!(st.battery_soc, Some(92.0));
+    }
+
+    #[test]
+    fn voltage_soc_matches_ha_battery_percent() {
+        // Parity with the HA template: linear 40-54.4 V, clamp 0-100, round.
+        assert_eq!(voltage_soc(40.0), 0.0);
+        assert_eq!(voltage_soc(54.4), 100.0);
+        assert_eq!(voltage_soc(47.2), 50.0);
+        assert_eq!(voltage_soc(30.0), 0.0); // below range clamps to 0
+        assert_eq!(voltage_soc(60.0), 100.0); // above range clamps to 100
+        assert_eq!(voltage_soc(51.2), 78.0); // whole numbers only
     }
 
     #[test]
