@@ -739,7 +739,13 @@ async fn connect_mqtt(
         .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
-    let mut client = MqttClient::new(host, port, username, password);
+    let mut client = MqttClient::new(
+        host,
+        port,
+        username,
+        password,
+        "inverter-dashboard-desktop".to_string(),
+    );
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
@@ -1063,7 +1069,13 @@ async fn connect_ha_mqtt(
             .map_err(|e| format!("Internal error: {}", e))?;
         *client_guard = None;
     }
-    let mut client = MqttClient::new(host, port, username, password);
+    let mut client = MqttClient::new(
+        host,
+        port,
+        username,
+        password,
+        "inverter-dashboard-desktop-ha".to_string(),
+    );
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app.clone());
     client.set_camera_topic(camera_topic);
