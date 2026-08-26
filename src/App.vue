@@ -385,17 +385,6 @@ const batteries = computed(() => {
     state: string
     timeToGo?: string
   }> = []
-  // Bank totals (shunt V/I/P + voltage-derived SOC formula)
-  if (state.value.battery_soc !== undefined && state.value.battery_soc !== null) {
-    tiles.push({
-      name: 'Bank',
-      voltage: state.value.battery_voltage || 0,
-      current: state.value.battery_current,
-      power: state.value.battery_power,
-      soc: state.value.battery_soc,
-      state: 'Shunt',
-    })
-  }
   for (const b of state.value.batteries || []) {
     tiles.push({
       name: b.name || 'Battery',
