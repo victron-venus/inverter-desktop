@@ -16,6 +16,7 @@ use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -372,7 +373,11 @@ async fn perform_action(
             .lock()
             .map_err(|e| format!("Internal error: {}", e))?;
         return match client.as_ref() {
-            Some(c) => c.set_water_mode(which, mode),
+            Some(c) => {
+                c.publish_command("water_mode_set", json!({ "which": which, "mode": mode }))
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
             None => Err("MQTT client not connected".to_string()),
         };
     }
