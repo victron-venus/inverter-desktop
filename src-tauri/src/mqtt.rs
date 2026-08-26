@@ -1,3 +1,4 @@
+use chrono::Utc;
 use rumqttc::{Client, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -1235,15 +1236,22 @@ impl MqttClient {
             if value == 1 || value == 2 {
                 let level = if value == 2 { "alarm" } else { "warning" };
                 let state_txt = if value == 2 { "Alarm" } else { "Warning" };
+                // Extract portal ID for more informative messages (topic format: N/<portal>/<service>/Alarms/<alarm_name>)
+                let portal_id = parts.get(1).copied().unwrap_or("unknown");
                 let _ = handle.emit(
                     "mqtt-notification",
                     MqttNotification {
                         id,
                         level: level.to_string(),
-                        title: pretty_service_name(service),
-                        body: format!("{}: {}", pretty_alarm_name(alarm_name), state_txt),
+                        title: pretty_alarm_name(alarm_name), // Show specific alarm name as title
+                        body: format!(
+                            "{} on {}: {}",
+                            pretty_alarm_name(alarm_name),
+                            portal_id,
+                            state_txt
+                        ),
                         source: "victron".to_string(),
-                        ts: String::new(),
+                        ts: Utc::now().to_rfc3339(), // Add timestamp
                     },
                 );
             } else {
