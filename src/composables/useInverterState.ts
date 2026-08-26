@@ -67,6 +67,9 @@ export interface InverterState {
   water_level?: number | null
   water_valve?: boolean | null
   pump_switch?: boolean | null
+  /** dbus-pump /Mode (0 auto, 1 always-on, 2 always-off); null until known */
+  water_pump_mode?: number | null
+  water_valve_mode?: number | null
 }
 
 export const state = ref<InverterState>({

@@ -361,6 +361,22 @@ async fn perform_action(
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
     info!("perform_action: action={}, payload={}", action, payload);
+
+    // Water control goes only through dbus-pump's writable /Mode via the GX
+    // MQTT-API (single control plane) - never straight to Home Assistant.
+    if action == "water_mode" {
+        let which = payload.get("which").and_then(|v| v.as_str()).unwrap_or("");
+        let mode = payload.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        let client = mqtt_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        return match client.as_ref() {
+            Some(c) => c.set_water_mode(which, mode),
+            None => Err("MQTT client not connected".to_string()),
+        };
+    }
+
     let config = load_config(&app)?;
 
     let entity_id = payload.get("entity").and_then(|v| v.as_str());

@@ -308,6 +308,10 @@ export function useHA() {
 
   const waterLevel = computed(() => state.value.water_level ?? null)
 
+  const waterPumpMode = computed(() => state.value.water_pump_mode ?? null)
+
+  const waterValveMode = computed(() => state.value.water_valve_mode ?? null)
+
   const waterSectionVisible = computed(
     () =>
       state.value.water_level != null ||
@@ -645,6 +649,8 @@ export function useHA() {
     pumpSwitchState,
     waterLevel,
     waterSectionVisible,
+    waterPumpMode,
+    waterValveMode,
     evSoc,
     evChargingKw,
     evClampWatts,

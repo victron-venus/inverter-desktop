@@ -15,6 +15,7 @@ export default {
     water: 'Water',
     pump: 'PUMP',
     valve: 'VALVE',
+    auto: 'AUTO',
     start: 'START',
     pause: 'PAUSE',
     home: 'Home',

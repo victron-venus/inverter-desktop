@@ -61,6 +61,8 @@
               :waterValve="waterValveState"
               :pumpSwitch="pumpSwitchState"
               :waterLevel="waterLevel"
+              :waterPumpMode="waterPumpMode"
+              :waterValveMode="waterValveMode"
               :washerActive="washerActive"
               :washerRemainingTime="washerRemainingTime"
               :dryerActive="dryerActive"
@@ -228,6 +230,8 @@ const {
   pumpSwitchState,
   waterLevel,
   waterSectionVisible,
+  waterPumpMode,
+  waterValveMode,
   evSoc,
   evChargingKw,
   evPower,
