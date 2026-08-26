@@ -13,14 +13,14 @@ describe('DailyStats', () => {
     ;(state as ReturnType<typeof ref>).value = {
       daily_stats: {
         produced_today: 15.99,
-        tasmota_daily: [2.121, 2.619],
+        pv_inverter_daily: [2.121, 2.619],
         mppt_daily: [3.2, 3.67, 4.38],
       },
       solar_forecast: { date: '2026-08-23', today_kwh: 13.39, tomorrow_kwh: 8.89 },
     }
     const wrapper = mount(DailyStats)
     const text = wrapper.text()
-    // (tasmota1+tasmota2+MPPT_TOTAL(mppt1+mppt2+mppt3)) and 2.12+2.62+11.25 === 15.99
+    // (pvInv1+pvInv2+MPPT_TOTAL(mppt1+mppt2+mppt3)) and 2.12+2.62+11.25 === 15.99
     expect(text).toContain('(2.12+2.62+11.25(3.20+3.67+4.38))')
     expect(text).toContain('15.99kWh')
     // forecast comes from top-level state.solar_forecast

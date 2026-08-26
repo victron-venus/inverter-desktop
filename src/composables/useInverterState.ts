@@ -11,7 +11,6 @@ export interface InverterState {
   t2?: number
   solar_total?: number
   mppt_total?: number
-  tasmota_total?: number
   battery_soc?: number
   battery_power?: number
   battery_voltage?: number
@@ -27,7 +26,6 @@ export interface InverterState {
   booleans?: Record<string, boolean>
   features?: Record<string, boolean>
   mppt_individual?: number[]
-  tasmota_individual?: number[]
   mppt_chargers?: Array<{ name?: string; pv_voltage?: number; current?: number; power?: number }>
   // AC PV inverters of any vendor (V/I/P per device)
   pv_inverters?: Array<{ name?: string; voltage?: number; current?: number; power?: number }>
@@ -54,7 +52,7 @@ export interface InverterState {
     battery_out?: number
     battery_in_yesterday?: number
     battery_out_yesterday?: number
-    tasmota_daily?: number[]
+    pv_inverter_daily?: number[]
     mppt_daily?: number[]
     pv_total_daily?: number
   }
