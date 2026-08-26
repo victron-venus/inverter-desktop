@@ -1351,8 +1351,7 @@ impl MqttClient {
                                 alert_notifications.push((title.clone(), body.clone()));
                                 // Also send as persistent banner
                                 if let Some(ref handle) = app_handle {
-                                    let alert_id =
-                                        format!("high-load-{}", Utc::now().timestamp_millis());
+                                    let alert_id = "high-load".to_string();
                                     let _ = handle.emit(
                                         "mqtt-notification",
                                         MqttNotification {
@@ -1381,8 +1380,7 @@ impl MqttClient {
                             alert_notifications.push((title.clone(), body.clone()));
                             // Also send as persistent banner
                             if let Some(ref handle) = app_handle {
-                                let alert_id =
-                                    format!("high-consumption-{}", Utc::now().timestamp_millis());
+                                let alert_id = "high-consumption".to_string();
                                 let _ = handle.emit(
                                     "mqtt-notification",
                                     MqttNotification {
@@ -1408,8 +1406,7 @@ impl MqttClient {
                             alert_notifications.push((title.clone(), body.clone()));
                             // Also send as persistent banner
                             if let Some(ref handle) = app_handle {
-                                let alert_id =
-                                    format!("low-water-{}", Utc::now().timestamp_millis());
+                                let alert_id = "low-water".to_string();
                                 let _ = handle.emit(
                                     "mqtt-notification",
                                     MqttNotification {
@@ -1435,8 +1432,7 @@ impl MqttClient {
                             alert_notifications.push((title.clone(), body.clone()));
                             // Also send as persistent banner
                             if let Some(ref handle) = app_handle {
-                                let alert_id =
-                                    format!("high-solar-{}", Utc::now().timestamp_millis());
+                                let alert_id = "high-solar".to_string();
                                 let _ = handle.emit(
                                     "mqtt-notification",
                                     MqttNotification {
