@@ -876,7 +876,11 @@ impl MqttClient {
             }
         } else if topic == "inverter/notifications" {
             match serde_json::from_str::<MqttNotification>(payload) {
-                Ok(notification) => {
+                Ok(mut notification) => {
+                    // Ensure timestamp is present (add if missing)
+                    if notification.ts.is_empty() {
+                        notification.ts = Utc::now().to_rfc3339();
+                    }
                     if let Some(ref handle) = app_handle {
                         let _ = handle.emit("mqtt-notification", &notification);
                         // Mirror to OS notification like local alerts
@@ -1361,10 +1365,25 @@ impl MqttClient {
                                 .or_insert_with(AlertState::new);
                             if alert.should_alert() {
                                 let display_name = Self::load_display_name(name, &ha_entity_states);
-                                alert_notifications.push((
-                                    "High Load".to_string(),
-                                    format!("{}: {}", display_name, fmt_watts(*power)),
-                                ));
+                                let title = "High Load".to_string();
+                                let body = format!("{}: {}", display_name, fmt_watts(*power));
+                                alert_notifications.push((title.clone(), body.clone()));
+                                // Also send as persistent banner
+                                if let Some(ref handle) = app_handle {
+                                    let alert_id =
+                                        format!("high-load-{}", Utc::now().timestamp_millis());
+                                    let _ = handle.emit(
+                                        "mqtt-notification",
+                                        MqttNotification {
+                                            id: alert_id,
+                                            level: "alarm".to_string(),
+                                            title: title.clone(),
+                                            body: body.clone(),
+                                            source: "system".to_string(),
+                                            ts: Utc::now().to_rfc3339(),
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
@@ -1376,10 +1395,25 @@ impl MqttClient {
                 if let Some(tt) = new_state.tt {
                     if tt > THRESHOLD_CONSUMPTION_W {
                         if alert_state.high_consumption.should_alert() {
-                            alert_notifications.push((
-                                "High Consumption".to_string(),
-                                format!("Consumption: {}", fmt_watts(tt)),
-                            ));
+                            let title = "High Consumption".to_string();
+                            let body = format!("Consumption: {}", fmt_watts(tt));
+                            alert_notifications.push((title.clone(), body.clone()));
+                            // Also send as persistent banner
+                            if let Some(ref handle) = app_handle {
+                                let alert_id =
+                                    format!("high-consumption-{}", Utc::now().timestamp_millis());
+                                let _ = handle.emit(
+                                    "mqtt-notification",
+                                    MqttNotification {
+                                        id: alert_id,
+                                        level: "alarm".to_string(),
+                                        title: title.clone(),
+                                        body: body.clone(),
+                                        source: "system".to_string(),
+                                        ts: Utc::now().to_rfc3339(),
+                                    },
+                                );
+                            }
                         }
                     } else {
                         alert_state.high_consumption.check_resolved();
@@ -1388,8 +1422,25 @@ impl MqttClient {
                 if let Some(wl) = new_state.water_level {
                     if wl < THRESHOLD_WATER_CM {
                         if alert_state.low_water.should_alert_value(wl) {
-                            alert_notifications
-                                .push(("Low Water".to_string(), format!("Water level: {} cm", wl)));
+                            let title = "Low Water".to_string();
+                            let body = format!("Water level: {} cm", wl);
+                            alert_notifications.push((title.clone(), body.clone()));
+                            // Also send as persistent banner
+                            if let Some(ref handle) = app_handle {
+                                let alert_id =
+                                    format!("low-water-{}", Utc::now().timestamp_millis());
+                                let _ = handle.emit(
+                                    "mqtt-notification",
+                                    MqttNotification {
+                                        id: alert_id,
+                                        level: "alarm".to_string(),
+                                        title: title.clone(),
+                                        body: body.clone(),
+                                        source: "system".to_string(),
+                                        ts: Utc::now().to_rfc3339(),
+                                    },
+                                );
+                            }
                         }
                     } else {
                         alert_state.low_water.check_resolved();
@@ -1398,10 +1449,25 @@ impl MqttClient {
                 if let Some(st) = new_state.solar_total {
                     if st > THRESHOLD_SOLAR_W {
                         if alert_state.high_solar.should_alert() {
-                            alert_notifications.push((
-                                "High Solar".to_string(),
-                                format!("Solar: {}", fmt_watts(st)),
-                            ));
+                            let title = "High Solar".to_string();
+                            let body = format!("Solar: {}", fmt_watts(st));
+                            alert_notifications.push((title.clone(), body.clone()));
+                            // Also send as persistent banner
+                            if let Some(ref handle) = app_handle {
+                                let alert_id =
+                                    format!("high-solar-{}", Utc::now().timestamp_millis());
+                                let _ = handle.emit(
+                                    "mqtt-notification",
+                                    MqttNotification {
+                                        id: alert_id,
+                                        level: "alarm".to_string(),
+                                        title: title.clone(),
+                                        body: body.clone(),
+                                        source: "system".to_string(),
+                                        ts: Utc::now().to_rfc3339(),
+                                    },
+                                );
+                            }
                         }
                     } else {
                         alert_state.high_solar.check_resolved();
