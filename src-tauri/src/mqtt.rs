@@ -22,7 +22,6 @@ pub struct InverterState {
     pub t2: Option<f64>,
     pub solar_total: Option<f64>,
     pub mppt_total: Option<f64>,
-    pub tasmota_total: Option<f64>,
     pub battery_soc: Option<f64>,
     pub battery_power: Option<f64>,
     pub battery_voltage: Option<f64>,
@@ -39,7 +38,6 @@ pub struct InverterState {
     pub booleans: Option<std::collections::HashMap<String, bool>>,
     pub features: Option<std::collections::HashMap<String, bool>>,
     pub mppt_individual: Option<Vec<f64>>,
-    pub tasmota_individual: Option<Vec<f64>>,
     pub mppt_chargers: Option<Vec<MpptCharger>>,
     pub pv_inverters: Option<Vec<PvInverter>>,
     pub batteries: Option<Vec<Battery>>,
@@ -88,7 +86,6 @@ struct RawInverterState {
     booleans: Option<std::collections::HashMap<String, serde_json::Value>>,
     features: Option<std::collections::HashMap<String, bool>>,
     mppt_individual: Option<Vec<f64>>,
-    tasmota_individual: Option<Vec<f64>>,
     mppt_chargers: Option<Vec<MpptCharger>>,
     pv_inverters: Option<Vec<PvInverter>>,
     batteries: Option<Vec<Battery>>,
@@ -235,7 +232,7 @@ pub struct DailyStats {
     pub battery_out: Option<f64>,
     pub battery_in_yesterday: Option<f64>,
     pub battery_out_yesterday: Option<f64>,
-    pub tasmota_daily: Option<Vec<f64>>,
+    pub pv_inverter_daily: Option<Vec<f64>>,
     pub mppt_daily: Option<Vec<f64>>,
     pub pv_total_daily: Option<f64>,
 }
@@ -1067,9 +1064,6 @@ impl MqttClient {
         }
         if !devices.pv_inverters.is_empty() {
             st.pv_inverters = Some(devices.pv_inverters.values().cloned().collect());
-            // Legacy aggregate keeps the Solar stat card alive until the SPA
-            // reads pv_inverters directly (also covers older bundled UIs).
-            st.tasmota_total = Some(devices.pv_inverters.values().filter_map(|p| p.power).sum());
         }
     }
 
@@ -1163,7 +1157,6 @@ impl MqttClient {
             t2: raw.t2,
             solar_total: raw.solar_total,
             mppt_total: raw.mppt_individual.as_ref().map(|v| v.iter().sum()),
-            tasmota_total: raw.tasmota_individual.as_ref().map(|v| v.iter().sum()),
             battery_soc: raw.battery_soc,
             battery_power: raw.battery_power,
             battery_voltage: raw.battery_voltage,
@@ -1182,7 +1175,6 @@ impl MqttClient {
                 .map(|map| map.into_iter().map(|(k, v)| (k, coerce_bool(&v))).collect()),
             features: raw.features,
             mppt_individual: raw.mppt_individual,
-            tasmota_individual: raw.tasmota_individual,
             mppt_chargers: raw.mppt_chargers,
             pv_inverters: raw.pv_inverters,
             batteries: raw.batteries,
@@ -1557,7 +1549,6 @@ mod tests {
         assert_eq!(inv.voltage, Some(126.0));
         assert_eq!(inv.current, Some(1.29));
         assert_eq!(inv.power, Some(163.0));
-        assert_eq!(st.tasmota_total, Some(163.0));
 
         // Shunt SoC counter itself is untouched in the per-device tile list.
         let bats = st.batteries.clone().unwrap();
