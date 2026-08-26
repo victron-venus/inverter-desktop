@@ -51,10 +51,6 @@ pub struct InverterState {
     pub water_level: Option<f64>,
     pub water_valve: Option<bool>,
     pub pump_switch: Option<bool>,
-    /// dbus-pump /Mode per device (0 auto, 1 always-on, 2 always-off);
-    /// None until the retained topic arrives.
-    pub water_pump_mode: Option<u8>,
-    pub water_valve_mode: Option<u8>,
     pub dishwasher_running: Option<bool>,
     pub dishwasher_duration: Option<u64>,
     pub washer_time: Option<u64>,
@@ -192,6 +188,11 @@ pub struct Battery {
     pub time_to_go: Option<String>,
 }
 
+/// Devices discovered directly on the Cerbo GX MQTT broker
+/// (N/<portal>/battery/..., N/<portal>/solarcharger/...,
+/// N/<portal>/pvinverter/...), independent of the inverter-control daemon's
+/// inverter/state payload. BTreeMap keeps a stable instance-ordered list for
+/// the UI.
 /// Tile identity for duplicate-name disambiguation: identical units ship one
 /// shared ProductName ("SmartSolar Charger MPPT 100/20 48V" x N), which reads
 /// as the same tile repeated.
@@ -242,6 +243,7 @@ impl DeviceIdentity for Battery {
 /// N/<portal>/pvinverter/...), independent of the inverter-control daemon's
 /// inverter/state payload. BTreeMap keeps a stable instance-ordered list for
 /// the UI.
+#[derive(Default)]
 struct CerboDevices {
     batteries: BTreeMap<u32, Battery>,
     chargers: BTreeMap<u32, MpptCharger>,
@@ -254,28 +256,16 @@ struct CerboDevices {
     last_sweep: Option<Instant>,
 }
 
-impl Default for CerboDevices {
-    fn default() -> Self {
-        Self {
-            batteries: Default::default(),
-            chargers: Default::default(),
-            pv_inverters: Default::default(),
-            // None = wipe due on first message: retained ghosts delivered at
-            // subscribe time get evicted immediately instead of living out a
-            // full TTL window.
-            last_sweep: None,
-        }
-    }
-}
-
 impl CerboDevices {
     /// How long a discovered entry survives without any fresh publish.
     const DEVICE_TTL_SECS: u64 = 60;
 
     fn sweep_stale(&mut self) {
-        let due = self.last_sweep.map_or(true, |t| {
-            t.elapsed() >= Duration::from_secs(Self::DEVICE_TTL_SECS)
-        });
+        // None = wipe due immediately: retained ghosts delivered at subscribe
+        // time get evicted right away instead of living out a full TTL window.
+        let due = self
+            .last_sweep
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(Self::DEVICE_TTL_SECS));
         if due {
             *self = Self {
                 last_sweep: Some(Instant::now()),
@@ -833,7 +823,6 @@ impl MqttClient {
             // pump/valve startstop state).
             format!("N/{}/tank/+/Level", id),
             format!("N/{}/pump/+/State", id),
-            format!("N/{}/pump/+/Mode", id),
             // Directly discovered GX devices: battery bank(s) + MPPT chargers
             // + AC PV inverters of any vendor, so the app finds them even
             // when inverter-control is down.
@@ -937,28 +926,17 @@ impl MqttClient {
             }
         } else if topic.starts_with("N/") && Self::parse_water_topic(topic).is_some() {
             // dbus-pump on the GX: N/<portal>/tank/<i>/Level (%),
-            // N/<portal>/pump/<i>/State (0 stopped, 1 running) and
-            // N/<portal>/pump/<i>/Mode (0 auto, 1 always-on, 2 always-off).
-            if let (Some((kind, path, inst)), Some((pump_i, valve_i)), Some(value)) = (
+            // N/<portal>/pump/<i>/State (0 stopped, 1 running).
+            if let (Some((kind, inst)), Some((pump_i, valve_i)), Some(value)) = (
                 Self::parse_water_topic(topic),
                 water_instances,
                 Self::parse_cerbo_value(payload),
             ) {
                 if let Ok(mut guard) = state.lock() {
-                    match (kind, path, inst) {
-                        ("tank", "Level", _) => guard.water_level = Some(value),
-                        ("pump", "State", i) if i == *pump_i => {
-                            guard.pump_switch = Some(value >= 0.5)
-                        }
-                        ("pump", "State", i) if i == *valve_i => {
-                            guard.water_valve = Some(value >= 0.5)
-                        }
-                        ("pump", "Mode", i) if i == *pump_i => {
-                            guard.water_pump_mode = Some(value as u8)
-                        }
-                        ("pump", "Mode", i) if i == *valve_i => {
-                            guard.water_valve_mode = Some(value as u8)
-                        }
+                    match (kind, inst) {
+                        ("tank", _) => guard.water_level = Some(value),
+                        ("pump", i) if i == *pump_i => guard.pump_switch = Some(value >= 0.5),
+                        ("pump", i) if i == *valve_i => guard.water_valve = Some(value >= 0.5),
                         _ => {}
                     }
                     if let Some(ref handle) = app_handle {
@@ -987,16 +965,15 @@ impl MqttClient {
     }
 
     /// Parse a dbus-pump water topic: N/<portal>/tank/<i>/Level or
-    /// N/<portal>/pump/<i>/{State,Mode} -> Some((kind, path, instance)).
-    fn parse_water_topic(topic: &str) -> Option<(&str, &str, u32)> {
+    /// N/<portal>/pump/<i>/State -> Some((kind, instance)).
+    fn parse_water_topic(topic: &str) -> Option<(&str, u32)> {
         let rest = topic.strip_prefix("N/")?;
         let mut it = rest.split('/');
         let _portal = it.next()?;
         let kind = it.next()?;
         let inst: u32 = it.next()?.parse().ok()?;
-        let path = it.next()?;
-        match (kind, path) {
-            ("tank", "Level") | ("pump", "State") | ("pump", "Mode") => Some((kind, path, inst)),
+        match (kind, it.next()?) {
+            ("tank", "Level") | ("pump", "State") => Some((kind, inst)),
             _ => None,
         }
     }
@@ -1202,16 +1179,20 @@ impl MqttClient {
         }
         if !devices.chargers.is_empty() {
             let mut chargers: Vec<MpptCharger> = devices.chargers.values().cloned().collect();
-            let instances: Vec<u32> = devices.chargers.keys().copied().collect();
-            Self::disambiguate_names(&mut chargers, &instances);
+            Self::disambiguate_names(
+                &mut chargers,
+                &devices.chargers.keys().copied().collect::<Vec<_>>(),
+            );
             st.mppt_total = Some(devices.chargers.values().filter_map(|c| c.power).sum());
             st.mppt_chargers = Some(chargers);
         }
         if !devices.pv_inverters.is_empty() {
             let mut pv_inverters: Vec<PvInverter> =
                 devices.pv_inverters.values().cloned().collect();
-            let instances: Vec<u32> = devices.pv_inverters.keys().copied().collect();
-            Self::disambiguate_names(&mut pv_inverters, &instances);
+            Self::disambiguate_names(
+                &mut pv_inverters,
+                &devices.pv_inverters.keys().copied().collect::<Vec<_>>(),
+            );
             st.pv_inverters = Some(pv_inverters);
         }
     }
@@ -1295,12 +1276,7 @@ impl MqttClient {
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         cerbo_devices: Option<Arc<Mutex<CerboDevices>>>,
     ) {
-        let existing = state
-            .lock()
-            .ok()
-            .map(|g| (g.console.clone(), g.water_pump_mode, g.water_valve_mode));
-        let (existing_console, existing_pump_mode, existing_valve_mode) =
-            existing.unwrap_or_default();
+        let existing_console = state.lock().ok().and_then(|g| g.console.clone());
 
         let mut new_state = InverterState {
             gt: raw.gt,
@@ -1350,9 +1326,6 @@ impl MqttClient {
             dryer_power: raw.dryer_power.as_ref().map(coerce_bool),
             latest_version: raw.latest_version,
             console: raw.console.or(existing_console),
-            // Mode lives only on the Cerbo topics; keep it across merges.
-            water_pump_mode: existing_pump_mode,
-            water_valve_mode: existing_valve_mode,
         };
 
         // GX-discovered devices win over daemon arrays (see
@@ -1454,43 +1427,6 @@ impl MqttClient {
         }
     }
 
-    /// Manual pump/valve override: publish dbus-pump's writable /Mode
-    /// (0 auto, 1 always-on, 2 always-off) over the GX MQTT-API. The GX
-    /// translates W/ into a dbus SetValue and dbus-pump then owns the
-    /// value in its own process, so a one-shot publish suffices - no
-    /// keepalive task needed (the Keepalive publish only satisfies the
-    /// bridge's expiry bookkeeping).
-    pub fn set_water_mode(&self, which: &str, mode: u8) -> Result<(), String> {
-        if which != "pump" && which != "valve" {
-            return Err(format!("unknown water device '{which}'"));
-        }
-        if mode > 2 {
-            return Err(format!("invalid mode {mode}"));
-        }
-        let client = self.client.as_ref().ok_or("MQTT not connected")?;
-        let portal = self
-            .portal_id
-            .as_deref()
-            .filter(|p| !p.is_empty())
-            .ok_or("Portal ID not discovered yet")?;
-        let (pump_i, valve_i) = self.water_instances.unwrap_or((1, 2));
-        let base = format!(
-            "W/{portal}/pump/{}/Mode",
-            if which == "valve" { valve_i } else { pump_i }
-        );
-        client
-            .publish(format!("{base}/Keepalive"), QoS::AtMostOnce, false, "")
-            .map_err(|e| e.to_string())?;
-        client
-            .publish(
-                base,
-                QoS::AtMostOnce,
-                false,
-                serde_json::json!({ "value": mode }).to_string(),
-            )
-            .map_err(|e| e.to_string())
-    }
-
     pub fn publish_command(
         &self,
         action: &str,
@@ -1564,7 +1500,7 @@ mod tests {
     fn parses_tank_level_topic() {
         assert_eq!(
             MqttClient::parse_water_topic("N/abc123/tank/21/Level"),
-            Some(("tank", "Level", 21))
+            Some(("tank", 21))
         );
     }
 
@@ -1572,19 +1508,7 @@ mod tests {
     fn parses_pump_state_topic() {
         assert_eq!(
             MqttClient::parse_water_topic("N/abc123/pump/2/State"),
-            Some(("pump", "State", 2))
-        );
-    }
-
-    #[test]
-    fn parses_pump_mode_topic() {
-        assert_eq!(
-            MqttClient::parse_water_topic("N/abc123/pump/1/Mode"),
-            Some(("pump", "Mode", 1))
-        );
-        assert_eq!(
-            MqttClient::parse_water_topic("N/abc123/pump/1/Pressure"),
-            None
+            Some(("pump", 2))
         );
     }
 
@@ -1762,6 +1686,35 @@ mod tests {
         // Idle battery keeps its state but loses the stale time-to-go.
         assert_eq!(bats[1].state.as_deref(), Some("Idle"));
         assert_eq!(bats[1].time_to_go, None);
+    }
+
+    /// Retained topics of retired instances are delivered once at subscribe
+    /// time and never again; the periodic sweep must evict them while fresh
+    /// entries inside the TTL window survive.
+    #[test]
+    fn cerbo_sweep_evicts_ghost_devices() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "solarcharger",
+            9,
+            "Yield/Power",
+            "{\"value\": 5}"
+        ));
+        // last_sweep = None -> wipe due immediately (startup ghosts).
+        d.sweep_stale();
+        assert!(d.chargers.is_empty());
+
+        // Fresh timer: entry applied after the sweep survives the next check.
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "solarcharger",
+            9,
+            "Yield/Power",
+            "{\"value\": 5}"
+        ));
+        d.sweep_stale();
+        assert_eq!(d.chargers.len(), 1);
     }
 
     #[test]
