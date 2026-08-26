@@ -901,6 +901,18 @@ impl MqttClient {
         })
     }
 
+    /// Charging/Discharging/Idle from current sign, ±0.5 A deadband —
+    /// mirrors inverter_control's _battery_state.
+    fn state_from_current(amps: f64) -> String {
+        if amps > 0.5 {
+            "Charging".to_string()
+        } else if amps < -0.5 {
+            "Discharging".to_string()
+        } else {
+            "Idle".to_string()
+        }
+    }
+
     /// Cerbo ProductName arrives as {"value": "<name>"}.
     fn parse_cerbo_name(payload: &str) -> Option<String> {
         let s = serde_json::from_str::<serde_json::Value>(payload)
@@ -943,17 +955,16 @@ impl MqttClient {
                 match path {
                     "Soc" => b.soc = val,
                     "Dc/0/Voltage" => b.voltage = val,
-                    "Dc/0/Current" => b.current = val,
+                    // The GX MQTT bridge publishes no battery /State — derive
+                    // it from current sign (±0.5 A, same as the daemon).
+                    "Dc/0/Current" => {
+                        b.current = val;
+                        if let Some(a) = val {
+                            b.state = Some(Self::state_from_current(a));
+                        }
+                    }
                     "Dc/0/Power" => b.power = val,
                     "ProductName" => b.name = Self::parse_cerbo_name(payload),
-                    // Venus battery /State enum: 0=Idle, 1=Charging, 2=Discharging
-                    "State" => {
-                        b.state = val.map(|v| match v as u32 {
-                            1 => "Charging".to_string(),
-                            2 => "Discharging".to_string(),
-                            _ => "Idle".to_string(),
-                        })
-                    }
                     "TimeToGo" => b.time_to_go = val.and_then(Self::format_time_to_go),
                     _ => return false,
                 }
@@ -995,7 +1006,14 @@ impl MqttClient {
     /// daemon data untouched.
     fn apply_cerbo_to_state(devices: &CerboDevices, st: &mut InverterState) {
         if !devices.batteries.is_empty() {
-            let batteries: Vec<Battery> = devices.batteries.values().cloned().collect();
+            let mut batteries: Vec<Battery> = devices.batteries.values().cloned().collect();
+            // Time-to-go is only meaningful while charging/discharging; hide
+            // the stale value otherwise (daemon does the same gating).
+            for b in &mut batteries {
+                if !matches!(b.state.as_deref(), Some("Charging") | Some("Discharging")) {
+                    b.time_to_go = None;
+                }
+            }
             // Bank totals come from the shunt alone; without it, leave the
             // daemon's system-aggregate values untouched rather than summing
             // overlapping battery services.
@@ -1396,8 +1414,8 @@ mod tests {
             &mut d,
             "battery",
             512,
-            "State",
-            "{\"value\": 1}"
+            "Dc/0/Current",
+            "{\"value\": 12.5}"
         ));
         assert!(MqttClient::apply_device_message(
             &mut d,
@@ -1406,21 +1424,24 @@ mod tests {
             "TimeToGo",
             "{\"value\": 108110.0}"
         ));
-        // Idle battery: Venus publishes null -> no time-to-go shown.
+        // Idle battery (0 A within deadband): stale time-to-go must be hidden
+        // even if a value was seen earlier.
         assert!(MqttClient::apply_device_message(
             &mut d,
             "battery",
             513,
-            "State",
-            "{\"value\": 0}"
+            "Dc/0/Current",
+            "{\"value\": 0.1}"
         ));
         assert!(MqttClient::apply_device_message(
             &mut d,
             "battery",
             513,
             "TimeToGo",
-            "{\"value\": null}"
+            "{\"value\": 7200.0}"
         ));
+        // Discharging derivation from negative current.
+        assert_eq!(MqttClient::state_from_current(-3.5), "Discharging");
         assert!(MqttClient::apply_device_message(
             &mut d,
             "solarcharger",
@@ -1444,7 +1465,8 @@ mod tests {
         assert_eq!(b.state.as_deref(), Some("Charging"));
         assert_eq!(b.time_to_go.as_deref(), Some("30h 01m"));
         assert_eq!(d.batteries[&513].state.as_deref(), Some("Idle"));
-        assert_eq!(d.batteries[&513].time_to_go, None);
+        // Raw value still stored; the Idle gate happens at overlay time.
+        assert_eq!(d.batteries[&513].time_to_go.as_deref(), Some("2h 00m"));
 
         let mut st = InverterState::default();
         MqttClient::apply_cerbo_to_state(&d, &mut st);
@@ -1459,6 +1481,9 @@ mod tests {
         // Shunt SoC counter itself is untouched in the per-device tile list.
         let bats = st.batteries.clone().unwrap();
         assert_eq!(bats[0].soc, Some(87.5));
+        // Idle battery keeps its state but loses the stale time-to-go.
+        assert_eq!(bats[1].state.as_deref(), Some("Idle"));
+        assert_eq!(bats[1].time_to_go, None);
     }
 
     #[test]
