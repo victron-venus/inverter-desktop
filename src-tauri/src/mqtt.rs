@@ -435,24 +435,6 @@ pub struct MqttNotification {
     pub ts: String,
 }
 
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-/// "battery_512" -> "Battery 512", "vebus" -> "Vebus"
-fn pretty_service_name(service: &str) -> String {
-    match service.split_once('_') {
-        Some((name, inst)) if !inst.is_empty() && inst.chars().all(|c| c.is_ascii_digit()) => {
-            format!("{} {}", capitalize(name), inst)
-        }
-        _ => capitalize(service),
-    }
-}
-
 /// Split CamelCase into words: "HighCellVoltage" -> ["High", "Cell", "Voltage"]
 fn split_camel(s: &str) -> Vec<String> {
     let mut words: Vec<String> = Vec::new();
@@ -1232,7 +1214,6 @@ impl MqttClient {
 
         let parts: Vec<&str> = topic.split('/').collect();
         // N/<portal>/<service_type>_<instance>/Alarms/<AlarmName>
-        let service = parts.get(2).copied().unwrap_or("device");
         let alarm_name = parts.get(4).copied().unwrap_or(topic);
         let id = format!("victron-{}", topic);
 
