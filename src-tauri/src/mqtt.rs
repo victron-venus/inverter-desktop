@@ -2,7 +2,7 @@ use rumqttc::{Client, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 use crate::ha_api::HaEntityEntry;
@@ -143,6 +143,8 @@ pub struct MpptCharger {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pv_voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
@@ -157,6 +159,8 @@ pub struct PvInverter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
@@ -168,6 +172,8 @@ pub struct PvInverter {
 pub struct Battery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,16 +188,97 @@ pub struct Battery {
     pub time_to_go: Option<String>,
 }
 
+/// Tile identity for duplicate-name disambiguation: identical units ship one
+/// shared ProductName ("SmartSolar Charger MPPT 100/20 48V" x N), which reads
+/// as the same tile repeated.
+trait DeviceIdentity {
+    fn display_name(&self) -> Option<&str>;
+    fn name_slot(&mut self) -> &mut Option<String>;
+    fn serial(&self) -> Option<&str>;
+}
+
+impl DeviceIdentity for MpptCharger {
+    fn display_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+    fn name_slot(&mut self) -> &mut Option<String> {
+        &mut self.name
+    }
+    fn serial(&self) -> Option<&str> {
+        self.serial.as_deref()
+    }
+}
+
+impl DeviceIdentity for PvInverter {
+    fn display_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+    fn name_slot(&mut self) -> &mut Option<String> {
+        &mut self.name
+    }
+    fn serial(&self) -> Option<&str> {
+        self.serial.as_deref()
+    }
+}
+
+impl DeviceIdentity for Battery {
+    fn display_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+    fn name_slot(&mut self) -> &mut Option<String> {
+        &mut self.name
+    }
+    fn serial(&self) -> Option<&str> {
+        self.serial.as_deref()
+    }
+}
+
 /// Devices discovered directly on the Cerbo GX MQTT broker
 /// (N/<portal>/battery/..., N/<portal>/solarcharger/...,
 /// N/<portal>/pvinverter/...), independent of the inverter-control daemon's
 /// inverter/state payload. BTreeMap keeps a stable instance-ordered list for
 /// the UI.
-#[derive(Default)]
 struct CerboDevices {
     batteries: BTreeMap<u32, Battery>,
     chargers: BTreeMap<u32, MpptCharger>,
     pv_inverters: BTreeMap<u32, PvInverter>,
+    /// Last full-map wipe. The GX keeper republishes the whole device tree
+    /// every few seconds, so wiping periodically evicts ghost entries whose
+    /// only delivery was the one-shot retained message of an instance that
+    /// no longer exists (instances drift across GX reboots). Live devices
+    /// repopulate within seconds; empty maps leave daemon data untouched.
+    last_sweep: Option<Instant>,
+}
+
+impl Default for CerboDevices {
+    fn default() -> Self {
+        Self {
+            batteries: Default::default(),
+            chargers: Default::default(),
+            pv_inverters: Default::default(),
+            // None = wipe due on first message: retained ghosts delivered at
+            // subscribe time get evicted immediately instead of living out a
+            // full TTL window.
+            last_sweep: None,
+        }
+    }
+}
+
+impl CerboDevices {
+    /// How long a discovered entry survives without any fresh publish.
+    const DEVICE_TTL_SECS: u64 = 60;
+
+    fn sweep_stale(&mut self) {
+        let due = self.last_sweep.map_or(true, |t| {
+            t.elapsed() >= Duration::from_secs(Self::DEVICE_TTL_SECS)
+        });
+        if due {
+            *self = Self {
+                last_sweep: Some(Instant::now()),
+                ..Default::default()
+            };
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -827,7 +914,10 @@ impl MqttClient {
                 let applied = cerbo_devices
                     .lock()
                     .ok()
-                    .map(|mut d| Self::apply_device_message(&mut d, kind, inst, path, payload))
+                    .map(|mut d| {
+                        d.sweep_stale();
+                        Self::apply_device_message(&mut d, kind, inst, path, payload)
+                    })
                     .unwrap_or(false);
                 if applied {
                     if let Ok(mut guard) = state.lock() {
@@ -982,6 +1072,7 @@ impl MqttClient {
                     }
                     "Dc/0/Power" => b.power = val,
                     "ProductName" => b.name = Self::parse_cerbo_name(payload),
+                    "Serial" => b.serial = Self::parse_cerbo_name(payload),
                     "TimeToGo" => b.time_to_go = val.and_then(Self::format_time_to_go),
                     _ => return false,
                 }
@@ -994,6 +1085,7 @@ impl MqttClient {
                     "Dc/0/Current" => m.current = val,
                     "Yield/Power" => m.power = val,
                     "ProductName" => m.name = Self::parse_cerbo_name(payload),
+                    "Serial" => m.serial = Self::parse_cerbo_name(payload),
                     _ => return false,
                 }
                 true
@@ -1007,6 +1099,7 @@ impl MqttClient {
                     "Ac/L1/Voltage" => p.voltage = val,
                     "Ac/L1/Current" => p.current = val,
                     "ProductName" => p.name = Self::parse_cerbo_name(payload),
+                    "Serial" => p.serial = Self::parse_cerbo_name(payload),
                     _ => return false,
                 }
                 true
@@ -1028,6 +1121,34 @@ impl MqttClient {
                 .to_lowercase()
                 .contains("shunt")
         })
+    }
+
+    /// Identical units ship one shared ProductName ("SmartSolar Charger MPPT
+    /// 100/20 48V" x N), which reads as the same tile repeated. Suffix every
+    /// duplicate with its serial tail (or broker instance when no serial is
+    /// known) so each tile stays distinguishable; unique names pass through.
+    fn disambiguate_names<T: DeviceIdentity>(items: &mut [T], instances: &[u32]) {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for it in items.iter() {
+            if let Some(n) = it.display_name() {
+                *counts.entry(n.to_string()).or_insert(0) += 1;
+            }
+        }
+        for (it, inst) in items.iter_mut().zip(instances) {
+            let Some(name) = it.display_name().map(String::from) else {
+                continue;
+            };
+            if counts.get(&name).copied().unwrap_or(1) <= 1 {
+                continue;
+            }
+            let tail = match it.serial() {
+                Some(s) if s.len() >= 4 && s.is_char_boundary(s.len() - 4) => {
+                    s[s.len() - 4..].to_string()
+                }
+                _ => format!("#{}", inst),
+            };
+            *it.name_slot() = Some(format!("{} · {}", name, tail));
+        }
     }
 
     /// Overlay discovered GX devices onto a state snapshot. When anything was
@@ -1056,14 +1177,25 @@ impl MqttClient {
                 st.battery_current = Some(shunt.current.unwrap_or(0.0));
                 st.battery_power = Some(shunt.power.unwrap_or(0.0));
             }
+            Self::disambiguate_names(
+                &mut batteries,
+                &devices.batteries.keys().copied().collect::<Vec<_>>(),
+            );
             st.batteries = Some(batteries);
         }
         if !devices.chargers.is_empty() {
+            let mut chargers: Vec<MpptCharger> = devices.chargers.values().cloned().collect();
+            let instances: Vec<u32> = devices.chargers.keys().copied().collect();
+            Self::disambiguate_names(&mut chargers, &instances);
             st.mppt_total = Some(devices.chargers.values().filter_map(|c| c.power).sum());
-            st.mppt_chargers = Some(devices.chargers.values().cloned().collect());
+            st.mppt_chargers = Some(chargers);
         }
         if !devices.pv_inverters.is_empty() {
-            st.pv_inverters = Some(devices.pv_inverters.values().cloned().collect());
+            let mut pv_inverters: Vec<PvInverter> =
+                devices.pv_inverters.values().cloned().collect();
+            let instances: Vec<u32> = devices.pv_inverters.keys().copied().collect();
+            Self::disambiguate_names(&mut pv_inverters, &instances);
+            st.pv_inverters = Some(pv_inverters);
         }
     }
 
