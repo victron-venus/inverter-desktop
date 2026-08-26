@@ -42,7 +42,7 @@
       </div>
       <div class="text-[11px] text-slate-500 dark:text-slate-300 font-bold">
         {{ formatPower(mpptTotal) }} <span class="opacity-30 mx-0.5">|</span>
-        {{ formatPower(tasmotaTotal) }}
+        {{ formatPower(pvInvertersTotal) }}
       </div>
     </div>
 
@@ -96,7 +96,7 @@ defineProps<{
   t2?: number
   solarTotal?: number
   mpptTotal: number
-  tasmotaTotal: number
+  pvInvertersTotal: number
   batterySoc?: number
   batteryPower?: number
   batteryVoltage?: number

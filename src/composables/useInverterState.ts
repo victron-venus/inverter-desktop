@@ -29,6 +29,8 @@ export interface InverterState {
   mppt_individual?: number[]
   tasmota_individual?: number[]
   mppt_chargers?: Array<{ name?: string; pv_voltage?: number; current?: number; power?: number }>
+  // AC PV inverters of any vendor (V/I/P per device)
+  pv_inverters?: Array<{ name?: string; voltage?: number; current?: number; power?: number }>
   batteries?: Array<{
     name?: string
     voltage?: number
