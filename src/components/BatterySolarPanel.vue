@@ -7,8 +7,8 @@
       </div>
       <div class="p-1 flex flex-wrap gap-x-3 gap-y-1.5">
         <div
-          v-for="bat in batteries"
-          :key="bat.name"
+          v-for="(bat, bi) in batteries"
+          :key="`${bi}-${bat.name}`"
           class="flex-1 min-w-[130px] border border-slate-200 dark:border-slate-700/50 p-1 rounded-sm"
         >
           <div
@@ -59,8 +59,8 @@
       </div>
       <div class="p-1 flex flex-wrap gap-x-2 gap-y-1.5">
         <div
-          v-for="src in solarSources"
-          :key="src.name"
+          v-for="(src, si) in solarSources"
+          :key="`${si}-${src.name}`"
           class="flex-1 min-w-[90px] border border-slate-200 dark:border-slate-700/50 p-1 rounded-sm"
         >
           <div
