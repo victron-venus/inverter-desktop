@@ -96,13 +96,13 @@ const batDeltaY = computed(() =>
   (Number.parseFloat(batInY.value) - Number.parseFloat(batOutY.value)).toFixed(1)
 )
 
-const tasmotaDaily = computed(() => ds.value.tasmota_daily || [])
+const pvDaily = computed(() => ds.value.tasmota_daily || [])
 const mpptDaily = computed(() => ds.value.mppt_daily || [])
 
 // Breakdown whose visible parts add up to prod:
-// (tasmota1+tasmota2+MPPT_TOTAL(mppt1+mppt2+mppt3))
+// (pvInv1+pvInv2+MPPT_TOTAL(mppt1+mppt2+mppt3))
 const solarStr = computed(() => {
-  const parts: string[] = tasmotaDaily.value.filter((v) => v > 0).map((v) => v.toFixed(2))
+  const parts: string[] = pvDaily.value.filter((v) => v > 0).map((v) => v.toFixed(2))
   const mpptTotal = mpptDaily.value.reduce((a, v) => a + v, 0)
   const mpptPart =
     mpptDaily.value.length > 0 ? mpptDaily.value.map((v) => v.toFixed(2)).join('+') : '0.00'

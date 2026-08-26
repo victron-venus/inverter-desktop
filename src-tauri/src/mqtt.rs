@@ -41,6 +41,7 @@ pub struct InverterState {
     pub mppt_individual: Option<Vec<f64>>,
     pub tasmota_individual: Option<Vec<f64>>,
     pub mppt_chargers: Option<Vec<MpptCharger>>,
+    pub pv_inverters: Option<Vec<PvInverter>>,
     pub batteries: Option<Vec<Battery>>,
     pub loads: Option<std::collections::HashMap<String, f64>>,
     pub ui_config: Option<UiConfig>,
@@ -89,6 +90,7 @@ struct RawInverterState {
     mppt_individual: Option<Vec<f64>>,
     tasmota_individual: Option<Vec<f64>>,
     mppt_chargers: Option<Vec<MpptCharger>>,
+    pv_inverters: Option<Vec<PvInverter>>,
     batteries: Option<Vec<Battery>>,
     loads: Option<std::collections::HashMap<String, f64>>,
     ui_config: Option<UiConfig>,
@@ -151,6 +153,20 @@ pub struct MpptCharger {
     pub power: Option<f64>,
 }
 
+/// AC PV inverter of any vendor (Tasmota plug, ESPHome, Fronius, ...):
+/// published on the GX broker by dbus services as N/<portal>/pvinverter/<id>.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PvInverter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voltage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power: Option<f64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Battery {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -170,13 +186,15 @@ pub struct Battery {
 }
 
 /// Devices discovered directly on the Cerbo GX MQTT broker
-/// (N/<portal>/battery/..., N/<portal>/solarcharger/...), independent of the
-/// inverter-control daemon's inverter/state payload. BTreeMap keeps a stable
-/// instance-ordered list for the UI.
+/// (N/<portal>/battery/..., N/<portal>/solarcharger/...,
+/// N/<portal>/pvinverter/...), independent of the inverter-control daemon's
+/// inverter/state payload. BTreeMap keeps a stable instance-ordered list for
+/// the UI.
 #[derive(Default)]
 struct CerboDevices {
     batteries: BTreeMap<u32, Battery>,
     chargers: BTreeMap<u32, MpptCharger>,
+    pv_inverters: BTreeMap<u32, PvInverter>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -727,10 +745,12 @@ impl MqttClient {
             // pump/valve startstop state).
             format!("N/{}/tank/+/Level", id),
             format!("N/{}/pump/+/State", id),
-            // Directly discovered GX devices: battery bank(s) + MPPT chargers,
-            // so the app finds them even when inverter-control is down.
+            // Directly discovered GX devices: battery bank(s) + MPPT chargers
+            // + AC PV inverters of any vendor, so the app finds them even
+            // when inverter-control is down.
             format!("N/{}/battery/+/#", id),
             format!("N/{}/solarcharger/+/#", id),
+            format!("N/{}/pvinverter/+/#", id),
         ] {
             if let Err(e) = client.subscribe(&filter, QoS::AtLeastOnce) {
                 log::warn!("Failed to subscribe to {}: {:?}", filter, e);
@@ -923,8 +943,8 @@ impl MqttClient {
     }
 
     /// Parse N/<portal>/<kind>/<instance>/<path> for GX devices we discover
-    /// ourselves (battery, solarcharger). Other kinds are left to their own
-    /// handlers (tank/pump) or ignored (vebus, pvinverter, ...).
+    /// ourselves (battery, solarcharger, pvinverter). Other kinds are left to
+    /// their own handlers (tank/pump) or ignored (vebus, ...).
     fn parse_device_topic(topic: &str) -> Option<(&str, u32, &str)> {
         let rest = topic.strip_prefix("N/")?;
         let (portal, rest) = rest.split_once('/')?;
@@ -932,7 +952,7 @@ impl MqttClient {
             return None;
         }
         let (kind, rest) = rest.split_once('/')?;
-        if kind != "battery" && kind != "solarcharger" {
+        if kind != "battery" && kind != "solarcharger" && kind != "pvinverter" {
             return None;
         }
         let (inst, path) = rest.split_once('/')?;
@@ -977,6 +997,19 @@ impl MqttClient {
                     "Dc/0/Current" => m.current = val,
                     "Yield/Power" => m.power = val,
                     "ProductName" => m.name = Self::parse_cerbo_name(payload),
+                    _ => return false,
+                }
+                true
+            }
+            "pvinverter" => {
+                let p = devices.pv_inverters.entry(inst).or_default();
+                match path {
+                    // Ac/Power is the device total; L1 Power equals it on
+                    // single-phase units but is accepted as a fallback.
+                    "Ac/Power" | "Ac/L1/Power" => p.power = val,
+                    "Ac/L1/Voltage" => p.voltage = val,
+                    "Ac/L1/Current" => p.current = val,
+                    "ProductName" => p.name = Self::parse_cerbo_name(payload),
                     _ => return false,
                 }
                 true
@@ -1031,6 +1064,12 @@ impl MqttClient {
         if !devices.chargers.is_empty() {
             st.mppt_total = Some(devices.chargers.values().filter_map(|c| c.power).sum());
             st.mppt_chargers = Some(devices.chargers.values().cloned().collect());
+        }
+        if !devices.pv_inverters.is_empty() {
+            st.pv_inverters = Some(devices.pv_inverters.values().cloned().collect());
+            // Legacy aggregate keeps the Solar stat card alive until the SPA
+            // reads pv_inverters directly (also covers older bundled UIs).
+            st.tasmota_total = Some(devices.pv_inverters.values().filter_map(|p| p.power).sum());
         }
     }
 
@@ -1145,6 +1184,7 @@ impl MqttClient {
             mppt_individual: raw.mppt_individual,
             tasmota_individual: raw.tasmota_individual,
             mppt_chargers: raw.mppt_chargers,
+            pv_inverters: raw.pv_inverters,
             batteries: raw.batteries,
             loads: raw.loads,
             ui_config: raw.ui_config,
@@ -1380,6 +1420,10 @@ mod tests {
             MqttClient::parse_device_topic("N/abc/solarcharger/1/Dc/0/Current"),
             Some(("solarcharger", 1, "Dc/0/Current"))
         );
+        assert_eq!(
+            MqttClient::parse_device_topic("N/abc/pvinverter/369/Ac/L1/Voltage"),
+            Some(("pvinverter", 369, "Ac/L1/Voltage"))
+        );
         // Other kinds route elsewhere or are ignored.
         assert_eq!(MqttClient::parse_device_topic("N/abc/tank/21/Level"), None);
         assert_eq!(MqttClient::parse_device_topic("N/abc/vebus/256/Soc"), None);
@@ -1449,6 +1493,35 @@ mod tests {
             "Yield/Power",
             "{\"value\": 1450}"
         ));
+        // AC PV inverter of any vendor: V/I/P from the GX bridge paths.
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "pvinverter",
+            369,
+            "Ac/L1/Voltage",
+            "{\"value\": 126.0}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "pvinverter",
+            369,
+            "Ac/L1/Current",
+            "{\"value\": 1.29}"
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "pvinverter",
+            369,
+            "Ac/Power",
+            "{\"value\": 163}"
+        ));
+        assert!(!MqttClient::apply_device_message(
+            &mut d,
+            "pvinverter",
+            369,
+            "StatusCode",
+            "{\"value\": 0}"
+        ));
         // Unknown path ignored, alarms payload not a number.
         assert!(!MqttClient::apply_device_message(
             &mut d,
@@ -1477,6 +1550,14 @@ mod tests {
         assert_eq!(st.batteries.as_ref().unwrap().len(), 2);
         assert_eq!(st.mppt_chargers.as_ref().unwrap().len(), 1);
         assert_eq!(st.mppt_total, Some(1450.0));
+        // Discovered PV inverter surfaces with V/I/P; the legacy aggregate
+        // mirrors its power so older UIs keep working.
+        assert_eq!(st.pv_inverters.as_ref().unwrap().len(), 1);
+        let inv = &st.pv_inverters.as_ref().unwrap()[0];
+        assert_eq!(inv.voltage, Some(126.0));
+        assert_eq!(inv.current, Some(1.29));
+        assert_eq!(inv.power, Some(163.0));
+        assert_eq!(st.tasmota_total, Some(163.0));
 
         // Shunt SoC counter itself is untouched in the per-device tile list.
         let bats = st.batteries.clone().unwrap();
@@ -1586,6 +1667,7 @@ mod tests {
             serde_json::to_string(&MpptCharger::default()).unwrap(),
             "{}"
         );
+        assert_eq!(serde_json::to_string(&PvInverter::default()).unwrap(), "{}");
         // Fully-populated values still serialize.
         let b = Battery {
             soc: Some(87.5),
