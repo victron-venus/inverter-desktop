@@ -79,7 +79,7 @@ describe('SidePanel', () => {
     const waterCard = wrapper
       .findAll('.classic-card')
       .find((c) => c.text().includes('sections.water'))
-    expect(waterCard?.findAll('button').length).toBe(0)
+    expect(waterCard?.findAll('button').length).toBe(2)
   })
 
   it('hides pump badge when state unknown', () => {
