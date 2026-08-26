@@ -42,21 +42,42 @@
         >
           {{ Math.round(waterLevel) }} %
         </div>
-        <div class="flex gap-1">
-          <span
+        <div class="flex gap-1 items-center">
+          <button
             v-if="pumpSwitch != null"
-            class="classic-btn pointer-events-none opacity-80"
+            type="button"
+            class="classic-btn"
             :class="{ 'classic-btn-on': pumpSwitch === true }"
+            @click="$emit('send', 'water_mode', { which: 'pump', mode: pumpSwitch ? 2 : 1 })"
           >
             {{ $t('sections.pump') }}
-          </span>
-          <span
+          </button>
+          <button
             v-if="waterValve != null"
-            class="classic-btn pointer-events-none opacity-80"
+            type="button"
+            class="classic-btn"
             :class="{ 'classic-btn-on': waterValve === true }"
+            @click="onValveClick"
           >
             {{ $t('sections.valve') }}
-          </span>
+          </button>
+          <!-- Reset chip shown only while dbus-pump /Mode is a manual override -->
+          <button
+            v-if="waterPumpMode === 1 || waterPumpMode === 2"
+            type="button"
+            class="classic-btn opacity-80 text-red-500"
+            @click="$emit('send', 'water_mode', { which: 'pump', mode: 0 })"
+          >
+            {{ $t('sections.auto') }}
+          </button>
+          <button
+            v-if="waterValveMode === 1 || waterValveMode === 2"
+            type="button"
+            class="classic-btn opacity-80 text-red-500"
+            @click="$emit('send', 'water_mode', { which: 'valve', mode: 0 })"
+          >
+            {{ $t('sections.auto') }}
+          </button>
         </div>
       </div>
     </div>
@@ -435,7 +456,7 @@ import type {
   HaWeatherDisplay,
 } from '../types/ha'
 
-defineProps<{
+const props = defineProps<{
   features?: Record<string, boolean>
   showEv?: boolean
   evSectionVisible?: boolean
@@ -446,6 +467,8 @@ defineProps<{
   waterVisible?: boolean
   waterValve?: boolean | null
   pumpSwitch?: boolean | null
+  waterPumpMode?: number | null
+  waterValveMode?: number | null
   waterLevel?: number | null
   washerActive?: boolean
   washerRemainingTime?: string | null
@@ -479,13 +502,19 @@ defineProps<{
   } | null
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   send: [action: string, payload?: Record<string, unknown>]
   'cover-position': [entityId: string, position: number]
   'media-control': [entityId: string, action: string]
   'number-set': [entityId: string, value: number]
   'scene-activate': [entityId: string]
 }>()
+
+// Opening the city valve floods the house system from the mains - confirm.
+function onValveClick() {
+  if (props.waterValve === false && !window.confirm('Open city water valve?')) return
+  emit('send', 'water_mode', { which: 'valve', mode: props.waterValve ? 2 : 1 })
+}
 
 const { t: $t } = useI18n()
 

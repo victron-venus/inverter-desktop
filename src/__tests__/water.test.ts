@@ -46,3 +46,25 @@ describe('water section (Cerbo MQTT only - dbus-pump data)', () => {
     expect(ha.pumpSwitchState.value).toBeNull()
   })
 })
+
+describe('water manual override (dbus-pump /Mode)', () => {
+  beforeEach(() => {
+    state.value = {
+      ...state.value,
+      water_level: 50,
+      water_valve: false,
+      pump_switch: false,
+      water_pump_mode: null,
+      water_valve_mode: null,
+    }
+    setCfg({})
+  })
+
+  it('exposes mode values from MQTT state', () => {
+    state.value.water_pump_mode = 1
+    state.value.water_valve_mode = 0
+    const ha = useHA()
+    expect(ha.waterPumpMode.value).toBe(1)
+    expect(ha.waterValveMode.value).toBe(0)
+  })
+})

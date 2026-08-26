@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Manual pump/valve buttons in the Water card, routed through dbus-pump's
+  writable `/Mode` (0 auto, 1 always-on, 2 always-off) via the GX MQTT-API
+  (`W/<portal>/pump/<n>/Mode`) - still no direct Home Assistant control.
+  Opening the city valve asks for confirmation; an AUTO chip appears while a
+  device is under manual override to hand it back to dbus-pump automation.
+- dbus-pump fix required on the GX: its `/Mode` onchange handler must return
+  true, otherwise vedbus rejects the write and the mode silently stays `auto`
+  (deployed as dbus-pump main).
+
 ## [2.5.0] - 2026-08-24
 
 ### Added
