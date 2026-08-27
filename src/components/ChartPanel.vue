@@ -1,6 +1,6 @@
 <template>
   <div class="classic-card h-full overflow-hidden">
-    <VChart class="chart-wrap w-full" :option="chartOption" :autoresize="true" />
+    <VChart class="chart-wrap w-full" :option="chartOption" :autoresize="{ throttle: 300 }" />
   </div>
 </template>
 

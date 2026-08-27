@@ -12,6 +12,10 @@ const MQTT_KEEP_ALIVE_SECS: u64 = 60;
 const KEEPALIVE_INTERVAL_SECS: u64 = 45;
 const MQTT_QUEUE_CAPACITY: usize = 10;
 const CONSOLE_MAX_LINES: usize = 50;
+const MIN_STATE_EMIT_INTERVAL: Duration = Duration::from_millis(500);
+
+static LAST_STATE_EMIT: std::sync::LazyLock<Mutex<Option<Instant>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
@@ -604,6 +608,36 @@ impl MqttClient {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    pub fn emit_state_update(
+        app_handle: &Option<tauri::AppHandle>,
+        state: &InverterState,
+        force: bool,
+    ) {
+        let hidden = crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+        if hidden {
+            return;
+        }
+        let Some(ref handle) = app_handle else {
+            return;
+        };
+
+        if !force {
+            if let Ok(mut last) = LAST_STATE_EMIT.lock() {
+                let now = Instant::now();
+                if let Some(prev) = *last {
+                    if now.duration_since(prev) < MIN_STATE_EMIT_INTERVAL {
+                        return;
+                    }
+                }
+                *last = Some(now);
+            }
+        } else if let Ok(mut last) = LAST_STATE_EMIT.lock() {
+            *last = Some(Instant::now());
+        }
+
+        let _ = handle.emit("mqtt-state-update", state);
+    }
+
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let host = self.host.clone();
         let port = self.port;
@@ -885,9 +919,7 @@ impl MqttClient {
                 if console.len() > CONSOLE_MAX_LINES {
                     console.remove(0);
                 }
-                if let Some(ref handle) = app_handle {
-                    let _ = handle.emit("mqtt-state-update", &*guard);
-                }
+                Self::emit_state_update(app_handle, &guard, false);
             }
         } else if topic.starts_with("N/") && Self::parse_device_topic(topic).is_some() {
             // Directly discovered GX device value (battery/solarcharger).
@@ -905,9 +937,7 @@ impl MqttClient {
                         if let Ok(d) = cerbo_devices.lock() {
                             Self::apply_cerbo_to_state(&d, &mut guard);
                         }
-                        if let Some(ref handle) = app_handle {
-                            let _ = handle.emit("mqtt-state-update", &*guard);
-                        }
+                        Self::emit_state_update(app_handle, &guard, false);
                     }
                 }
             }
@@ -926,9 +956,7 @@ impl MqttClient {
                         ("pump", i) if i == *valve_i => guard.water_valve = Some(value >= 0.5),
                         _ => {}
                     }
-                    if let Some(ref handle) = app_handle {
-                        let _ = handle.emit("mqtt-state-update", &*guard);
-                    }
+                    Self::emit_state_update(app_handle, &guard, false);
                 }
             }
         } else if let Some(ref cam_t) = camera_topic {
@@ -1468,11 +1496,7 @@ impl MqttClient {
             }
         }
 
-        if let Some(ref handle) = app_handle {
-            if !hidden {
-                let _ = handle.emit("mqtt-state-update", &new_state);
-            }
-        }
+        Self::emit_state_update(&app_handle, &new_state, false);
         if let Ok(mut guard) = state.lock() {
             *guard = new_state;
         }

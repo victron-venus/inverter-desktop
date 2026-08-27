@@ -1,7 +1,7 @@
 import { type Ref, ref } from 'vue'
 
 const MAX_HISTORY_POINTS = 1800
-const CHART_UPDATE_INTERVAL_MS = 1000
+const CHART_UPDATE_INTERVAL_MS = 2000
 
 interface TooltipParam {
   value: number[]
@@ -18,9 +18,17 @@ const historyData = {
 }
 
 let chartUpdateCallback: (() => void) | null = null
+let chartPaused = false
 
 export function setChartUpdateCallback(cb: () => void) {
   chartUpdateCallback = cb
+}
+
+export function setChartPaused(paused: boolean) {
+  chartPaused = paused
+  if (!paused && chartUpdateCallback) {
+    chartUpdateCallback()
+  }
 }
 
 export function addHistoryPoint(newState: {
@@ -43,8 +51,10 @@ export function addHistoryPoint(newState: {
       historyData.battery.shift()
       historyData.setpoint.shift()
     }
-    // Trigger chart update
-    if (chartUpdateCallback) chartUpdateCallback()
+    // Trigger chart update only if not paused
+    if (!chartPaused && chartUpdateCallback) {
+      chartUpdateCallback()
+    }
   }
 }
 
@@ -56,6 +66,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
   setChartUpdateCallback(() => updateChartOption(false))
 
   function updateChartOption(force: boolean) {
+    if (chartPaused && !force) return
+
     const now = Date.now()
     if (!force && now - lastChartUpdate < CHART_UPDATE_INTERVAL_MS) return
     lastChartUpdate = now
@@ -123,7 +135,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
         {
           name: 'Grid',
           type: 'line',
-          smooth: true,
+          smooth: 0.2,
+          sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, grid[i] || 0]),
           lineStyle: { color: '#2196f3', width: 2 },
@@ -132,7 +145,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
         {
           name: 'Solar',
           type: 'line',
-          smooth: true,
+          smooth: 0.2,
+          sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, solar[i] || 0]),
           lineStyle: { color: '#ff9800', width: 2 },
@@ -141,7 +155,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
         {
           name: 'Battery',
           type: 'line',
-          smooth: true,
+          smooth: 0.2,
+          sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, battery[i] || 0]),
           lineStyle: { color: '#4caf50', width: 2 },
@@ -150,7 +165,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
         {
           name: 'Setpoint',
           type: 'line',
-          smooth: true,
+          smooth: 0.2,
+          sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, setpoint[i] || 0]),
           lineStyle: { color: '#00bcd4', width: 2, type: 'dashed' },
@@ -164,5 +180,5 @@ export function useChart(isDarkRef: Ref<boolean>) {
     updateChartOption(true)
   }
 
-  return { chartOption, forceUpdateChart }
+  return { chartOption, forceUpdateChart, setChartPaused }
 }

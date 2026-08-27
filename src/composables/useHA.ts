@@ -52,6 +52,16 @@ function hasNonZeroTime(time: string | null): boolean {
   return ![...time.replace(/\D/g, '')].every((c) => c === '0')
 }
 
+const loadNameCache = new Map<string, string>()
+function getFormattedLoadName(key: string): string {
+  let cached = loadNameCache.get(key)
+  if (!cached) {
+    cached = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    loadNameCache.set(key, cached)
+  }
+  return cached
+}
+
 export function useHA() {
   const haEntityStates = ref<Record<string, string>>({})
   const haEntityAttributes = ref<Record<string, Record<string, unknown>>>({})
@@ -251,25 +261,6 @@ export function useHA() {
     // Check HA connection status via HTTP
     await checkHaConnection()
 
-    // Poll HA connection status periodically in case WS event is missed
-    const connInterval = setInterval(() => {
-      if (haEnabled.value && !haWsConnected.value) {
-        checkHaConnection()
-      }
-    }, 10000)
-
-    // Store interval for cleanup
-    ;(globalThis as unknown as Record<string, unknown>).__haConnInterval = connInterval
-
-    // Poll appliance entities so their state stays fresh even if WS events are missed
-    const appliancePoll = setInterval(() => {
-      const entities = configuredSectionEntities(appConfig)
-      if (haEnabled.value && entities.length > 0) {
-        fetchHaEntityStates(entities)
-      }
-    }, 30000)
-    ;(globalThis as unknown as Record<string, unknown>).__haAppliancePoll = appliancePoll
-
     // Watch for config/state changes to fetch dynamic entity IDs (home buttons, header toggles)
     watch(
       [appConfig, () => state.value.ui_config],
@@ -407,9 +398,8 @@ export function useHA() {
     for (const [key, val] of Object.entries(mqttLoads)) {
       const v = typeof val === 'number' ? val : Number(val)
       if (!Number.isNaN(v) && Math.abs(v) > 2) {
-        const formattedName = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
         items.push({
-          name: formattedName,
+          name: getFormattedLoadName(key),
           value: v,
           isGeneration: v < 0,
         })
@@ -595,14 +585,6 @@ export function useHA() {
     if (unlistenHaUpdate) unlistenHaUpdate()
     if (unlistenHaConn) unlistenHaConn()
     if (unlistenHaFiltered) unlistenHaFiltered()
-    const interval = (globalThis as unknown as Record<string, unknown>).__haConnInterval
-    if (typeof interval === 'number') {
-      clearInterval(interval)
-    }
-    const appliancePoll = (globalThis as unknown as Record<string, unknown>).__haAppliancePoll
-    if (typeof appliancePoll === 'number') {
-      clearInterval(appliancePoll)
-    }
   }
 
   const haLoadsForConfig = computed(() => {
@@ -614,10 +596,9 @@ export function useHA() {
     for (const [key, val] of Object.entries(mqttLoads)) {
       const v = typeof val === 'number' ? val : Number(val)
       if (!Number.isNaN(v) && Math.abs(v) > 2) {
-        const formattedName = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
         items.push({
           key,
-          name: formattedName,
+          name: getFormattedLoadName(key),
         })
       }
     }
