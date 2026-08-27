@@ -11,6 +11,9 @@
       <Info v-else :size="15" class="shrink-0" />
       <span class="font-bold shrink-0">{{ banner.title }}</span>
       <span v-if="banner.body" class="opacity-80 truncate flex-1 min-w-0">{{ banner.body }}</span>
+      <span v-if="banner.ts" class="text-[10px] opacity-60 ml-1">{{
+        formatTimestamp(banner.ts)
+      }}</span>
       <span class="flex-1" />
       <button
         type="button"
@@ -27,6 +30,7 @@
 <script setup lang="ts">
 import { AlertOctagon, Info, TriangleAlert, X } from '@lucide/vue'
 import { bannerNotifications, dismissBanner } from '../composables/useInverterState'
+import { formatTimestamp } from '../utils'
 
 const levelClasses: Record<string, string> = {
   info: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30',
