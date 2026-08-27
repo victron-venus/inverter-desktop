@@ -261,7 +261,8 @@ const {
   setWindowHidden,
 } = useHA()
 const { isDark, toggleTheme } = useTheme()
-const { chartOption, forceUpdateChart } = useChart(isDark)
+const { chartOption, forceUpdateChart, setChartPaused } = useChart(isDark)
+const isWindowHidden = ref(false)
 
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
@@ -443,6 +444,7 @@ watch(
 watch(
   () => state.value,
   (newState) => {
+    if (isWindowHidden.value) return
     if (newState.gt !== undefined) addHistoryPoint(newState)
   },
   { deep: false }
@@ -518,9 +520,17 @@ onMounted(async () => {
     haEntityAttributes.value = {}
   })
 
-  // Pause HA updates only when window is minimized/closed (not when it loses focus)
-  const unlistenHidden = await listen('window-hidden', () => setWindowHidden(true))
-  const unlistenShown = await listen('window-shown', () => setWindowHidden(false))
+  // Pause updates and charts when window is minimized/closed to tray
+  const unlistenHidden = await listen('window-hidden', () => {
+    isWindowHidden.value = true
+    setChartPaused(true)
+    setWindowHidden(true)
+  })
+  const unlistenShown = await listen('window-shown', () => {
+    isWindowHidden.value = false
+    setChartPaused(false)
+    setWindowHidden(false)
+  })
 
   unlistenWindowEvents = () => {
     unlistenHidden()

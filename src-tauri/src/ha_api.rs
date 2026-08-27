@@ -454,6 +454,7 @@ impl HaApiClient {
 pub struct HaWebSocketClient {
     rx: Option<tokio::sync::oneshot::Receiver<()>>,
     /// Whitelist of entity IDs that should trigger frontend updates.
+    #[allow(dead_code)]
     whitelist: HashSet<String>,
 }
 

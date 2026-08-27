@@ -1032,8 +1032,16 @@ async fn send_notification(
 }
 
 #[tauri::command]
-fn set_window_hidden(hidden: bool) {
+fn set_window_hidden(hidden: bool, app: tauri::AppHandle, mqtt_client: State<'_, MqttState>) {
     ha_api::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
+    if !hidden {
+        if let Ok(guard) = mqtt_client.0.lock() {
+            if let Some(ref client) = *guard {
+                let state = client.get_state();
+                crate::mqtt::MqttClient::emit_state_update(&Some(app), &state, true);
+            }
+        }
+    }
 }
 
 #[tauri::command]
