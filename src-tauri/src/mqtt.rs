@@ -193,6 +193,28 @@ pub struct Battery {
     pub time_to_go: Option<String>,
 }
 
+/// Wrapper that tracks when a device was last seen via MQTT, enabling
+/// per-device TTL eviction instead of a global map wipe.
+struct TrackedEntry<T> {
+    data: T,
+    last_seen: Instant,
+}
+
+impl<T: Default> Default for TrackedEntry<T> {
+    fn default() -> Self {
+        Self {
+            data: T::default(),
+            last_seen: Instant::now(),
+        }
+    }
+}
+
+impl<T> TrackedEntry<T> {
+    fn touch(&mut self) {
+        self.last_seen = Instant::now();
+    }
+}
+
 /// Devices discovered directly on the Cerbo GX MQTT broker
 /// (N/<portal>/battery/..., N/<portal>/solarcharger/...,
 /// N/<portal>/pvinverter/...), independent of the inverter-control daemon's
@@ -250,33 +272,26 @@ impl DeviceIdentity for Battery {
 /// the UI.
 #[derive(Default)]
 struct CerboDevices {
-    batteries: BTreeMap<u32, Battery>,
-    chargers: BTreeMap<u32, MpptCharger>,
-    pv_inverters: BTreeMap<u32, PvInverter>,
-    /// Last full-map wipe. The GX keeper republishes the whole device tree
-    /// every few seconds, so wiping periodically evicts ghost entries whose
-    /// only delivery was the one-shot retained message of an instance that
-    /// no longer exists (instances drift across GX reboots). Live devices
-    /// repopulate within seconds; empty maps leave daemon data untouched.
-    last_sweep: Option<Instant>,
+    batteries: BTreeMap<u32, TrackedEntry<Battery>>,
+    chargers: BTreeMap<u32, TrackedEntry<MpptCharger>>,
+    pv_inverters: BTreeMap<u32, TrackedEntry<PvInverter>>,
 }
 
 impl CerboDevices {
     /// How long a discovered entry survives without any fresh publish.
-    const DEVICE_TTL_SECS: u64 = 60;
+    const DEVICE_TTL_SECS: u64 = 120;
 
+    /// Evict entries whose `last_seen` is older than the TTL. Unlike the old
+    /// global map wipe, this preserves active entries when other devices are
+    /// updated — only truly stale (disconnected) devices are removed.
     fn sweep_stale(&mut self) {
-        // None = wipe due immediately: retained ghosts delivered at subscribe
-        // time get evicted right away instead of living out a full TTL window.
-        let due = self
-            .last_sweep
-            .is_none_or(|t| t.elapsed() >= Duration::from_secs(Self::DEVICE_TTL_SECS));
-        if due {
-            *self = Self {
-                last_sweep: Some(Instant::now()),
-                ..Default::default()
-            };
-        }
+        let ttl = Duration::from_secs(Self::DEVICE_TTL_SECS);
+        self.batteries
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.chargers
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.pv_inverters
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
     }
 }
 
@@ -1067,7 +1082,9 @@ impl MqttClient {
         let val = Self::parse_cerbo_value(payload);
         match kind {
             "battery" => {
-                let b = devices.batteries.entry(inst).or_default();
+                let entry = devices.batteries.entry(inst).or_default();
+                entry.touch();
+                let b = &mut entry.data;
                 match path {
                     "Soc" => b.soc = val,
                     "Dc/0/Voltage" => b.voltage = val,
@@ -1088,7 +1105,9 @@ impl MqttClient {
                 true
             }
             "solarcharger" => {
-                let m = devices.chargers.entry(inst).or_default();
+                let entry = devices.chargers.entry(inst).or_default();
+                entry.touch();
+                let m = &mut entry.data;
                 match path {
                     "Pv/V" => m.pv_voltage = val,
                     "Dc/0/Current" => m.current = val,
@@ -1100,7 +1119,9 @@ impl MqttClient {
                 true
             }
             "pvinverter" => {
-                let p = devices.pv_inverters.entry(inst).or_default();
+                let entry = devices.pv_inverters.entry(inst).or_default();
+                entry.touch();
+                let p = &mut entry.data;
                 match path {
                     // Ac/Power is the device total; L1 Power equals it on
                     // single-phase units but is accepted as a fallback.
@@ -1166,7 +1187,8 @@ impl MqttClient {
     /// daemon data untouched.
     fn apply_cerbo_to_state(devices: &CerboDevices, st: &mut InverterState) {
         if !devices.batteries.is_empty() {
-            let mut batteries: Vec<Battery> = devices.batteries.values().cloned().collect();
+            let mut batteries: Vec<Battery> =
+                devices.batteries.values().map(|e| e.data.clone()).collect();
             // Time-to-go is only meaningful while charging/discharging; hide
             // the stale value otherwise (daemon does the same gating).
             for b in &mut batteries {
@@ -1193,17 +1215,21 @@ impl MqttClient {
             st.batteries = Some(batteries);
         }
         if !devices.chargers.is_empty() {
-            let mut chargers: Vec<MpptCharger> = devices.chargers.values().cloned().collect();
+            let mut chargers: Vec<MpptCharger> =
+                devices.chargers.values().map(|e| e.data.clone()).collect();
             Self::disambiguate_names(
                 &mut chargers,
                 &devices.chargers.keys().copied().collect::<Vec<_>>(),
             );
-            st.mppt_total = Some(devices.chargers.values().filter_map(|c| c.power).sum());
+            st.mppt_total = Some(devices.chargers.values().filter_map(|e| e.data.power).sum());
             st.mppt_chargers = Some(chargers);
         }
         if !devices.pv_inverters.is_empty() {
-            let mut pv_inverters: Vec<PvInverter> =
-                devices.pv_inverters.values().cloned().collect();
+            let mut pv_inverters: Vec<PvInverter> = devices
+                .pv_inverters
+                .values()
+                .map(|e| e.data.clone())
+                .collect();
             Self::disambiguate_names(
                 &mut pv_inverters,
                 &devices.pv_inverters.keys().copied().collect::<Vec<_>>(),
@@ -1297,57 +1323,99 @@ impl MqttClient {
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         cerbo_devices: Option<Arc<Mutex<CerboDevices>>>,
     ) {
-        let existing_console = state.lock().ok().and_then(|g| g.console.clone());
-
-        let mut new_state = InverterState {
-            gt: raw.gt,
-            g1: raw.g1,
-            g2: raw.g2,
-            tt: raw.tt,
-            t1: raw.t1,
-            t2: raw.t2,
-            solar_total: raw.solar_total,
-            mppt_total: raw.mppt_individual.as_ref().map(|v| v.iter().sum()),
-            battery_soc: raw.battery_soc,
-            battery_power: raw.battery_power,
-            battery_voltage: raw.battery_voltage,
-            battery_current: raw.battery_current,
-            setpoint: raw.setpoint,
-            inverter_state: raw.inverter_state,
-            version: raw.version,
-            dashboard_version: raw.dashboard_version,
-            uptime: raw.uptime,
-            ha_connected: raw.ha_connected,
-            ha_direct_connected: raw.ha_direct_connected,
-            dry_run: raw.dry_run.as_ref().map(coerce_bool),
-            ess_mode: raw.ess_mode,
-            booleans: raw
-                .booleans
-                .map(|map| map.into_iter().map(|(k, v)| (k, coerce_bool(&v))).collect()),
-            features: raw.features,
-            mppt_individual: raw.mppt_individual,
-            mppt_chargers: raw.mppt_chargers,
-            pv_inverters: raw.pv_inverters,
-            batteries: raw.batteries,
-            loads: raw.loads,
-            ui_config: raw.ui_config,
-            daily_stats: raw.daily_stats,
-            solar_forecast: raw.solar_forecast,
-            ev_charging_kw: raw.ev_charging_kw,
-            ev_power: raw.ev_power,
-            car_soc: raw.car_soc,
-            water_level: raw.water_level,
-            water_valve: raw.water_valve.as_ref().map(coerce_bool),
-            pump_switch: raw.pump_switch.as_ref().map(coerce_bool),
-            dishwasher_running: raw.dishwasher_running.as_ref().map(coerce_bool),
-            dishwasher_duration: raw.dishwasher_duration,
-            washer_time: raw.washer_time,
-            washer_power: raw.washer_power.as_ref().map(coerce_bool),
-            dryer_time: raw.dryer_time,
-            dryer_power: raw.dryer_power.as_ref().map(coerce_bool),
-            latest_version: raw.latest_version,
-            console: raw.console.or(existing_console),
+        // Non-destructive merge: start from existing state, update only fields
+        // present in the incoming payload. Prevents transient `None` values
+        // from wiping valid data during partial MQTT messages.
+        let mut new_state = {
+            let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            guard.clone()
         };
+
+        // Merge numeric scalars — keep existing if incoming is None
+        macro_rules! merge_opt {
+            ($field:ident, $val:expr) => {
+                if $val.is_some() {
+                    new_state.$field = $val;
+                }
+            };
+        }
+
+        merge_opt!(gt, raw.gt);
+        merge_opt!(g1, raw.g1);
+        merge_opt!(g2, raw.g2);
+        merge_opt!(tt, raw.tt);
+        merge_opt!(t1, raw.t1);
+        merge_opt!(t2, raw.t2);
+        merge_opt!(solar_total, raw.solar_total);
+        merge_opt!(battery_soc, raw.battery_soc);
+        merge_opt!(battery_power, raw.battery_power);
+        merge_opt!(battery_voltage, raw.battery_voltage);
+        merge_opt!(battery_current, raw.battery_current);
+        merge_opt!(setpoint, raw.setpoint);
+        merge_opt!(inverter_state, raw.inverter_state);
+        merge_opt!(version, raw.version);
+        merge_opt!(dashboard_version, raw.dashboard_version);
+        merge_opt!(uptime, raw.uptime);
+        merge_opt!(ha_connected, raw.ha_connected);
+        merge_opt!(ha_direct_connected, raw.ha_direct_connected);
+        merge_opt!(ess_mode, raw.ess_mode);
+        merge_opt!(mppt_individual, raw.mppt_individual);
+        merge_opt!(ui_config, raw.ui_config);
+        merge_opt!(daily_stats, raw.daily_stats);
+        merge_opt!(solar_forecast, raw.solar_forecast);
+        merge_opt!(ev_charging_kw, raw.ev_charging_kw);
+        merge_opt!(ev_power, raw.ev_power);
+        merge_opt!(car_soc, raw.car_soc);
+        merge_opt!(water_level, raw.water_level);
+        merge_opt!(dishwasher_duration, raw.dishwasher_duration);
+        merge_opt!(washer_time, raw.washer_time);
+        merge_opt!(dryer_time, raw.dryer_time);
+        merge_opt!(latest_version, raw.latest_version);
+
+        // Bool coercions — keep existing if incoming is None
+        if let Some(ref v) = raw.dry_run {
+            new_state.dry_run = Some(coerce_bool(v));
+        }
+        if let Some(ref v) = raw.water_valve {
+            new_state.water_valve = Some(coerce_bool(v));
+        }
+        if let Some(ref v) = raw.pump_switch {
+            new_state.pump_switch = Some(coerce_bool(v));
+        }
+        if let Some(ref v) = raw.dishwasher_running {
+            new_state.dishwasher_running = Some(coerce_bool(v));
+        }
+        if let Some(ref v) = raw.washer_power {
+            new_state.washer_power = Some(coerce_bool(v));
+        }
+        if let Some(ref v) = raw.dryer_power {
+            new_state.dryer_power = Some(coerce_bool(v));
+        }
+
+        // Map coercions
+        if let Some(map) = raw.booleans {
+            new_state.booleans = Some(map.into_iter().map(|(k, v)| (k, coerce_bool(&v))).collect());
+        }
+        merge_opt!(features, raw.features);
+
+        // Collection fields — replace when daemon sends them
+        merge_opt!(mppt_chargers, raw.mppt_chargers);
+        merge_opt!(pv_inverters, raw.pv_inverters);
+        merge_opt!(batteries, raw.batteries);
+        merge_opt!(loads, raw.loads);
+
+        // mppt_total is derived from mppt_individual (compute from merged value)
+        new_state.mppt_total = new_state.mppt_individual.as_ref().map(|v| v.iter().sum());
+
+        // Console: append new lines, cap at max
+        if let Some(new_lines) = raw.console {
+            let console = new_state.console.get_or_insert_with(Vec::new);
+            console.extend(new_lines);
+            if console.len() > CONSOLE_MAX_LINES {
+                let drain = console.len() - CONSOLE_MAX_LINES;
+                console.drain(..drain);
+            }
+        }
 
         // GX-discovered devices win over daemon arrays (see
         // apply_cerbo_to_state) so batteries/MPPTs survive daemon outages.
@@ -1728,15 +1796,15 @@ mod tests {
             "{\"value\": 1}"
         ));
 
-        let b = &d.batteries[&512];
+        let b = &d.batteries[&512].data;
         assert_eq!(b.soc, Some(87.5));
         assert_eq!(b.voltage, Some(51.2));
         assert_eq!(b.name.as_deref(), Some("SmartShunt 500A"));
         assert_eq!(b.state.as_deref(), Some("Charging"));
         assert_eq!(b.time_to_go.as_deref(), Some("30h 01m"));
-        assert_eq!(d.batteries[&513].state.as_deref(), Some("Idle"));
+        assert_eq!(d.batteries[&513].data.state.as_deref(), Some("Idle"));
         // Raw value still stored; the Idle gate happens at overlay time.
-        assert_eq!(d.batteries[&513].time_to_go.as_deref(), Some("2h 00m"));
+        assert_eq!(d.batteries[&513].data.time_to_go.as_deref(), Some("2h 00m"));
 
         let mut st = InverterState::default();
         MqttClient::apply_cerbo_to_state(&d, &mut st);
@@ -1763,9 +1831,8 @@ mod tests {
         assert_eq!(bats[1].time_to_go, None);
     }
 
-    /// Retained topics of retired instances are delivered once at subscribe
-    /// time and never again; the periodic sweep must evict them while fresh
-    /// entries inside the TTL window survive.
+    /// Per-device TTL: entries survive sweep when recently seen, are evicted
+    /// after the TTL window, and updating one entry doesn't affect others.
     #[test]
     fn cerbo_sweep_evicts_ghost_devices() {
         let mut d = CerboDevices::default();
@@ -1776,20 +1843,24 @@ mod tests {
             "Yield/Power",
             "{\"value\": 5}"
         ));
-        // last_sweep = None -> wipe due immediately (startup ghosts).
+        // Entry just created — survives sweep (last_seen < TTL).
         d.sweep_stale();
-        assert!(d.chargers.is_empty());
+        assert_eq!(d.chargers.len(), 1);
 
-        // Fresh timer: entry applied after the sweep survives the next check.
+        // Second entry: updating one device doesn't evict the other.
         assert!(MqttClient::apply_device_message(
             &mut d,
             "solarcharger",
-            9,
+            10,
             "Yield/Power",
-            "{\"value\": 5}"
+            "{\"value\": 8}"
         ));
         d.sweep_stale();
-        assert_eq!(d.chargers.len(), 1);
+        assert_eq!(d.chargers.len(), 2);
+
+        // Both entries are fresh — neither is evicted.
+        assert!(d.chargers.contains_key(&9));
+        assert!(d.chargers.contains_key(&10));
     }
 
     #[test]
@@ -1927,5 +1998,136 @@ mod tests {
     fn no_shunt_when_only_chains_present() {
         let batteries = vec![bat("JBD Chain 1", 4.0), bat("JBD Chain 2", 4.3)];
         assert!(MqttClient::find_shunt(&batteries).is_none());
+    }
+
+    /// Partial topic streams: only some fields arrive per message. Existing
+    /// fields must be preserved when a new message updates a different field.
+    #[test]
+    fn partial_device_messages_preserve_existing_fields() {
+        let mut d = CerboDevices::default();
+        // First message: only SoC arrives.
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "Soc",
+            "{\"value\": 85.0}"
+        ));
+        assert_eq!(d.batteries[&512].data.soc, Some(85.0));
+        assert_eq!(d.batteries[&512].data.voltage, None);
+
+        // Second message: only voltage arrives — SoC must survive.
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "Dc/0/Voltage",
+            "{\"value\": 52.1}"
+        ));
+        assert_eq!(d.batteries[&512].data.soc, Some(85.0));
+        assert_eq!(d.batteries[&512].data.voltage, Some(52.1));
+
+        // Third message: power arrives — both SoC and voltage survive.
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "Dc/0/Power",
+            "{\"value\": -1200}"
+        ));
+        assert_eq!(d.batteries[&512].data.soc, Some(85.0));
+        assert_eq!(d.batteries[&512].data.voltage, Some(52.1));
+        assert_eq!(d.batteries[&512].data.power, Some(-1200.0));
+
+        // Name arrives later — all numeric fields still intact.
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            512,
+            "ProductName",
+            "{\"value\": \"SmartShunt 500A\"}"
+        ));
+        assert_eq!(
+            d.batteries[&512].data.name.as_deref(),
+            Some("SmartShunt 500A")
+        );
+        assert_eq!(d.batteries[&512].data.soc, Some(85.0));
+        assert_eq!(d.batteries[&512].data.voltage, Some(52.1));
+        assert_eq!(d.batteries[&512].data.power, Some(-1200.0));
+    }
+
+    /// Shunt bank totals survive when the shunt message is delayed.
+    /// The cerbo overlay should keep existing bank values when the shunt
+    /// is momentarily absent from the device map.
+    #[test]
+    fn shunt_bank_totals_retained_when_shunt_delayed() {
+        let mut st = InverterState::default();
+
+        // Phase 1: shunt present — sets bank totals.
+        let mut d = CerboDevices::default();
+        MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            1,
+            "ProductName",
+            "\"SmartShunt 500A/50mV\"",
+        );
+        MqttClient::apply_device_message(&mut d, "battery", 1, "Dc/0/Voltage", "{\"value\": 53.0}");
+        MqttClient::apply_device_message(&mut d, "battery", 1, "Dc/0/Current", "{\"value\": -5.0}");
+        MqttClient::apply_device_message(&mut d, "battery", 1, "Dc/0/Power", "{\"value\": -265}");
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        assert_eq!(st.battery_soc, Some(voltage_soc(53.0)));
+        assert_eq!(st.battery_voltage, Some(53.0));
+        assert_eq!(st.battery_current, Some(-5.0));
+        assert_eq!(st.battery_power, Some(-265.0));
+
+        // Phase 2: shunt missing (delayed / MQTT gap) — only a non-shunt battery.
+        let mut d2 = CerboDevices::default();
+        MqttClient::apply_device_message(&mut d2, "battery", 2, "Soc", "{\"value\": 90}");
+        MqttClient::apply_cerbo_to_state(&d2, &mut st);
+        // Bank totals from the shunt must survive.
+        assert_eq!(st.battery_soc, Some(voltage_soc(53.0)));
+        assert_eq!(st.battery_voltage, Some(53.0));
+        assert_eq!(st.battery_power, Some(-265.0));
+
+        // Phase 3: shunt returns with updated values.
+        let mut d3 = CerboDevices::default();
+        MqttClient::apply_device_message(
+            &mut d3,
+            "battery",
+            1,
+            "ProductName",
+            "\"SmartShunt 500A/50mV\"",
+        );
+        MqttClient::apply_device_message(
+            &mut d3,
+            "battery",
+            1,
+            "Dc/0/Voltage",
+            "{\"value\": 52.5}",
+        );
+        MqttClient::apply_device_message(&mut d3, "battery", 1, "Dc/0/Power", "{\"value\": -300}");
+        MqttClient::apply_cerbo_to_state(&d3, &mut st);
+        // Updated shunt values replace the old ones.
+        assert_eq!(st.battery_soc, Some(voltage_soc(52.5)));
+        assert_eq!(st.battery_voltage, Some(52.5));
+        assert_eq!(st.battery_power, Some(-300.0));
+    }
+
+    /// Per-device TTL: updating one device must not evict other active entries.
+    #[test]
+    fn per_device_ttl_does_not_evict_active_peers() {
+        let mut d = CerboDevices::default();
+        // Create two devices.
+        MqttClient::apply_device_message(&mut d, "battery", 1, "Soc", "{\"value\": 80}");
+        MqttClient::apply_device_message(&mut d, "battery", 2, "Soc", "{\"value\": 90}");
+        assert_eq!(d.batteries.len(), 2);
+
+        // Update only device 1 — device 2 must survive the sweep.
+        MqttClient::apply_device_message(&mut d, "battery", 1, "Soc", "{\"value\": 81}");
+        d.sweep_stale();
+        assert_eq!(d.batteries.len(), 2);
+        assert_eq!(d.batteries[&1].data.soc, Some(81.0));
+        assert_eq!(d.batteries[&2].data.soc, Some(90.0));
     }
 }
