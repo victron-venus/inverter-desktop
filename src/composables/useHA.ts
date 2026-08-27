@@ -70,6 +70,11 @@ export function useHA() {
   let unlistenHaConn: (() => void) | null = null
   let unlistenHaFiltered: (() => void) | null = null
 
+  // Grace period: retain previous entity states for 15 seconds during
+  // transient WebSocket reconnects to prevent UI flicker / entity blinking.
+  const HA_GRACE_PERIOD_MS = 15_000
+  let haGraceTimer: ReturnType<typeof setTimeout> | null = null
+
   /** Parse an HA state string into a number; excludes unavailable/unknown states */
   function parseNumberState(entity: string): number | null {
     const stateVal = haEntityStates.value[entity]
@@ -230,10 +235,25 @@ export function useHA() {
     })
 
     unlistenHaConn = await listen<boolean>('ha-connection-status', (event) => {
-      haWsConnected.value = event.payload
-      // On connect, fetch full state so buttons show correct state
       if (event.payload) {
+        // Reconnected — cancel any pending grace timer and keep states
+        if (haGraceTimer) {
+          clearTimeout(haGraceTimer)
+          haGraceTimer = null
+        }
+        haWsConnected.value = true
+        // On connect, fetch full state so buttons show correct state
         fetchHaStates()
+      } else {
+        // Disconnected — start grace period before clearing states
+        haWsConnected.value = false
+        if (!haGraceTimer) {
+          haGraceTimer = setTimeout(() => {
+            haGraceTimer = null
+            haEntityStates.value = {}
+            haEntityAttributes.value = {}
+          }, HA_GRACE_PERIOD_MS)
+        }
       }
     })
 
@@ -585,6 +605,10 @@ export function useHA() {
     if (unlistenHaUpdate) unlistenHaUpdate()
     if (unlistenHaConn) unlistenHaConn()
     if (unlistenHaFiltered) unlistenHaFiltered()
+    if (haGraceTimer) {
+      clearTimeout(haGraceTimer)
+      haGraceTimer = null
+    }
   }
 
   const haLoadsForConfig = computed(() => {

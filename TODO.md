@@ -1,57 +1,63 @@
-# WebKit CPU Optimization Tasks (macOS M1)
+# Dashboard Data Resilience & Grace Period Tasks
 
-Tracking document for eliminating high CPU usage in `WebKit.WebContent` (dropping from ~80% to <3% active, ~0% idle/tray) without losing any functionality.
-
----
-
-## 1. Rust Backend IPC Throttling & Visibility Gating (`src-tauri/`)
-
-- [x] **1.1. Rate-limit / coalesce MQTT IPC emits in `src-tauri/src/mqtt.rs`**
-  - [x] Implement debounced / throttled state emission (500ms min interval for incoming Victron Cerbo GX device updates `N/...`).
-  - [x] Ensure critical notifications/alarms bypass throttling and emit immediately.
-- [x] **1.2. Enforce `WINDOW_HIDDEN` check across all MQTT emit locations in `src-tauri/src/mqtt.rs`**
-  - [x] Add `!WINDOW_HIDDEN.load(Ordering::Relaxed)` guard via `emit_state_update` to console, Cerbo devices, and water topics.
-  - [x] Ensure Rust internal state (`InverterState` and `cerbo_devices`) continues updating so tray icon (1.5s timer) and background alerts remain 100% operational when hidden.
-- [x] **1.3. Instant state synchronization on window show in `src-tauri/src/lib.rs`**
-  - [x] Ensure that when `set_window_hidden(false)` is invoked upon showing the window, the latest `InverterState` snapshot is immediately emitted to the frontend with `force: true`.
+Tracking document for preventing transient dashboard flickering, metric zeroing (`0%`, `0.00V`, `0W`), and disappearing sections during intermittent MQTT data gaps (batteries, SmartShunt, MPPTs, PV inverters, HA entities).
 
 ---
 
-## 2. ECharts & Canvas Rendering Optimization (`src/composables/` & `src/components/`)
+## 1. Rust Backend: Granular Per-Device TTL & Grace Period (`src-tauri/src/mqtt.rs`)
 
-- [x] **2.1. Add downsampling and rendering optimizations in `src/composables/useChart.ts`**
-  - [x] Enable ECharts `sampling: 'lttb'` (Largest-Triangle-Three-Buckets) on all line series to prevent drawing thousands of redundant canvas points.
-  - [x] Increase `CHART_UPDATE_INTERVAL_MS` from 1000ms to 2000ms.
-  - [x] Optimize spline curvature (`smooth: 0.2`) to reduce bezier curve tesselation on M1 GPU/CPU canvas rasterizer.
-- [x] **2.2. Pause ECharts updates and history ingestion when hidden**
-  - [x] Add `setChartPaused()` hook.
-  - [x] Stop setting `chartOption.value` and skip canvas recalculations when `windowHidden` is active.
-- [x] **2.3. Optimize `ChartPanel.vue` resize observer**
-  - [x] Add `{ throttle: 300 }` to `autoresize` on `VChart` to avoid continuous layout passes during window resizing.
+- [ ] **1.1. Replace Global `sweep_stale()` with Per-Device TTL (`TrackedEntry<T>`)**
+  - [ ] Implement `TrackedEntry<T> { data: T, last_seen: Instant }` for discovered Cerbo GX devices.
+  - [ ] Update `CerboDevices` to store `BTreeMap<u32, TrackedEntry<Battery>>`, `BTreeMap<u32, TrackedEntry<MpptCharger>>`, and `BTreeMap<u32, TrackedEntry<PvInverter>>`.
+  - [ ] Implement granular `sweep_stale()` with a 120s grace period (`retain` active entries whose `last_seen.elapsed() < 120s`) instead of wiping the entire map at once.
+  - [ ] Touch `last_seen` timestamp on every incoming MQTT message for a specific device instance.
 
----
+- [ ] **1.2. Preserve Device Properties Across Partial MQTT Messages**
+  - [ ] In `apply_device_message`, update only incoming fields without resetting existing properties (`name`, `serial`, `voltage`, `current`, `power`, `soc`, `time_to_go`).
 
-## 3. Frontend Reactivity & Background WebKit Suspension (`src/`)
+- [ ] **1.3. Maintain Bank Totals & SmartShunt State Persistence**
+  - [ ] In `apply_cerbo_to_state`, ensure that if `find_shunt()` is momentarily unavailable between topic updates, existing `battery_soc`, `battery_voltage`, `battery_current`, and `battery_power` values are retained rather than cleared or zeroed out.
+  - [ ] Preserve per-battery and per-charger tile lists across partial topic bursts.
 
-- [x] **3.1. Suspend WebKit JS execution on `window-hidden` in `src/App.vue` & `src/composables/useConnection.ts`**
-  - [x] Track global `isWindowHidden` reactive state.
-  - [x] Gate `watch(() => state.value, ...)` so history points and UI calculations pause when window is hidden in tray.
-- [x] **3.2. Remove redundant JS HTTP polling in `src/composables/useHA.ts`**
-  - [x] Remove `connInterval` (10s) and `appliancePoll` (30s) `setInterval` calls in frontend, relying on Rust's WebSocket push loop.
-- [x] **3.3. Optimize computed properties with regex/string sorting**
-  - [x] Optimize `haLoads` and `haLoadsForConfig` in `src/composables/useHA.ts` with `loadNameCache` to avoid redundant regex formatting and sorting on every tick.
+- [ ] **1.4. Non-Destructive Daemon State Merging (`process_state_update`)**
+  - [ ] Retain existing valid numbers (`gt`, `tt`, `solar_total`, `battery_soc`, `setpoint`, `water_level`, etc.) if incoming `RawInverterState` contains `None`.
+  - [ ] Merge `loads` maps smoothly to avoid dropping active loads on intermittent payload drops.
 
 ---
 
-## 4. Verification & Benchmarking
+## 2. Frontend: Resilient State Retention & Grace Periods (`src/composables/`)
 
-- [x] **4.1. Automated Test Suite**
-  - [x] Run `pnpm test` (vitest: 75/75 passed).
-  - [x] Run `cd src-tauri && cargo check && cargo clippy --all-targets -- -D warnings && cargo test --all-targets` (17/17 passed, 0 warnings).
-  - [x] Run `pnpm run format:check` (Prettier clean).
-  - [x] Run `pnpm run build` (Vite + TypeScript clean build).
-- [ ] **4.2. macOS M1 Activity Monitor Profiling**
-  - [ ] Verify `WebKit.WebContent` CPU drops to **< 3–5%** with window open.
-  - [ ] Verify `WebKit.WebContent` CPU drops to **0.0% – 0.1%** when window is hidden/minimized to tray.
-  - [ ] Verify system tray icon continues updating smoothly every 1.5s with zero lag.
-  - [ ] Verify restoring window from tray immediately displays up-to-date values without flicker or delay.
+- [ ] **2.1. Non-Destructive State Merging in `useConnection.ts` & `useInverterState.ts`**
+  - [ ] In `processState()`, merge new incoming state updates with existing state, preventing transient `null` or `undefined` values from wiping existing numbers.
+
+- [ ] **2.2. Home Assistant Entity Grace Period in `useHA.ts`**
+  - [ ] Retain previous entity states and attributes during transient WebSocket reconnects or brief unavailability (15-second grace period) before clearing or marking unavailable.
+
+---
+
+## 3. UI Component Resilience (`src/components/`)
+
+- [ ] **3.1. Zero-Flicker Protection in `StatCards.vue`**
+  - [ ] Ensure formatting and displays maintain last-known valid readings without flashing `0%`, `0.00V`, or `0.0A`.
+
+- [ ] **3.2. Stable Tile Rendering in `BatterySolarPanel.vue`**
+  - [ ] Ensure battery and solar card grids render steadily without jumping or collapsing when individual device messages are delayed.
+
+---
+
+## 4. Verification & Testing
+
+- [ ] **4.1. Rust Unit & Integration Tests**
+  - [ ] Add tests for `CerboDevices` per-device TTL eviction (verifying that active devices are not evicted when another device is updated).
+  - [ ] Add tests for field persistence across partial device topic streams.
+  - [ ] Add tests for shunt and bank totals retention when shunt message is delayed.
+  - [ ] Run `cargo check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test --all-targets`.
+
+- [ ] **4.2. Frontend Vitest Tests**
+  - [ ] Add tests for state merging and resilience in `useConnection.ts` and `useInverterState.ts`.
+  - [ ] Run `pnpm test` (vitest).
+  - [ ] Run `pnpm run format:check` and `pnpm run build`.
+
+- [ ] **4.3. Manual / Live Verification**
+  - [ ] Verify that all 4 battery tiles and SmartShunt bank totals remain rock-solid without blinking or disappearing during intermittent MQTT traffic.
+  - [ ] Verify that disconnected devices still cleanly disappear after the 120s grace period.

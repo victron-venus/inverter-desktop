@@ -53,7 +53,17 @@ export function useConnection() {
   let haMqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
 
   function processState(newState: InverterState) {
-    state.value = markRaw(newState)
+    const prev = state.value
+    // Non-destructive merge: preserve existing values when incoming field is
+    // undefined. Prevents transient null/undefined from wiping valid numbers
+    // during partial MQTT messages or reconnection bursts.
+    const merged: InverterState = { ...prev }
+    for (const [key, val] of Object.entries(newState)) {
+      if (val !== undefined) {
+        ;(merged as Record<string, unknown>)[key] = val
+      }
+    }
+    state.value = markRaw(merged)
   }
 
   async function connectMqtt() {
