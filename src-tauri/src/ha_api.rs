@@ -1,9 +1,11 @@
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tauri::Emitter;
+// Import config loading functions from lib
+use crate::load_config;
 
 pub static WINDOW_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -451,6 +453,8 @@ impl HaApiClient {
 /// HA WebSocket client — subscribes to all state_changed events and emits to frontend.
 pub struct HaWebSocketClient {
     rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// Whitelist of entity IDs that should trigger frontend updates.
+    whitelist: HashSet<String>,
 }
 
 impl HaWebSocketClient {
@@ -584,6 +588,69 @@ impl HaWebSocketClient {
             }
         }
 
+        // Compute whitelist of entity IDs that the dashboard actually uses
+        let whitelist = {
+            // Load persisted config to determine which entities are needed
+            if let Ok(config) = load_config(&app) {
+                let mut set = HashSet::new();
+
+                // Helper to insert an entity ID if it's not empty
+                let mut insert_if_not_empty = |id: &Option<String>| {
+                    if let Some(ref id_str) = id {
+                        if !id_str.is_empty() {
+                            set.insert(id_str.clone());
+                        }
+                    }
+                };
+
+                // Individual entities for appliances, EV, etc.
+                insert_if_not_empty(&config.ha_dryer_entity);
+                insert_if_not_empty(&config.ha_washer_entity);
+                insert_if_not_empty(&config.ha_washer_start_entity);
+                insert_if_not_empty(&config.ha_washer_pause_entity);
+                insert_if_not_empty(&config.ha_dryer_start_entity);
+                insert_if_not_empty(&config.ha_dryer_pause_entity);
+                insert_if_not_empty(&config.ha_dishwasher_running_entity);
+                insert_if_not_empty(&config.ha_dishwasher_duration_entity);
+                insert_if_not_empty(&config.ha_ev_soc_entity);
+                insert_if_not_empty(&config.ha_ev_charging_entity);
+                insert_if_not_empty(&config.ha_ev_clamp_entity);
+
+                // Consumption and generation clamps
+                if let Some(ref clamps) = config.ha_consumption_clamps {
+                    for id in clamps {
+                        insert_if_not_empty(&Some(id.clone()));
+                    }
+                }
+                if let Some(ref clamps) = config.ha_generation_clamps {
+                    for id in clamps {
+                        insert_if_not_empty(&Some(id.clone()));
+                    }
+                }
+
+                // Home buttons (ha_entities)
+                if let Some(ref entities) = config.ha_entities {
+                    for entity in entities {
+                        insert_if_not_empty(&Some(entity.entity.clone()));
+                    }
+                }
+
+                // Header toggles
+                if let Some(ref toggles) = config.header_toggles_config {
+                    for toggle in toggles {
+                        insert_if_not_empty(&Some(toggle.entity.clone()));
+                    }
+                }
+
+                set
+            } else {
+                // If config loading fails, fallback to empty whitelist (no updates)
+                // This is safe but disables functionality; better to log and use empty set
+                log::warn!("Failed to load config for HA whitelist, disabling entity filtering");
+                HashSet::new()
+            }
+        };
+
         // Emit initial filtered data immediately after populating state map
         // This ensures frontend has full data on WS connect
         if let Ok(states_guard) = entity_states.lock() {
@@ -595,6 +662,7 @@ impl HaWebSocketClient {
 
         // Spawn read loop with timeout
         let app_clone = app.clone();
+        let whitelist_clone = whitelist.clone();
         tokio::spawn(async move {
             const READ_TIMEOUT_SECS: u64 = 60;
             loop {
@@ -622,15 +690,17 @@ impl HaWebSocketClient {
 
                                                         // Skip expensive processing and emits when window is hidden
                                                         if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
-                                                            // Emit individual update (backward compat for buttonStates, etc.)
-                                                            let _ = app_clone.emit(
-                                                                "ha-state-update",
-                                                                serde_json::json!({
-                                                                    "entity_id": eid,
-                                                                    "state": state,
-                                                                    "attributes": attrs.unwrap_or(serde_json::Value::Null),
-                                                                }),
-                                                            );
+                                                            // Emit individual update (backward compat for buttonStates, etc.) only for whitelisted entities
+                                                            if whitelist_clone.contains(&eid) {
+                                                                let _ = app_clone.emit(
+                                                                    "ha-state-update",
+                                                                    serde_json::json!({
+                                                                        "entity_id": eid,
+                                                                        "state": state,
+                                                                        "attributes": attrs.unwrap_or(serde_json::Value::Null),
+                                                                    }),
+                                                                );
+                                                            }
 
                                                             // Compute and emit pre-filtered entity data
                                                             let filtered = compute_filtered_data(&states_guard);
@@ -666,6 +736,7 @@ impl HaWebSocketClient {
 
         Ok(Self {
             rx: Some(completion_rx),
+            whitelist,
         })
     }
 
