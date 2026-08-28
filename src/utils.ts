@@ -36,7 +36,6 @@ export function formatTimestamp(tsString: string | undefined): string {
   const diffMs = now.getTime() - timestamp.getTime()
   const diffMin = Math.floor(diffMs / (1000 * 60))
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
   if (diffMin < 30) {
     return '30 min ago'
