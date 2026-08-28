@@ -174,19 +174,29 @@ pub struct PvInverter {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Vebus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l1_power: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l2_power: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ac_power: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Battery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub soc: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub power: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub soc: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,6 +285,7 @@ struct CerboDevices {
     batteries: BTreeMap<u32, TrackedEntry<Battery>>,
     chargers: BTreeMap<u32, TrackedEntry<MpptCharger>>,
     pv_inverters: BTreeMap<u32, TrackedEntry<PvInverter>>,
+    vebus: BTreeMap<u32, TrackedEntry<Vebus>>,
 }
 
 impl CerboDevices {
@@ -291,6 +302,8 @@ impl CerboDevices {
         self.chargers
             .retain(|_, entry| entry.last_seen.elapsed() < ttl);
         self.pv_inverters
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.vebus
             .retain(|_, entry| entry.last_seen.elapsed() < ttl);
     }
 }
@@ -1054,8 +1067,8 @@ impl MqttClient {
     }
 
     /// Parse N/<portal>/<kind>/<instance>/<path> for GX devices we discover
-    /// ourselves (battery, solarcharger, pvinverter). Other kinds are left to
-    /// their own handlers (tank/pump) or ignored (vebus, ...).
+    /// ourselves (battery, solarcharger, pvinverter, vebus). Other kinds are left to
+    /// their own handlers (tank/pump) or ignored.
     fn parse_device_topic(topic: &str) -> Option<(&str, u32, &str)> {
         let rest = topic.strip_prefix("N/")?;
         let (portal, rest) = rest.split_once('/')?;
@@ -1063,7 +1076,7 @@ impl MqttClient {
             return None;
         }
         let (kind, rest) = rest.split_once('/')?;
-        if kind != "battery" && kind != "solarcharger" && kind != "pvinverter" {
+        if kind != "battery" && kind != "solarcharger" && kind != "pvinverter" && kind != "vebus" {
             return None;
         }
         let (inst, path) = rest.split_once('/')?;
@@ -1130,6 +1143,19 @@ impl MqttClient {
                     "Ac/L1/Current" => p.current = val,
                     "ProductName" => p.name = Self::parse_cerbo_name(payload),
                     "Serial" => p.serial = Self::parse_cerbo_name(payload),
+                    _ => return false,
+                }
+                true
+            }
+            "vebus" => {
+                let entry = devices.vebus.entry(inst).or_default();
+                entry.touch();
+                let v = &mut entry.data;
+                match path {
+                    "Ac/L1/Power" => v.l1_power = val,
+                    "Ac/L2/Power" => v.l2_power = val,
+                    "Ac/ActiveIn/L1/Power" => v.l1_power = val, // fallback or grid-in
+                    "Ac/Out/P" | "Ac/Power" => v.ac_power = val,
                     _ => return false,
                 }
                 true
@@ -1235,6 +1261,25 @@ impl MqttClient {
                 &devices.pv_inverters.keys().copied().collect::<Vec<_>>(),
             );
             st.pv_inverters = Some(pv_inverters);
+        }
+        if !devices.vebus.is_empty() {
+            // Use the first VE.Bus device found to set grid power (gt, g1, g2)
+            for entry in devices.vebus.values() {
+                let v = &entry.data;
+                if let Some(l1) = v.l1_power {
+                    st.g1 = Some(l1);
+                }
+                if let Some(l2) = v.l2_power {
+                    st.g2 = Some(l2);
+                }
+                // Compute total gt from g1 + g2 if both present, else fallback to ac_power
+                if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
+                    st.gt = Some(g1 + g2);
+                } else if let Some(ac_power) = v.ac_power {
+                    st.gt = Some(ac_power);
+                }
+                break;
+            }
         }
     }
 
@@ -1691,7 +1736,10 @@ mod tests {
         );
         // Other kinds route elsewhere or are ignored.
         assert_eq!(MqttClient::parse_device_topic("N/abc/tank/21/Level"), None);
-        assert_eq!(MqttClient::parse_device_topic("N/abc/vebus/256/Soc"), None);
+        assert_eq!(
+            MqttClient::parse_device_topic("N/abc/vebus/256/Soc"),
+            Some(("vebus", 256, "Soc"))
+        );
         assert_eq!(MqttClient::parse_device_topic("N/abc/battery/x/Soc"), None);
     }
 
