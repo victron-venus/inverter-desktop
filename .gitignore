@@ -74,3 +74,4 @@ release.sh
 release.txt
 C*.md
 .github/secrets/ANDROID_KEYSTORE_BASE64
+*.backup
