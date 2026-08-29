@@ -150,6 +150,8 @@ pub struct MpptCharger {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pv_voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
@@ -165,6 +167,8 @@ pub struct PvInverter {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -189,6 +193,8 @@ pub struct Battery {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub soc: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1262,23 +1268,20 @@ impl MqttClient {
             );
             st.pv_inverters = Some(pv_inverters);
         }
-        if !devices.vebus.is_empty() {
+        if let Some(entry) = devices.vebus.values().next() {
             // Use the first VE.Bus device found to set grid power (gt, g1, g2)
-            for entry in devices.vebus.values() {
-                let v = &entry.data;
-                if let Some(l1) = v.l1_power {
-                    st.g1 = Some(l1);
-                }
-                if let Some(l2) = v.l2_power {
-                    st.g2 = Some(l2);
-                }
-                // Compute total gt from g1 + g2 if both present, else fallback to ac_power
-                if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
-                    st.gt = Some(g1 + g2);
-                } else if let Some(ac_power) = v.ac_power {
-                    st.gt = Some(ac_power);
-                }
-                break;
+            let v = &entry.data;
+            if let Some(l1) = v.l1_power {
+                st.g1 = Some(l1);
+            }
+            if let Some(l2) = v.l2_power {
+                st.g2 = Some(l2);
+            }
+            // Compute total gt from g1 + g2 if both present, else fallback to ac_power
+            if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
+                st.gt = Some(g1 + g2);
+            } else if let Some(ac_power) = v.ac_power {
+                st.gt = Some(ac_power);
             }
         }
     }

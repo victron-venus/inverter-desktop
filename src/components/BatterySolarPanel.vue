@@ -8,7 +8,7 @@
       <div class="p-1 flex flex-wrap gap-x-3 gap-y-1.5">
         <div
           v-for="(bat, bi) in batteries"
-          :key="`${bi}-${bat.name}`"
+          :key="bat.serial ?? bat.instance ?? `${bi}-${bat.name}`"
           class="flex-1 min-w-[130px] border border-slate-200 dark:border-slate-700/50 p-1 rounded-sm"
         >
           <div
@@ -60,7 +60,7 @@
       <div class="p-1 flex flex-wrap gap-x-2 gap-y-1.5">
         <div
           v-for="(src, si) in solarSources"
-          :key="`${si}-${src.name}`"
+          :key="src.serial ?? src.instance ?? `${si}-${src.name}`"
           class="flex-1 min-w-[90px] border border-slate-200 dark:border-slate-700/50 p-1 rounded-sm"
         >
           <div
@@ -95,6 +95,8 @@ import { BatteryMedium, SunMedium } from '@lucide/vue'
 defineProps<{
   batteries: Array<{
     name: string
+    serial?: string
+    instance?: number
     voltage: number
     current?: number
     power?: number
@@ -102,7 +104,14 @@ defineProps<{
     state: string
     timeToGo?: string
   }>
-  solarSources: Array<{ name: string; pvVoltage?: number; current?: number; power: number }>
+  solarSources: Array<{
+    name: string
+    serial?: string
+    instance?: number
+    pvVoltage?: number
+    current?: number
+    power: number
+  }>
   showBatteries?: boolean
   showSolar?: boolean
 }>()
