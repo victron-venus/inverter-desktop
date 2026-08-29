@@ -329,7 +329,7 @@ flowchart LR
 
 ### Published (commands)
 
-- `inverter/cmd/toggle` - Toggle boolean entities
+- `inverter/cmd/toggle` - Toggle boolean entities (always used for the 7 inverter-control flags: `only_charging`, `no_feed`, `house_support`, `charge_battery`, `do_not_supply_charger`, `set_limit_to_ev_charger`, `minimize_charging`. Payload `{entity: "input_boolean.<key>"}`, QoS 1, retain=false. `ha_use_direct_api` does not apply to these flags.)
 - `inverter/cmd/press` - Press button entities
 - `inverter/cmd/setpoint` - Set power setpoint
 - `inverter/cmd/dry_run` - Toggle dry run mode

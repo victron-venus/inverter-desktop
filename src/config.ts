@@ -16,6 +16,13 @@ export interface AppConfig {
   ha_longlived_token?: string | null
   ha_url?: string | null
   ha_port?: number | null
+  /**
+   * When URL+token are set, home-device actions (garage, recliner, laundry,
+   * EV, covers, …) use HA REST. Does **not** apply to inverter-control flags
+   * (only_charging, no_feed, house_support, charge_battery,
+   * do_not_supply_charger, set_limit_to_ev_charger, minimize_charging) —
+   * those always publish to Cerbo MQTT `inverter/cmd/toggle`.
+   */
   ha_use_direct_api?: boolean
   ha_entities?: Array<{
     id: string

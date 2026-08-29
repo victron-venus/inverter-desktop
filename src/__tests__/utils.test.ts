@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { formatPower, formatUptime, formatDuration, formatInverterState } from '../utils'
+import {
+  formatPower,
+  formatUptime,
+  formatDuration,
+  formatInverterState,
+  isInverterControlFlag,
+  resolveHeaderToggleState,
+} from '../utils'
 
 describe('formatPower', () => {
   it('formats watts below 1000', () => {
@@ -72,5 +79,63 @@ describe('formatDuration', () => {
 
   it('formats hours', () => {
     expect(formatDuration(7200)).toBe('2:00:00')
+  })
+})
+
+describe('isInverterControlFlag', () => {
+  it('matches the 7 flags as bare keys and input_boolean.*', () => {
+    const keys = [
+      'only_charging',
+      'no_feed',
+      'house_support',
+      'charge_battery',
+      'do_not_supply_charger',
+      'set_limit_to_ev_charger',
+      'minimize_charging',
+    ]
+    for (const key of keys) {
+      expect(isInverterControlFlag(key)).toBe(true)
+      expect(isInverterControlFlag(`input_boolean.${key}`)).toBe(true)
+    }
+  })
+
+  it('rejects non-flag strings', () => {
+    expect(isInverterControlFlag('garage_door')).toBe(false)
+    expect(isInverterControlFlag('switch.living_room')).toBe(false)
+    expect(isInverterControlFlag('')).toBe(false)
+    expect(isInverterControlFlag('minimize_charging_extra')).toBe(false)
+  })
+})
+
+describe('resolveHeaderToggleState', () => {
+  it('uses MQTT for inverter-control flags even when HA is enabled', () => {
+    const toggle = { id: 'only_charging', entity: 'input_boolean.only_charging' }
+    expect(
+      resolveHeaderToggleState(toggle, { 'input_boolean.only_charging': 'on' }, true, {})
+    ).toBe('off')
+    expect(
+      resolveHeaderToggleState(toggle, { 'input_boolean.only_charging': 'off' }, true, {
+        only_charging: true,
+      })
+    ).toBe('on')
+  })
+
+  it('uses HA for non-flag entities when HA is enabled', () => {
+    const toggle = { id: 'garage', entity: 'switch.garage' }
+    expect(resolveHeaderToggleState(toggle, { 'switch.garage': 'on' }, true, {})).toBe('on')
+    expect(resolveHeaderToggleState(toggle, { 'switch.garage': 'off' }, true, {})).toBe('off')
+  })
+
+  it('falls back to MQTT booleans when HA is disabled', () => {
+    const toggle = { id: 'only_charging', entity: 'input_boolean.only_charging' }
+    expect(resolveHeaderToggleState(toggle, {}, false, { only_charging: true })).toBe('on')
+    expect(resolveHeaderToggleState(toggle, {}, false, { only_charging: false })).toBe('off')
+  })
+
+  it('handles string/number MQTT values', () => {
+    const toggle = { id: 'no_feed', entity: 'input_boolean.no_feed' }
+    expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 'true' })).toBe('on')
+    expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 1 })).toBe('on')
+    expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 0 })).toBe('off')
   })
 })

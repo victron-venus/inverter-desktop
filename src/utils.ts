@@ -55,3 +55,45 @@ export function formatTimestamp(tsString: string | undefined): string {
       .replace(',', '') // Remove the comma if present
   }
 }
+
+/** Inverter-control flags owned by inverter-control on Cerbo MQTT. */
+export const INVERTER_CONTROL_FLAGS = [
+  'only_charging',
+  'no_feed',
+  'house_support',
+  'charge_battery',
+  'do_not_supply_charger',
+  'set_limit_to_ev_charger',
+  'minimize_charging',
+] as const
+
+/** Bare key (`only_charging`) or HA-style id (`input_boolean.only_charging`). */
+export function inverterControlFlagKey(entityOrId: string): string | null {
+  const raw = (entityOrId || '').trim()
+  if (!raw) return null
+  const key = raw.includes('.') ? (raw.split('.').pop() as string) : raw
+  return (INVERTER_CONTROL_FLAGS as readonly string[]).includes(key) ? key : null
+}
+
+export function isInverterControlFlag(entityOrId: string): boolean {
+  return inverterControlFlagKey(entityOrId) !== null
+}
+
+/** Header-toggle display: the 7 control flags always use MQTT `booleans`. */
+export function resolveHeaderToggleState(
+  toggle: { id: string; entity: string },
+  haEntityStates: Record<string, string>,
+  haEnabled: boolean,
+  mqttBooleans: Record<string, unknown>
+): 'on' | 'off' {
+  const controlFlag = isInverterControlFlag(toggle.entity) || isInverterControlFlag(toggle.id)
+  if (!controlFlag && haEnabled && haEntityStates[toggle.entity] !== undefined) {
+    return haEntityStates[toggle.entity] === 'on' ? 'on' : 'off'
+  }
+  const entityKey = toggle.entity.split('.').pop() || toggle.id
+  const rawVal = mqttBooleans[toggle.id] ?? mqttBooleans[entityKey] ?? mqttBooleans[toggle.entity]
+  let val: unknown = rawVal
+  if (typeof val === 'string') val = val === 'true' || val === '1'
+  else if (typeof val === 'number') val = val !== 0
+  return val ? 'on' : 'off'
+}

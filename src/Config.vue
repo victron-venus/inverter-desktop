@@ -190,6 +190,10 @@
                 >
                   Home Assistant
                 </h2>
+                <p class="text-[10px] text-slate-500 dark:text-slate-500 mt-1">
+                  HA API is for home devices (garage, laundry, EV, covers). Inverter control flags
+                  always go to Cerbo MQTT, even when API is enabled.
+                </p>
               </header>
 
               <div
