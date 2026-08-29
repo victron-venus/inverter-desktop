@@ -150,6 +150,8 @@ pub struct MpptCharger {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pv_voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<f64>,
@@ -165,6 +167,8 @@ pub struct PvInverter {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -189,6 +193,8 @@ pub struct Battery {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub soc: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

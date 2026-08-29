@@ -26,11 +26,27 @@ export interface InverterState {
   booleans?: Record<string, boolean>
   features?: Record<string, boolean>
   mppt_individual?: number[]
-  mppt_chargers?: Array<{ name?: string; pv_voltage?: number; current?: number; power?: number }>
+  mppt_chargers?: Array<{
+    name?: string
+    serial?: string
+    instance?: number
+    pv_voltage?: number
+    current?: number
+    power?: number
+  }>
   // AC PV inverters of any vendor (V/I/P per device)
-  pv_inverters?: Array<{ name?: string; voltage?: number; current?: number; power?: number }>
+  pv_inverters?: Array<{
+    name?: string
+    serial?: string
+    instance?: number
+    voltage?: number
+    current?: number
+    power?: number
+  }>
   batteries?: Array<{
     name?: string
+    serial?: string
+    instance?: number
     voltage?: number
     current?: number
     power?: number

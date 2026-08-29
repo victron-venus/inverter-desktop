@@ -385,6 +385,8 @@ const pvInvertersTotal = computed(() =>
 const batteries = computed(() => {
   const tiles: Array<{
     name: string
+    serial?: string
+    instance?: number
     voltage: number
     current?: number
     power?: number
@@ -395,6 +397,8 @@ const batteries = computed(() => {
   for (const b of state.value.batteries || []) {
     tiles.push({
       name: b.name || 'Battery',
+      serial: b.serial,
+      instance: b.instance,
       voltage: b.voltage || 0,
       current: b.current,
       power: b.power,
@@ -407,10 +411,19 @@ const batteries = computed(() => {
 })
 
 const solarSources = computed(() => {
-  const sources: Array<{ name: string; pvVoltage?: number; current?: number; power: number }> = []
+  const sources: Array<{
+    name: string
+    serial?: string
+    instance?: number
+    pvVoltage?: number
+    current?: number
+    power: number
+  }> = []
   ;(state.value.mppt_chargers || []).forEach((m) => {
     sources.push({
       name: m.name || 'MPPT',
+      serial: m.serial,
+      instance: m.instance,
       pvVoltage: m.pv_voltage || 0,
       current: m.current || 0,
       power: m.power || 0,
@@ -421,6 +434,8 @@ const solarSources = computed(() => {
     pvInvs.forEach((p, i) => {
       sources.push({
         name: p.name || 'PV Inverter ' + (i + 1),
+        serial: p.serial,
+        instance: p.instance,
         pvVoltage: p.voltage,
         current: p.current,
         power: p.power || 0,
