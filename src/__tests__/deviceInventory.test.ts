@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { InventoryDevice } from '../deviceInventory'
 import {
   DISCOVERY_INTERVAL_MS,
   lockName,
@@ -85,8 +86,8 @@ describe('mergeDeviceInventory', () => {
     expect(result).toHaveLength(2)
   })
   it('does not add new devices when addNew=false', () => {
-    const existing = [{ name: 'MPPT-0', serial: 's1' }]
-    const incoming = [
+    const existing: InventoryDevice[] = [{ name: 'MPPT-0', serial: 's1' }]
+    const incoming: InventoryDevice[] = [
       { name: 'MPPT-0', serial: 's1', power: 5 },
       { name: 'MPPT-1', serial: 's2', power: 10 },
     ]
@@ -95,8 +96,8 @@ describe('mergeDeviceInventory', () => {
     expect(result[0].power).toBe(5)
   })
   it('preserves custom name against incoming MPPT-0', () => {
-    const existing = [{ name: 'Roof Array', serial: 's1' }]
-    const incoming = [{ name: 'MPPT-0', serial: 's1', power: 50 }]
+    const existing: InventoryDevice[] = [{ name: 'Roof Array', serial: 's1' }]
+    const incoming: InventoryDevice[] = [{ name: 'MPPT-0', serial: 's1', power: 50 }]
     const result = mergeDeviceInventory(existing, incoming)
     expect(result[0].name).toBe('Roof Array')
     expect(result[0].power).toBe(50)
@@ -108,8 +109,8 @@ describe('mergeDeviceInventory', () => {
     expect(result[0].name).toBe('Roof Array')
   })
   it('fallback name dedupe when neither serial nor instance present', () => {
-    const existing = [{ name: 'Battery 1' }]
-    const incoming = [{ name: 'Battery 1', power: 200 }]
+    const existing: InventoryDevice[] = [{ name: 'Battery 1' }]
+    const incoming: InventoryDevice[] = [{ name: 'Battery 1', power: 200 }]
     const result = mergeDeviceInventory(existing, incoming)
     expect(result).toHaveLength(1)
     expect(result[0].power).toBe(200)
