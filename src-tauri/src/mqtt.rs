@@ -1262,23 +1262,20 @@ impl MqttClient {
             );
             st.pv_inverters = Some(pv_inverters);
         }
-        if !devices.vebus.is_empty() {
+        if let Some(entry) = devices.vebus.values().next() {
             // Use the first VE.Bus device found to set grid power (gt, g1, g2)
-            for entry in devices.vebus.values() {
-                let v = &entry.data;
-                if let Some(l1) = v.l1_power {
-                    st.g1 = Some(l1);
-                }
-                if let Some(l2) = v.l2_power {
-                    st.g2 = Some(l2);
-                }
-                // Compute total gt from g1 + g2 if both present, else fallback to ac_power
-                if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
-                    st.gt = Some(g1 + g2);
-                } else if let Some(ac_power) = v.ac_power {
-                    st.gt = Some(ac_power);
-                }
-                break;
+            let v = &entry.data;
+            if let Some(l1) = v.l1_power {
+                st.g1 = Some(l1);
+            }
+            if let Some(l2) = v.l2_power {
+                st.g2 = Some(l2);
+            }
+            // Compute total gt from g1 + g2 if both present, else fallback to ac_power
+            if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
+                st.gt = Some(g1 + g2);
+            } else if let Some(ac_power) = v.ac_power {
+                st.gt = Some(ac_power);
             }
         }
     }
