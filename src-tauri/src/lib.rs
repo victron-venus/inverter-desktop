@@ -193,6 +193,19 @@ const HA_ENTITY_DOMAINS: &[&str] = &[
     "climate",
     "button",
 ];
+
+/// Inverter-control flags owned by inverter-control. Always published to
+/// Cerbo MQTT `inverter/cmd/toggle` — never Home Assistant REST, even when
+/// `ha_use_direct_api` is on. Accepts `input_boolean.<key>` or bare `<key>`.
+const INVERTER_CONTROL_FLAGS: &[&str] = &[
+    "only_charging",
+    "no_feed",
+    "house_support",
+    "charge_battery",
+    "do_not_supply_charger",
+    "set_limit_to_ev_charger",
+    "minimize_charging",
+];
 const ABOUT_WINDOW_W: f64 = 380.0;
 const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
@@ -386,101 +399,100 @@ async fn perform_action(
 
     let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
-    // Always try HA path for known entity domains if HA is configured
-    if config.ha_use_direct_api && config.ha_url.is_some() && config.ha_longlived_token.is_some() {
+    // HA REST is for home devices (garage, recliner, laundry, EV, covers, …).
+    // Inverter-control flags always go to Cerbo MQTT — ha_use_direct_api does
+    // not apply to them (inverter-control no longer reads HA for those 7).
+    let ha_direct =
+        config.ha_use_direct_api && config.ha_url.is_some() && config.ha_longlived_token.is_some();
+    if should_use_ha_rest(entity_id, ha_direct) {
         if let Some(entity) = entity_id {
             let domain = entity.split('.').next().unwrap_or("");
             // For switch/input_boolean/light entities, always prefer HA API
-            if is_ha_entity(entity) {
-                let client = ha_api::HaApiClient::new(
-                    config.ha_url.as_deref().unwrap_or(""),
-                    config.ha_port,
-                    config.ha_longlived_token.as_deref().unwrap_or(""),
-                )
-                .await?;
+            let client = ha_api::HaApiClient::new(
+                config.ha_url.as_deref().unwrap_or(""),
+                config.ha_port,
+                config.ha_longlived_token.as_deref().unwrap_or(""),
+            )
+            .await?;
 
-                match domain {
-                    "cover" => {
-                        let position = payload
-                            .get("position")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u8;
-                        client.set_cover_position(entity, position).await?;
-                    }
-                    "media_player" => {
-                        let mp_action = payload
-                            .get("mp_action")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("toggle");
-                        match mp_action {
-                            "play" => client.media_player_play(entity).await?,
-                            "pause" => client.media_player_pause(entity).await?,
-                            "stop" => client.media_player_stop(entity).await?,
-                            _ => {
-                                // toggle: on/off
-                                let states = client.get_states().await?;
-                                let state = states.iter().find(|s| s.entity_id == entity);
-                                if let Some(s) = state {
-                                    if s.state == "on" {
-                                        client.turn_off(entity).await?
-                                    } else {
-                                        client.turn_on(entity).await?
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    "number" => {
-                        let value = payload.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        client
-                            .call_service(
-                                entity,
-                                "number",
-                                "set_value",
-                                serde_json::json!({ "value": value }),
-                            )
-                            .await?;
-                    }
-                    "scene" => {
-                        client.scene_activate(entity).await?;
-                    }
-                    "button" => {
-                        client
-                            .call_service(entity, "button", "press", serde_json::json!({}))
-                            .await?;
-                    }
-                    _ => {
-                        let states = client.get_states().await?;
-                        let state = states.iter().find(|s| s.entity_id == entity);
-                        match state {
-                            Some(s) => {
+            match domain {
+                "cover" => {
+                    let position = payload
+                        .get("position")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u8;
+                    client.set_cover_position(entity, position).await?;
+                }
+                "media_player" => {
+                    let mp_action = payload
+                        .get("mp_action")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("toggle");
+                    match mp_action {
+                        "play" => client.media_player_play(entity).await?,
+                        "pause" => client.media_player_pause(entity).await?,
+                        "stop" => client.media_player_stop(entity).await?,
+                        _ => {
+                            // toggle: on/off
+                            let states = client.get_states().await?;
+                            let state = states.iter().find(|s| s.entity_id == entity);
+                            if let Some(s) = state {
                                 if s.state == "on" {
                                     client.turn_off(entity).await?
                                 } else {
                                     client.turn_on(entity).await?
                                 }
                             }
-                            None => {
-                                // Entity not found in HA, fallback to MQTT
-                                log::warn!(
-                                    "Entity {} not found in HA, falling back to MQTT",
-                                    entity
-                                );
-                                let mqtt_client = mqtt_client
-                                    .0
-                                    .lock()
-                                    .map_err(|e| format!("Lock error: {}", e))?;
-                                if let Some(ref c) = *mqtt_client {
-                                    c.publish_command(&action, payload.clone())
-                                        .map_err(|e| format!("MQTT error: {}", e))?;
-                                }
-                                return Ok(());
-                            }
                         }
                     }
                 }
-                return Ok(());
+                "number" => {
+                    let value = payload.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    client
+                        .call_service(
+                            entity,
+                            "number",
+                            "set_value",
+                            serde_json::json!({ "value": value }),
+                        )
+                        .await?;
+                }
+                "scene" => {
+                    client.scene_activate(entity).await?;
+                }
+                "button" => {
+                    client
+                        .call_service(entity, "button", "press", serde_json::json!({}))
+                        .await?;
+                }
+                _ => {
+                    let states = client.get_states().await?;
+                    let state = states.iter().find(|s| s.entity_id == entity);
+                    match state {
+                        Some(s) => {
+                            if s.state == "on" {
+                                client.turn_off(entity).await?
+                            } else {
+                                client.turn_on(entity).await?
+                            }
+                        }
+                        None => {
+                            // Entity not found in HA, fallback to MQTT
+                            log::warn!("Entity {} not found in HA, falling back to MQTT", entity);
+                            let mqtt_client = mqtt_client
+                                .0
+                                .lock()
+                                .map_err(|e| format!("Lock error: {}", e))?;
+                            if let Some(ref c) = *mqtt_client {
+                                c.publish_command(&action, payload.clone())
+                                    .map_err(|e| format!("MQTT error: {}", e))?;
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
             }
+            return Ok(());
         }
     }
 
@@ -501,6 +513,23 @@ async fn perform_action(
 fn is_ha_entity(entity_id: &str) -> bool {
     let domain = entity_id.split('.').next().unwrap_or("");
     HA_ENTITY_DOMAINS.contains(&domain)
+}
+
+/// Bare key (`only_charging`) or HA-style id (`input_boolean.only_charging`).
+pub(crate) fn is_inverter_control_flag(entity_or_id: &str) -> bool {
+    let key = entity_or_id.split('.').next_back().unwrap_or("").trim();
+    INVERTER_CONTROL_FLAGS.contains(&key)
+}
+
+/// HA REST is for home devices only — inverter-control flags always go to MQTT.
+fn should_use_ha_rest(entity_id: Option<&str>, ha_direct: bool) -> bool {
+    if !ha_direct {
+        return false;
+    }
+    match entity_id {
+        Some(e) => is_ha_entity(e) && !is_inverter_control_flag(e),
+        None => false,
+    }
 }
 
 /// Build HA WebSocket URL from config, handling host:port format properly.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { HaCoverDisplay, HaSensorDisplay, HaWeatherDisplay } from '../types/ha'
+import { resolveHeaderToggleState } from '../utils'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => vi.fn()(...args),
@@ -74,14 +75,7 @@ function computeToggleStates(
 ): Record<string, string> {
   const states: Record<string, string> = {}
   for (const toggle of headerToggles) {
-    if (haEnabled && haEntityStates[toggle.entity] !== undefined) {
-      states[toggle.id] = haEntityStates[toggle.entity] === 'on' ? 'on' : 'off'
-    } else {
-      let val = mqttBooleans[toggle.id]
-      if (typeof val === 'string') val = val === 'true' || val === '1'
-      else if (typeof val === 'number') val = val !== 0
-      states[toggle.id] = val ? 'on' : 'off'
-    }
+    states[toggle.id] = resolveHeaderToggleState(toggle, haEntityStates, haEnabled, mqttBooleans)
   }
   return states
 }
@@ -180,15 +174,15 @@ describe('computeToggleStates', () => {
     { id: 'no_feed', entity: 'input_boolean.no_feed' },
   ]
 
-  it('uses HA entity state when HA enabled', () => {
+  it('ignores HA entity state for inverter-control flags even when HA enabled', () => {
     const states = computeToggleStates(
       toggles,
       { 'input_boolean.only_charging': 'on', 'input_boolean.no_feed': 'off' },
       true,
-      {}
+      { only_charging: false, no_feed: true }
     )
-    expect(states.only_charging).toBe('on')
-    expect(states.no_feed).toBe('off')
+    expect(states.only_charging).toBe('off')
+    expect(states.no_feed).toBe('on')
   })
 
   it('falls back to MQTT booleans when HA disabled', () => {

@@ -12,7 +12,7 @@ import type {
   HaSensorDisplay,
   HaWeatherDisplay,
 } from '../types/ha'
-import { formatPower } from '../utils'
+import { formatPower, isInverterControlFlag, resolveHeaderToggleState } from '../utils'
 import { appConfig, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
@@ -260,17 +260,8 @@ export function useHA() {
     // Fetch initial state on mount
     await fetchHaStates()
 
-    // Fetch button/switch states so UI shows correct on/off at startup
-    const buttonEntityIds = [
-      'input_boolean.only_charging',
-      'input_boolean.no_feed',
-      'input_boolean.house_support',
-      'input_boolean.charge_battery',
-      'input_boolean.do_not_supply_charger',
-      'input_boolean.set_limit_to_ev_charger',
-      'input_boolean.minimize_charging',
-    ]
-    await fetchHaEntityStates(buttonEntityIds)
+    // Inverter-control flags (only_charging, …) live on Cerbo MQTT
+    // inverter/state.booleans — do not fetch them from HA REST.
 
     // Fetch dashboard section entities (washer/dryer/dishwasher/water/EV/clamps) immediately
     const applianceEntities = configuredSectionEntities(appConfig)
@@ -293,7 +284,10 @@ export function useHA() {
         const toggles =
           appConfig.value?.header_toggles_config || state.value.ui_config?.header_toggles || []
         for (const t of toggles) {
-          if (t.entity) ids.add(t.entity)
+          // Control flags are MQTT-only; skip HA REST fetches for them.
+          if (t.entity && !isInverterControlFlag(t.entity) && !isInverterControlFlag(t.id)) {
+            ids.add(t.entity)
+          }
         }
         // Home buttons from config or ui_config
         const buttons =
@@ -301,7 +295,7 @@ export function useHA() {
           state.value.ui_config?.home_buttons?.map((b) => b.entity) ||
           []
         for (const b of buttons) {
-          if (b) ids.add(b)
+          if (b && !isInverterControlFlag(b)) ids.add(b)
         }
         if (ids.size > 0) {
           fetchHaEntityStates([...ids])
@@ -556,7 +550,12 @@ export function useHA() {
     const states: Record<string, string> = {}
     homeButtons.value.forEach(
       (btn: { id: string; label: string; entity: string; state_key?: string }) => {
-        if (haEnabled.value && haEntityStates.value[btn.entity] !== undefined) {
+        if (
+          !isInverterControlFlag(btn.entity) &&
+          !isInverterControlFlag(btn.id) &&
+          haEnabled.value &&
+          haEntityStates.value[btn.entity] !== undefined
+        ) {
           states[btn.id] = haEntityStates.value[btn.entity] === 'on' ? 'on' : 'off'
         } else {
           const stateKey = btn.state_key || `home_${btn.id}`
@@ -572,21 +571,16 @@ export function useHA() {
 
   const headerToggleStates = computed(() => {
     const states: Record<string, string> = {}
+    const mqttBooleans = (state.value.booleans || {}) as Record<string, unknown>
     headerToggles.value.forEach((toggle: { id: string; label: string; entity: string }) => {
-      if (haEnabled.value && haEntityStates.value[toggle.entity] !== undefined) {
-        states[toggle.id] = haEntityStates.value[toggle.entity] === 'on' ? 'on' : 'off'
-      } else {
-        // Fallback: check MQTT booleans (key = toggle.id or entity name without prefix)
-        const entityKey = toggle.entity.split('.').pop() || toggle.id
-        const rawVal =
-          state.value.booleans?.[toggle.id] ??
-          state.value.booleans?.[entityKey] ??
-          state.value.booleans?.[toggle.entity]
-        let val = rawVal
-        if (typeof val === 'string') val = val === 'true' || val === '1'
-        else if (typeof val === 'number') val = val !== 0
-        states[toggle.id] = val ? 'on' : 'off'
-      }
+      // The 7 inverter-control flags always read Cerbo MQTT booleans, even
+      // when ha_use_direct_api is on. Other header toggles may still use HA.
+      states[toggle.id] = resolveHeaderToggleState(
+        toggle,
+        haEntityStates.value,
+        haEnabled.value,
+        mqttBooleans
+      )
     })
     return states
   })

@@ -629,16 +629,22 @@ impl HaWebSocketClient {
                     }
                 }
 
-                // Home buttons (ha_entities)
+                // Home buttons (ha_entities) — skip inverter-control flags (MQTT-only).
                 if let Some(ref entities) = config.ha_entities {
                     for entity in entities {
+                        if crate::is_inverter_control_flag(&entity.entity) {
+                            continue;
+                        }
                         insert_if_not_empty(&Some(entity.entity.clone()));
                     }
                 }
 
-                // Header toggles
+                // Header toggles — skip inverter-control flags (MQTT-only).
                 if let Some(ref toggles) = config.header_toggles_config {
                     for toggle in toggles {
+                        if crate::is_inverter_control_flag(&toggle.entity) {
+                            continue;
+                        }
                         insert_if_not_empty(&Some(toggle.entity.clone()));
                     }
                 }
