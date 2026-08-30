@@ -13,7 +13,7 @@ import type {
   HaWeatherDisplay,
 } from '../types/ha'
 import { formatPower, isInverterControlFlag, resolveHeaderToggleState } from '../utils'
-import { appConfig, type InverterState, state } from './useInverterState'
+import { appConfig, type InverterState, mqttConnected, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
@@ -31,9 +31,6 @@ function configuredSectionEntities(appConfig: Ref<AppConfig | null>): string[] {
     cfg?.ha_dryer_pause_entity,
     cfg?.ha_dishwasher_running_entity,
     cfg?.ha_dishwasher_duration_entity,
-    cfg?.ha_ev_soc_entity,
-    cfg?.ha_ev_charging_entity,
-    cfg?.ha_ev_clamp_entity,
   ]
   const all = [
     ...singles,
@@ -74,24 +71,6 @@ export function useHA() {
   // transient WebSocket reconnects to prevent UI flicker / entity blinking.
   const HA_GRACE_PERIOD_MS = 15_000
   let haGraceTimer: ReturnType<typeof setTimeout> | null = null
-
-  /** Parse an HA state string into a number; excludes unavailable/unknown states */
-  function parseNumberState(entity: string): number | null {
-    const stateVal = haEntityStates.value[entity]
-    if (!stateVal) return null
-    const raw = String(stateVal).trim()
-    const lower = raw.toLowerCase()
-    if (!lower || lower === 'unavailable' || lower === 'unknown') return null
-    // Replace comma with dot to handle European decimal format, assuming no thousand separator
-    const normalized = raw.replace(/,/g, '.')
-    // Extract the first number from the string (handles cases like "10.1 kW", "OFF", etc.)
-    const match = /^[-+]?\d*\.?\d+/.exec(normalized)
-    if (match) {
-      const n = Number.parseFloat(match[0])
-      return Number.isNaN(n) ? null : n
-    }
-    return null
-  }
 
   // Pre-filtered HA entity data from Rust (replaces 6 computed properties)
   const haSensors = ref<HaSensorDisplay[]>([])
@@ -324,60 +303,22 @@ export function useHA() {
       state.value.pump_switch != null
   )
 
-  const haEvSocEntity = computed(() => (appConfig.value?.ha_ev_soc_entity || '').trim())
-
-  const haEvChargingEntity = computed(() => (appConfig.value?.ha_ev_charging_entity || '').trim())
-
-  const haEvClampEntity = computed(() => (appConfig.value?.ha_ev_clamp_entity || '').trim())
-
+  // EV metrics now come from the GX via MQTT (dbus-ev / dbus-evcharger),
+  // published on N/<portal>/ev/<instance>/Soc, /Ac/Power and
+  // N/<portal>/evcharger/<instance>/Ac/Power. No Home Assistant required.
   const evSoc = computed(() => {
-    if (!haEnabled.value) return null
-    const entity = haEvSocEntity.value
-    if (!entity) return null
-    const n = parseNumberState(entity)
-    if (n === null) return null
-    return Math.max(0, Math.min(100, n))
+    const v = state.value.car_soc
+    if (v == null) return null
+    return Math.max(0, Math.min(100, v))
   })
 
-  /** EV car charging power in watts (converts from kW if needed) */
-  const evChargingWatts = computed(() => {
-    if (!haEnabled.value) return null
-    const entity = haEvChargingEntity.value
-    if (!entity) return null
-    const stateNum = parseNumberState(entity)
-    if (stateNum === null) return null
-
-    // Check if we have attributes with unit information
-    const attrs = haEntityAttributes.value[entity]
-    const unit = attrs?.unit_of_measurement
-
-    // Convert to watts: if unit is kW, multiply by 1000; if unit is W or unset, use as-is (assume watts)
-    if (unit === 'kW') {
-      return stateNum * 1000 // Convert kW to watts
-    } else {
-      // Assume watts (covers W, empty/null, or any other unit)
-      return stateNum // Already in watts
-    }
-  })
+  /** EV car charging power in watts (from N/<portal>/ev/<i>/Ac/Power) */
+  const evChargingWatts = computed(() => state.value.car_charging_power ?? null)
 
   const evClampWatts = computed(() => {
-    if (!haEnabled.value) return null
-    const entity = haEvClampEntity.value
-    if (!entity) return null
-    const stateNum = parseNumberState(entity)
-    if (stateNum === null) return null
-
-    // Check if we have attributes with unit information
-    const attrs = haEntityAttributes.value[entity]
-    const unit = attrs?.unit_of_measurement
-
-    // Convert to watts: if unit is kW, multiply by 1000; if unit is W or unset, use as-is (assume watts)
-    if (unit === 'kW') {
-      return stateNum * 1000 // Convert kW to watts
-    } else {
-      // Assume watts (covers W, empty/null, or any other unit)
-      return stateNum // Already in watts
-    }
+    const v = state.value.ev_charging_power
+    if (v == null) return null
+    return Math.abs(v)
   })
 
   const evChargingKw = computed(() => {
@@ -385,21 +326,21 @@ export function useHA() {
     return w === null ? null : w / 1000
   })
 
-  const evPowerWatts = computed(() => {
-    const w = evClampWatts.value
-    return w === null ? null : Math.abs(w)
-  })
+  const evPowerWatts = computed(() => evClampWatts.value)
 
   const evPower = computed(() => {
     const w = evClampWatts.value
     if (w === null) return ''
-    return formatPower(Math.abs(w))
+    return formatPower(w)
   })
 
   const evSectionVisible = computed(() => {
-    if (!haEnabled.value) return false
-    if (!(haEvSocEntity.value || haEvChargingEntity.value || haEvClampEntity.value)) return false
-    return evSoc.value !== null || evChargingWatts.value !== null || evClampWatts.value !== null
+    if (!mqttConnected.value) return false
+    return (
+      state.value.car_soc != null ||
+      state.value.car_charging_power != null ||
+      state.value.ev_charging_power != null
+    )
   })
 
   /** Active loads strictly from Cerbo DBus -> MQTT (state.value.loads), zero HA fallback */

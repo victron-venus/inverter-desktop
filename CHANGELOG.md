@@ -14,6 +14,16 @@ All notable changes to this project will be documented in this file.
   true, otherwise vedbus rejects the write and the mode silently stays `auto`
   (deployed as dbus-pump main).
 
+### Changed
+- EV section now sources data from Cerbo MQTT (dbus-ev / dbus-evcharger) instead of
+  Home Assistant. Subscribes to `N/<portal>/ev/<instance>/Soc` (%),
+  `N/<portal>/ev/<instance>/Ac/Power` (W), and
+  `N/<portal>/evcharger/<instance>/Ac/Power` (W).
+  New config fields: `evcharger_instance` (default 40) and `ev_instance` (default 22).
+  The `ha_ev_soc_entity`, `ha_ev_charging_entity`, and `ha_ev_clamp_entity` config
+  fields are removed. EV section visibility no longer requires HA direct API — it shows
+  when Cerbo MQTT is connected and at least one EV metric is live.
+
 ## [2.5.0] - 2026-08-24
 
 ### Added

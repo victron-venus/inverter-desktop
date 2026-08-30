@@ -6,22 +6,22 @@
         <Car :size="10" /> {{ $t('sections.ev') }}
       </div>
       <div class="p-1 flex justify-between items-center gap-2 px-2">
-        <div v-if="evChargingKw != null">
+        <div v-if="carChargingPower != null">
           <div class="text-xl font-bold text-solar leading-none">
-            {{ evChargingKw.toFixed(1) }}kW
+            {{ (carChargingPower / 1000).toFixed(1) }}kW
           </div>
           <div class="text-[10px] text-slate-500 font-bold text-center">
             {{ $t('sections.charging') }}
           </div>
         </div>
-        <div class="text-center" v-if="evPowerWatts !== null">
-          <div class="text-xl font-bold text-slate-500 leading-none">{{ evPower }}</div>
+        <div class="text-center" v-if="evChargingPower !== null">
+          <div class="text-xl font-bold text-slate-500 leading-none">{{ evChargingPower }}</div>
           <div class="text-[10px] text-slate-500 font-bold tracking-tighter">
             {{ $t('sections.vue') }}
           </div>
         </div>
-        <div class="text-right" v-if="evSoc != null && evSoc > 0">
-          <div class="text-xl font-bold text-accent leading-none">{{ Math.floor(evSoc) }}%</div>
+        <div class="text-right" v-if="carSoc != null && carSoc > 0">
+          <div class="text-xl font-bold text-accent leading-none">{{ Math.floor(carSoc) }}%</div>
           <div class="text-[10px] text-slate-500 font-bold text-center tracking-tighter">
             {{ $t('sections.soc') }}
           </div>
@@ -460,10 +460,9 @@ const props = defineProps<{
   features?: Record<string, boolean>
   showEv?: boolean
   evSectionVisible?: boolean
-  evSoc?: number | null
-  evChargingKw?: number | null
-  evPower?: string
-  evPowerWatts?: number | null
+  carSoc?: number | null
+  carChargingPower?: number | null
+  evChargingPower?: number | null
   waterVisible?: boolean
   waterValve?: boolean | null
   pumpSwitch?: boolean | null

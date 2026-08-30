@@ -86,6 +86,12 @@ export interface InverterState {
   /** dbus-pump /Mode (0 auto, 1 always-on, 2 always-off); null until known */
   water_pump_mode?: number | null
   water_valve_mode?: number | null
+  /** EV vehicle battery % from dbus-ev via Cerbo MQTT (N/<portal>/ev/<i>/Soc) */
+  car_soc?: number | null
+  /** EV vehicle charging power (W) from dbus-ev (N/<portal>/ev/<i>/Ac/Power) */
+  car_charging_power?: number | null
+  /** Wallbox charging power (W) from dbus-evcharger (N/<portal>/evcharger/<i>/Ac/Power) */
+  ev_charging_power?: number | null
 }
 
 export const state = ref<InverterState>({

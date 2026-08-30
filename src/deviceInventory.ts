@@ -6,6 +6,7 @@ export interface InventoryDevice {
   name?: string
   serial?: string
   instance?: number
+  [k: string]: unknown
 }
 
 const FALLBACK_NAME = /^(mppt|battery|pv inverter|solar charger)(?:[- ](\d+))?$/i

@@ -280,6 +280,8 @@ struct FullConfig {
     portal_id: Option<String>,
     water_pump_instance: Option<u32>,
     water_valve_instance: Option<u32>,
+    evcharger_instance: Option<u32>,
+    ev_instance: Option<u32>,
     camera_topic: Option<String>,
     camera_enabled: bool,
     show_advanced_settings: Option<bool>,
@@ -334,6 +336,8 @@ impl Default for FullConfig {
             // dbus-pump defaults on the GX (see dbus-pump local_config.example.py)
             water_pump_instance: Some(1),
             water_valve_instance: Some(2),
+            evcharger_instance: Some(40),
+            ev_instance: Some(22),
             camera_topic: Some("frigate/+/events".to_string()),
             camera_enabled: false,
             show_advanced_settings: Some(false),
@@ -797,6 +801,8 @@ async fn connect_mqtt(
     portal_id: Option<String>,
     water_pump_instance: Option<u32>,
     water_valve_instance: Option<u32>,
+    evcharger_instance: Option<u32>,
+    ev_instance: Option<u32>,
     camera_topic: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
@@ -817,6 +823,10 @@ async fn connect_mqtt(
     client.set_portal_id(portal_id);
     client.set_water_instances(match (water_pump_instance, water_valve_instance) {
         (Some(p), Some(v)) => Some((p, v)),
+        _ => None,
+    });
+    client.set_ev_instances(match (evcharger_instance, ev_instance) {
+        (Some(evc), Some(ev)) => Some((evc, ev)),
         _ => None,
     });
     client.set_camera_topic(camera_topic);
@@ -1442,6 +1452,8 @@ pub fn run() {
                         let portal_id = config.portal_id.clone();
                         let water_pump_instance = config.water_pump_instance;
                         let water_valve_instance = config.water_valve_instance;
+                        let evcharger_instance = config.evcharger_instance;
+                        let ev_instance = config.ev_instance;
                         let camera_topic = config.camera_topic.clone();
                         let connect_handle = app_handle.clone();
                         let mqtt_state = app_handle.state::<MqttState>();
@@ -1453,6 +1465,8 @@ pub fn run() {
                             portal_id,
                             water_pump_instance,
                             water_valve_instance,
+                            evcharger_instance,
+                            ev_instance,
                             camera_topic,
                             connect_handle,
                             mqtt_state,
