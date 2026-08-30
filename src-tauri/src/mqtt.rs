@@ -455,7 +455,9 @@ pub struct MqttClient {
     /// Cerbo GX startstop device instances for (pump, valve) water topics.
     water_instances: Option<(u32, u32)>,
     /// Cerbo GX EV (vehicle) and evcharger instance pair for EV topics.
-    ev_instances: Option<(u32, u32)>,
+    /// Either side may be None — dbus-ev and dbus-evcharger are independent
+    /// services, so the EV tile must populate if just one is configured.
+    ev_instances: Option<(Option<u32>, Option<u32>)>,
     camera_topic: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     alarms: Arc<Mutex<HashMap<String, u8>>>,
@@ -635,7 +637,7 @@ impl MqttClient {
         self.water_instances = instances;
     }
 
-    pub fn set_ev_instances(&mut self, instances: Option<(u32, u32)>) {
+    pub fn set_ev_instances(&mut self, instances: Option<(Option<u32>, Option<u32>)>) {
         self.ev_instances = instances;
     }
 
@@ -756,7 +758,7 @@ impl MqttClient {
         app_handle: Option<tauri::AppHandle>,
         portal_id: Option<String>,
         water_instances: Option<(u32, u32)>,
-        ev_instances: Option<(u32, u32)>,
+        ev_instances: Option<(Option<u32>, Option<u32>)>,
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
         alarms: Arc<Mutex<HashMap<String, u8>>>,
@@ -941,7 +943,7 @@ impl MqttClient {
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
         water_instances: &Option<(u32, u32)>,
-        ev_instances: &Option<(u32, u32)>,
+        ev_instances: &Option<(Option<u32>, Option<u32>)>,
         notifications: &Arc<Mutex<NotificationState>>,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
@@ -1031,29 +1033,14 @@ impl MqttClient {
             // dbus-ev / dbus-evcharger on the GX:
             // N/<portal>/ev/<i>/Soc, /ev/<i>/Ac/Power (W),
             // N/<portal>/evcharger/<i>/Ac/Power (W).
-            // Apply only for the configured instance pair; ignore others.
-            if let (Some((kind, inst, path)), Some((ev_i, evc_i)), Some(value)) = (
+            // Apply per-side: each kind matches its own configured instance;
+            // either side may be None and the other still applies.
+            if let (Some((kind, inst, path)), Some(value)) = (
                 Self::parse_ev_topic(topic),
-                ev_instances,
                 Self::parse_cerbo_value(payload),
             ) {
-                let matched = match (kind, inst) {
-                    ("ev", i) if i == *ev_i => Some(path),
-                    ("evcharger", i) if i == *evc_i => Some(path),
-                    _ => None,
-                };
-                if let Some(path) = matched {
-                    if let Ok(mut guard) = state.lock() {
-                        match path {
-                            "Soc" => guard.car_soc = Some(value),
-                            "Ac/Power" if kind == "ev" => {
-                                guard.car_charging_power = Some(value);
-                            }
-                            "Ac/Power" if kind == "evcharger" => {
-                                guard.ev_charging_power = Some(value);
-                            }
-                            _ => {}
-                        }
+                if let Ok(mut guard) = state.lock() {
+                    if Self::apply_ev_message(&mut guard, kind, inst, path, value, ev_instances) {
                         Self::emit_state_update(app_handle, &guard, false);
                     }
                 }
@@ -1256,6 +1243,44 @@ impl MqttClient {
                     "Ac/Out/P" | "Ac/Power" => v.ac_power = val,
                     _ => return false,
                 }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Apply a dbus-ev / dbus-evcharger message to state.
+    /// Returns true if the state was modified.
+    /// Each side matches its own configured instance; either may be None.
+    fn apply_ev_message(
+        st: &mut InverterState,
+        kind: &str,
+        inst: u32,
+        path: &str,
+        value: f64,
+        ev_instances: &Option<(Option<u32>, Option<u32>)>,
+    ) -> bool {
+        let ev_i = ev_instances.as_ref().and_then(|(e, _)| *e);
+        let evc_i = ev_instances.as_ref().and_then(|(_, c)| *c);
+        let matched = match kind {
+            "ev" => ev_i == Some(inst),
+            "evcharger" => evc_i == Some(inst),
+            _ => false,
+        };
+        if !matched {
+            return false;
+        }
+        match (kind, path) {
+            ("ev", "Soc") => {
+                st.car_soc = Some(value);
+                true
+            }
+            ("ev", "Ac/Power") => {
+                st.car_charging_power = Some(value);
+                true
+            }
+            ("evcharger", "Ac/Power") => {
+                st.ev_charging_power = Some(value);
                 true
             }
             _ => false,
@@ -1841,14 +1866,120 @@ mod tests {
     }
 
     #[test]
+    fn apply_ev_message_pops_car_soc() {
+        let mut st = InverterState::default();
+        let instances = Some((Some(22), Some(40)));
+        assert!(MqttClient::apply_ev_message(
+            &mut st, "ev", 22, "Soc", 66.0, &instances
+        ));
+        assert_eq!(st.car_soc, Some(66.0));
+    }
+
+    #[test]
+    fn apply_ev_message_pops_evcharger_power() {
+        let mut st = InverterState::default();
+        let instances = Some((Some(22), Some(40)));
+        assert!(MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            40,
+            "Ac/Power",
+            7400.0,
+            &instances
+        ));
+        assert_eq!(st.ev_charging_power, Some(7400.0));
+    }
+
+    #[test]
+    fn apply_ev_message_ignores_wrong_instance() {
+        let mut st = InverterState::default();
+        let instances = Some((Some(22), Some(40)));
+        assert!(!MqttClient::apply_ev_message(
+            &mut st, "ev", 99, "Soc", 66.0, &instances
+        ));
+        assert!(st.car_soc.is_none());
+        assert!(!MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            99,
+            "Ac/Power",
+            7400.0,
+            &instances
+        ));
+        assert!(st.ev_charging_power.is_none());
+    }
+
+    #[test]
+    fn apply_ev_message_partial_instances_ev_only() {
+        let mut st = InverterState::default();
+        // ev_instance set, evcharger_instance absent
+        let instances = Some((Some(22), None));
+        assert!(MqttClient::apply_ev_message(
+            &mut st, "ev", 22, "Soc", 55.0, &instances
+        ));
+        assert_eq!(st.car_soc, Some(55.0));
+        // evcharger message must be ignored
+        assert!(!MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            40,
+            "Ac/Power",
+            7400.0,
+            &instances
+        ));
+        assert!(st.ev_charging_power.is_none());
+    }
+
+    #[test]
+    fn apply_ev_message_partial_instances_evcharger_only() {
+        let mut st = InverterState::default();
+        // evcharger_instance set, ev_instance absent
+        let instances = Some((None, Some(40)));
+        assert!(MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            40,
+            "Ac/Power",
+            5500.0,
+            &instances
+        ));
+        assert_eq!(st.ev_charging_power, Some(5500.0));
+        // ev message must be ignored
+        assert!(!MqttClient::apply_ev_message(
+            &mut st, "ev", 22, "Soc", 55.0, &instances
+        ));
+        assert!(st.car_soc.is_none());
+    }
+
+    #[test]
+    fn apply_ev_message_no_instances_ignores_all() {
+        let mut st = InverterState::default();
+        let instances: Option<(Option<u32>, Option<u32>)> = None;
+        assert!(!MqttClient::apply_ev_message(
+            &mut st, "ev", 22, "Soc", 66.0, &instances
+        ));
+        assert!(!MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            40,
+            "Ac/Power",
+            7400.0,
+            &instances
+        ));
+        assert!(st.car_soc.is_none());
+        assert!(st.ev_charging_power.is_none());
+    }
+
+    #[test]
     fn rejects_ev_other_paths() {
         assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/22/Status"), None);
         assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/22/Current"), None);
         assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/22/Energy"), None);
         assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/x/Ac/Power"), None);
+        // dbus-ev publishes Soc under the evcharger bus name, so this is valid.
         assert_eq!(
             MqttClient::parse_ev_topic("N/portal/evcharger/40/Soc"),
-            None
+            Some(("evcharger", 40, "Soc"))
         );
         assert_eq!(
             MqttClient::parse_ev_topic("N/portal/evcharger/40/Status"),

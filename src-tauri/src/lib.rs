@@ -856,10 +856,7 @@ async fn connect_mqtt(
         (Some(p), Some(v)) => Some((p, v)),
         _ => None,
     });
-    client.set_ev_instances(match (evcharger_instance, ev_instance) {
-        (Some(evc), Some(ev)) => Some((evc, ev)),
-        _ => None,
-    });
+    client.set_ev_instances(Some((ev_instance, evcharger_instance)));
     client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
     *client_guard = Some(client);
