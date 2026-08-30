@@ -888,13 +888,12 @@ impl MqttClient {
             // pump/valve startstop state).
             format!("N/{}/tank/+/Level", id),
             format!("N/{}/pump/+/State", id),
-            // EV system published by dbus-ev (vehicle) and dbus-evcharger on the GX
+            // EV system: dbus-ev (vehicle SoC/Power) and dbus-evcharger (charger Power)
+            // dbus-ev uses bus name com.victronenergy.evcharger.<N>, so Soc/Power land
+            // under evcharger/<instance>/ path — subscribe both ev/ and evcharger/ to be safe.
             format!("N/{}/ev/+/Soc", id),
             format!("N/{}/ev/+/Ac/Power", id),
-            format!("N/{}/evcharger/+/Ac/Power", id),
-            // EV system published by dbus-ev and dbus-evcharger on the GX
-            format!("N/{}/ev/+/Ac/Power", id),
-            format!("N/{}/ev/+/Soc", id),
+            format!("N/{}/evcharger/+/Soc", id),
             format!("N/{}/evcharger/+/Ac/Power", id),
             // Directly discovered GX devices: battery bank(s) + MPPT chargers
             // + AC PV inverters of any vendor, so the app finds them even
@@ -1100,9 +1099,10 @@ impl MqttClient {
             None => p1,
         };
         match (kind, path) {
-            ("ev", "Soc") | ("ev", "Ac/Power") | ("evcharger", "Ac/Power") => {
-                Some((kind, inst, path))
-            }
+            ("ev", "Soc")
+            | ("ev", "Ac/Power")
+            | ("evcharger", "Soc")
+            | ("evcharger", "Ac/Power") => Some((kind, inst, path)),
             _ => None,
         }
     }
