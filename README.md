@@ -309,6 +309,9 @@ const config = {
 - `inverter/console` - Console log messages
 - `N/<portal>/tank/+/Level` - Tank level % (dbus-pump on the Cerbo GX)
 - `N/<portal>/pump/+/State` - Pump/valve startstop state (dbus-pump)
+- `N/<portal>/ev/+/Soc` - EV vehicle battery % (dbus-ev on the Cerbo GX)
+- `N/<portal>/ev/+/Ac/Power` - EV vehicle charging power in W (dbus-ev)
+- `N/<portal>/evcharger/+/Ac/Power` - Wallbox/clamp charging power in W (dbus-evcharger)
 
 ### Water system
 
@@ -325,6 +328,37 @@ flowchart LR
     T --> MQB["Cerbo MQTT broker"]
     P --> MQB
     MQB -->|"N/&lt;portal&gt;/tank/+/Level<br/>N/&lt;portal&gt;/pump/+/State"| APP["inverter-desktop<br/>water card (level %, badges)"]
+```
+
+### EV system
+
+EV data comes **exclusively** from Cerbo MQTT — no Home Assistant involved. Two dbus services
+on the GX expose the metrics:
+
+- [dbus-evcharger](https://github.com/victron-venus/dbus-evcharger) — D-Bus
+  `com.victronenergy.evcharger.<N>` (default instance **40**) publishes
+  `N/<portal>/evcharger/40/Ac/Power` (W).
+- [dbus-ev](https://github.com/victron-venus/dbus-ev) — D-Bus `com.victronenergy.ev.<N>`
+  (default instance **22**) publishes `N/<portal>/ev/22/Soc` (%) and
+  `N/<portal>/ev/22/Ac/Power` (W).
+
+Configure `evcharger_instance` and `ev_instance` in the app config; they must match the GX
+services' `DEVICE_INSTANCE`. Both power paths are read in **watts**; the UI displays them as kW.
+The EV section shows when Cerbo MQTT is connected and at least one of SOC / vehicle power /
+wallbox power is live.
+
+```mermaid
+flowchart LR
+    subgraph GX["Cerbo GX"]
+        EVB["dbus-ev<br/>vehicle (default instance 22)"]
+        ECB["dbus-evcharger<br/>wallbox (default instance 40)"]
+        MQB["Cerbo MQTT broker"]
+    end
+    EVB -->|"D-Bus"| ED["com.victronenergy.ev.22"]
+    ECB -->|"D-Bus"| CD["com.victronenergy.evcharger.40"]
+    ED --> MQB
+    CD --> MQB
+    MQB -->|"N/&lt;portal&gt;/ev/22/Soc<br/>N/&lt;portal&gt;/ev/22/Ac/Power<br/>N/&lt;portal&gt;/evcharger/40/Ac/Power"| APP["inverter-desktop<br/>EV card (SOC %, kW)"]
 ```
 
 ### Published (commands)

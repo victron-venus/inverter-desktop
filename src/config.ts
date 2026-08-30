@@ -42,9 +42,10 @@ export interface AppConfig {
   /** dbus-pump startstop instances on the Cerbo GX (defaults 1/2) */
   water_pump_instance?: number
   water_valve_instance?: number
-  ha_ev_soc_entity?: string
-  ha_ev_charging_entity?: string
-  ha_ev_clamp_entity?: string
+  /** Cerbo GX EV charger instance (default 40) */
+  evcharger_instance?: number
+  /** Cerbo GX EV instance (default 22) */
+  ev_instance?: number
   ha_consumption_clamps?: string[]
   ha_generation_clamps?: string[]
   header_toggles_config?: Array<{ id: string; label: string; entity: string }>

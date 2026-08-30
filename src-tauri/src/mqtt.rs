@@ -53,6 +53,8 @@ pub struct InverterState {
     pub ev_charging_kw: Option<f64>,
     pub ev_power: Option<f64>,
     pub car_soc: Option<f64>,
+    pub ev_charging_power: Option<f64>,
+    pub car_charging_power: Option<f64>,
     pub water_level: Option<f64>,
     pub water_valve: Option<bool>,
     pub pump_switch: Option<bool>,
@@ -452,6 +454,8 @@ pub struct MqttClient {
     portal_id: Option<String>,
     /// Cerbo GX startstop device instances for (pump, valve) water topics.
     water_instances: Option<(u32, u32)>,
+    /// Cerbo GX EV (vehicle) and evcharger instance pair for EV topics.
+    ev_instances: Option<(u32, u32)>,
     camera_topic: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     alarms: Arc<Mutex<HashMap<String, u8>>>,
@@ -601,6 +605,7 @@ impl MqttClient {
             app_handle: None,
             portal_id: None,
             water_instances: None,
+            ev_instances: None,
             camera_topic: None,
             notifications: Arc::new(Mutex::new(NotificationState {
                 high_consumption: AlertState::new(),
@@ -628,6 +633,10 @@ impl MqttClient {
 
     pub fn set_water_instances(&mut self, instances: Option<(u32, u32)>) {
         self.water_instances = instances;
+    }
+
+    pub fn set_ev_instances(&mut self, instances: Option<(u32, u32)>) {
+        self.ev_instances = instances;
     }
 
     pub fn set_camera_topic(&mut self, topic: Option<String>) {
@@ -683,6 +692,7 @@ impl MqttClient {
         let app_handle = self.app_handle.clone();
         let portal_id = self.portal_id.clone();
         let water_instances_owned = self.water_instances;
+        let ev_instances_owned = self.ev_instances;
         let cam_topic_owned = self.camera_topic.clone();
         let notifications = self.notifications.clone();
         let alarms = self.alarms.clone();
@@ -703,6 +713,7 @@ impl MqttClient {
                         app_handle.clone(),
                         portal_id.clone(),
                         water_instances_owned,
+                        ev_instances_owned,
                         cam_topic_owned.clone(),
                         notifications.clone(),
                         alarms.clone(),
@@ -739,6 +750,7 @@ impl MqttClient {
         app_handle: Option<tauri::AppHandle>,
         portal_id: Option<String>,
         water_instances: Option<(u32, u32)>,
+        ev_instances: Option<(u32, u32)>,
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
         alarms: Arc<Mutex<HashMap<String, u8>>>,
@@ -791,6 +803,7 @@ impl MqttClient {
         let app_c = app_handle.clone();
         let cam_c = camera_topic.clone();
         let water_c = water_instances;
+        let ev_c = ev_instances;
         let notif_c = notifications.clone();
         let alarms_c = alarms.clone();
         let ha_states_c = ha_entity_states.clone();
@@ -826,6 +839,7 @@ impl MqttClient {
                             &app_c,
                             &cam_c,
                             &water_c,
+                            &ev_c,
                             &notif_c,
                             &alarms_c,
                             &ha_states_c,
@@ -874,6 +888,14 @@ impl MqttClient {
             // pump/valve startstop state).
             format!("N/{}/tank/+/Level", id),
             format!("N/{}/pump/+/State", id),
+            // EV system published by dbus-ev (vehicle) and dbus-evcharger on the GX
+            format!("N/{}/ev/+/Soc", id),
+            format!("N/{}/ev/+/Ac/Power", id),
+            format!("N/{}/evcharger/+/Ac/Power", id),
+            // EV system published by dbus-ev and dbus-evcharger on the GX
+            format!("N/{}/ev/+/Ac/Power", id),
+            format!("N/{}/ev/+/Soc", id),
+            format!("N/{}/evcharger/+/Ac/Power", id),
             // Directly discovered GX devices: battery bank(s) + MPPT chargers
             // + AC PV inverters of any vendor, so the app finds them even
             // when inverter-control is down.
@@ -908,6 +930,7 @@ impl MqttClient {
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
         water_instances: &Option<(u32, u32)>,
+        ev_instances: &Option<(u32, u32)>,
         notifications: &Arc<Mutex<NotificationState>>,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
@@ -993,6 +1016,37 @@ impl MqttClient {
                     Self::emit_state_update(app_handle, &guard, false);
                 }
             }
+        } else if topic.starts_with("N/") && Self::parse_ev_topic(topic).is_some() {
+            // dbus-ev / dbus-evcharger on the GX:
+            // N/<portal>/ev/<i>/Soc, /ev/<i>/Ac/Power (W),
+            // N/<portal>/evcharger/<i>/Ac/Power (W).
+            // Apply only for the configured instance pair; ignore others.
+            if let (Some((kind, inst, path)), Some((ev_i, evc_i)), Some(value)) = (
+                Self::parse_ev_topic(topic),
+                ev_instances,
+                Self::parse_cerbo_value(payload),
+            ) {
+                let matched = match (kind, inst) {
+                    ("ev", i) if i == *ev_i => Some(path),
+                    ("evcharger", i) if i == *evc_i => Some(path),
+                    _ => None,
+                };
+                if let Some(path) = matched {
+                    if let Ok(mut guard) = state.lock() {
+                        match path {
+                            "Soc" => guard.car_soc = Some(value),
+                            "Ac/Power" if kind == "ev" => {
+                                guard.car_charging_power = Some(value);
+                            }
+                            "Ac/Power" if kind == "evcharger" => {
+                                guard.ev_charging_power = Some(value);
+                            }
+                            _ => {}
+                        }
+                        Self::emit_state_update(app_handle, &guard, false);
+                    }
+                }
+            }
         } else if let Some(ref cam_t) = camera_topic {
             if match_mqtt_topic(topic, cam_t) {
                 if let Some(ref handle) = app_handle {
@@ -1023,6 +1077,32 @@ impl MqttClient {
         let inst: u32 = it.next()?.parse().ok()?;
         match (kind, it.next()?) {
             ("tank", "Level") | ("pump", "State") => Some((kind, inst)),
+            _ => None,
+        }
+    }
+
+    /// Parse dbus-ev / dbus-evcharger topic:
+    /// N/<portal>/ev/<i>/Soc, N/<portal>/ev/<i>/Ac/Power,
+    /// N/<portal>/evcharger/<i>/Ac/Power -> Some((kind, instance, path)).
+    fn parse_ev_topic(topic: &str) -> Option<(&str, u32, &str)> {
+        // "N/portal/ev/22/Soc"        -> 5 parts: portal, ev, 22, Soc
+        // "N/portal/ev/22/Ac/Power"   -> 6 parts: portal, ev, 22, Ac, Power
+        // (the slash inside "Ac/Power" is part of the path, not a separator).
+        let rest = topic.strip_prefix("N/")?;
+        let mut it = rest.splitn(6, '/');
+        let _portal = it.next()?;
+        let kind = it.next()?;
+        let inst: u32 = it.next()?.parse().ok()?;
+        let p1 = it.next()?;
+        let path = match it.next() {
+            Some(p2) if p1 == "Ac" && p2 == "Power" => "Ac/Power",
+            Some(_) => return None,
+            None => p1,
+        };
+        match (kind, path) {
+            ("ev", "Soc") | ("ev", "Ac/Power") | ("evcharger", "Ac/Power") => {
+                Some((kind, inst, path))
+            }
             _ => None,
         }
     }
@@ -1711,6 +1791,46 @@ mod tests {
             None
         );
         assert_eq!(MqttClient::parse_water_topic("N/abc/pump/x/State"), None);
+    }
+
+    #[test]
+    fn parses_ev_soc_topic() {
+        assert_eq!(
+            MqttClient::parse_ev_topic("N/portal/ev/22/Soc"),
+            Some(("ev", 22, "Soc"))
+        );
+    }
+
+    #[test]
+    fn parses_ev_power_topic() {
+        assert_eq!(
+            MqttClient::parse_ev_topic("N/portal/ev/22/Ac/Power"),
+            Some(("ev", 22, "Ac/Power"))
+        );
+    }
+
+    #[test]
+    fn parses_evcharger_power_topic() {
+        assert_eq!(
+            MqttClient::parse_ev_topic("N/portal/evcharger/40/Ac/Power"),
+            Some(("evcharger", 40, "Ac/Power"))
+        );
+    }
+
+    #[test]
+    fn rejects_ev_other_paths() {
+        assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/22/Status"), None);
+        assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/22/Current"), None);
+        assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/22/Energy"), None);
+        assert_eq!(MqttClient::parse_ev_topic("N/portal/ev/x/Ac/Power"), None);
+        assert_eq!(
+            MqttClient::parse_ev_topic("N/portal/evcharger/40/Soc"),
+            None
+        );
+        assert_eq!(
+            MqttClient::parse_ev_topic("N/portal/evcharger/40/Status"),
+            None
+        );
     }
 
     #[test]

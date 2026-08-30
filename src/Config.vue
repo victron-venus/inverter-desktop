@@ -566,53 +566,36 @@
                   With a Cerbo GX portal ID configured, water data comes from the GX (MQTT, via
                   dbus-pump). Pump/valve automation lives in dbus-pump - no manual control here.
                 </p>
-                <div class="flex flex-col gap-1">
+                <div class="flex items-center gap-4">
                   <label
-                    for="ha_ev_soc_entity"
+                    for="evcharger_instance"
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >EV SOC Entity</label
+                    >EV Charger Instance</label
                   >
                   <input
-                    id="ha_ev_soc_entity"
-                    v-model="config.ha_ev_soc_entity"
-                    type="text"
-                    class="classic-input w-full"
-                    placeholder="sensor.ev_soc"
+                    id="evcharger_instance"
+                    v-model.number="config.evcharger_instance"
+                    type="number"
+                    min="1"
+                    class="classic-input w-24"
                   />
                 </div>
-                <div class="flex flex-col gap-1">
+                <div class="flex items-center gap-4">
                   <label
-                    for="ha_ev_charging_entity"
+                    for="ev_instance"
                     class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >EV Car Charging Value</label
+                    >EV Vehicle Instance</label
                   >
                   <input
-                    id="ha_ev_charging_entity"
-                    v-model="config.ha_ev_charging_entity"
-                    type="text"
-                    class="classic-input w-full"
-                    placeholder="sensor.ev_charging_power"
+                    id="ev_instance"
+                    v-model.number="config.ev_instance"
+                    type="number"
+                    min="1"
+                    class="classic-input w-24"
                   />
                   <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
-                    Power sensor in watts (W); displayed as kW. EV section shows only when at least
-                    one of these entities is set.
-                  </p>
-                </div>
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="ha_ev_clamp_entity"
-                    class="text-[10px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-400 px-1"
-                    >EV Clamp Charger Value</label
-                  >
-                  <input
-                    id="ha_ev_clamp_entity"
-                    v-model="config.ha_ev_clamp_entity"
-                    type="text"
-                    class="classic-input w-full"
-                    placeholder="sensor.ev_clamp_power"
-                  />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
-                    Clamp-measured power in watts (W).
+                    EV data comes from the GX via MQTT (dbus-ev / dbus-evcharger). Defaults: 40
+                    (charger) / 22 (vehicle).
                   </p>
                 </div>
               </div>
