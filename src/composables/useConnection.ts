@@ -128,8 +128,8 @@ export function useConnection() {
         portalId: config.portal_id || null,
         waterPumpInstance: config.water_pump_instance ?? null,
         waterValveInstance: config.water_valve_instance ?? null,
-        evchargerInstance: config.evcharger_instance ?? null,
-        evInstance: config.ev_instance ?? null,
+        evchargerInstance: config.evcharger_instance ?? 40,
+        evInstance: config.ev_instance ?? 22,
         cameraTopic: null,
       })
       notify('MQTT', 'Connected to inverter')
