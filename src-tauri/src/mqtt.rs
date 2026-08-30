@@ -443,7 +443,7 @@ struct NotificationState {
 }
 
 pub struct MqttClient {
-    client: Option<Client>,
+    client: Arc<Mutex<Option<Client>>>,
     client_id: String,
     pub(crate) state: Arc<Mutex<InverterState>>,
     host: String,
@@ -595,7 +595,7 @@ impl MqttClient {
         client_id: String,
     ) -> Self {
         Self {
-            client: None,
+            client: Arc::new(Mutex::new(None)),
             client_id,
             state: Arc::new(Mutex::new(InverterState::default())),
             host,
@@ -698,6 +698,7 @@ impl MqttClient {
         let alarms = self.alarms.clone();
         let status_event = self.status_event.clone();
         let ha_entity_states = self.ha_entity_states.clone();
+        let client_slot = self.client.clone();
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -719,6 +720,7 @@ impl MqttClient {
                         alarms.clone(),
                         ha_entity_states.clone(),
                         &status_event,
+                        client_slot.clone(),
                     )
                     .await
                     .is_err();
@@ -727,7 +729,11 @@ impl MqttClient {
                     } else {
                         log::info!("MQTT disconnected, reconnecting in 5s...");
                     }
-                    // Connection lost or failed — wait before reconnecting
+                    // Connection lost or failed — clear the publish slot so
+                    // publish_command reports the disconnect, then wait.
+                    if let Ok(mut slot) = client_slot.lock() {
+                        *slot = None;
+                    }
                     if let Some(ref handle) = app_handle {
                         let _ = handle.emit(&status_event, false);
                     }
@@ -756,6 +762,7 @@ impl MqttClient {
         alarms: Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         status_event: &str,
+        client_slot: Arc<Mutex<Option<Client>>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
         let queue_cap = MQTT_QUEUE_CAPACITY;
@@ -773,6 +780,11 @@ impl MqttClient {
         }
 
         let (client, mut connection) = Client::builder(mqttoptions).capacity(queue_cap).build();
+
+        // Store the connected client so publish_command can use it.
+        if let Ok(mut slot) = client_slot.lock() {
+            *slot = Some(client.clone());
+        }
 
         // Subscribe to topics using QoS 1 (AtLeastOnce)
         client.subscribe("inverter/state", QoS::AtLeastOnce)?;
@@ -1711,7 +1723,11 @@ impl MqttClient {
         action: &str,
         payload: serde_json::Value,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let client = self.client.as_ref().ok_or("MQTT client not connected")?;
+        let guard = self
+            .client
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        let client = guard.as_ref().ok_or("MQTT client not connected")?;
         let topic = format!("inverter/cmd/{}", action);
         let payload_str = if payload.is_null() {
             String::new()
@@ -2320,6 +2336,36 @@ mod tests {
             .publish_command("toggle", serde_json::json!({"entity": "only_charging"}))
             .unwrap_err();
         assert!(err.to_string().contains("not connected"));
+    }
+
+    #[test]
+    fn publish_command_does_not_error_when_slot_is_some() {
+        // After connect() builds the rumqtt Client it stores a clone in the Arc slot.
+        // publish_command must be able to use it.  Test the slot-populated path by
+        // directly filling the Arc slot with a dummy Client (no broker needed).
+        let client = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
+
+        // Build a real Client so we exercise the Arc slot path (not the None path).
+        let mqttoptions = rumqttc::MqttOptions::new("test-publish", ("localhost", 1883));
+        let (dummy, _connection) = rumqttc::Client::builder(mqttoptions).build();
+        {
+            let mut slot = client.client.lock().unwrap();
+            *slot = Some(dummy);
+        }
+        // Slot is Some — publish_command must not return "not connected".
+        // (try_publish on a disconnected client queues the request in the channel
+        // and returns Ok; the real broker connection is the EventLoop's job. We
+        // only care that publish_command did not bail out before reaching the
+        // client because the slot was None.)
+        let result =
+            client.publish_command("toggle", serde_json::json!({"entity": "only_charging"}));
+        match result {
+            Ok(()) => {}
+            Err(e) => assert!(
+                !e.to_string().contains("not connected"),
+                "expected a real publish error, not 'not connected': {e}"
+            ),
+        }
     }
 
     /// Per-device TTL: updating one device must not evict other active entries.
