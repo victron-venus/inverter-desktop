@@ -68,7 +68,7 @@ pub struct InverterState {
     pub console: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RawInverterState {
     gt: Option<f64>,
     g1: Option<f64>,
@@ -442,6 +442,88 @@ struct NotificationState {
     high_load: std::collections::HashMap<String, AlertState>,
 }
 
+/// Last-good Cerbo GX EV sample per field with a throttle window.
+///
+/// dbus-ev / dbus-evcharger publish at the inverter-control poll cadence
+/// (every 2 s). The desktop EV tile flickered because process_state_update
+/// ran on every inverter/state message and, while building its merged
+/// snapshot, cloned the state from *before* apply_ev_message landed. The
+/// resulting write-back wiped the freshly-populated EV fields and the tile
+/// toggled on/off in a 2 s loop. SoC never showed because inverter/state
+/// published car_soc=0 when no car was connected, and merge_opt!(car_soc)
+/// happily overwrote the real 0 with the daemon's 0 — wait, 0 is a
+/// perfectly cromulent value. The real issue is that *missing* SoC
+/// (inverter publishes 0 as "not connected") is indistinguishable from a
+/// legitimate 0, so we treat 0 as no-data for SoC and refuse to clobber a
+/// cached real value.
+///
+/// Throttle: per-field, ignore a new sample if the cached sample is younger
+/// than 8 s. The cache survives process_state_update so the tile keeps
+/// showing the last good value between Cerbo publishes.
+#[derive(Default)]
+struct EvCache {
+    car_soc: Option<(f64, Instant)>,
+    car_charging_power: Option<(f64, Instant)>,
+    ev_charging_power: Option<(f64, Instant)>,
+}
+
+const EV_CACHE_TTL: Duration = Duration::from_secs(8);
+
+impl EvCache {
+    /// Apply a new Cerbo sample; returns true if the cache was updated.
+    /// - car_soc: 0 is treated as no-data (refused if cache already populated).
+    /// - power: 0 is a legitimate idle value, accepted.
+    /// - throttle: reject a sample if the existing cache is younger than TTL.
+    fn update(&mut self, field: EvField, value: f64) -> bool {
+        let now = Instant::now();
+        let slot = match field {
+            EvField::CarSoc => {
+                if value <= 0.0 && self.car_soc.is_some() {
+                    return false;
+                }
+                &mut self.car_soc
+            }
+            EvField::CarChargingPower => &mut self.car_charging_power,
+            EvField::EvChargingPower => &mut self.ev_charging_power,
+        };
+        if let Some((_, prev_ts)) = slot {
+            if now.duration_since(*prev_ts) < EV_CACHE_TTL {
+                return false;
+            }
+        }
+        *slot = Some((value, now));
+        true
+    }
+
+    /// Re-apply the cached values to `st`, but only for fields the incoming
+    /// state does not already hold. Used after process_state_update's
+    /// clone-and-merge to repair the EV fields the daemon's merge just wiped.
+    fn restore_into(&self, st: &mut InverterState) {
+        if st.car_soc.is_none() {
+            if let Some((v, _)) = self.car_soc {
+                st.car_soc = Some(v);
+            }
+        }
+        if st.car_charging_power.is_none() {
+            if let Some((v, _)) = self.car_charging_power {
+                st.car_charging_power = Some(v);
+            }
+        }
+        if st.ev_charging_power.is_none() {
+            if let Some((v, _)) = self.ev_charging_power {
+                st.ev_charging_power = Some(v);
+            }
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum EvField {
+    CarSoc,
+    CarChargingPower,
+    EvChargingPower,
+}
+
 pub struct MqttClient {
     client: Arc<Mutex<Option<Client>>>,
     client_id: String,
@@ -463,6 +545,9 @@ pub struct MqttClient {
     alarms: Arc<Mutex<HashMap<String, u8>>>,
     status_event: String,
     ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
+    /// Throttled last-good EV sample cache (see EvCache docs). Wrapped in
+    /// Mutex so the run_mqtt_loop closure can hold an Arc clone.
+    ev_cache: Arc<Mutex<EvCache>>,
 }
 
 /// Notification pushed by inverter-control on {prefix}/notifications.
@@ -618,6 +703,7 @@ impl MqttClient {
             alarms: Arc::new(Mutex::new(HashMap::new())),
             status_event: "mqtt-connection-status".to_string(),
             ha_entity_states: None,
+            ev_cache: Arc::new(Mutex::new(EvCache::default())),
         }
     }
 
@@ -701,6 +787,7 @@ impl MqttClient {
         let status_event = self.status_event.clone();
         let ha_entity_states = self.ha_entity_states.clone();
         let client_slot = self.client.clone();
+        let ev_cache = self.ev_cache.clone();
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -723,6 +810,7 @@ impl MqttClient {
                         ha_entity_states.clone(),
                         &status_event,
                         client_slot.clone(),
+                        ev_cache.clone(),
                     )
                     .await
                     .is_err();
@@ -765,6 +853,7 @@ impl MqttClient {
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         status_event: &str,
         client_slot: Arc<Mutex<Option<Client>>>,
+        ev_cache: Arc<Mutex<EvCache>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
         let queue_cap = MQTT_QUEUE_CAPACITY;
@@ -823,6 +912,7 @@ impl MqttClient {
         let ha_states_c = ha_entity_states.clone();
         let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
         let cerbo_c = cerbo_devices.clone();
+        let ev_cache_c = ev_cache.clone();
         let se = status_event.to_string();
         let con_result = tokio::task::spawn_blocking(move || {
             // Portal discovered at runtime via the retained inverter/portal
@@ -858,6 +948,7 @@ impl MqttClient {
                             &alarms_c,
                             &ha_states_c,
                             &cerbo_c,
+                            &ev_cache_c,
                         );
                     }
                     Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
@@ -948,6 +1039,7 @@ impl MqttClient {
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
         ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         cerbo_devices: &Arc<Mutex<CerboDevices>>,
+        ev_cache: &Arc<Mutex<EvCache>>,
     ) {
         if topic == "inverter/state" {
             if let Ok(raw) = serde_json::from_str::<RawInverterState>(payload) {
@@ -958,6 +1050,7 @@ impl MqttClient {
                     notifications.clone(),
                     ha_entity_states.clone(),
                     Some(cerbo_devices.clone()),
+                    ev_cache.clone(),
                 );
             }
         } else if topic == "inverter/notifications" {
@@ -1039,8 +1132,18 @@ impl MqttClient {
                 Self::parse_ev_topic(topic),
                 Self::parse_cerbo_value(payload),
             ) {
-                if let Ok(mut guard) = state.lock() {
-                    if Self::apply_ev_message(&mut guard, kind, inst, path, value, ev_instances) {
+                if let (Ok(mut guard), Ok(mut cache)) = (state.lock(), ev_cache.lock()) {
+                    if Self::apply_ev_message(
+                        &mut guard,
+                        &mut cache,
+                        kind,
+                        inst,
+                        path,
+                        value,
+                        ev_instances,
+                    )
+                    .is_some()
+                    {
                         Self::emit_state_update(app_handle, &guard, false);
                     }
                 }
@@ -1252,14 +1355,18 @@ impl MqttClient {
     /// Apply a dbus-ev / dbus-evcharger message to state.
     /// Returns true if the state was modified.
     /// Each side matches its own configured instance; either may be None.
+    /// Apply a dbus-ev / dbus-evcharger message to state.
+    /// Updates `ev_cache` (throttled, 8 s per field) and state simultaneously.
+    /// Returns the field that was updated, or None if no state change occurred.
     fn apply_ev_message(
         st: &mut InverterState,
+        cache: &mut EvCache,
         kind: &str,
         inst: u32,
         path: &str,
         value: f64,
         ev_instances: &Option<(Option<u32>, Option<u32>)>,
-    ) -> bool {
+    ) -> Option<EvField> {
         let ev_i = ev_instances.as_ref().and_then(|(e, _)| *e);
         let evc_i = ev_instances.as_ref().and_then(|(_, c)| *c);
         let matched = match kind {
@@ -1268,28 +1375,44 @@ impl MqttClient {
             _ => false,
         };
         if !matched {
-            return false;
+            return None;
         }
         match (kind, path) {
             ("ev", "Soc") => {
-                st.car_soc = Some(value);
-                true
+                if cache.update(EvField::CarSoc, value) {
+                    st.car_soc = Some(value);
+                    Some(EvField::CarSoc)
+                } else {
+                    None
+                }
             }
             ("ev", "Ac/Power") => {
-                st.car_charging_power = Some(value);
-                true
+                if cache.update(EvField::CarChargingPower, value) {
+                    st.car_charging_power = Some(value);
+                    Some(EvField::CarChargingPower)
+                } else {
+                    None
+                }
             }
             ("evcharger", "Ac/Power") => {
-                st.ev_charging_power = Some(value);
-                true
+                if cache.update(EvField::EvChargingPower, value) {
+                    st.ev_charging_power = Some(value);
+                    Some(EvField::EvChargingPower)
+                } else {
+                    None
+                }
             }
             ("evcharger", "Soc") => {
                 // dbus-ev originally published Soc under com.victronenergy.evcharger;
                 // some GX installs still use that name after the .ev rename.
-                st.car_soc = Some(value);
-                true
+                if cache.update(EvField::CarSoc, value) {
+                    st.car_soc = Some(value);
+                    Some(EvField::CarSoc)
+                } else {
+                    None
+                }
             }
-            _ => false,
+            _ => None,
         }
     }
 
@@ -1493,6 +1616,7 @@ impl MqttClient {
         notifications: Arc<Mutex<NotificationState>>,
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         cerbo_devices: Option<Arc<Mutex<CerboDevices>>>,
+        ev_cache: Arc<Mutex<EvCache>>,
     ) {
         // Non-destructive merge: start from existing state, update only fields
         // present in the incoming payload. Prevents transient `None` values
@@ -1736,6 +1860,14 @@ impl MqttClient {
         }
 
         Self::emit_state_update(&app_handle, &new_state, false);
+        // Restore any EV fields the daemon merge may have just wiped.
+        // The clone-and-merge above starts from the pre-apply snapshot, so
+        // if apply_ev_message populated EV fields in the meantime, they
+        // would be lost when we write `new_state` back. Re-apply from the
+        // throttled cache so the EV tile keeps showing the last good value.
+        if let Ok(cache) = ev_cache.lock() {
+            cache.restore_into(&mut new_state);
+        }
         if let Ok(mut guard) = state.lock() {
             *guard = new_state;
         }
@@ -1874,104 +2006,131 @@ mod tests {
     #[test]
     fn apply_ev_message_pops_car_soc() {
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         let instances = Some((Some(22), Some(40)));
         assert!(MqttClient::apply_ev_message(
-            &mut st, "ev", 22, "Soc", 66.0, &instances
-        ));
+            &mut st, &mut cache, "ev", 22, "Soc", 66.0, &instances
+        )
+        .is_some());
         assert_eq!(st.car_soc, Some(66.0));
     }
 
     #[test]
     fn apply_ev_message_pops_evcharger_power() {
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         let instances = Some((Some(22), Some(40)));
         assert!(MqttClient::apply_ev_message(
             &mut st,
+            &mut cache,
             "evcharger",
             40,
             "Ac/Power",
             7400.0,
             &instances
-        ));
+        )
+        .is_some());
         assert_eq!(st.ev_charging_power, Some(7400.0));
     }
 
     #[test]
     fn apply_ev_message_ignores_wrong_instance() {
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         let instances = Some((Some(22), Some(40)));
-        assert!(!MqttClient::apply_ev_message(
-            &mut st, "ev", 99, "Soc", 66.0, &instances
-        ));
+        assert_eq!(
+            MqttClient::apply_ev_message(&mut st, &mut cache, "ev", 99, "Soc", 66.0, &instances),
+            None
+        );
         assert!(st.car_soc.is_none());
-        assert!(!MqttClient::apply_ev_message(
-            &mut st,
-            "evcharger",
-            99,
-            "Ac/Power",
-            7400.0,
-            &instances
-        ));
+        assert_eq!(
+            MqttClient::apply_ev_message(
+                &mut st,
+                &mut cache,
+                "evcharger",
+                99,
+                "Ac/Power",
+                7400.0,
+                &instances
+            ),
+            None
+        );
         assert!(st.ev_charging_power.is_none());
     }
 
     #[test]
     fn apply_ev_message_partial_instances_ev_only() {
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         // ev_instance set, evcharger_instance absent
         let instances = Some((Some(22), None));
         assert!(MqttClient::apply_ev_message(
-            &mut st, "ev", 22, "Soc", 55.0, &instances
-        ));
+            &mut st, &mut cache, "ev", 22, "Soc", 55.0, &instances
+        )
+        .is_some());
         assert_eq!(st.car_soc, Some(55.0));
         // evcharger message must be ignored
-        assert!(!MqttClient::apply_ev_message(
-            &mut st,
-            "evcharger",
-            40,
-            "Ac/Power",
-            7400.0,
-            &instances
-        ));
+        assert_eq!(
+            MqttClient::apply_ev_message(
+                &mut st,
+                &mut cache,
+                "evcharger",
+                40,
+                "Ac/Power",
+                7400.0,
+                &instances
+            ),
+            None
+        );
         assert!(st.ev_charging_power.is_none());
     }
 
     #[test]
     fn apply_ev_message_partial_instances_evcharger_only() {
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         // evcharger_instance set, ev_instance absent
         let instances = Some((None, Some(40)));
         assert!(MqttClient::apply_ev_message(
             &mut st,
+            &mut cache,
             "evcharger",
             40,
             "Ac/Power",
             5500.0,
             &instances
-        ));
+        )
+        .is_some());
         assert_eq!(st.ev_charging_power, Some(5500.0));
         // ev message must be ignored
-        assert!(!MqttClient::apply_ev_message(
-            &mut st, "ev", 22, "Soc", 55.0, &instances
-        ));
+        assert_eq!(
+            MqttClient::apply_ev_message(&mut st, &mut cache, "ev", 22, "Soc", 55.0, &instances),
+            None
+        );
         assert!(st.car_soc.is_none());
     }
 
     #[test]
     fn apply_ev_message_no_instances_ignores_all() {
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         let instances: Option<(Option<u32>, Option<u32>)> = None;
-        assert!(!MqttClient::apply_ev_message(
-            &mut st, "ev", 22, "Soc", 66.0, &instances
-        ));
-        assert!(!MqttClient::apply_ev_message(
-            &mut st,
-            "evcharger",
-            40,
-            "Ac/Power",
-            7400.0,
-            &instances
-        ));
+        assert_eq!(
+            MqttClient::apply_ev_message(&mut st, &mut cache, "ev", 22, "Soc", 66.0, &instances),
+            None
+        );
+        assert_eq!(
+            MqttClient::apply_ev_message(
+                &mut st,
+                &mut cache,
+                "evcharger",
+                40,
+                "Ac/Power",
+                7400.0,
+                &instances
+            ),
+            None
+        );
         assert!(st.car_soc.is_none());
         assert!(st.ev_charging_power.is_none());
     }
@@ -1979,17 +2138,20 @@ mod tests {
     #[test]
     fn apply_ev_message_evcharger_soc_populates_car_soc() {
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         let instances = Some((Some(22), Some(40)));
         // dbus-ev may publish Soc under the evcharger bus name on installs
         // where the .ev rename hasn't reached the GX yet.
         assert!(MqttClient::apply_ev_message(
             &mut st,
+            &mut cache,
             "evcharger",
             40,
             "Soc",
             72.5,
             &instances
-        ));
+        )
+        .is_some());
         assert_eq!(st.car_soc, Some(72.5));
     }
 
@@ -1998,19 +2160,23 @@ mod tests {
         // Simulates the #302 regression for users whose saved config predates
         // the EV instance fields: serde defaults populate them to (22, 40).
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         let instances = Some((Some(22), Some(40)));
         assert!(MqttClient::apply_ev_message(
-            &mut st, "ev", 22, "Soc", 66.0, &instances
-        ));
+            &mut st, &mut cache, "ev", 22, "Soc", 66.0, &instances
+        )
+        .is_some());
         assert_eq!(st.car_soc, Some(66.0));
         assert!(MqttClient::apply_ev_message(
             &mut st,
+            &mut cache,
             "evcharger",
             40,
             "Ac/Power",
             7400.0,
             &instances
-        ));
+        )
+        .is_some());
         assert_eq!(st.ev_charging_power, Some(7400.0));
     }
 
@@ -2019,18 +2185,24 @@ mod tests {
         // Belt-and-braces: if the auto-connect path ever regresses to pass
         // Some((None, None)) again, EVERY ev and evcharger message must drop.
         let mut st = InverterState::default();
+        let mut cache = EvCache::default();
         let instances: Option<(Option<u32>, Option<u32>)> = Some((None, None));
-        assert!(!MqttClient::apply_ev_message(
-            &mut st, "ev", 22, "Soc", 66.0, &instances
-        ));
-        assert!(!MqttClient::apply_ev_message(
-            &mut st,
-            "evcharger",
-            40,
-            "Ac/Power",
-            7400.0,
-            &instances
-        ));
+        assert_eq!(
+            MqttClient::apply_ev_message(&mut st, &mut cache, "ev", 22, "Soc", 66.0, &instances),
+            None
+        );
+        assert_eq!(
+            MqttClient::apply_ev_message(
+                &mut st,
+                &mut cache,
+                "evcharger",
+                40,
+                "Ac/Power",
+                7400.0,
+                &instances
+            ),
+            None
+        );
         assert!(st.car_soc.is_none());
         assert!(st.ev_charging_power.is_none());
     }
@@ -2579,5 +2751,116 @@ mod tests {
         assert_eq!(d.batteries.len(), 2);
         assert_eq!(d.batteries[&1].data.soc, Some(81.0));
         assert_eq!(d.batteries[&2].data.soc, Some(90.0));
+    }
+
+    // -------------------------------------------------------------------------
+    // EV cache integration tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn ev_cache_throttles_same_field_within_window() {
+        // Apply once → cache populated. Second call within 8 s → rejected.
+        let mut cache = EvCache::default();
+        let instances = Some((Some(22), Some(40)));
+
+        let mut st = InverterState::default();
+        assert!(MqttClient::apply_ev_message(
+            &mut st, &mut cache, "ev", 22, "Soc", 66.0, &instances
+        )
+        .is_some());
+        assert_eq!(st.car_soc, Some(66.0));
+
+        // Second call within the 8 s throttle window → ignored, state unchanged.
+        let mut st2 = InverterState::default();
+        assert!(MqttClient::apply_ev_message(
+            &mut st2, &mut cache, "ev", 22, "Soc", 70.0, &instances
+        )
+        .is_none());
+        assert_eq!(st2.car_soc, None);
+    }
+
+    #[test]
+    fn ev_cache_restores_after_process_state_update() {
+        // Simulate the race: apply_ev_message sets EV fields, then
+        // process_state_update clones from before that and overwrites them.
+        // The cache must restore the EV values after write-back.
+        let state = Arc::new(Mutex::new(InverterState::default()));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+        let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
+
+        // Apply EV sample — populates both state and cache.
+        {
+            let mut guard = state.lock().unwrap();
+            let mut cache = ev_cache.lock().unwrap();
+            let instances = Some((Some(22), Some(40)));
+            MqttClient::apply_ev_message(&mut guard, &mut cache, "ev", 22, "Soc", 66.0, &instances);
+            MqttClient::apply_ev_message(
+                &mut guard, &mut cache, "ev", 22, "Ac/Power", 3200.0, &instances,
+            );
+            MqttClient::apply_ev_message(
+                &mut guard,
+                &mut cache,
+                "evcharger",
+                40,
+                "Ac/Power",
+                7400.0,
+                &instances,
+            );
+        }
+
+        // process_state_update with a RawInverterState that has no EV fields
+        // (simulates the inverter/state payload missing EV data). The clone-
+        // and-merge starts from the pre-apply snapshot, so EV fields would be
+        // wiped without cache restoration.
+        let raw = RawInverterState {
+            gt: Some(500.0),
+            ..Default::default()
+        };
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            Arc::new(Mutex::new(NotificationState {
+                high_consumption: AlertState::new(),
+                low_water: AlertState::new(),
+                high_solar: AlertState::new(),
+                high_load: std::collections::HashMap::new(),
+            })),
+            None,
+            Some(cerbo_devices),
+            ev_cache.clone(),
+        );
+
+        // EV fields must survive the daemon's merge.
+        let guard = state.lock().unwrap();
+        assert_eq!(guard.car_soc, Some(66.0));
+        assert_eq!(guard.car_charging_power, Some(3200.0));
+        assert_eq!(guard.ev_charging_power, Some(7400.0));
+    }
+
+    #[test]
+    fn ev_cache_zero_soc_does_not_clobber_real_soc() {
+        // inverter-control publishes car_soc=0 when no car is connected.
+        // The cache must refuse to overwrite a real SoC with 0.
+        let mut cache = EvCache::default();
+        let instances = Some((Some(22), Some(40)));
+
+        // First: real car SoC from Cerbo.
+        let mut st = InverterState::default();
+        assert!(MqttClient::apply_ev_message(
+            &mut st, &mut cache, "ev", 22, "Soc", 66.0, &instances,
+        )
+        .is_some());
+        assert_eq!(st.car_soc, Some(66.0));
+
+        // Second: daemon publishes 0 → cache must refuse (preserve real value).
+        let mut st2 = InverterState::default();
+        assert_eq!(
+            MqttClient::apply_ev_message(&mut st2, &mut cache, "ev", 22, "Soc", 0.0, &instances,),
+            None,
+        );
+        assert_eq!(st2.car_soc, None); // cache didn't update, so st2 stays None
+                                       // But st (the live state) still has 66.
+        assert_eq!(st.car_soc, Some(66.0));
     }
 }
