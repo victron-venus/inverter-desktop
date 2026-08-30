@@ -1283,6 +1283,12 @@ impl MqttClient {
                 st.ev_charging_power = Some(value);
                 true
             }
+            ("evcharger", "Soc") => {
+                // dbus-ev originally published Soc under com.victronenergy.evcharger;
+                // some GX installs still use that name after the .ev rename.
+                st.car_soc = Some(value);
+                true
+            }
             _ => false,
         }
     }
@@ -1955,6 +1961,65 @@ mod tests {
     fn apply_ev_message_no_instances_ignores_all() {
         let mut st = InverterState::default();
         let instances: Option<(Option<u32>, Option<u32>)> = None;
+        assert!(!MqttClient::apply_ev_message(
+            &mut st, "ev", 22, "Soc", 66.0, &instances
+        ));
+        assert!(!MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            40,
+            "Ac/Power",
+            7400.0,
+            &instances
+        ));
+        assert!(st.car_soc.is_none());
+        assert!(st.ev_charging_power.is_none());
+    }
+
+    #[test]
+    fn apply_ev_message_evcharger_soc_populates_car_soc() {
+        let mut st = InverterState::default();
+        let instances = Some((Some(22), Some(40)));
+        // dbus-ev may publish Soc under the evcharger bus name on installs
+        // where the .ev rename hasn't reached the GX yet.
+        assert!(MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            40,
+            "Soc",
+            72.5,
+            &instances
+        ));
+        assert_eq!(st.car_soc, Some(72.5));
+    }
+
+    #[test]
+    fn apply_ev_message_partial_default_when_serialized_old_config() {
+        // Simulates the #302 regression for users whose saved config predates
+        // the EV instance fields: serde defaults populate them to (22, 40).
+        let mut st = InverterState::default();
+        let instances = Some((Some(22), Some(40)));
+        assert!(MqttClient::apply_ev_message(
+            &mut st, "ev", 22, "Soc", 66.0, &instances
+        ));
+        assert_eq!(st.car_soc, Some(66.0));
+        assert!(MqttClient::apply_ev_message(
+            &mut st,
+            "evcharger",
+            40,
+            "Ac/Power",
+            7400.0,
+            &instances
+        ));
+        assert_eq!(st.ev_charging_power, Some(7400.0));
+    }
+
+    #[test]
+    fn apply_ev_message_both_none_drops_all_messages() {
+        // Belt-and-braces: if the auto-connect path ever regresses to pass
+        // Some((None, None)) again, EVERY ev and evcharger message must drop.
+        let mut st = InverterState::default();
+        let instances: Option<(Option<u32>, Option<u32>)> = Some((None, None));
         assert!(!MqttClient::apply_ev_message(
             &mut st, "ev", 22, "Soc", 66.0, &instances
         ));

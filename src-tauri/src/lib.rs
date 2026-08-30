@@ -280,7 +280,9 @@ struct FullConfig {
     portal_id: Option<String>,
     water_pump_instance: Option<u32>,
     water_valve_instance: Option<u32>,
+    #[serde(default = "default_evcharger_instance")]
     evcharger_instance: Option<u32>,
+    #[serde(default = "default_ev_instance")]
     ev_instance: Option<u32>,
     camera_topic: Option<String>,
     camera_enabled: bool,
@@ -298,6 +300,14 @@ struct FullConfig {
     auth_username: Option<String>,
     auth_password: Option<String>,
     auth_biometric: Option<bool>,
+}
+
+fn default_evcharger_instance() -> Option<u32> {
+    Some(40)
+}
+
+fn default_ev_instance() -> Option<u32> {
+    Some(22)
 }
 
 impl Default for FullConfig {
@@ -1480,8 +1490,8 @@ pub fn run() {
                         let portal_id = config.portal_id.clone();
                         let water_pump_instance = config.water_pump_instance;
                         let water_valve_instance = config.water_valve_instance;
-                        let evcharger_instance = config.evcharger_instance;
-                        let ev_instance = config.ev_instance;
+                        let evcharger_instance = config.evcharger_instance.or(Some(40));
+                        let ev_instance = config.ev_instance.or(Some(22));
                         let camera_topic = config.camera_topic.clone();
                         let connect_handle = app_handle.clone();
                         let mqtt_state = app_handle.state::<MqttState>();
