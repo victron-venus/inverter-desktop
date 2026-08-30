@@ -445,7 +445,7 @@ struct NotificationState {
 pub struct MqttClient {
     client: Option<Client>,
     client_id: String,
-    state: Arc<Mutex<InverterState>>,
+    pub(crate) state: Arc<Mutex<InverterState>>,
     host: String,
     port: u16,
     username: Option<String>,
@@ -1698,20 +1698,27 @@ impl MqttClient {
         }
     }
 
+    /// Returns the current value of an inverter-control flag (true=on, false=off),
+    /// or None when the flag has not been published yet.
+    pub fn flag_state(&self, key: &str) -> Option<bool> {
+        let state = self.state.lock().ok()?;
+        let bools = state.booleans.as_ref()?;
+        bools.get(key).copied()
+    }
+
     pub fn publish_command(
         &self,
         action: &str,
         payload: serde_json::Value,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(client) = &self.client {
-            let topic = format!("inverter/cmd/{}", action);
-            let payload_str = if payload.is_null() {
-                String::new()
-            } else {
-                serde_json::to_string(&payload)?
-            };
-            client.publish(topic, QoS::AtLeastOnce, false, payload_str)?;
-        }
+        let client = self.client.as_ref().ok_or("MQTT client not connected")?;
+        let topic = format!("inverter/cmd/{}", action);
+        let payload_str = if payload.is_null() {
+            String::new()
+        } else {
+            serde_json::to_string(&payload)?
+        };
+        client.publish(topic, QoS::AtLeastOnce, false, payload_str)?;
         Ok(())
     }
 }
@@ -2283,6 +2290,36 @@ mod tests {
         assert_eq!(st.battery_soc, Some(voltage_soc(52.5)));
         assert_eq!(st.battery_voltage, Some(52.5));
         assert_eq!(st.battery_power, Some(-300.0));
+    }
+
+    #[test]
+    fn flag_state_returns_current_value() {
+        let client = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
+        // No booleans yet → None.
+        assert_eq!(client.flag_state("only_charging"), None);
+        {
+            let mut st = client.state.lock().unwrap();
+            st.booleans = Some(HashMap::from([("only_charging".into(), true)]));
+        }
+        assert_eq!(client.flag_state("only_charging"), Some(true));
+        {
+            let mut st = client.state.lock().unwrap();
+            st.booleans = Some(HashMap::from([("only_charging".into(), false)]));
+        }
+        assert_eq!(client.flag_state("only_charging"), Some(false));
+        assert_eq!(client.flag_state("never_set"), None);
+    }
+
+    #[test]
+    fn publish_command_errors_when_client_is_none() {
+        // Regression: clicks used to silently return Ok(()) when the client
+        // was dropped during reconnect, leaving the UI with no feedback.
+        let client = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
+        // self.client is None — connect() is the only thing that fills it.
+        let err = client
+            .publish_command("toggle", serde_json::json!({"entity": "only_charging"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("not connected"));
     }
 
     /// Per-device TTL: updating one device must not evict other active entries.

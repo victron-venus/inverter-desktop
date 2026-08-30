@@ -371,6 +371,30 @@ fn get_state(mqtt_client: State<MqttState>) -> Result<InverterState, String> {
     }
 }
 
+/// If the action is `toggle` and the entity is an inverter-control flag,
+/// inject an explicit `state` field so inverter-control's `_handle_toggle`
+/// sets the absolute value instead of flipping whatever it last saw.
+fn stamp_toggle_state(payload: &mut serde_json::Value, client: &MqttClient, action: &str) {
+    if action != "toggle" {
+        return;
+    }
+    let Some(entity) = payload.get("entity").and_then(|v| v.as_str()) else {
+        return;
+    };
+    if !is_inverter_control_flag(entity) {
+        return;
+    }
+    let key = entity.split('.').next_back().unwrap_or(entity);
+    let current = client.flag_state(key).unwrap_or(false);
+    let new_state = if !current { "on" } else { "off" };
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert(
+            "state".to_string(),
+            serde_json::Value::String(new_state.to_string()),
+        );
+    }
+}
+
 #[tauri::command]
 async fn perform_action(
     action: String,
@@ -487,10 +511,11 @@ async fn perform_action(
                                 .0
                                 .lock()
                                 .map_err(|e| format!("Lock error: {}", e))?;
-                            if let Some(ref c) = *mqtt_client {
-                                c.publish_command(&action, payload.clone())
-                                    .map_err(|e| format!("MQTT error: {}", e))?;
-                            }
+                            let c = mqtt_client
+                                .as_ref()
+                                .ok_or_else(|| "MQTT client not connected".to_string())?;
+                            c.publish_command(&action, payload.clone())
+                                .map_err(|e| format!("MQTT error: {}", e))?;
                             return Ok(());
                         }
                     }
@@ -505,13 +530,19 @@ async fn perform_action(
         .0
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
-    if let Some(ref client) = *client {
-        client
-            .publish_command(&action, payload)
-            .map_err(|e| e.to_string())
-    } else {
-        Err("MQTT client not connected".to_string())
-    }
+    let client = client
+        .as_ref()
+        .ok_or_else(|| "MQTT client not connected".to_string())?;
+
+    // Inverter-control flags: send an explicit `state` so inverter-control's
+    // _handle_toggle can set the absolute value, rather than flipping whatever
+    // it last saw (and getting out of sync if a click was lost in flight).
+    let mut payload = payload;
+    stamp_toggle_state(&mut payload, &client, &action);
+
+    client
+        .publish_command(&action, payload)
+        .map_err(|e| e.to_string())
 }
 
 fn is_ha_entity(entity_id: &str) -> bool {
@@ -1171,6 +1202,84 @@ async fn connect_ha_mqtt(
         .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = Some(client);
     Ok(())
+}
+
+#[cfg(test)]
+mod perform_action_tests {
+    use super::*;
+
+    fn client_with_flags(flags: impl IntoIterator<Item = (&'static str, bool)>) -> MqttClient {
+        let c = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
+        {
+            let mut st = c.state.lock().unwrap();
+            st.booleans = Some(flags.into_iter().map(|(k, v)| (k.into(), v)).collect());
+        }
+        c
+    }
+
+    #[test]
+    fn stamp_toggle_adds_state_for_inverter_control_flag() {
+        let client = client_with_flags([("only_charging", true)]);
+        let mut payload = serde_json::json!({"entity": "only_charging"});
+        stamp_toggle_state(&mut payload, &client, "toggle");
+        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("off"));
+    }
+
+    #[test]
+    fn stamp_toggle_removes_flag_when_off() {
+        let client = client_with_flags([("house_support", false)]);
+        let mut payload = serde_json::json!({"entity": "house_support"});
+        stamp_toggle_state(&mut payload, &client, "toggle");
+        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("on"));
+    }
+
+    #[test]
+    fn stamp_toggle_handles_input_boolean_prefix() {
+        let client = client_with_flags([("no_feed", false)]);
+        let mut payload = serde_json::json!({"entity": "input_boolean.no_feed"});
+        stamp_toggle_state(&mut payload, &client, "toggle");
+        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("on"));
+    }
+
+    #[test]
+    fn stamp_toggle_ignores_non_toggle_actions() {
+        let client = client_with_flags([("only_charging", true)]);
+        let mut payload = serde_json::json!({"entity": "only_charging"});
+        stamp_toggle_state(&mut payload, &client, "press");
+        assert!(payload.get("state").is_none());
+    }
+
+    #[test]
+    fn stamp_toggle_ignores_non_flag_entities() {
+        let client = client_with_flags([("only_charging", true)]);
+        let mut payload = serde_json::json!({"entity": "switch.garage"});
+        stamp_toggle_state(&mut payload, &client, "toggle");
+        assert!(payload.get("state").is_none());
+    }
+
+    #[test]
+    fn stamp_toggle_defaults_to_on_when_unknown() {
+        // No booleans published yet — flag_state returns None → default to false →
+        // !false = true → "on" (turn the flag on when we don't know the state).
+        let client = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
+        let mut payload = serde_json::json!({"entity": "only_charging"});
+        stamp_toggle_state(&mut payload, &client, "toggle");
+        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("on"));
+    }
+
+    #[test]
+    fn is_inverter_control_flag_accepts_bare_key() {
+        assert!(is_inverter_control_flag("only_charging"));
+        assert!(is_inverter_control_flag("no_feed"));
+        assert!(!is_inverter_control_flag("switch.garage"));
+    }
+
+    #[test]
+    fn is_inverter_control_flag_accepts_input_boolean_prefix() {
+        assert!(is_inverter_control_flag("input_boolean.only_charging"));
+        assert!(is_inverter_control_flag("input_boolean.house_support"));
+        assert!(!is_inverter_control_flag("input_boolean.garage"));
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
