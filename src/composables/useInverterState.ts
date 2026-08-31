@@ -92,6 +92,11 @@ export interface InverterState {
   car_charging_power?: number | null
   /** Wallbox charging power (W) from dbus-evcharger (N/<portal>/evcharger/<i>/Ac/Power) */
   ev_charging_power?: number | null
+  /** True once any ev/<i>/... message for the configured instance has been
+   *  seen on Cerbo MQTT. Survives daemon merges; gates the EV card. */
+  ev_present?: boolean
+  /** True once any evcharger/<i>/... message has been seen on Cerbo MQTT. */
+  evcharger_present?: boolean
 }
 
 export const state = ref<InverterState>({

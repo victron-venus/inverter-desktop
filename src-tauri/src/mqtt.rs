@@ -55,6 +55,11 @@ pub struct InverterState {
     pub car_soc: Option<f64>,
     pub ev_charging_power: Option<f64>,
     pub car_charging_power: Option<f64>,
+    /// Cerbo MQTT has published at least one ev/<i>/... message for a
+    /// configured ev_instance. Survives process_state_update clones/merges.
+    pub ev_present: bool,
+    /// Same for evcharger/<i>/... messages.
+    pub evcharger_present: bool,
     pub water_level: Option<f64>,
     pub water_valve: Option<bool>,
     pub pump_switch: Option<bool>,
@@ -100,9 +105,9 @@ struct RawInverterState {
     ui_config: Option<UiConfig>,
     daily_stats: Option<DailyStats>,
     solar_forecast: Option<SolarForecast>,
-    ev_charging_kw: Option<f64>,
-    ev_power: Option<f64>,
-    car_soc: Option<f64>,
+    // ev_charging_kw, ev_power, car_soc are intentionally absent —
+    // EV telemetry comes only from Cerbo MQTT via apply_ev_message + EvCache,
+    // not from the daemon's inverter/state payload.
     water_level: Option<f64>,
     water_valve: Option<serde_json::Value>,
     pump_switch: Option<serde_json::Value>,
@@ -465,6 +470,10 @@ struct EvCache {
     car_soc: Option<(f64, Instant)>,
     car_charging_power: Option<(f64, Instant)>,
     ev_charging_power: Option<(f64, Instant)>,
+    /// Presence bits survive process_state_update so the EV tile never
+    /// disappears on a daemon merge that wipes the EV metrics.
+    ev_present: bool,
+    evcharger_present: bool,
 }
 
 const EV_CACHE_TTL: Duration = Duration::from_secs(8);
@@ -495,10 +504,23 @@ impl EvCache {
         true
     }
 
-    /// Re-apply the cached values to `st`, but only for fields the incoming
-    /// state does not already hold. Used after process_state_update's
-    /// clone-and-merge to repair the EV fields the daemon's merge just wiped.
+    /// Mark presence for ev/evcharger when a matching MQTT message arrives
+    /// (including value 0). Presence survives process_state_update merges
+    /// because daemon never publishes these fields.
+    fn set_presence(&mut self, kind: &str) {
+        match kind {
+            "ev" => self.ev_present = true,
+            "evcharger" => self.evcharger_present = true,
+            _ => {}
+        }
+    }
+
+    /// Re-apply the cached values AND presence bits to `st` after a
+    /// daemon merge wiped them. Presence bits ensure the EV tile stays
+    /// visible even when SOC/power are 0 or absent.
     fn restore_into(&self, st: &mut InverterState) {
+        st.ev_present = self.ev_present;
+        st.evcharger_present = self.evcharger_present;
         if st.car_soc.is_none() {
             if let Some((v, _)) = self.car_soc {
                 st.car_soc = Some(v);
@@ -1377,6 +1399,8 @@ impl MqttClient {
         if !matched {
             return None;
         }
+        // Mark presence so the EV tile stays visible even when SOC/power are 0.
+        cache.set_presence(kind);
         match (kind, path) {
             ("ev", "Soc") => {
                 if cache.update(EvField::CarSoc, value) {
@@ -1658,9 +1682,8 @@ impl MqttClient {
         merge_opt!(ui_config, raw.ui_config);
         merge_opt!(daily_stats, raw.daily_stats);
         merge_opt!(solar_forecast, raw.solar_forecast);
-        merge_opt!(ev_charging_kw, raw.ev_charging_kw);
-        merge_opt!(ev_power, raw.ev_power);
-        merge_opt!(car_soc, raw.car_soc);
+        // EV numbers come ONLY from MQTT (apply_ev_message + EvCache).
+        // Do NOT merge daemon zeros here — they overwrite MQTT telemetry.
         merge_opt!(water_level, raw.water_level);
         merge_opt!(dishwasher_duration, raw.dishwasher_duration);
         merge_opt!(washer_time, raw.washer_time);
@@ -1859,15 +1882,12 @@ impl MqttClient {
             }
         }
 
-        Self::emit_state_update(&app_handle, &new_state, false);
-        // Restore any EV fields the daemon merge may have just wiped.
-        // The clone-and-merge above starts from the pre-apply snapshot, so
-        // if apply_ev_message populated EV fields in the meantime, they
-        // would be lost when we write `new_state` back. Re-apply from the
-        // throttled cache so the EV tile keeps showing the last good value.
+        // Restore EV fields/presence BEFORE emitting so the UI never sees
+        // the pre-restore state (no flash/blink on HA poll interval).
         if let Ok(cache) = ev_cache.lock() {
             cache.restore_into(&mut new_state);
         }
+        Self::emit_state_update(&app_handle, &new_state, false);
         if let Ok(mut guard) = state.lock() {
             *guard = new_state;
         }
@@ -2083,6 +2103,53 @@ mod tests {
             None
         );
         assert!(st.ev_charging_power.is_none());
+    }
+
+    #[test]
+    fn apply_ev_message_sets_presence_for_ev() {
+        let mut st = InverterState::default();
+        let mut cache = EvCache::default();
+        let instances = Some((Some(22), Some(40)));
+        // Presence is set on the cache after apply_ev_message
+        MqttClient::apply_ev_message(&mut st, &mut cache, "ev", 22, "Soc", 0.0, &instances);
+        assert!(
+            cache.ev_present,
+            "cache.ev_present should be true after apply_ev_message with 0"
+        );
+        assert_eq!(st.car_soc, Some(0.0));
+        // After restore_into, st.ev_present mirrors cache
+        cache.restore_into(&mut st);
+        assert!(
+            st.ev_present,
+            "st.ev_present should be true after restore_into"
+        );
+    }
+
+    #[test]
+    fn apply_ev_message_sets_presence_for_evcharger() {
+        let mut st = InverterState::default();
+        let mut cache = EvCache::default();
+        let instances = Some((Some(22), Some(40)));
+        MqttClient::apply_ev_message(
+            &mut st,
+            &mut cache,
+            "evcharger",
+            40,
+            "Ac/Power",
+            0.0,
+            &instances,
+        );
+        assert!(
+            cache.evcharger_present,
+            "cache.evcharger_present should be true after apply_ev_message with 0"
+        );
+        assert_eq!(st.ev_charging_power, Some(0.0));
+        // After restore_into, st.evcharger_present mirrors cache
+        cache.restore_into(&mut st);
+        assert!(
+            st.evcharger_present,
+            "st.evcharger_present should be true after restore_into"
+        );
     }
 
     #[test]
@@ -2831,11 +2898,50 @@ mod tests {
             ev_cache.clone(),
         );
 
-        // EV fields must survive the daemon's merge.
+        // EV fields AND presence bits must survive the daemon's merge.
         let guard = state.lock().unwrap();
         assert_eq!(guard.car_soc, Some(66.0));
         assert_eq!(guard.car_charging_power, Some(3200.0));
         assert_eq!(guard.ev_charging_power, Some(7400.0));
+        assert!(guard.ev_present, "ev_present must survive daemon merge");
+        assert!(
+            guard.evcharger_present,
+            "evcharger_present must survive daemon merge"
+        );
+    }
+
+    #[test]
+    fn ev_cache_zero_power_still_shows_section() {
+        // Zero power is a legitimate idle value. The section should stay visible
+        // via presence bits (set on cache, restored into state after daemon merge).
+        let mut st = InverterState::default();
+        let mut cache = EvCache::default();
+        let instances = Some((Some(22), Some(40)));
+
+        MqttClient::apply_ev_message(&mut st, &mut cache, "ev", 22, "Ac/Power", 0.0, &instances);
+        assert!(cache.ev_present, "section visible via cache.ev_present");
+        assert_eq!(st.car_charging_power, Some(0.0));
+
+        MqttClient::apply_ev_message(
+            &mut st,
+            &mut cache,
+            "evcharger",
+            40,
+            "Ac/Power",
+            0.0,
+            &instances,
+        );
+        assert!(
+            cache.evcharger_present,
+            "section visible via cache.evcharger_present"
+        );
+        assert_eq!(st.ev_charging_power, Some(0.0));
+
+        // restore_into propagates presence to state
+        let mut st2 = InverterState::default();
+        cache.restore_into(&mut st2);
+        assert!(st2.ev_present);
+        assert!(st2.evcharger_present);
     }
 
     #[test]
