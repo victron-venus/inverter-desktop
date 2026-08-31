@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { computed, type Ref, ref, watch, watchEffect } from 'vue'
+import { computed, type Ref, ref, watch } from 'vue'
 import type { AppConfig } from '../config'
 import { logger } from '../logger'
 import type {
@@ -12,7 +12,7 @@ import type {
   HaSensorDisplay,
   HaWeatherDisplay,
 } from '../types/ha'
-import { formatPower, isInverterControlFlag, resolveHeaderToggleState } from '../utils'
+import { isInverterControlFlag, resolveHeaderToggleState } from '../utils'
 import { appConfig, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
@@ -284,93 +284,8 @@ export function useHA() {
     )
   }
 
-  // Water comes exclusively from Cerbo GX MQTT (published by dbus-pump);
-  // pump/valve control lives in dbus-pump itself - no HA fallback, no toggles.
-  const waterValveState = computed(() => state.value.water_valve ?? null)
-
-  const pumpSwitchState = computed(() => state.value.pump_switch ?? null)
-
-  const waterLevel = computed(() => state.value.water_level ?? null)
-
-  const waterPumpMode = computed(() => state.value.water_pump_mode ?? null)
-
-  const waterValveMode = computed(() => state.value.water_valve_mode ?? null)
-
-  const waterSectionVisible = computed(
-    () =>
-      state.value.water_level != null ||
-      state.value.water_valve != null ||
-      state.value.pump_switch != null
-  )
-
-  // EV metrics now come from the GX via MQTT (dbus-ev / dbus-evcharger),
-  // published on N/<portal>/ev/<instance>/Soc, /Ac/Power and
-  // N/<portal>/evcharger/<instance>/Ac/Power. No Home Assistant required.
-  const evSoc = computed(() => {
-    const v = state.value.car_soc
-    if (v == null) return null
-    return Math.max(0, Math.min(100, v))
-  })
-
-  /** EV car charging power in watts (from N/<portal>/ev/<i>/Ac/Power) */
-  const evChargingWatts = computed(() => state.value.car_charging_power ?? null)
-
-  const evClampWatts = computed(() => {
-    const v = state.value.ev_charging_power
-    if (v == null) return null
-    return Math.abs(v)
-  })
-
-  const evChargingKw = computed(() => {
-    const w = evChargingWatts.value
-    return w === null ? null : w / 1000
-  })
-
-  const evPowerWatts = computed(() => evClampWatts.value)
-
-  const evPower = computed(() => {
-    const w = evClampWatts.value
-    if (w === null) return ''
-    return formatPower(w)
-  })
-
-  // Latch: once any ev/evcharger MQTT message is seen, never hide the card.
-  // Matches BATTERIES/SOLAR behaviour (chrome-gated by config, not live data).
-  // Does NOT unlatch on mqttConnected false.
-  const evLatch = ref(false)
-  watchEffect(() => {
-    if (state.value.ev_present || state.value.evcharger_present) {
-      evLatch.value = true
-    }
-  })
-
-  const evSectionVisible = computed(() => evLatch.value)
-
-  /** Active loads strictly from Cerbo DBus -> MQTT (state.value.loads), zero HA fallback */
-  const haLoads = computed(() => {
-    const mqttLoads = state.value.loads
-    if (!mqttLoads || Object.keys(mqttLoads).length === 0) {
-      return []
-    }
-    const items: Array<{ name: string; value: number; isGeneration: boolean }> = []
-    for (const [key, val] of Object.entries(mqttLoads)) {
-      const v = typeof val === 'number' ? val : Number(val)
-      if (!Number.isNaN(v) && Math.abs(v) > 2) {
-        items.push({
-          name: getFormattedLoadName(key),
-          value: v,
-          isGeneration: v < 0,
-        })
-      }
-    }
-    items.sort((a, b) => {
-      const absDiff = Math.abs(b.value) - Math.abs(a.value)
-      if (absDiff !== 0) return absDiff
-      // tie-break by name alphabetically (case-insensitive)
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-    })
-    return items
-  })
+  // Water / EV / active loads live in useMQTTState (Cerbo MQTT only).
+  // No HA fallback, no toggles for those sections.
 
   const dishwasherActive = computed(() => {
     if (!haEnabled.value) return false
@@ -588,19 +503,6 @@ export function useHA() {
     headerToggles,
     buttonStates,
     headerToggleStates,
-    waterValveState,
-    pumpSwitchState,
-    waterLevel,
-    waterSectionVisible,
-    waterPumpMode,
-    waterValveMode,
-    evSoc,
-    evChargingKw,
-    evClampWatts,
-    evPower,
-    evPowerWatts,
-    evSectionVisible,
-    haLoads,
     haSensors,
     haNumbers,
     haCovers,
