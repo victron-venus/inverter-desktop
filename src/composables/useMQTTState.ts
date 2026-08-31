@@ -78,5 +78,7 @@ export function useMQTTState() {
     evPowerWatts,
     evSectionVisible,
     acloads,
+    /** Exposed for tests — resets the EV latch between test runs. */
+    evLatch,
   }
 }

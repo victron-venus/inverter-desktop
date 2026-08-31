@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
-import { useHA } from '../composables/useHA'
 import { mqttConnected, state } from '../composables/useInverterState'
+import { useMQTTState } from '../composables/useMQTTState'
 import type { HaCoverDisplay, HaSensorDisplay, HaWeatherDisplay } from '../types/ha'
 import { resolveHeaderToggleState } from '../utils'
 
@@ -227,7 +227,8 @@ describe('evSectionVisible latch', () => {
     state.value.ev_present = false
     state.value.evcharger_present = false
     mqttConnected.value = true
-    const { evSectionVisible } = useHA()
+    const { evSectionVisible, evLatch } = useMQTTState()
+    evLatch.value = false
     expect(evSectionVisible.value).toBe(false)
 
     state.value.ev_present = true
@@ -244,7 +245,8 @@ describe('evSectionVisible latch', () => {
     state.value.ev_present = false
     state.value.evcharger_present = false
     mqttConnected.value = true
-    const { evSectionVisible } = useHA()
+    const { evSectionVisible, evLatch } = useMQTTState()
+    evLatch.value = false
     expect(evSectionVisible.value).toBe(false)
 
     state.value.evcharger_present = true
@@ -256,7 +258,8 @@ describe('evSectionVisible latch', () => {
     state.value.ev_present = undefined
     state.value.evcharger_present = undefined
     mqttConnected.value = true
-    const { evSectionVisible } = useHA()
+    const { evSectionVisible, evLatch } = useMQTTState()
+    evLatch.value = false
     expect(evSectionVisible.value).toBe(false)
 
     mqttConnected.value = false

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useHA } from '../composables/useHA'
 import { appConfig, state } from '../composables/useInverterState'
+import { useMQTTState } from '../composables/useMQTTState'
 
 type Cfg = NonNullable<typeof appConfig.value>
 const setCfg = (partial: Record<string, unknown>) => {
@@ -18,7 +18,7 @@ describe('water section (Cerbo MQTT only - dbus-pump data)', () => {
     state.value.water_valve = true
     state.value.pump_switch = false
 
-    const ha = useHA()
+    const ha = useMQTTState()
     expect(ha.waterLevel.value).toBe(66)
     expect(ha.waterValveState.value).toBe(true)
     expect(ha.pumpSwitchState.value).toBe(false)
@@ -31,7 +31,7 @@ describe('water section (Cerbo MQTT only - dbus-pump data)', () => {
       ha_url: 'http://ha:8123',
       ha_longlived_token: 'tok',
     })
-    const ha = useHA()
+    const ha = useMQTTState()
     expect(ha.waterSectionVisible.value).toBe(false)
     expect(ha.waterLevel.value).toBeNull()
     expect(ha.waterValveState.value).toBeNull()
@@ -41,7 +41,7 @@ describe('water section (Cerbo MQTT only - dbus-pump data)', () => {
   it('becomes visible from a partial payload (valve only)', () => {
     state.value.water_valve = true
 
-    const ha = useHA()
+    const ha = useMQTTState()
     expect(ha.waterSectionVisible.value).toBe(true)
     expect(ha.pumpSwitchState.value).toBeNull()
   })
@@ -63,7 +63,7 @@ describe('water manual override (dbus-pump /Mode)', () => {
   it('exposes mode values from MQTT state', () => {
     state.value.water_pump_mode = 1
     state.value.water_valve_mode = 0
-    const ha = useHA()
+    const ha = useMQTTState()
     expect(ha.waterPumpMode.value).toBe(1)
     expect(ha.waterValveMode.value).toBe(0)
   })
