@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { computed, type Ref, ref, watch } from 'vue'
+import { computed, type Ref, ref, watch, watchEffect } from 'vue'
 import type { AppConfig } from '../config'
 import { logger } from '../logger'
 import type {
@@ -13,7 +13,7 @@ import type {
   HaWeatherDisplay,
 } from '../types/ha'
 import { formatPower, isInverterControlFlag, resolveHeaderToggleState } from '../utils'
-import { appConfig, type InverterState, mqttConnected, state } from './useInverterState'
+import { appConfig, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
@@ -334,14 +334,17 @@ export function useHA() {
     return formatPower(w)
   })
 
-  const evSectionVisible = computed(() => {
-    if (!mqttConnected.value) return false
-    // Show EV section whenever MQTT has published for configured ev/evcharger
-    // instances — presence bits survive daemon merges and 0-power values still
-    // display the section. Metric nullness (SOC/power) gates display content,
-    // not card visibility.
-    return state.value.ev_present || state.value.evcharger_present
+  // Latch: once any ev/evcharger MQTT message is seen, never hide the card.
+  // Matches BATTERIES/SOLAR behaviour (chrome-gated by config, not live data).
+  // Does NOT unlatch on mqttConnected false.
+  const evLatch = ref(false)
+  watchEffect(() => {
+    if (state.value.ev_present || state.value.evcharger_present) {
+      evLatch.value = true
+    }
   })
+
+  const evSectionVisible = computed(() => evLatch.value)
 
   /** Active loads strictly from Cerbo DBus -> MQTT (state.value.loads), zero HA fallback */
   const haLoads = computed(() => {
