@@ -518,23 +518,21 @@ impl EvCache {
     /// Re-apply the cached values AND presence bits to `st` after a
     /// daemon merge wiped them. Presence bits ensure the EV tile stays
     /// visible even when SOC/power are 0 or absent.
+    ///
+    /// Always overwrite: if the cache has a value (even 0), copy it onto st.
+    /// Presence bits are sticky — never cleared to false.
     fn restore_into(&self, st: &mut InverterState) {
-        st.ev_present = self.ev_present;
-        st.evcharger_present = self.evcharger_present;
-        if st.car_soc.is_none() {
-            if let Some((v, _)) = self.car_soc {
-                st.car_soc = Some(v);
-            }
+        st.ev_present = self.ev_present || st.ev_present;
+        st.evcharger_present = self.evcharger_present || st.evcharger_present;
+        // Always overwrite: cache value (even 0) takes precedence over None.
+        if let Some((v, _)) = self.car_soc {
+            st.car_soc = Some(v);
         }
-        if st.car_charging_power.is_none() {
-            if let Some((v, _)) = self.car_charging_power {
-                st.car_charging_power = Some(v);
-            }
+        if let Some((v, _)) = self.car_charging_power {
+            st.car_charging_power = Some(v);
         }
-        if st.ev_charging_power.is_none() {
-            if let Some((v, _)) = self.ev_charging_power {
-                st.ev_charging_power = Some(v);
-            }
+        if let Some((v, _)) = self.ev_charging_power {
+            st.ev_charging_power = Some(v);
         }
     }
 }
@@ -1401,10 +1399,15 @@ impl MqttClient {
         }
         // Mark presence so the EV tile stays visible even when SOC/power are 0.
         cache.set_presence(kind);
+        // When cache.update returns false (TTL or 0-clobber), still re-apply the
+        // cached value to st so process_state_update's clone doesn't see None.
         match (kind, path) {
             ("ev", "Soc") => {
                 if cache.update(EvField::CarSoc, value) {
                     st.car_soc = Some(value);
+                    Some(EvField::CarSoc)
+                } else if let Some((v, _)) = cache.car_soc {
+                    st.car_soc = Some(v);
                     Some(EvField::CarSoc)
                 } else {
                     None
@@ -1414,6 +1417,9 @@ impl MqttClient {
                 if cache.update(EvField::CarChargingPower, value) {
                     st.car_charging_power = Some(value);
                     Some(EvField::CarChargingPower)
+                } else if let Some((v, _)) = cache.car_charging_power {
+                    st.car_charging_power = Some(v);
+                    Some(EvField::CarChargingPower)
                 } else {
                     None
                 }
@@ -1421,6 +1427,9 @@ impl MqttClient {
             ("evcharger", "Ac/Power") => {
                 if cache.update(EvField::EvChargingPower, value) {
                     st.ev_charging_power = Some(value);
+                    Some(EvField::EvChargingPower)
+                } else if let Some((v, _)) = cache.ev_charging_power {
+                    st.ev_charging_power = Some(v);
                     Some(EvField::EvChargingPower)
                 } else {
                     None
@@ -1431,6 +1440,9 @@ impl MqttClient {
                 // some GX installs still use that name after the .ev rename.
                 if cache.update(EvField::CarSoc, value) {
                     st.car_soc = Some(value);
+                    Some(EvField::CarSoc)
+                } else if let Some((v, _)) = cache.car_soc {
+                    st.car_soc = Some(v);
                     Some(EvField::CarSoc)
                 } else {
                     None
@@ -1887,6 +1899,9 @@ impl MqttClient {
         if let Ok(cache) = ev_cache.lock() {
             cache.restore_into(&mut new_state);
         }
+        // restore_into ran above BEFORE emit so the emitted snapshot already
+        // carries cached EV values (prevents the blink where the clone from
+        // before apply_ev_message lands sees null EV numbers).
         Self::emit_state_update(&app_handle, &new_state, false);
         if let Ok(mut guard) = state.lock() {
             *guard = new_state;
@@ -2826,7 +2841,9 @@ mod tests {
 
     #[test]
     fn ev_cache_throttles_same_field_within_window() {
-        // Apply once → cache populated. Second call within 8 s → rejected.
+        // Apply once → cache populated. Second call within 8 s → rejected by TTL.
+        // But apply_ev_message still copies the cached value onto st and returns
+        // Some (so process_state_update sees consistent state).
         let mut cache = EvCache::default();
         let instances = Some((Some(22), Some(40)));
 
@@ -2837,13 +2854,14 @@ mod tests {
         .is_some());
         assert_eq!(st.car_soc, Some(66.0));
 
-        // Second call within the 8 s throttle window → ignored, state unchanged.
+        // Second call within the 8 s throttle window → cache not updated, but
+        // cached value is re-applied to st and Some is returned.
         let mut st2 = InverterState::default();
         assert!(MqttClient::apply_ev_message(
             &mut st2, &mut cache, "ev", 22, "Soc", 70.0, &instances
         )
-        .is_none());
-        assert_eq!(st2.car_soc, None);
+        .is_some());
+        assert_eq!(st2.car_soc, Some(66.0)); // cached value preserved
     }
 
     #[test]
@@ -2959,14 +2977,14 @@ mod tests {
         .is_some());
         assert_eq!(st.car_soc, Some(66.0));
 
-        // Second: daemon publishes 0 → cache must refuse (preserve real value).
+        // Second: daemon publishes 0 → cache refuses update (preserves real).
+        // apply_ev_message still copies cached value onto st2 and returns Some.
         let mut st2 = InverterState::default();
         assert_eq!(
             MqttClient::apply_ev_message(&mut st2, &mut cache, "ev", 22, "Soc", 0.0, &instances,),
-            None,
+            Some(EvField::CarSoc),
         );
-        assert_eq!(st2.car_soc, None); // cache didn't update, so st2 stays None
-                                       // But st (the live state) still has 66.
+        assert_eq!(st2.car_soc, Some(66.0)); // cached value preserved, not clobbered
         assert_eq!(st.car_soc, Some(66.0));
     }
 }

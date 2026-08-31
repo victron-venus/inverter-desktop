@@ -57,9 +57,11 @@ export function useConnection() {
     // Non-destructive merge: preserve existing values when incoming field is
     // undefined. Prevents transient null/undefined from wiping valid numbers
     // during partial MQTT messages or reconnection bursts.
+    // JSON null IS undefined for our purposes — do not let null overwrite
+    // an existing number/string for telemetry fields.
     const merged: InverterState = { ...prev }
     for (const [key, val] of Object.entries(newState)) {
-      if (val !== undefined) {
+      if (val !== undefined && val !== null) {
         ;(merged as Record<string, unknown>)[key] = val
       }
     }
