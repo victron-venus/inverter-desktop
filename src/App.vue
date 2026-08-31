@@ -102,7 +102,7 @@
           :showSolar="appConfig?.show_solar_production !== false"
         />
 
-        <LoadsTable v-if="appConfig?.show_active_loads !== false" :loads="haLoads" />
+        <LoadsTable v-if="appConfig?.show_active_loads !== false" :loads="acloads" />
       </div>
 
       <!-- Bottom Status Bar: Classic dot layout -->
@@ -202,6 +202,7 @@ import { checkForUpdates, checkForUpdatesSilent } from './composables/useAutoUpd
 import { addHistoryPoint, useChart } from './composables/useChart'
 import { notify, useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
+import { useMQTTState } from './composables/useMQTTState'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
 import { getAppConfig } from './config'
@@ -225,18 +226,6 @@ const {
   buttonStates,
   headerToggles,
   headerToggleStates,
-  waterValveState,
-  pumpSwitchState,
-  waterLevel,
-  waterSectionVisible,
-  waterPumpMode,
-  waterValveMode,
-  evSoc,
-  evChargingKw,
-  evPower,
-  evPowerWatts,
-  evSectionVisible,
-  haLoads,
   haSensors,
   haNumbers,
   haCovers,
@@ -259,6 +248,19 @@ const {
   cleanupHa,
   setWindowHidden,
 } = useHA()
+const {
+  waterLevel,
+  pumpSwitchState,
+  waterValveState,
+  waterPumpMode,
+  waterValveMode,
+  waterSectionVisible,
+  evSoc,
+  evChargingKw,
+  evPowerWatts,
+  evSectionVisible,
+  acloads,
+} = useMQTTState()
 const { isDark, toggleTheme } = useTheme()
 const { chartOption, forceUpdateChart, setChartPaused } = useChart(isDark)
 const isWindowHidden = ref(false)
@@ -432,7 +434,7 @@ const solarSources = computed(() => {
   if (pvInvs?.length) {
     pvInvs.forEach((p, i) => {
       sources.push({
-        name: p.name || 'PV Inverter ' + (i + 1),
+        name: p.name || `PV Inverter ${i + 1}`,
         serial: p.serial,
         instance: p.instance,
         pvVoltage: p.voltage,
