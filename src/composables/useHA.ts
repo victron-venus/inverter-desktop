@@ -336,11 +336,11 @@ export function useHA() {
 
   const evSectionVisible = computed(() => {
     if (!mqttConnected.value) return false
-    return (
-      state.value.car_soc != null ||
-      state.value.car_charging_power != null ||
-      state.value.ev_charging_power != null
-    )
+    // Show EV section whenever MQTT has published for configured ev/evcharger
+    // instances — presence bits survive daemon merges and 0-power values still
+    // display the section. Metric nullness (SOC/power) gates display content,
+    // not card visibility.
+    return state.value.ev_present || state.value.evcharger_present
   })
 
   /** Active loads strictly from Cerbo DBus -> MQTT (state.value.loads), zero HA fallback */
