@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
+import { useHA } from '../composables/useHA'
+import { mqttConnected, state } from '../composables/useInverterState'
 import type { HaCoverDisplay, HaSensorDisplay, HaWeatherDisplay } from '../types/ha'
 import { resolveHeaderToggleState } from '../utils'
 
@@ -216,5 +219,49 @@ describe('computeToggleStates', () => {
     const states = computeToggleStates(toggles, {}, false, {})
     expect(states.only_charging).toBe('off')
     expect(states.no_feed).toBe('off')
+  })
+})
+
+describe('evSectionVisible latch', () => {
+  it('latches true once ev_present is seen and never clears', async () => {
+    state.value.ev_present = false
+    state.value.evcharger_present = false
+    mqttConnected.value = true
+    const { evSectionVisible } = useHA()
+    expect(evSectionVisible.value).toBe(false)
+
+    state.value.ev_present = true
+    await nextTick()
+    expect(evSectionVisible.value).toBe(true)
+
+    state.value.ev_present = false
+    mqttConnected.value = false
+    await nextTick()
+    expect(evSectionVisible.value).toBe(true)
+  })
+
+  it('latches from evcharger_present', async () => {
+    state.value.ev_present = false
+    state.value.evcharger_present = false
+    mqttConnected.value = true
+    const { evSectionVisible } = useHA()
+    expect(evSectionVisible.value).toBe(false)
+
+    state.value.evcharger_present = true
+    await nextTick()
+    expect(evSectionVisible.value).toBe(true)
+  })
+
+  it('stays hidden when no presence was ever seen', async () => {
+    state.value.ev_present = undefined
+    state.value.evcharger_present = undefined
+    mqttConnected.value = true
+    const { evSectionVisible } = useHA()
+    expect(evSectionVisible.value).toBe(false)
+
+    mqttConnected.value = false
+    state.value.ev_present = false
+    await nextTick()
+    expect(evSectionVisible.value).toBe(false)
   })
 })
