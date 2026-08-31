@@ -21,6 +21,14 @@ npm run tauri build -- --verbose
 echo "===> Killing running instances of '${APP_NAME}'..."
 pkill -f "${APP_NAME}" 2>/dev/null && echo "  ✓ Killed" || echo "  (not running)"
 
+BUNDLE_ID="com.alvit.inverter-dashboard"
+echo ""
+echo "===> Clearing WKWebView NetworkCache..."
+rm -rf "$HOME/Library/Caches/${BUNDLE_ID}/WebKit/NetworkCache"
+echo "  ✓ $HOME/Library/Caches/${BUNDLE_ID}/WebKit/NetworkCache"
+# Also possible (drops localStorage theme/dismissed, not Application Support/config.json):
+# rm -rf "$HOME/Library/WebKit/${BUNDLE_ID}"
+
 echo ""
 echo "===> Installing ${APP_NAME} to /Applications..."
 APP_BUNDLE="${BUNDLE_DIR}/macos/${APP_NAME}.app"
