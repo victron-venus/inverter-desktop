@@ -4,19 +4,18 @@ set -euo pipefail
 APP_NAME="Inverter Desktop"
 BUNDLE_DIR="src-tauri/target/release/bundle"
 
-echo "===> Cleaning project (npm mode)..."
+echo "===> Cleaning project..."
 rm -rf node_modules dist src-tauri/target
 echo "  ✓ Cleaned"
 
 echo ""
-echo "===> Installing dependencies using npm..."
-# We switch to npm because pnpm installation is broken on this system
-npm install
+echo "===> Installing dependencies using pnpm..."
+# Using pnpm for consistent lockfile-based installs (matches CI)
+pnpm install
 
 echo ""
 echo "===> Building Tauri application..."
-# Use npm to run tauri build
-npm run tauri build -- --verbose
+pnpm run tauri build -- --verbose
 
 echo "===> Killing running instances of '${APP_NAME}'..."
 pkill -f "${APP_NAME}" 2>/dev/null && echo "  ✓ Killed" || echo "  (not running)"
