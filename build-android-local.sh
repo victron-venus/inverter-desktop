@@ -17,10 +17,11 @@ SIGN_APK="${SIGN_APK:-false}"
 VERSION=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
 
 usage() {
-  echo "Usage: $0 [--clean] [--dev] [--sign]"
+  echo "Usage: $0 [--clean] [--dev] [--sign] [--update-deps]"
   echo "  --clean    Remove node_modules and build artifacts before starting"
   echo "  --dev      Build debug APK instead of release"
   echo "  --sign     Sign the release APK (requires keystore env vars)"
+  echo "  --update-deps  Update JS dependencies (pnpm update) before building"
   echo ""
   echo "Environment variables for signing:"
   echo "  ANDROID_KEYSTORE_PATH    Path to .keystore/.jks file"
@@ -32,11 +33,13 @@ usage() {
 
 CLEAN=false
 RELEASE=true
+UPDATE_DEPS=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean) CLEAN=true; shift ;;
     --dev)   RELEASE=false; shift ;;
     --sign)  SIGN_APK=true; shift ;;
+    --update-deps) UPDATE_DEPS=true; shift ;;
     --help)  usage ;;
     *)       usage ;;
   esac
@@ -58,6 +61,17 @@ echo "║  5. Sign & align APK                                 ║"
 fi
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
+
+if [ "$UPDATE_DEPS" = true ]; then
+  echo "===> Updating dependencies..."
+  pnpm update
+  echo ""
+  echo "===> Regenerating lockfile..."
+  pnpm install
+  echo ""
+  echo "  ⚠  Commit pnpm-lock.yaml before building:"
+  echo "      git add pnpm-lock.yaml && git commit -m 'chore: update deps'"
+fi
 
 if [ "$CLEAN" = true ]; then
   echo "===> Cleaning project..."
@@ -180,7 +194,7 @@ echo "  ✓ Rust Android targets installed"
 
 echo ""
 echo "===> Installing dependencies..."
-pnpm install
+pnpm install --frozen-lockfile
 
 echo ""
 echo "===> Initializing Android project (if needed)..."

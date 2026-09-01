@@ -4,14 +4,36 @@ set -euo pipefail
 APP_NAME="Inverter Desktop"
 BUNDLE_DIR="src-tauri/target/release/bundle"
 
-echo "===> Cleaning project..."
-rm -rf node_modules dist src-tauri/target
-echo "  ✓ Cleaned"
+UPDATE_DEPS=false
+CLEAN=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --update-deps) UPDATE_DEPS=true; shift ;;
+    --clean) CLEAN=true; shift ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
+if [[ "$CLEAN" == true || "$UPDATE_DEPS" == true ]]; then
+  echo "===> Cleaning project..."
+  rm -rf node_modules dist src-tauri/target
+  echo "  ✓ Cleaned"
+fi
 
 echo ""
-echo "===> Installing dependencies using pnpm..."
-# Using pnpm for consistent lockfile-based installs (matches CI)
-pnpm install
+if [[ "$UPDATE_DEPS" == true ]]; then
+  echo "===> Updating dependencies..."
+  pnpm update
+  echo ""
+  echo "===> Regenerating lockfile..."
+  pnpm install
+  echo ""
+  echo "  ⚠  Commit pnpm-lock.yaml before building:"
+  echo "      git add pnpm-lock.yaml && git commit -m 'chore: update deps'"
+else
+  echo "===> Installing dependencies (frozen lockfile)..."
+  pnpm install --frozen-lockfile
+fi
 
 echo ""
 echo "===> Building Tauri application..."
@@ -25,8 +47,6 @@ echo ""
 echo "===> Clearing WKWebView NetworkCache..."
 rm -rf "$HOME/Library/Caches/${BUNDLE_ID}/WebKit/NetworkCache"
 echo "  ✓ $HOME/Library/Caches/${BUNDLE_ID}/WebKit/NetworkCache"
-# Also possible (drops localStorage theme/dismissed, not Application Support/config.json):
-# rm -rf "$HOME/Library/WebKit/${BUNDLE_ID}"
 
 echo ""
 echo "===> Installing ${APP_NAME} to /Applications..."
@@ -48,6 +68,5 @@ echo "  App:  /Applications/${APP_NAME}.app"
 echo "  DMG:  ${BUNDLE_DIR}/dmg/"
 echo "========================================"
 
-# Launch the app
 open -a "${APP_NAME}"
 date
