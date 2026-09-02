@@ -15,9 +15,11 @@
           </div>
         </div>
         <div class="text-center" v-if="evChargingPower !== null">
-          <div class="text-xl font-bold text-slate-500 leading-none">{{ evChargingPower }}</div>
+          <div class="text-xl font-bold text-slate-500 leading-none">
+            {{ (evChargingPower / 1000).toFixed(1) }}kW
+          </div>
           <div class="text-[10px] text-slate-500 font-bold tracking-tighter">
-            {{ $t('sections.vue') }}
+            {{ $t('sections.evcharger') }}
           </div>
         </div>
         <div class="text-right" v-if="carSoc != null && carSoc > 0">
@@ -430,23 +432,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import {
+  Blinds,
   Car,
   CloudSun,
   Droplets,
   Gauge,
   Home as HomeIcon,
-  Blinds,
+  Lightbulb,
+  type LucideIcon,
   Play,
+  PlugZap,
   Sliders,
   Sparkles,
-  Lightbulb,
   WashingMachine,
-  PlugZap,
-  type LucideIcon,
 } from '@lucide/vue'
+import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type {
   HaCoverDisplay,
   HaMediaPlayerDisplay,

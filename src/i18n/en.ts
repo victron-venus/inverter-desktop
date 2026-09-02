@@ -9,8 +9,8 @@ export default {
   },
   sections: {
     ev: 'EV',
-    charging: 'Charging',
-    vue: 'VUE',
+    charging: 'EV',
+    evcharger: 'Charger',
     soc: 'SoC',
     water: 'Water',
     pump: 'PUMP',
