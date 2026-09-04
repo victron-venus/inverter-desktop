@@ -3,7 +3,9 @@
     <div class="classic-header py-0 px-2 flex items-center gap-1.5 h-[22px]">
       <Zap :size="10" /> Active Loads
     </div>
-    <div class="divide-y divide-slate-50 dark:divide-slate-800/30">
+    <div
+      class="divide-y divide-slate-50 dark:divide-slate-800/30 max-h-[min(40vh,280px)] overflow-y-auto overscroll-contain"
+    >
       <div
         v-for="load in loads"
         :key="load.id || load.name"
