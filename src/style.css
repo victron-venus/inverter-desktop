@@ -764,3 +764,31 @@
 .ha-entity-unavailable .text-muted {
   color: #8e8e93 !important;
 }
+
+/* SidePanel dense chrome 2026 */
+.side-panel .classic-header {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.625rem;
+}
+.side-panel .classic-card {
+  border-radius: var(--radius-card);
+}
+.side-panel .classic-card > div:last-child {
+  padding: 0.5rem !important;
+}
+.side-panel .home-btn-grid {
+  gap: 0.1rem;
+}
+.side-panel .classic-inset {
+  padding: 0.15rem 0.3rem;
+}
+.app-shell {
+  background-image:
+    radial-gradient(ellipse at top left, color-mix(in srgb, var(--color-accent) 4%, transparent) 0%, transparent 40%),
+    radial-gradient(ellipse at bottom right, color-mix(in srgb, var(--color-battery) 3%, transparent) 0%, transparent 45%);
+}
+.dark .app-shell {
+  background-image:
+    radial-gradient(ellipse at top left, color-mix(in srgb, var(--color-accent) 3%, transparent) 0%, transparent 40%),
+    radial-gradient(ellipse at bottom right, color-mix(in srgb, var(--color-battery) 2%, transparent) 0%, transparent 45%);
+}
