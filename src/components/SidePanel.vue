@@ -552,12 +552,15 @@ function getHomeButtonIcon(entity: string, label: string): LucideIcon | null {
   return null
 }
 
-/** Get display label with keywords stripped */
+/** Get display label with keywords stripped; break at spaces for compact tiles. */
 function getHomeButtonLabel(label: string): string {
   return label
     .replace(/\b(laundry|washer|washing|guard)\b/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim()
+    .split(' ')
+    .filter(Boolean)
+    .join('\n')
 }
 
 function isBtnUnavailable(state: string | undefined): boolean {

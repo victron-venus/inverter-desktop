@@ -317,10 +317,10 @@
   min-width: 0;
   max-width: 100%;
   width: 100%;
-  white-space: normal !important;
+  /* Labels insert \n between words — honor them even when width would fit one line */
+  white-space: pre-line !important;
   overflow-wrap: break-word;
   word-break: normal;
-  /* 2-line clamp without -webkit-box (more reliable wrap-at-space) */
   max-height: calc(1.15em * 2);
   overflow: hidden;
   font-size: 0.5625rem;
