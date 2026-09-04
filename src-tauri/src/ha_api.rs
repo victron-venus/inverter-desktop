@@ -346,12 +346,21 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
     }
 }
 
-/// Entity IDs that returned HTTP 404/410 from `/api/states/{id}`.
+/// Consecutive HTTP 404/410 strikes required before blacklisting an entity.
+/// A single miss can be a fluke/timeout race; require sustained absence.
+const HA_ENTITY_SKIP_STRIKES: u32 = 3;
+
+/// Entity IDs blacklisted after [`HA_ENTITY_SKIP_STRIKES`] consecutive 404/410
+/// responses from `/api/states/{id}`.
 /// Process-wide because `HaApiClient` is constructed per REST invoke; cleared on
 /// config save/restore and HA WebSocket reconnect so fixing an entity id in
 /// config takes effect without a full app restart.
 static HA_ENTITY_SKIP: std::sync::LazyLock<Mutex<HashSet<String>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Per-entity consecutive 404/410 failure counts (process-wide, like HA_ENTITY_SKIP).
+static HA_ENTITY_FAIL_COUNT: std::sync::LazyLock<Mutex<HashMap<String, u32>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn is_entity_skipped(entity_id: &str) -> bool {
     HA_ENTITY_SKIP
@@ -360,23 +369,56 @@ fn is_entity_skipped(entity_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn blacklist_missing_entity(entity_id: &str) {
+/// Record a successful fetch for `entity_id` — resets its consecutive-miss counter.
+fn record_entity_success(entity_id: &str) {
+    if let Ok(mut counts) = HA_ENTITY_FAIL_COUNT.lock() {
+        counts.remove(entity_id);
+    }
+}
+
+/// Record an HTTP 404/410 for `entity_id`. Blacklists only after
+/// [`HA_ENTITY_SKIP_STRIKES`] consecutive misses; any success resets the counter.
+fn record_entity_missing(entity_id: &str) {
+    if is_entity_skipped(entity_id) {
+        return;
+    }
+    let strikes = {
+        let Ok(mut counts) = HA_ENTITY_FAIL_COUNT.lock() else {
+            return;
+        };
+        let entry = counts.entry(entity_id.to_string()).or_insert(0);
+        *entry = entry.saturating_add(1);
+        *entry
+    };
+    if strikes < HA_ENTITY_SKIP_STRIKES {
+        log::debug!(
+            "HA entity {} returned 404/410 (strike {}/{}); will retry",
+            entity_id,
+            strikes,
+            HA_ENTITY_SKIP_STRIKES
+        );
+        return;
+    }
     let newly_added = HA_ENTITY_SKIP
         .lock()
         .map(|mut set| set.insert(entity_id.to_string()))
         .unwrap_or(false);
     if newly_added {
         log::info!(
-            "HA entity {} not found — disabled until config reload",
-            entity_id
+            "HA entity {} not found after {} consecutive 404/410 — disabled until config reload",
+            entity_id,
+            strikes
         );
     }
 }
 
-/// Clear the missing-entity killswitch (config reload / HA reconnect).
+/// Clear the missing-entity killswitch and failure counters (config reload / HA reconnect).
 pub fn clear_entity_skip_list() {
     if let Ok(mut set) = HA_ENTITY_SKIP.lock() {
         set.clear();
+    }
+    if let Ok(mut counts) = HA_ENTITY_FAIL_COUNT.lock() {
+        counts.clear();
     }
 }
 
@@ -509,16 +551,18 @@ impl HaApiClient {
             if status == reqwest::StatusCode::UNAUTHORIZED {
                 return Err("HA authentication failed (401)".to_string());
             }
-            // Gone / missing entities are blacklisted for this process lifetime
-            // (cleared on config reload or HA reconnect) so we stop polling + WARNing.
+            // Gone / missing entities: require HA_ENTITY_SKIP_STRIKES consecutive
+            // 404/410 before blacklisting (cleared on config reload / HA reconnect).
             if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::GONE {
-                blacklist_missing_entity(eid);
+                record_entity_missing(eid);
                 continue;
             }
             if !status.is_success() {
                 log::warn!("HA entity {} returned HTTP {}, skipping", eid, status);
                 continue;
             }
+            // HTTP success — entity exists; reset consecutive-miss counter.
+            record_entity_success(eid);
             if let Ok(item) = response.json::<serde_json::Value>().await {
                 if let (Some(entity_id), Some(state)) = (item.get("entity_id"), item.get("state")) {
                     if let (Some(eid_str), Some(state_str)) = (entity_id.as_str(), state.as_str()) {
@@ -949,34 +993,86 @@ mod entity_skip_tests {
     use super::*;
     use std::sync::Mutex;
 
-    // Process-global skip set — serialize these tests.
+    // Process-global skip set + fail counters — serialize these tests.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    fn strike_until_skip(eid: &str) {
+        for _ in 0..HA_ENTITY_SKIP_STRIKES {
+            record_entity_missing(eid);
+        }
+    }
+
     #[test]
-    fn blacklist_skips_subsequent_checks() {
+    fn requires_three_consecutive_misses_before_skip() {
         let _guard = TEST_LOCK.lock().unwrap();
         clear_entity_skip_list();
         let eid = "button.washer_start";
         assert!(!is_entity_skipped(eid));
-        blacklist_missing_entity(eid);
+
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid), "1 miss must not blacklist");
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid), "2 misses must not blacklist");
+        record_entity_missing(eid);
+        assert!(
+            is_entity_skipped(eid),
+            "3 consecutive misses must blacklist"
+        );
+
+        // Further misses are a no-op (still skipped)
+        record_entity_missing(eid);
         assert!(is_entity_skipped(eid));
-        // Second blacklist is a no-op (still skipped)
-        blacklist_missing_entity(eid);
-        assert!(is_entity_skipped(eid));
+
         clear_entity_skip_list();
         assert!(!is_entity_skipped(eid));
     }
 
     #[test]
-    fn clear_only_affects_skip_list() {
+    fn success_resets_consecutive_miss_counter() {
         let _guard = TEST_LOCK.lock().unwrap();
         clear_entity_skip_list();
-        blacklist_missing_entity("sensor.dead_one");
-        blacklist_missing_entity("button.dead_two");
+        let eid = "sensor.flaky";
+
+        record_entity_missing(eid);
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid));
+
+        record_entity_success(eid);
+
+        // After reset, need a fresh 3 strikes
+        record_entity_missing(eid);
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid));
+        record_entity_missing(eid);
+        assert!(is_entity_skipped(eid));
+
+        clear_entity_skip_list();
+    }
+
+    #[test]
+    fn clear_resets_skip_list_and_counters() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_entity_skip_list();
+
+        strike_until_skip("sensor.dead_one");
+        strike_until_skip("button.dead_two");
         assert!(is_entity_skipped("sensor.dead_one"));
         assert!(is_entity_skipped("button.dead_two"));
+
+        // Partial strikes on a third entity, then clear everything
+        record_entity_missing("sensor.partial");
+        record_entity_missing("sensor.partial");
         clear_entity_skip_list();
+
         assert!(!is_entity_skipped("sensor.dead_one"));
         assert!(!is_entity_skipped("button.dead_two"));
+        assert!(!is_entity_skipped("sensor.partial"));
+
+        // Cleared counters: two more misses still not enough to skip
+        record_entity_missing("sensor.partial");
+        record_entity_missing("sensor.partial");
+        assert!(!is_entity_skipped("sensor.partial"));
+
+        clear_entity_skip_list();
     }
 }
