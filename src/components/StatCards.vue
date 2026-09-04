@@ -1,63 +1,59 @@
 <template>
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-1.5 mb-0.5">
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-1.5">
     <!-- Grid -->
-    <div class="classic-card p-1.5 flex flex-col items-center justify-center min-h-[75px]">
+    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
       <div class="classic-stat-label">Grid</div>
-      <div class="text-3xl font-bold text-grid leading-none tracking-tight">
+      <div class="classic-stat-value text-[1.75rem] font-bold text-grid">
         {{ formatPower(gt) }}
       </div>
-      <div class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-        {{ formatPower(g1) }} <span class="opacity-30 mx-0.5">|</span> {{ formatPower(g2) }}
+      <div class="classic-stat-meta mt-0.5">
+        {{ formatPower(g1) }} <span class="opacity-30 mx-0.5">·</span> {{ formatPower(g2) }}
       </div>
     </div>
 
     <!-- Consumption -->
-    <div class="classic-card p-1.5 flex flex-col items-center justify-center min-h-[75px]">
+    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
       <div class="classic-stat-label">Consumption</div>
-      <div class="text-3xl font-bold text-consumption leading-none tracking-tight">
+      <div class="classic-stat-value text-[1.75rem] font-bold text-consumption">
         {{ formatPower(tt) }}
       </div>
-      <div class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-        {{ formatPower(t1) }} <span class="opacity-30 mx-0.5">|</span> {{ formatPower(t2) }}
+      <div class="classic-stat-meta mt-0.5">
+        {{ formatPower(t1) }} <span class="opacity-30 mx-0.5">·</span> {{ formatPower(t2) }}
       </div>
     </div>
 
     <!-- Solar -->
-    <div class="classic-card p-1.5 flex flex-col items-center justify-center min-h-[75px]">
+    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
       <div class="classic-stat-label">Solar</div>
-      <div class="text-3xl font-bold text-solar leading-none tracking-tight">
+      <div class="classic-stat-value text-[1.75rem] font-bold text-solar">
         {{ formatPower(solarTotal) }}
       </div>
-      <div class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-        {{ formatPower(mpptTotal) }} <span class="opacity-30 mx-0.5">|</span>
+      <div class="classic-stat-meta mt-0.5">
+        {{ formatPower(mpptTotal) }} <span class="opacity-30 mx-0.5">·</span>
         {{ formatPower(pvInvertersTotal) }}
       </div>
     </div>
 
     <!-- Battery -->
-    <div class="classic-card p-1.5 flex flex-col items-center justify-center min-h-[75px]">
+    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
       <div class="classic-stat-label">Battery</div>
-      <div class="text-3xl font-bold text-battery leading-none tracking-tight">
+      <div class="classic-stat-value text-[1.75rem] font-bold text-battery">
         {{ Math.floor(batterySoc || 0) }}%
       </div>
-      <div
-        class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold truncate w-full text-center"
-      >
-        {{ formatPower(batteryPower) }} <span class="opacity-30 mx-0.5">|</span>
-        {{ (batteryVoltage || 0).toFixed(2) }}V <span class="opacity-30 mx-0.5">|</span>
+      <div class="classic-stat-meta mt-0.5 truncate w-full text-center">
+        {{ formatPower(batteryPower) }} <span class="opacity-30 mx-0.5">·</span>
+        {{ (batteryVoltage || 0).toFixed(2) }}V <span class="opacity-30 mx-0.5">·</span>
         {{ (batteryCurrent || 0).toFixed(1) }}A
       </div>
     </div>
 
     <!-- Setpoint -->
-    <div class="classic-card p-1.5 flex flex-col items-center justify-center min-h-[75px]">
+    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
       <div class="classic-stat-label">Setpoint</div>
-      <div class="text-3xl font-bold text-accent leading-none tracking-tight">
+      <div class="classic-stat-value text-[1.75rem] font-bold text-accent">
         {{ formatPower(setpoint) }}
       </div>
-      <div
-        class="text-[11px] text-slate-500 dark:text-slate-400 font-semibold truncate w-full text-center tracking-tight"
-      >
+      <div class="classic-stat-meta mt-0.5 truncate w-full text-center">
         {{ formatInverterState(inverterState) }}
       </div>
     </div>

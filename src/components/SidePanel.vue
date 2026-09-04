@@ -5,26 +5,28 @@
       <div class="classic-header flex items-center gap-1.5">
         <Car :size="10" /> {{ $t('sections.ev') }}
       </div>
-      <div class="p-1 flex justify-between items-center gap-2 px-2">
+      <div class="p-1.5 flex justify-between items-center gap-2 px-2">
         <div v-if="carChargingPower != null">
-          <div class="text-xl font-bold text-solar leading-none">
+          <div class="text-xl font-bold text-solar leading-none tabular tracking-tight">
             {{ (carChargingPower / 1000).toFixed(1) }}kW
           </div>
-          <div class="text-[10px] text-slate-500 font-bold text-center">
+          <div class="text-[10px] text-muted font-semibold text-center">
             {{ $t('sections.charging') }}
           </div>
         </div>
         <div class="text-center" v-if="evChargingPower !== null">
-          <div class="text-xl font-bold text-slate-500 leading-none">
+          <div class="text-xl font-bold text-muted leading-none tabular tracking-tight">
             {{ (evChargingPower / 1000).toFixed(1) }}kW
           </div>
-          <div class="text-[10px] text-slate-500 font-bold tracking-tighter">
+          <div class="text-[10px] text-muted font-semibold tracking-tight">
             {{ $t('sections.evcharger') }}
           </div>
         </div>
         <div class="text-right" v-if="carSoc != null && carSoc > 0">
-          <div class="text-xl font-bold text-accent leading-none">{{ Math.floor(carSoc) }}%</div>
-          <div class="text-[10px] text-slate-500 font-bold text-center tracking-tighter">
+          <div class="text-xl font-bold text-accent leading-none tabular tracking-tight">
+            {{ Math.floor(carSoc) }}%
+          </div>
+          <div class="text-[10px] text-muted font-semibold text-center tracking-tight">
             {{ $t('sections.soc') }}
           </div>
         </div>
@@ -36,11 +38,11 @@
       <div class="classic-header flex items-center gap-1.5">
         <Droplets :size="10" /> {{ $t('sections.water') }}
       </div>
-      <div class="p-1 flex justify-between items-center gap-2 px-2">
+      <div class="p-1.5 flex justify-between items-center gap-2 px-2">
         <div
           v-if="waterLevel != null"
-          class="text-xl font-bold"
-          :class="waterValve === true ? 'text-red-500' : 'text-green-500'"
+          class="text-xl font-bold tabular tracking-tight"
+          :class="waterValve === true ? 'text-consumption' : 'text-battery'"
         >
           {{ Math.round(waterLevel) }} %
         </div>
@@ -92,7 +94,7 @@
       <div class="classic-header flex items-center gap-1.5">
         <HomeIcon :size="10" /> {{ $t('sections.home') }}
       </div>
-      <div class="home-btn-grid p-1 overflow-y-auto max-h-[300px]">
+      <div class="home-btn-grid p-1.5 overflow-y-auto max-h-[300px]">
         <UiButton
           v-for="btn in homeButtons"
           :key="btn.id"
@@ -122,10 +124,10 @@
       <div class="p-1">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1">
-            <span class="text-lg font-bold text-slate-700 dark:text-slate-300">
+            <span class="text-lg font-bold text-main tabular tracking-tight">
               {{ haWeather.temperature }}{{ haWeather.unit }}
             </span>
-            <span class="text-[10px] text-slate-500 capitalize">{{ haWeather.state }}</span>
+            <span class="text-[10px] text-muted capitalize">{{ haWeather.state }}</span>
           </div>
         </div>
         <!-- Forecast -->
@@ -135,11 +137,11 @@
             :key="idx"
             class="classic-inset flex flex-col items-center min-w-[40px] !px-1 !py-0.5"
           >
-            <span class="text-[8px] text-slate-400">{{
+            <span class="text-[8px] text-muted">{{
               (day.datetime as string)?.slice(5, 10) || ''
             }}</span>
             <span class="text-[10px] font-bold">{{ day.temperature }}{{ haWeather.unit }}</span>
-            <span class="text-[8px] text-slate-500 capitalize truncate max-w-[36px]">{{
+            <span class="text-[8px] text-muted capitalize truncate max-w-[36px]">{{
               day.condition as string
             }}</span>
           </div>
@@ -154,18 +156,18 @@
         @click="sensorsExpanded = !sensorsExpanded"
       >
         <Gauge :size="10" /> {{ $t('sections.sensors') }} ({{ haSensors.length }})
-        <span class="ml-auto text-[10px]">{{ sensorsExpanded ? '▼' : '▶' }}</span>
+        <span class="ml-auto text-[10px]">{{ sensorsExpanded ? '▾' : '▸' }}</span>
       </div>
       <div v-if="sensorsExpanded" class="p-1 flex flex-col gap-0.5">
         <div
           v-for="sensor in haSensors"
           :key="sensor.entity_id"
-          class="flex justify-between items-center px-1 py-0.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800/50"
+          class="row-hover flex justify-between items-center px-1 py-0.5 rounded"
         >
-          <span class="text-[10px] font-medium text-slate-500 truncate mr-2">
+          <span class="text-[10px] font-medium text-muted truncate mr-2">
             {{ sensor.name }}
           </span>
-          <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300 whitespace-nowrap">
+          <span class="text-[11px] font-semibold text-main whitespace-nowrap tabular">
             {{ sensor.state }}{{ sensor.unit }}
           </span>
         </div>
@@ -179,18 +181,18 @@
         @click="numbersExpanded = !numbersExpanded"
       >
         <Sliders :size="10" /> {{ $t('sections.numbers') }} ({{ haNumbers.length }})
-        <span class="ml-auto text-[10px]">{{ numbersExpanded ? '▼' : '▶' }}</span>
+        <span class="ml-auto text-[10px]">{{ numbersExpanded ? '▾' : '▸' }}</span>
       </div>
       <div v-if="numbersExpanded" class="p-1 flex flex-col gap-1">
         <div v-for="num in haNumbers" :key="num.entity_id" class="flex flex-col gap-0.5">
           <div class="flex justify-between items-center px-1">
             <span
               :id="'num-label-' + num.entity_id"
-              class="text-[10px] font-medium text-slate-500 truncate mr-2"
+              class="text-[10px] font-medium text-muted truncate mr-2"
             >
               {{ num.name }}
             </span>
-            <span class="text-[10px] font-bold text-slate-600 dark:text-slate-400">
+            <span class="text-[10px] font-semibold text-muted tabular">
               {{ num.value }}{{ num.unit }}
             </span>
           </div>
@@ -202,7 +204,7 @@
             :max="num.max"
             :step="num.step"
             :value="num.value"
-            class="w-full h-1 accent-blue-500 cursor-pointer"
+            class="w-full h-1 accent-accent cursor-pointer"
             @change="
               $emit('number-set', num.entity_id, Number(($event.target as HTMLInputElement).value))
             "
@@ -218,7 +220,7 @@
         @click="coversExpanded = !coversExpanded"
       >
         <Blinds :size="10" /> {{ $t('sections.covers') }} ({{ haCovers.length }})
-        <span class="ml-auto text-[10px]">{{ coversExpanded ? '▼' : '▶' }}</span>
+        <span class="ml-auto text-[10px]">{{ coversExpanded ? '▾' : '▸' }}</span>
       </div>
       <div v-if="coversExpanded" class="p-1 flex flex-col gap-1">
         <div
@@ -230,11 +232,11 @@
           <div class="flex justify-between items-center px-1">
             <span
               :id="'cover-label-' + cover.entity_id"
-              class="text-[10px] font-medium text-slate-500 truncate mr-2"
+              class="text-[10px] font-medium text-muted truncate mr-2"
             >
               {{ cover.name }}
             </span>
-            <span class="text-[10px] font-bold text-slate-600 dark:text-slate-400">
+            <span class="text-[10px] font-semibold text-muted tabular">
               <template v-if="isCoverUnavailable(cover)">unavailable</template>
               <template v-else>{{ coverStateLabel(cover) }} · {{ cover.position }}%</template>
             </span>
@@ -247,7 +249,7 @@
             max="100"
             :value="cover.position"
             :disabled="isCoverUnavailable(cover)"
-            class="w-full h-1 accent-blue-500 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            class="w-full h-1 accent-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             @change="
               $emit(
                 'cover-position',
@@ -270,7 +272,7 @@
         @click="mediaExpanded = !mediaExpanded"
       >
         <Play :size="10" /> {{ $t('sections.media') }} ({{ haMediaPlayers.length }})
-        <span class="ml-auto text-[10px]">{{ mediaExpanded ? '▼' : '▶' }}</span>
+        <span class="ml-auto text-[10px]">{{ mediaExpanded ? '▾' : '▸' }}</span>
       </div>
       <div v-if="mediaExpanded" class="p-1 flex flex-col gap-0.5">
         <div
@@ -279,8 +281,8 @@
           class="flex items-center justify-between px-1 py-0.5"
         >
           <div class="flex flex-col min-w-0 mr-2">
-            <span class="text-[10px] font-medium text-slate-500 truncate">{{ mp.name }}</span>
-            <span class="text-[9px] text-slate-400 truncate">{{ mp.state }}</span>
+            <span class="text-[10px] font-medium text-muted truncate">{{ mp.name }}</span>
+            <span class="text-[9px] text-muted truncate">{{ mp.state }}</span>
           </div>
           <div class="flex gap-0.5 shrink-0">
             <UiButton
@@ -320,18 +322,18 @@
     >
       <div
         v-if="showDishwasher !== false && dishwasherActive"
-        class="classic-card px-2 py-0.5 flex justify-between items-center"
+        class="classic-card px-2 py-1 flex justify-between items-center"
       >
-        <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
+        <span class="text-[10px] font-semibold text-muted tracking-tight">{{
           $t('sections.dishwasher')
         }}</span>
         <div class="flex items-center gap-1.5">
-          <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+          <span class="text-[10px] font-semibold text-battery tracking-tight">{{
             $t('sections.running')
           }}</span>
           <span
             v-if="dishwasherRemainingTime"
-            class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
+            class="text-[11px] font-semibold text-main tabular"
             >{{ dishwasherRemainingTime }}</span
           >
         </div>
@@ -339,21 +341,19 @@
 
       <div
         v-if="showWasher !== false && washerActive"
-        class="classic-card px-2 py-0.5 flex flex-col gap-0.5"
+        class="classic-card px-2 py-1 flex flex-col gap-0.5"
       >
         <div class="flex justify-between items-center">
-          <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
+          <span class="text-[10px] font-semibold text-muted tracking-tight">{{
             $t('sections.washer')
           }}</span>
           <div class="flex items-center gap-1.5">
-            <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+            <span class="text-[10px] font-semibold text-battery tracking-tight">{{
               $t('sections.running')
             }}</span>
-            <span
-              v-if="washerRemainingTime"
-              class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-              >{{ washerRemainingTime }}</span
-            >
+            <span v-if="washerRemainingTime" class="text-[11px] font-semibold text-main tabular">{{
+              washerRemainingTime
+            }}</span>
           </div>
         </div>
         <div v-if="washerStartEntity || washerPauseEntity" class="flex gap-1 justify-end">
@@ -377,21 +377,19 @@
 
       <div
         v-if="showDryer !== false && dryerActive"
-        class="classic-card px-2 py-0.5 flex flex-col gap-0.5"
+        class="classic-card px-2 py-1 flex flex-col gap-0.5"
       >
         <div class="flex justify-between items-center">
-          <span class="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{{
+          <span class="text-[10px] font-semibold text-muted tracking-tight">{{
             $t('sections.dryer')
           }}</span>
           <div class="flex items-center gap-1.5">
-            <span class="text-[10px] font-bold text-green-600 uppercase tracking-tighter">{{
+            <span class="text-[10px] font-semibold text-battery tracking-tight">{{
               $t('sections.running')
             }}</span>
-            <span
-              v-if="dryerRemainingTime"
-              class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-              >{{ dryerRemainingTime }}</span
-            >
+            <span v-if="dryerRemainingTime" class="text-[11px] font-semibold text-main tabular">{{
+              dryerRemainingTime
+            }}</span>
           </div>
         </div>
         <div v-if="dryerStartEntity || dryerPauseEntity" class="flex gap-1 justify-end">
@@ -421,7 +419,7 @@
         @click="scenesExpanded = !scenesExpanded"
       >
         <Sparkles :size="10" /> {{ $t('sections.scenes') }} ({{ haScenes.length }})
-        <span class="ml-auto text-[10px]">{{ scenesExpanded ? '▼' : '▶' }}</span>
+        <span class="ml-auto text-[10px]">{{ scenesExpanded ? '▾' : '▸' }}</span>
       </div>
       <div v-if="scenesExpanded" class="p-1 flex flex-wrap gap-0.5">
         <UiButton

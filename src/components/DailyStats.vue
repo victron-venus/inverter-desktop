@@ -1,64 +1,46 @@
 <template>
   <div
-    class="p-0 mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-slate-700 dark:text-slate-300"
+    class="classic-card px-2 py-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-main"
   >
-    <div v-if="hasSolar" class="flex items-center gap-1.5 mr-1">
-      <span class="text-solar font-bold flex items-center gap-1">☀️ {{ prod }}kWh</span>
-      <span
-        v-if="fcToday"
-        class="text-slate-500 dark:text-slate-400 text-[10px] font-bold tracking-tighter"
+    <div v-if="hasSolar" class="flex items-center gap-1.5 mr-0.5">
+      <span class="text-solar font-semibold flex items-center gap-1 tabular">☀️ {{ prod }}kWh</span>
+      <span v-if="fcToday" class="text-muted text-[10px] font-semibold tracking-tight tabular"
         >[{{ fcToday }}]</span
       >
-      <span class="text-slate-400 dark:text-slate-500 text-[10px] font-bold">({{ prodY }})</span>
-      <span
-        v-if="fcTomorrow"
-        class="text-slate-500 dark:text-slate-400 text-[10px] font-bold tracking-tighter"
+      <span class="text-muted text-[10px] font-semibold tabular">({{ prodY }})</span>
+      <span v-if="fcTomorrow" class="text-muted text-[10px] font-semibold tracking-tight tabular"
         >[{{ fcTomorrow }}]</span
       >
-      <span class="text-slate-600 dark:text-slate-400 font-medium text-[11px] tracking-tighter">{{
-        solarStr
-      }}</span>
-      <span v-if="hasDollars" class="text-green-600 font-bold">(${{ dollars }})</span>
+      <span class="text-muted font-medium text-[11px] tracking-tight">{{ solarStr }}</span>
+      <span v-if="hasDollars" class="text-battery font-semibold tabular">(${{ dollars }})</span>
     </div>
 
-    <div v-if="hasGrid" class="flex items-center gap-1.5 mr-1">
-      <div v-if="hasSolar" class="w-px h-3 bg-black/10 dark:bg-white/10"></div>
-      <Zap :size="14" class="text-slate-400 dark:text-slate-500" />
-      <span class="font-bold text-slate-600 dark:text-white">{{ grid }}kWh</span>
-      <span class="text-green-600 font-bold">(${{ gridCost }})</span>
+    <div v-if="hasGrid" class="flex items-center gap-1.5 mr-0.5">
+      <div v-if="hasSolar" class="soft-divider"></div>
+      <Zap :size="13" class="text-muted" />
+      <span class="font-semibold text-main tabular">{{ grid }}kWh</span>
+      <span class="text-battery font-semibold tabular">(${{ gridCost }})</span>
     </div>
 
     <div v-if="hasBattery" class="flex items-center gap-1.5 flex-1 min-w-fit">
-      <div v-if="hasSolar || hasGrid" class="w-px h-3 bg-black/10 dark:bg-white/10"></div>
-      <BatteryIcon :size="14" class="text-green-500" />
-      <div class="flex items-center gap-1.5">
-        <span class="text-slate-400 dark:text-slate-500 text-[10px] font-semibold tracking-tight"
-          >I:</span
-        >
-        <span class="font-bold text-slate-600 dark:text-white">{{ batIn }}kWh</span>
-        <span class="text-slate-400 dark:text-slate-500 text-[10px] font-bold">({{ batInY }})</span>
+      <div v-if="hasSolar || hasGrid" class="soft-divider"></div>
+      <BatteryIcon :size="13" class="text-battery" />
+      <div class="flex items-center gap-1.5 tabular">
+        <span class="text-muted text-[10px] font-semibold tracking-tight">I:</span>
+        <span class="font-semibold text-main">{{ batIn }}kWh</span>
+        <span class="text-muted text-[10px] font-semibold">({{ batInY }})</span>
 
-        <span
-          class="text-slate-400 dark:text-slate-500 text-[10px] font-semibold tracking-tight ml-0.5"
-          >O:</span
-        >
-        <span class="font-bold text-slate-600 dark:text-white">{{ batOut }}kWh</span>
-        <span class="text-slate-400 dark:text-slate-500 text-[10px] font-bold"
-          >({{ batOutY }})</span
-        >
+        <span class="text-muted text-[10px] font-semibold tracking-tight ml-0.5">O:</span>
+        <span class="font-semibold text-main">{{ batOut }}kWh</span>
+        <span class="text-muted text-[10px] font-semibold">({{ batOutY }})</span>
 
+        <span class="text-muted text-[10px] font-semibold tracking-tight ml-0.5">Δ:</span>
         <span
-          class="text-slate-400 dark:text-slate-500 text-[10px] font-semibold tracking-tight ml-0.5"
-          >Δ:</span
-        >
-        <span
-          class="font-bold"
-          :class="parseFloat(batDelta) >= 0 ? 'text-green-600' : 'text-red-600'"
+          class="font-semibold"
+          :class="parseFloat(batDelta) >= 0 ? 'text-battery' : 'text-consumption'"
           >{{ batDelta }}kWh</span
         >
-        <span class="text-slate-400 dark:text-slate-500 text-[10px] font-bold"
-          >({{ batDeltaY }})</span
-        >
+        <span class="text-muted text-[10px] font-semibold">({{ batDeltaY }})</span>
       </div>
     </div>
   </div>
@@ -72,7 +54,6 @@ import { state } from '../composables/useInverterState'
 const GRID_COST_PER_KWH = 0.31
 
 const ds = computed(() => state.value.daily_stats || {})
-// solar_forecast is a top-level state key from inverter-control, not inside daily_stats
 const fc = computed(() => state.value.solar_forecast || {})
 
 const prod = computed(() => (ds.value.produced_today || 0).toFixed(2))
@@ -98,8 +79,6 @@ const batDeltaY = computed(() =>
 const pvDaily = computed(() => ds.value.pv_inverter_daily || [])
 const mpptDaily = computed(() => ds.value.mppt_daily || [])
 
-// Breakdown whose visible parts add up to prod:
-// (pvInv1+pvInv2+MPPT_TOTAL(mppt1+mppt2+mppt3))
 const solarStr = computed(() => {
   const parts: string[] = pvDaily.value.filter((v) => v > 0).map((v) => v.toFixed(2))
   const mpptTotal = mpptDaily.value.reduce((a, v) => a + v, 0)

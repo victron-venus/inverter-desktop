@@ -1,6 +1,10 @@
 <template>
-  <div class="classic-card h-full overflow-hidden">
-    <VChart class="chart-wrap w-full" :option="chartOption" :autoresize="{ throttle: 300 }" />
+  <div class="classic-card h-full overflow-hidden flex flex-col">
+    <VChart
+      class="chart-wrap w-full flex-1"
+      :option="chartOption"
+      :autoresize="{ throttle: 300 }"
+    />
   </div>
 </template>
 
@@ -16,7 +20,6 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 
-// Register ECharts components
 use([CanvasRenderer, LineChart, TitleComponent, TooltipComponent, GridComponent, LegendComponent])
 
 defineProps<{
@@ -26,6 +29,7 @@ defineProps<{
 
 <style scoped>
 .chart-wrap {
-  min-height: 250px; /* Reduced height to match old versions and improve density */
+  min-height: 250px;
+  padding: 2px 2px 0;
 }
 </style>
