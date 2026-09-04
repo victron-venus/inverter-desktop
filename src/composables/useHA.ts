@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { computed, type Ref, ref, watch } from 'vue'
+import { computed, markRaw, type Ref, ref, watch } from 'vue'
 import type { AppConfig } from '../config'
 import { logger } from '../logger'
 import type {
@@ -12,8 +12,8 @@ import type {
   HaSensorDisplay,
   HaWeatherDisplay,
 } from '../types/ha'
-import { isInverterControlFlag, resolveHeaderToggleState } from '../utils'
-import { appConfig, type InverterState, state } from './useInverterState'
+import { isInverterControlFlag, normalizeHaToggleState, resolveHeaderToggleState } from '../utils'
+import { appConfig, applyInverterState, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
@@ -177,9 +177,22 @@ export function useHA() {
         fetchHaStates()
         const applianceEntities = configuredSectionEntities(appConfig)
         if (applianceEntities.length > 0) fetchHaEntityStates(applianceEntities)
+        // Merge — never assign get_state raw (serde nulls would wipe tiles).
         const initial = await invoke<InverterState>('get_state')
         if (initial) {
-          state.value = initial
+          applyInverterState(initial)
+        }
+        // Sensors are not live-ticked (WebKit freeze); refresh snapshot on show.
+        try {
+          const filtered = await invoke<HaFilteredData>('get_ha_filtered_data')
+          haSensors.value = markRaw(filtered.sensors)
+          haNumbers.value = markRaw(filtered.numbers)
+          haCovers.value = markRaw(filtered.covers)
+          haMediaPlayers.value = markRaw(filtered.media_players)
+          haScenes.value = markRaw(filtered.scenes)
+          haWeather.value = filtered.weather ? markRaw(filtered.weather) : null
+        } catch (e) {
+          logger.warn('Failed to refresh HA filtered snapshot:', e)
         }
       }
     } catch (e) {
@@ -205,12 +218,17 @@ export function useHA() {
     unlistenHaFiltered = await listen<HaFilteredData>('ha-filtered-update', (event) => {
       if (windowHidden) return
       const data = event.payload
-      haSensors.value = data.sensors
-      haNumbers.value = data.numbers
-      haCovers.value = data.covers
-      haMediaPlayers.value = data.media_players
-      haScenes.value = data.scenes
-      haWeather.value = data.weather
+      // markRaw: opaque display snapshots from Rust — avoid deep proxies.
+      // Sensors only refresh on connect/force (refresh_sensors); live ticks
+      // omit them so SidePanel does not re-render the whole house inventory.
+      if (data.refresh_sensors) {
+        haSensors.value = markRaw(data.sensors)
+      }
+      haNumbers.value = markRaw(data.numbers)
+      haCovers.value = markRaw(data.covers)
+      haMediaPlayers.value = markRaw(data.media_players)
+      haScenes.value = markRaw(data.scenes)
+      haWeather.value = data.weather ? markRaw(data.weather) : null
     })
 
     unlistenHaConn = await listen<boolean>('ha-connection-status', (event) => {
@@ -415,7 +433,7 @@ export function useHA() {
           haEnabled.value &&
           haEntityStates.value[btn.entity] !== undefined
         ) {
-          states[btn.id] = haEntityStates.value[btn.entity] === 'on' ? 'on' : 'off'
+          states[btn.id] = normalizeHaToggleState(haEntityStates.value[btn.entity])
         } else {
           const stateKey = btn.state_key || `home_${btn.id}`
           let val = state.value.booleans?.[stateKey]
@@ -475,7 +493,9 @@ export function useHA() {
       if (!Number.isNaN(v) && Math.abs(v) > 2) {
         items.push({
           key,
-          name: getFormattedLoadName(key),
+          name:
+            (state.value.load_names?.[key] && state.value.load_names[key].trim()) ||
+            getFormattedLoadName(key),
         })
       }
     }

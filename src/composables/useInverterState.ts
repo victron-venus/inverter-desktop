@@ -1,6 +1,8 @@
-import { ref } from 'vue'
-// Use ref for deep reactivity so that nested properties (like state.value.loads) updates are tracked.
+import { markRaw, ref, shallowRef } from 'vue'
+// shallowRef + replace-with-new-object (see applyInverterState): nested loads/etc.
+// update when MQTT sends a fresh snapshot. markRaw avoids deep-proxying big payloads.
 import type { AppConfig } from '../config'
+import { invoke } from '@tauri-apps/api/core'
 
 export interface InverterState {
   gt?: number
@@ -57,6 +59,8 @@ export interface InverterState {
     time_to_go?: string
   }>
   loads?: Record<string, number>
+  /** Cerbo acload instance id → CustomName/ProductName (stable; loads stay id-keyed). */
+  load_names?: Record<string, string>
   ui_config?: {
     home_buttons?: Array<{ id: string; label: string; entity: string; state_key?: string }>
     header_toggles?: Array<{ id: string; label: string; entity: string }>
@@ -101,7 +105,7 @@ export interface InverterState {
   evcharger_present?: boolean
 }
 
-export const state = ref<InverterState>({
+export const state = shallowRef<InverterState>({
   booleans: {},
   features: {},
   ui_config: {},
@@ -110,6 +114,20 @@ export const state = ref<InverterState>({
 export const mqttConnected = ref(false)
 export const haMqttConnected = ref<boolean | null>(null)
 export const appConfig = ref<AppConfig | null>(null)
+
+/** Non-destructive merge into dashboard state. Skips null/undefined so partial
+ *  MQTT snapshots and serde nulls cannot wipe live telemetry. Always assigns a
+ *  new markRaw object so shallowRef watchers/tiles re-render. */
+export function applyInverterState(newState: InverterState) {
+  const prev = state.value
+  const merged: InverterState = { ...prev }
+  for (const [key, val] of Object.entries(newState)) {
+    if (val !== undefined && val !== null) {
+      ;(merged as Record<string, unknown>)[key] = val
+    }
+  }
+  state.value = markRaw(merged)
+}
 
 export interface NotificationEntry {
   id: number
@@ -193,11 +211,24 @@ export function isBannerDismissed(id: string): boolean {
   return dismissedIds.has(id)
 }
 
-/** User dismissed the banner — hidden until a new notification reuses a fresh id. */
-export function dismissBanner(id: string) {
+/**
+ * User dismissed the banner.
+ * Victron platform notifications are acknowledged/silenced on the Cerbo via MQTT
+ * (same as GUIv2); local dismissedIds are not used so a failed ack can reappear.
+ * Other sources stay locally dismissed until a fresh id arrives.
+ */
+export async function dismissBanner(id: string): Promise<void> {
+  clearBanner(id)
+  if (id.startsWith('victron-platform-')) {
+    try {
+      await invoke('acknowledge_victron_banner', { id })
+    } catch (e) {
+      console.warn('Failed to acknowledge Victron alarm on Cerbo:', e)
+    }
+    return
+  }
   dismissedIds.add(id)
   saveDismissedIds()
-  clearBanner(id)
 }
 
 /** Add or replace by id (dedupe for hourly re-publishes). */

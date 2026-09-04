@@ -264,13 +264,11 @@ struct FullConfig {
     ha_ev_soc_entity: Option<String>,
     ha_ev_charging_entity: Option<String>,
     ha_ev_clamp_entity: Option<String>,
-    // NOTE: Most fields now come from inverter-control MQTT (D-Bus sourced):
-    // gt, g1, g2, tt, t1, t2, solar_total, mppt_total
-    // battery_soc, battery_power, battery_voltage, battery_current
-    // setpoint, daily_stats, mppt_chargers, batteries, mppt_individual
-    // loads (Vue circuits via D-Bus acload)
-    // Only configure fields NOT available from inverter-control:
-    // gt (if you prefer HA CT meter over Victron D-Bus)
+    // Live power tiles prefer Cerbo GX MQTT (system/vebus/shunt/acload/MPPT/PV/EV/water).
+    // Daemon inverter/state still supplies: daily_stats, solar_forecast, booleans,
+    // features, ess_mode, versions, dry_run, ui_config, console, HA connectivity flags.
+    // HA entities cover washer/dryer/dishwasher (not merged from daemon).
+    // Optional HA CT clamps if you prefer HA meters over Victron D-Bus:
     ha_consumption_clamps: Option<Vec<String>>,
     ha_generation_clamps: Option<Vec<String>>,
     color_scheme: Option<String>,
@@ -336,7 +334,7 @@ impl Default for FullConfig {
             ha_ev_soc_entity: None,
             ha_ev_charging_entity: None,
             ha_ev_clamp_entity: None,
-            // NOTE: Most fields now come from inverter-control MQTT (D-Bus sourced)
+            // Live tiles: Cerbo-first; daemon for stats/flags/config (see FullConfig note)
             ha_consumption_clamps: None,
             ha_generation_clamps: None,
             color_scheme: Some("dark".to_string()),
@@ -648,6 +646,9 @@ fn start_ha_polling(app: tauri::AppHandle) {
                 .await
             {
                 Ok(mut ws_client) => {
+                    // Retry previously-404 entities after a successful reconnect
+                    // (HA may have added them; avoids re-spam during failed reconnect loops).
+                    ha_api::clear_entity_skip_list();
                     info!("HA WebSocket connected");
                     let _ = app.emit("ha-connection-status", true);
                     let _ = app.emit("ha-state-update", serde_json::json!({ "connected": true }));
@@ -779,7 +780,10 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 
 #[tauri::command]
 async fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
-    save_config_encrypted(&app, &config)
+    save_config_encrypted(&app, &config)?;
+    // Fixed / newly configured entity IDs should be polled again without app restart.
+    ha_api::clear_entity_skip_list();
+    Ok(())
 }
 
 #[tauri::command]
@@ -828,8 +832,38 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
     let config: FullConfig =
         serde_json::from_str(&content).map_err(|e| format!("Invalid backup file: {}", e))?;
     save_config_encrypted(&app, &config)?;
+    ha_api::clear_entity_skip_list();
     info!("Config restored from {}", path.display());
     Ok(true)
+}
+
+#[tauri::command]
+fn acknowledge_victron_banner(id: String, mqtt_client: State<'_, MqttState>) -> Result<(), String> {
+    // id: victron-platform-<inst>-<slot>
+    let rest = id
+        .strip_prefix("victron-platform-")
+        .ok_or_else(|| format!("Not a Victron platform banner id: {id}"))?;
+    let mut parts = rest.splitn(2, '-');
+    let platform_instance: u32 = parts
+        .next()
+        .ok_or("missing platform instance")?
+        .parse()
+        .map_err(|e| format!("bad platform instance: {e}"))?;
+    let slot: u32 = parts
+        .next()
+        .ok_or("missing slot")?
+        .parse()
+        .map_err(|e| format!("bad slot: {e}"))?;
+    let client = mqtt_client
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {e}"))?;
+    let client = client
+        .as_ref()
+        .ok_or_else(|| "MQTT client not connected".to_string())?;
+    client
+        .acknowledge_victron_notification(platform_instance, slot)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -848,10 +882,17 @@ async fn connect_mqtt(
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client
-        .0
-        .lock()
-        .map_err(|e| format!("Internal error: {}", e))?;
+    // Drop/stop any previous client first so its reconnect loop cannot keep
+    // discovering the portal (xN) and racing the new connection.
+    {
+        let mut client_guard = mqtt_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        if let Some(old) = client_guard.take() {
+            old.stop();
+        }
+    }
     let mut client = MqttClient::new(
         host,
         port,
@@ -869,6 +910,10 @@ async fn connect_mqtt(
     client.set_ev_instances(Some((ev_instance, evcharger_instance)));
     client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
+    let mut client_guard = mqtt_client
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = Some(client);
     Ok(())
 }
@@ -886,6 +931,9 @@ async fn get_ha_appliance_states(
     token: String,
 ) -> Result<Vec<ha_api::HaState>, String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
+    // Legacy fallback list for installs without section entity config.
+    // Prefer get_ha_entity_states with configured IDs. Missing entities (404/410)
+    // are killswitched in HaApiClient::get_entities so they are not polled forever.
     let entity_ids = [
         // Dishwasher
         "binary_sensor.dishwasher_running",
@@ -1109,15 +1157,23 @@ async fn send_notification(
 }
 
 #[tauri::command]
-fn set_window_hidden(hidden: bool, app: tauri::AppHandle, mqtt_client: State<'_, MqttState>) {
+fn set_window_hidden(
+    hidden: bool,
+    app: tauri::AppHandle,
+    mqtt_client: State<'_, MqttState>,
+    ha_entity_states: State<'_, HaEntityStates>,
+) {
     ha_api::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
     if !hidden {
         if let Ok(guard) = mqtt_client.0.lock() {
             if let Some(ref client) = *guard {
                 let state = client.get_state();
-                crate::mqtt::MqttClient::emit_state_update(&Some(app), &state, true);
+                crate::mqtt::MqttClient::emit_state_update(&Some(app.clone()), &state, true);
             }
         }
+        // Sensors are omitted from live ha-filtered ticks; force a full snapshot
+        // (incl. sensors) whenever the window is shown again.
+        ha_api::force_emit_ha_filtered(&app, &ha_entity_states.0);
     }
 }
 
@@ -1189,7 +1245,9 @@ async fn connect_ha_mqtt(
             .0
             .lock()
             .map_err(|e| format!("Internal error: {}", e))?;
-        *client_guard = None;
+        if let Some(old) = client_guard.take() {
+            old.stop();
+        }
     }
     let mut client = MqttClient::new(
         host,
@@ -1219,7 +1277,15 @@ pub fn run() {
     let ha_entity_states = HaEntityStates(Arc::new(Mutex::new(HashMap::new())));
 
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                // Default TRACE from dependencies (tungstenite) floods the log
+                // file with every HA WS frame and starves the UI thread/disk.
+                .level(log::LevelFilter::Info)
+                .level_for("tungstenite", log::LevelFilter::Warn)
+                .level_for("tokio_tungstenite", log::LevelFilter::Warn)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
@@ -1237,6 +1303,7 @@ pub fn run() {
             get_state,
             perform_action,
             connect_mqtt,
+            acknowledge_victron_banner,
             connect_ha_mqtt,
             get_config,
             save_config,

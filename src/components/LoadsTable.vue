@@ -1,13 +1,13 @@
 <template>
   <div v-if="loads.length" class="classic-card mb-1 overflow-hidden">
-    <div class="classic-header py-0 px-2 flex items-center gap-1.5 h-[22px]">
-      <Zap :size="10" /> Active Loads
-    </div>
-    <div class="divide-y divide-slate-50 dark:divide-slate-800/30">
+    <div class="classic-header !py-0 !px-2 !h-[22px]"><Zap :size="10" /> Active Loads</div>
+    <div
+      class="divide-y divide-slate-50 dark:divide-slate-800/30 max-h-[min(40vh,280px)] overflow-y-auto overscroll-contain"
+    >
       <div
         v-for="load in loads"
-        :key="load.name"
-        class="flex justify-between items-center px-2 py-0.5 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors"
+        :key="load.id || load.name"
+        class="flex justify-between items-center px-2 py-0.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
       >
         <span
           class="text-[11px] font-medium text-slate-600 dark:text-slate-400 capitalize tracking-tight"
@@ -25,7 +25,7 @@
 import { Zap } from '@lucide/vue'
 
 defineProps<{
-  loads: Array<{ name: string; value: number; isGeneration?: boolean }>
+  loads: Array<{ id?: string; name: string; value: number; isGeneration?: boolean }>
 }>()
 
 function loadColor(load: { name: string; value: number; isGeneration?: boolean }): string {

@@ -45,41 +45,41 @@
           {{ Math.round(waterLevel) }} %
         </div>
         <div class="flex gap-1 items-center">
-          <button
+          <UiButton
             v-if="pumpSwitch != null"
-            type="button"
-            class="classic-btn"
-            :class="{ 'classic-btn-on': pumpSwitch === true }"
+            size="sm"
+            toggle
+            :active="pumpSwitch === true"
             @click="$emit('send', 'water_mode', { which: 'pump', mode: pumpSwitch ? 2 : 1 })"
           >
             {{ $t('sections.pump') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="waterValve != null"
-            type="button"
-            class="classic-btn"
-            :class="{ 'classic-btn-on': waterValve === true }"
+            size="sm"
+            toggle
+            :active="waterValve === true"
             @click="onValveClick"
           >
             {{ $t('sections.valve') }}
-          </button>
+          </UiButton>
           <!-- Reset chip shown only while dbus-pump /Mode is a manual override -->
-          <button
+          <UiButton
             v-if="waterPumpMode === 1 || waterPumpMode === 2"
-            type="button"
-            class="classic-btn opacity-80 text-red-500"
+            size="sm"
+            variant="danger"
             @click="$emit('send', 'water_mode', { which: 'pump', mode: 0 })"
           >
             {{ $t('sections.auto') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="waterValveMode === 1 || waterValveMode === 2"
-            type="button"
-            class="classic-btn opacity-80 text-red-500"
+            size="sm"
+            variant="danger"
             @click="$emit('send', 'water_mode', { which: 'valve', mode: 0 })"
           >
             {{ $t('sections.auto') }}
-          </button>
+          </UiButton>
         </div>
       </div>
     </div>
@@ -92,23 +92,25 @@
       <div class="classic-header flex items-center gap-1.5">
         <HomeIcon :size="10" /> {{ $t('sections.home') }}
       </div>
-      <div class="p-1 flex flex-wrap gap-0.5 overflow-y-auto max-h-[300px]">
-        <button
-          type="button"
+      <div class="home-btn-grid p-1 overflow-y-auto max-h-[300px]">
+        <UiButton
           v-for="btn in homeButtons"
           :key="btn.id"
-          class="classic-btn classic-btn-3d !flex-1 !min-w-[50px] !normal-case flex flex-col items-center gap-0.5"
-          :class="{ 'classic-btn-on': buttonStates[btn.id] === 'on' }"
+          variant="tile"
+          class="home-btn-tile"
+          toggle
+          :active="buttonStates[btn.id] === 'on'"
+          :unavailable="isBtnUnavailable(buttonStates[btn.id])"
           @click="$emit('send', 'toggle', { entity: btn.entity })"
         >
           <component
             :is="getHomeButtonIcon(btn.entity, btn.label)"
             v-if="getHomeButtonIcon(btn.entity, btn.label)"
-            :size="14"
-            class="opacity-70"
+            :size="12"
+            class="opacity-70 shrink-0"
           />
-          <span class="text-[9px] leading-tight">{{ getHomeButtonLabel(btn.label) }}</span>
-        </button>
+          <span class="home-tile-label">{{ getHomeButtonLabel(btn.label) }}</span>
+        </UiButton>
       </div>
     </div>
 
@@ -131,7 +133,7 @@
           <div
             v-for="(day, idx) in haWeather.forecast.slice(0, 5)"
             :key="idx"
-            class="flex flex-col items-center min-w-[40px] px-1 py-0.5 rounded bg-slate-50 dark:bg-slate-800/50"
+            class="classic-inset flex flex-col items-center min-w-[40px] !px-1 !py-0.5"
           >
             <span class="text-[8px] text-slate-400">{{
               (day.datetime as string)?.slice(5, 10) || ''
@@ -219,7 +221,12 @@
         <span class="ml-auto text-[10px]">{{ coversExpanded ? '▼' : '▶' }}</span>
       </div>
       <div v-if="coversExpanded" class="p-1 flex flex-col gap-1">
-        <div v-for="cover in haCovers" :key="cover.entity_id" class="flex flex-col gap-0.5">
+        <div
+          v-for="cover in haCovers"
+          :key="cover.entity_id"
+          class="flex flex-col gap-0.5"
+          :class="{ 'ha-entity-unavailable': isCoverUnavailable(cover) }"
+        >
           <div class="flex justify-between items-center px-1">
             <span
               :id="'cover-label-' + cover.entity_id"
@@ -228,7 +235,8 @@
               {{ cover.name }}
             </span>
             <span class="text-[10px] font-bold text-slate-600 dark:text-slate-400">
-              {{ cover.position }}%
+              <template v-if="isCoverUnavailable(cover)">unavailable</template>
+              <template v-else>{{ coverStateLabel(cover) }} · {{ cover.position }}%</template>
             </span>
           </div>
           <input
@@ -238,7 +246,8 @@
             min="0"
             max="100"
             :value="cover.position"
-            class="w-full h-1 accent-blue-500 cursor-pointer"
+            :disabled="isCoverUnavailable(cover)"
+            class="w-full h-1 accent-blue-500 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             @change="
               $emit(
                 'cover-position',
@@ -274,27 +283,27 @@
             <span class="text-[9px] text-slate-400 truncate">{{ mp.state }}</span>
           </div>
           <div class="flex gap-0.5 shrink-0">
-            <button
-              type="button"
-              class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
+            <UiButton
+              size="sm"
+              class="!px-1.5"
               @click="$emit('media-control', mp.entity_id, 'play')"
             >
               ▶
-            </button>
-            <button
-              type="button"
-              class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
+            </UiButton>
+            <UiButton
+              size="sm"
+              class="!px-1.5"
               @click="$emit('media-control', mp.entity_id, 'pause')"
             >
               ⏸
-            </button>
-            <button
-              type="button"
-              class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
+            </UiButton>
+            <UiButton
+              size="sm"
+              class="!px-1.5"
               @click="$emit('media-control', mp.entity_id, 'stop')"
             >
               ⏹
-            </button>
+            </UiButton>
           </div>
         </div>
       </div>
@@ -348,22 +357,21 @@
           </div>
         </div>
         <div v-if="washerStartEntity || washerPauseEntity" class="flex gap-1 justify-end">
-          <button
+          <UiButton
             v-if="washerStartEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
+            variant="primary"
             @click="$emit('send', 'press', { entity: washerStartEntity })"
           >
             {{ $t('sections.start') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="washerPauseEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
             @click="$emit('send', 'press', { entity: washerPauseEntity })"
           >
             {{ $t('sections.pause') }}
-          </button>
+          </UiButton>
         </div>
       </div>
 
@@ -387,22 +395,21 @@
           </div>
         </div>
         <div v-if="dryerStartEntity || dryerPauseEntity" class="flex gap-1 justify-end">
-          <button
+          <UiButton
             v-if="dryerStartEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
+            variant="primary"
             @click="$emit('send', 'press', { entity: dryerStartEntity })"
           >
             {{ $t('sections.start') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="dryerPauseEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
             @click="$emit('send', 'press', { entity: dryerPauseEntity })"
           >
             {{ $t('sections.pause') }}
-          </button>
+          </UiButton>
         </div>
       </div>
     </div>
@@ -417,15 +424,14 @@
         <span class="ml-auto text-[10px]">{{ scenesExpanded ? '▼' : '▶' }}</span>
       </div>
       <div v-if="scenesExpanded" class="p-1 flex flex-wrap gap-0.5">
-        <button
-          type="button"
+        <UiButton
           v-for="scene in haScenes"
           :key="scene.entity_id"
-          class="classic-btn !flex-1 !min-w-[50px] !normal-case !text-[10px]"
+          class="!flex-1 !min-w-[50px] !text-[10px]"
           @click="$emit('scene-activate', scene.entity_id)"
         >
           {{ scene.name }}
-        </button>
+        </UiButton>
       </div>
     </div>
   </div>
@@ -448,7 +454,9 @@ import {
   WashingMachine,
 } from '@lucide/vue'
 import { ref } from 'vue'
+import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
+import { isHaUnavailableState } from '../utils'
 import type {
   HaCoverDisplay,
   HaMediaPlayerDisplay,
@@ -544,11 +552,30 @@ function getHomeButtonIcon(entity: string, label: string): LucideIcon | null {
   return null
 }
 
-/** Get display label with keywords stripped */
+/** Get display label with keywords stripped; break at spaces for compact tiles. */
 function getHomeButtonLabel(label: string): string {
   return label
     .replace(/\b(laundry|washer|washing|guard)\b/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim()
+    .split(' ')
+    .filter(Boolean)
+    .join('\n')
+}
+
+function isBtnUnavailable(state: string | undefined): boolean {
+  return isHaUnavailableState(state)
+}
+
+function isCoverUnavailable(cover: HaCoverDisplay): boolean {
+  return isHaUnavailableState(cover.state)
+}
+
+function coverStateLabel(cover: HaCoverDisplay): string {
+  const s = (cover.state || '').trim().toLowerCase()
+  if (s === 'open' || s === 'opening') return 'open'
+  if (s === 'closed' || s === 'closing') return 'closed'
+  if (s) return s
+  return cover.position > 0 ? 'open' : 'closed'
 }
 </script>

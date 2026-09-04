@@ -4,7 +4,7 @@
       class="h-screen bg-background-light dark:bg-background-dark text-slate-800 dark:text-slate-200 flex items-center justify-center p-4 select-none font-sans"
     >
       <div
-        class="classic-card p-6 w-full max-w-sm flex flex-col items-center text-center shadow-lg bg-white dark:bg-slate-900"
+        class="classic-card p-6 w-full max-w-sm flex flex-col items-center text-center shadow-lg"
       >
         <img
           :class="{ hidden: imageError }"
@@ -17,9 +17,7 @@
         />
 
         <h2 class="text-lg font-bold tracking-tight mb-0.5">Inverter Desktop</h2>
-        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">
-          Version {{ appVersion }}
-        </div>
+        <div class="classic-label mb-4">Version {{ appVersion }}</div>
 
         <p class="text-[12px] leading-relaxed text-slate-500 dark:text-slate-500 mb-6 px-2">
           Desktop application for monitoring and controlling Victron energy inverter systems via
@@ -34,13 +32,7 @@
           github.com/victron-venus/inverter-desktop
         </button>
 
-        <button
-          type="button"
-          @click="closeWindow"
-          class="classic-btn w-full !normal-case !py-2 !text-xs !classic-btn-on"
-        >
-          Close
-        </button>
+        <UiButton variant="primary" size="lg" class="w-full" @click="closeWindow"> Close </UiButton>
       </div>
     </div>
   </ErrorBoundary>
@@ -49,6 +41,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import ErrorBoundary from './components/ErrorBoundary.vue'
+import UiButton from './components/UiButton.vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'

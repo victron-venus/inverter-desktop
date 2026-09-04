@@ -4,7 +4,10 @@ import {
   formatUptime,
   formatDuration,
   formatInverterState,
+  formatTimestamp,
+  isHaUnavailableState,
   isInverterControlFlag,
+  normalizeHaToggleState,
   resolveHeaderToggleState,
 } from '../utils'
 
@@ -137,5 +140,51 @@ describe('resolveHeaderToggleState', () => {
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 'true' })).toBe('on')
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 1 })).toBe('on')
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 0 })).toBe('off')
+  })
+
+  it('returns unavailable for HA unavailable/unknown non-flag entities', () => {
+    const toggle = { id: 'garage', entity: 'switch.garage' }
+    expect(resolveHeaderToggleState(toggle, { 'switch.garage': 'unavailable' }, true, {})).toBe(
+      'unavailable'
+    )
+    expect(resolveHeaderToggleState(toggle, { 'switch.garage': 'unknown' }, true, {})).toBe(
+      'unavailable'
+    )
+  })
+})
+
+describe('isHaUnavailableState / normalizeHaToggleState', () => {
+  it('detects unavailable and unknown', () => {
+    expect(isHaUnavailableState('unavailable')).toBe(true)
+    expect(isHaUnavailableState('unknown')).toBe(true)
+    expect(isHaUnavailableState('')).toBe(true)
+    expect(isHaUnavailableState('on')).toBe(false)
+    expect(isHaUnavailableState(undefined)).toBe(false)
+  })
+
+  it('normalizes on/off/open/unavailable', () => {
+    expect(normalizeHaToggleState('on')).toBe('on')
+    expect(normalizeHaToggleState('open')).toBe('on')
+    expect(normalizeHaToggleState('off')).toBe('off')
+    expect(normalizeHaToggleState('closed')).toBe('off')
+    expect(normalizeHaToggleState('unavailable')).toBe('unavailable')
+    expect(normalizeHaToggleState('unknown')).toBe('unavailable')
+  })
+})
+
+describe('formatTimestamp', () => {
+  it('shows minutes and hours like GUIv2', () => {
+    const now = Date.now()
+    expect(formatTimestamp(new Date(now - 5 * 60 * 1000).toISOString())).toBe('5m ago')
+    expect(formatTimestamp(new Date(now - (10 * 60 + 16) * 60 * 1000).toISOString())).toBe(
+      '10h 16m ago'
+    )
+    expect(formatTimestamp(new Date(now - 2 * 60 * 60 * 1000).toISOString())).toBe('2h ago')
+  })
+
+  it('does not hardcode 30 min ago for fresh timestamps', () => {
+    const ts = new Date(Date.now() - 2 * 60 * 1000).toISOString()
+    expect(formatTimestamp(ts)).toBe('2m ago')
+    expect(formatTimestamp(ts)).not.toBe('30 min ago')
   })
 })

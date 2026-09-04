@@ -9,11 +9,9 @@
         <div
           v-for="(bat, bi) in batteries"
           :key="bat.serial ?? bat.instance ?? `${bi}-${bat.name}`"
-          class="flex-1 min-w-[130px] border border-slate-200 dark:border-slate-700/50 p-1 rounded-sm"
+          class="classic-inset flex-1 min-w-[130px]"
         >
-          <div
-            class="text-[10px] font-extrabold text-slate-600 dark:text-white uppercase tracking-tighter"
-          >
+          <div class="text-[10px] font-semibold text-slate-600 dark:text-slate-200 tracking-tight">
             {{ bat.name }}
           </div>
           <div class="flex justify-between items-baseline gap-1 mt-0.5">
@@ -32,7 +30,7 @@
             >
           </div>
           <div
-            class="flex justify-between items-center mt-1 pt-1 border-t border-slate-200 dark:border-slate-700/50"
+            class="flex justify-between items-center mt-1 pt-1 border-t border-black/5 dark:border-white/8"
           >
             <span
               class="text-[12px] font-bold leading-none shrink-0"
@@ -42,9 +40,7 @@
             >
               {{ bat.soc.toFixed(1) }}%
             </span>
-            <span
-              class="text-[10px] text-slate-400 font-medium truncate uppercase ml-2 text-right flex-1"
-            >
+            <span class="text-[10px] text-slate-400 font-medium truncate ml-2 text-right flex-1">
               {{ bat.state }}<span v-if="bat.timeToGo"> · {{ bat.timeToGo }}</span>
             </span>
           </div>
@@ -61,11 +57,9 @@
         <div
           v-for="(src, si) in solarSources"
           :key="src.serial ?? src.instance ?? `${si}-${src.name}`"
-          class="flex-1 min-w-[90px] border border-slate-200 dark:border-slate-700/50 p-1 rounded-sm"
+          class="classic-inset flex-1 min-w-[90px]"
         >
-          <div
-            class="text-[10px] font-bold text-slate-600 dark:text-slate-200 uppercase tracking-tighter"
-          >
+          <div class="text-[10px] font-semibold text-slate-600 dark:text-slate-200 tracking-tight">
             {{ src.name }}
           </div>
           <div class="flex flex-col">

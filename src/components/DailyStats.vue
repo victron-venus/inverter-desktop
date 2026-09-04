@@ -22,25 +22,24 @@
     </div>
 
     <div v-if="hasGrid" class="flex items-center gap-1.5 mr-1">
-      <div v-if="hasSolar" class="w-px h-3 bg-slate-300"></div>
+      <div v-if="hasSolar" class="w-px h-3 bg-black/10 dark:bg-white/10"></div>
       <Zap :size="14" class="text-slate-400 dark:text-slate-500" />
       <span class="font-bold text-slate-600 dark:text-white">{{ grid }}kWh</span>
       <span class="text-green-600 font-bold">(${{ gridCost }})</span>
     </div>
 
     <div v-if="hasBattery" class="flex items-center gap-1.5 flex-1 min-w-fit">
-      <div v-if="hasSolar || hasGrid" class="w-px h-3 bg-slate-300"></div>
+      <div v-if="hasSolar || hasGrid" class="w-px h-3 bg-black/10 dark:bg-white/10"></div>
       <BatteryIcon :size="14" class="text-green-500" />
       <div class="flex items-center gap-1.5">
-        <span
-          class="text-slate-400 dark:text-slate-500 uppercase text-[10px] font-bold tracking-tighter"
+        <span class="text-slate-400 dark:text-slate-500 text-[10px] font-semibold tracking-tight"
           >I:</span
         >
         <span class="font-bold text-slate-600 dark:text-white">{{ batIn }}kWh</span>
         <span class="text-slate-400 dark:text-slate-500 text-[10px] font-bold">({{ batInY }})</span>
 
         <span
-          class="text-slate-400 dark:text-slate-500 uppercase text-[10px] font-bold tracking-tighter ml-0.5"
+          class="text-slate-400 dark:text-slate-500 text-[10px] font-semibold tracking-tight ml-0.5"
           >O:</span
         >
         <span class="font-bold text-slate-600 dark:text-white">{{ batOut }}kWh</span>
@@ -49,7 +48,7 @@
         >
 
         <span
-          class="text-slate-400 dark:text-slate-500 uppercase text-[10px] font-bold tracking-tighter ml-0.5"
+          class="text-slate-400 dark:text-slate-500 text-[10px] font-semibold tracking-tight ml-0.5"
           >Δ:</span
         >
         <span

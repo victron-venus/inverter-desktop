@@ -3,27 +3,43 @@
 @variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* Exact 1.0.17 Color Palette */
+  /* Energy accents — keep existing cyan/green/battery family */
   --color-grid: #2196f3;
   --color-consumption: #f44336;
   --color-solar: #ff9800;
   --color-battery: #4caf50;
   --color-accent: #00bcd4;
-  --color-text-dim: #757575;
+  --color-text-dim: #8e8e93;
 
-  /* Backgrounds */
-  --color-bg-page: #efeff4; /* Slightly grey "podlozhka" */
+  /* Light surfaces */
+  --color-bg-page: #f2f2f4;
   --color-bg-card: #ffffff;
-  --color-border-card: #dcdce2; /* Darkened for visibility in light mode */
-  --color-text-main: #333333;
+  --color-bg-muted: #f0f0f2;
+  --color-bg-elevated: #ffffff;
+  --color-border-card: rgba(60, 60, 67, 0.12);
+  --color-text-main: #1c1c1e;
+  --color-text-secondary: #636366;
 
-  /* Dark Mode Palette - Now with actual dark backgrounds */
-  --color-dark-bg-page: #0a0a0a; /* Darker black */
-  --color-dark-bg-card: #1c1c1e; /* Apple dark card grey */
-  --color-dark-border-card: #3a3a3c; /* Brightened for visibility in dark mode */
-  --color-dark-text-main: #e0e0e0;
+  /* Dark surfaces — first-class, calm utility */
+  --color-dark-bg-page: #0b0b0d;
+  --color-dark-bg-card: #161618;
+  --color-dark-bg-muted: #1a1a1c;
+  --color-dark-bg-elevated: #1c1c1e;
+  --color-dark-border-card: rgba(255, 255, 255, 0.08);
+  --color-dark-text-main: #f5f5f7;
+  --color-dark-text-secondary: #98989d;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  /* Radius scale */
+  --radius-card: 0.625rem;
+  --radius-control: 0.4375rem;
+  --radius-chip: 0.375rem;
+
+  /* Legacy aliases used by a few components */
+  --color-apple-blue: #00bcd4;
+  --color-apple-border: rgba(60, 60, 67, 0.12);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
 }
 
 @layer base {
@@ -31,143 +47,345 @@
     @apply font-sans antialiased overflow-hidden text-[12px];
     background-color: var(--color-bg-page);
     color: var(--color-text-main);
+    letter-spacing: -0.01em;
   }
 
-  /* Night mode background - correctly syncing with dark theme now */
-  .dark body {
+  .dark body,
+  body.dark {
     background-color: var(--color-dark-bg-page);
     color: var(--color-dark-text-main);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 28%, transparent);
   }
 }
 
 @layer components {
-  /* Card: Standard appearance */
+  /* Card surface — soft border, clear hierarchy, dense */
   .classic-card {
-    @apply border rounded-[3px] shadow-none;
+    border: 1px solid var(--color-border-card);
+    border-radius: var(--radius-card);
     background-color: var(--color-bg-card);
-    border-color: var(--color-border-card);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
   }
 
   .dark .classic-card {
     background-color: var(--color-dark-bg-card);
     border-color: var(--color-dark-border-card);
+    box-shadow: none;
   }
 
-}
-
-/* Exact port from v1.0.9 .toggle-btn - MOVED OUTSIDE LAYERS FOR PRIORITY */
-.classic-btn {
-  cursor: pointer !important;
-  padding: 2px 6px !important;
-  border-radius: 4px !important;
-  font-size: 9px !important;
-  font-weight: 600 !important;
-  border: 1px solid #555 !important;
-  transition: all 0.15s !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 4px !important;
-  margin: 1px !important;
-  background-color: #333 !important;
-  color: #bbb !important;
-  text-transform: none !important;
-  height: auto !important;
-  line-height: normal !important;
-}
-
-.classic-btn:hover {
-  transform: scale(1.02) !important;
-  filter: brightness(1.1) !important;
-}
-
-/* State: ON - Exact v1.0.9 .toggle-btn.on */
-.classic-btn-on {
-  background-color: #2e7d32 !important;
-  border-color: #4caf50 !important;
-  color: #ffffff !important;
-}
-
-/* Dark mode — visible buttons */
-.dark .classic-btn {
-  background-color: #333 !important;
-  color: #bbb !important;
-  border-color: #555 !important;
-}
-
-/* Light mode */
-:not(.dark) .classic-btn {
-  background-color: #ddd !important;
-  color: #333 !important;
-  border-color: #ccc !important;
-}
-
-:not(.dark) .classic-btn-on {
-  background-color: #2e7d32 !important;
-  border-color: #4caf50 !important;
-  color: #ffffff !important;
-}
-
-/* 3D raised look for Home section buttons */
-.classic-btn-3d {
-  border-bottom-width: 3px !important;
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.15)) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 3px rgba(0, 0, 0, 0.4) !important;
-}
-
-.classic-btn-3d:hover {
-  transform: translateY(-1px) scale(1.02) !important;
-}
-
-.classic-btn-3d:active {
-  transform: translateY(1px) !important;
-  border-bottom-width: 1px !important;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5) !important;
-}
-
-.classic-btn-3d.classic-btn-on {
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.18), rgba(0, 0, 0, 0.08)) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 2px 3px rgba(0, 0, 0, 0.4) !important;
-}
-
-/* Light mode 3D adjust */
-:not(.dark) .classic-btn-3d {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 2px 3px rgba(0, 0, 0, 0.15) !important;
-}
-
-:not(.dark) .classic-btn-3d.classic-btn-on {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 2px 3px rgba(0, 0, 0, 0.2) !important;
-}
-
-@layer components {
-
-  /* Card Header Style: Increased to 11px to match 0.7rem from v1.0.9 */
+  /* Section header — sentence case, compact, no chunky uppercase */
   .classic-header {
-    @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-600;
-    background-color: var(--color-bg-card);
-    border-color: var(--color-border-card);
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.3125rem 0.5rem;
+    border-bottom: 1px solid var(--color-border-card);
+    background-color: color-mix(in srgb, var(--color-bg-muted) 70%, var(--color-bg-card));
+    color: var(--color-text-secondary);
+    font-size: 0.6875rem; /* 11px */
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    line-height: 1.2;
   }
 
   .dark .classic-header {
-    background-color: var(--color-dark-bg-card);
+    background-color: color-mix(in srgb, var(--color-dark-bg-muted) 80%, var(--color-dark-bg-card));
     border-color: var(--color-dark-border-card);
-    color: #e0e0e0;
+    color: var(--color-dark-text-secondary);
   }
 
-  /* Compact Input */
+  /* Compact input */
   .classic-input {
-    @apply h-6 px-1.5 rounded-[2px] border text-[11px] outline-none focus:border-blue-500 transition-none;
+    height: 1.625rem;
+    padding: 0 0.5rem;
+    border-radius: var(--radius-control);
+    border: 1px solid color-mix(in srgb, var(--color-border-card) 100%, #000);
     background-color: #fff;
-    border-color: #ced4da;
-    color: #333;
+    color: var(--color-text-main);
+    font-size: 0.6875rem;
+    outline: none;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+
+  .classic-input:focus {
+    border-color: color-mix(in srgb, var(--color-accent) 65%, #94a3b8);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 22%, transparent);
   }
 
   .dark .classic-input {
-    background-color: #1a1a1a;
-    border-color: #444;
-    color: #e0e0e0;
+    background-color: var(--color-dark-bg-elevated);
+    border-color: var(--color-dark-border-card);
+    color: var(--color-dark-text-main);
+  }
+
+  .dark .classic-input:focus {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, #3a3a3c);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+
+  /* Config / form labels — calm, not shouting */
+  .classic-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    color: var(--color-text-secondary);
+  }
+
+  .dark .classic-label {
+    color: var(--color-dark-text-secondary);
+  }
+
+  .classic-section-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-transform: none;
+    color: var(--color-text-main);
+  }
+
+  .dark .classic-section-title {
+    color: var(--color-dark-text-main);
+  }
+
+  .classic-subsection-title {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    color: var(--color-text-main);
+  }
+
+  .dark .classic-subsection-title {
+    color: var(--color-dark-text-main);
+  }
+
+  /* Nested cell inside a card (batteries / solar / weather chips) */
+  .classic-inset {
+    border: 1px solid color-mix(in srgb, var(--color-border-card) 90%, transparent);
+    border-radius: var(--radius-chip);
+    background-color: color-mix(in srgb, var(--color-bg-muted) 55%, transparent);
+    padding: 0.25rem 0.375rem;
+  }
+
+  .dark .classic-inset {
+    border-color: var(--color-dark-border-card);
+    background-color: color-mix(in srgb, var(--color-dark-bg-muted) 70%, transparent);
+  }
+
+  /* Stat tile label */
+  .classic-stat-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--color-text-secondary);
+    margin-bottom: 0.125rem;
+  }
+
+  .dark .classic-stat-label {
+    color: var(--color-dark-text-secondary);
+  }
+
+  /* Context menu / floating panel alias */
+  .apple-card {
+    border: 1px solid var(--color-border-card);
+    border-radius: 0.75rem;
+    background-color: color-mix(in srgb, var(--color-bg-card) 92%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  }
+
+  .dark .apple-card {
+    background-color: color-mix(in srgb, var(--color-dark-bg-elevated) 92%, transparent);
+    border-color: var(--color-dark-border-card);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
   }
 }
+
+/* ── Button system (2026, dense desktop) ─────────────────────────────
+   Hierarchy: primary / secondary (default) / ghost / danger
+   Toggle active: .classic-btn-on
+   Home-grid tile: .classic-btn-tile (alias: .classic-btn-3d)
+*/
+.classic-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 1.5rem;
+  min-height: 1.5rem;
+  padding: 0 0.55rem;
+  margin: 0;
+  border-radius: 0.4rem;
+  border: 1px solid transparent;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease,
+    opacity 0.12s ease;
+  background-color: #e8e8ed;
+  color: #3a3a3c;
+  border-color: #d1d1d6;
+  box-shadow: none;
+}
+
+.classic-btn:hover {
+  background-color: #dcdcde;
+  border-color: #c7c7cc;
+}
+
+.classic-btn:active {
+  background-color: #d1d1d6;
+}
+
+.classic-btn:focus {
+  outline: none;
+}
+
+.classic-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, white);
+  outline-offset: 1px;
+}
+
+.classic-btn:disabled,
+.classic-btn[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.dark .classic-btn {
+  background-color: #2c2c2e;
+  color: #d1d1d6;
+  border-color: #3a3a3c;
+}
+
+.dark .classic-btn:hover {
+  background-color: #3a3a3c;
+  border-color: #48484a;
+}
+
+.dark .classic-btn:active {
+  background-color: #48484a;
+}
+
+/* Active / toggled ON — calm green, not neon */
+.classic-btn-on {
+  background-color: color-mix(in srgb, var(--color-battery) 22%, #ffffff) !important;
+  border-color: color-mix(in srgb, var(--color-battery) 55%, #ffffff) !important;
+  color: #1b5e20 !important;
+}
+
+.classic-btn-on:hover {
+  background-color: color-mix(in srgb, var(--color-battery) 30%, #ffffff) !important;
+}
+
+.dark .classic-btn-on {
+  background-color: color-mix(in srgb, var(--color-battery) 28%, #1c1c1e) !important;
+  border-color: color-mix(in srgb, var(--color-battery) 50%, #3a3a3c) !important;
+  color: #a5d6a7 !important;
+}
+
+.dark .classic-btn-on:hover {
+  background-color: color-mix(in srgb, var(--color-battery) 38%, #1c1c1e) !important;
+}
+
+/* Primary — accent fill (save, confirm, sign-in) */
+.classic-btn-primary {
+  background-color: var(--color-accent) !important;
+  border-color: color-mix(in srgb, var(--color-accent) 70%, #006064) !important;
+  color: #0a0a0a !important;
+}
+
+.classic-btn-primary:hover {
+  filter: brightness(1.06);
+}
+
+.classic-btn-primary:active {
+  filter: brightness(0.96);
+}
+
+.dark .classic-btn-primary {
+  color: #041016 !important;
+}
+
+/* Ghost — low emphasis */
+.classic-btn-ghost {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #636366 !important;
+}
+
+.classic-btn-ghost:hover {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+  color: #1c1c1e !important;
+}
+
+.dark .classic-btn-ghost {
+  color: #8e8e93 !important;
+}
+
+.dark .classic-btn-ghost:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  color: #f2f2f7 !important;
+}
+
+/* Danger — soft red for destructive / override reset */
+.classic-btn-danger {
+  background-color: color-mix(in srgb, #f44336 12%, #ffffff) !important;
+  border-color: color-mix(in srgb, #f44336 35%, #d1d1d6) !important;
+  color: #c62828 !important;
+}
+
+.classic-btn-danger:hover {
+  background-color: color-mix(in srgb, #f44336 20%, #ffffff) !important;
+}
+
+.dark .classic-btn-danger {
+  background-color: color-mix(in srgb, #f44336 18%, #1c1c1e) !important;
+  border-color: color-mix(in srgb, #f44336 40%, #3a3a3c) !important;
+  color: #ef9a9a !important;
+}
+
+.dark .classic-btn-danger:hover {
+  background-color: color-mix(in srgb, #f44336 28%, #1c1c1e) !important;
+}
+
+/* Size helpers */
+.classic-btn-sm {
+  height: 1.25rem;
+  min-height: 1.25rem;
+  padding: 0 0.4rem;
+  font-size: 0.5625rem;
+  border-radius: 0.35rem;
+}
+
+.classic-btn-lg {
+  height: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  font-size: 0.8125rem;
+  border-radius: 0.5rem;
+}
+
+
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -177,7 +395,119 @@
   border-radius: 10px;
 }
 .dark ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .scrollbar-hide::-webkit-scrollbar { display: none; }
+
+/* HOME button grid: 2 equal columns; cells do not stretch to tallest label. */
+.home-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.125rem;
+  align-items: start;
+}
+
+/* Home-grid tile: fixed compact height; labels wrap at spaces (max 2 lines). */
+.classic-btn-tile,
+.classic-btn-3d,
+.home-btn-tile.classic-btn {
+  height: 2.5rem !important;
+  min-height: 2.5rem !important;
+  max-height: 2.5rem !important;
+  width: 100%;
+  min-width: 0 !important;
+  max-width: 100%;
+  padding: 0.25rem 0.35rem !important;
+  border-radius: 0.45rem;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  white-space: normal !important;
+  overflow: hidden;
+  line-height: 1.15 !important;
+  text-align: center;
+  background-image: none !important;
+  box-shadow: none !important;
+  border-bottom-width: 1px !important;
+}
+
+.classic-btn-tile .home-tile-label,
+.classic-btn-3d .home-tile-label,
+.classic-btn-tile > span,
+.classic-btn-3d > span {
+  display: block !important;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  /* Labels insert \n between words — honor them even when width would fit one line */
+  white-space: pre-line !important;
+  overflow-wrap: break-word;
+  word-break: normal;
+  max-height: calc(1.15em * 2);
+  overflow: hidden;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.classic-btn-tile:hover,
+.classic-btn-3d:hover {
+  transform: none !important;
+}
+
+.classic-btn-tile:active,
+.classic-btn-3d:active {
+  transform: none !important;
+  box-shadow: none !important;
+  border-bottom-width: 1px !important;
+}
+
+.classic-btn-tile.classic-btn-on,
+.classic-btn-3d.classic-btn-on {
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+/* Entity exists but HA state is unavailable/unknown — distinct from OFF + disabled */
+.classic-btn-unavailable,
+.classic-btn-unavailable.classic-btn-on {
+  opacity: 0.55 !important;
+  background-color: #e5e5ea !important;
+  border-color: #aeaeb2 !important;
+  border-style: dashed !important;
+  color: #8e8e93 !important;
+  filter: none !important;
+  cursor: not-allowed;
+}
+
+.classic-btn-unavailable:hover,
+.classic-btn-unavailable.classic-btn-on:hover {
+  background-color: #e5e5ea !important;
+  filter: none !important;
+}
+
+.dark .classic-btn-unavailable,
+.dark .classic-btn-unavailable.classic-btn-on {
+  background-color: #2a2a2c !important;
+  border-color: #636366 !important;
+  color: #8e8e93 !important;
+}
+
+.dark .classic-btn-unavailable:hover,
+.dark .classic-btn-unavailable.classic-btn-on:hover {
+  background-color: #2a2a2c !important;
+}
+
+.ha-entity-unavailable {
+  opacity: 0.55;
+}
+
+.ha-entity-unavailable .text-slate-500,
+.ha-entity-unavailable .text-slate-600,
+.ha-entity-unavailable .dark\:text-slate-400 {
+  color: #8e8e93 !important;
+}

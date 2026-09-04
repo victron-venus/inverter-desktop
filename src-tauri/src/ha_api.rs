@@ -2,12 +2,150 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 // Import config loading functions from lib
 use crate::load_config;
 
 pub static WINDOW_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Coalesce high-frequency `ha-filtered-update` IPC: HA may emit dozens of
+/// `state_changed` events per second (every power sensor in the house). Emitting
+/// a full filtered snapshot on each event saturates WebKit IPC and freezes the
+/// dashboard even though MQTT/`ha-state-update` data is arriving.
+const MIN_HA_FILTERED_EMIT_INTERVAL: Duration = Duration::from_millis(500);
+
+struct HaFilteredEmitCoalesce {
+    last_emit: Option<Instant>,
+    flush_scheduled: bool,
+}
+
+static HA_FILTERED_COALESCE: std::sync::LazyLock<Mutex<HaFilteredEmitCoalesce>> =
+    std::sync::LazyLock::new(|| {
+        Mutex::new(HaFilteredEmitCoalesce {
+            last_emit: None,
+            flush_scheduled: false,
+        })
+    });
+
+/// Domains that are safe to live-push via `ha-filtered-update`.
+///
+/// `sensor` / `binary_sensor` are intentionally excluded: a typical HA install
+/// has hundreds of them (power clamps alone can tick 50-100/s). Rebuilding and
+/// IPC-emitting the full sensor list — even coalesced to 2 Hz — saturates
+/// WebKit and freezes MQTT-driven main tiles. Sensors are snapshotted on WS
+/// connect (force emit) and via `get_ha_filtered_data`; they are not live-ticked.
+fn domain_triggers_live_filtered(entity_id: &str) -> bool {
+    matches!(
+        entity_id.split('.').next().unwrap_or(""),
+        "number" | "cover" | "media_player" | "scene" | "weather"
+    )
+}
+
+fn emit_ha_filtered_now(
+    app: &tauri::AppHandle,
+    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    include_sensors: bool,
+) {
+    if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let mut filtered = {
+        let Ok(guard) = entity_states.lock() else {
+            return;
+        };
+        compute_filtered_data(&guard)
+    };
+    // Live ticks omit the bulky sensors array so Vue does not re-render hundreds
+    // of SidePanel rows on every coalesce flush. Connect/force sets refresh_sensors.
+    if !include_sensors {
+        filtered.sensors.clear();
+    }
+    filtered.refresh_sensors = include_sensors;
+    let _ = app.emit("ha-filtered-update", &filtered);
+}
+
+/// Force a full filtered snapshot (including sensors) — used on WS connect and
+/// when the window becomes visible again.
+pub fn force_emit_ha_filtered(
+    app: &tauri::AppHandle,
+    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+) {
+    emit_ha_filtered_coalesced(app, entity_states, true);
+}
+
+/// Emit filtered HA entity arrays to the frontend, coalesced to at most one
+/// update per `MIN_HA_FILTERED_EMIT_INTERVAL` with a trailing flush of the
+/// latest map snapshot so the SidePanel never freezes on dropped ticks.
+fn emit_ha_filtered_coalesced(
+    app: &tauri::AppHandle,
+    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    force: bool,
+) {
+    if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    if force {
+        if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
+            c.last_emit = Some(Instant::now());
+            c.flush_scheduled = false;
+        }
+        emit_ha_filtered_now(app, entity_states, true);
+        return;
+    }
+
+    let mut schedule_delay: Option<Duration> = None;
+    let mut emit_now = false;
+
+    if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
+        let now = Instant::now();
+        let since_last = c.last_emit.map(|prev| now.duration_since(prev));
+        let within_interval = since_last
+            .map(|d| d < MIN_HA_FILTERED_EMIT_INTERVAL)
+            .unwrap_or(false);
+
+        if within_interval {
+            if !c.flush_scheduled {
+                c.flush_scheduled = true;
+                let elapsed = since_last.unwrap_or(Duration::ZERO);
+                schedule_delay = Some(MIN_HA_FILTERED_EMIT_INTERVAL.saturating_sub(elapsed));
+            }
+        } else {
+            c.last_emit = Some(now);
+            emit_now = true;
+        }
+    } else {
+        emit_now = true;
+    }
+
+    if emit_now {
+        // Live path: never ship the full sensors inventory.
+        emit_ha_filtered_now(app, entity_states, false);
+        return;
+    }
+
+    if let Some(delay) = schedule_delay {
+        let app = app.clone();
+        let entity_states = Arc::clone(entity_states);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let should_emit = {
+                if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
+                    c.flush_scheduled = false;
+                    c.last_emit = Some(Instant::now());
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_emit {
+                emit_ha_filtered_now(&app, &entity_states, false);
+            }
+        });
+    }
+}
 
 fn attr_str<'a>(attrs: Option<&'a serde_json::Value>, key: &str) -> Option<&'a str> {
     attrs.and_then(|a| a.get(key)).and_then(|v| v.as_str())
@@ -54,6 +192,9 @@ pub struct HaCoverDisplay {
     pub entity_id: String,
     pub name: String,
     pub position: i64,
+    /// HA state: open / closed / opening / closing / unavailable / unknown
+    #[serde(default)]
+    pub state: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -87,6 +228,10 @@ pub struct HaFilteredData {
     pub media_players: Vec<HaMediaPlayerDisplay>,
     pub scenes: Vec<HaSceneDisplay>,
     pub weather: Option<HaWeatherDisplay>,
+    /// When true, frontend should replace `haSensors`. Live ticks set this false
+    /// so the bulky sensor list is not re-rendered continuously.
+    #[serde(default)]
+    pub refresh_sensors: bool,
 }
 
 #[derive(Clone)]
@@ -104,10 +249,12 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
     let mut weather = None;
 
     for (entity_id, entry) in entity_states {
-        if entry.state == "unavailable" || entry.state == "unknown" {
+        let domain = entity_id.split('.').next().unwrap_or("");
+        let is_unavailable = entry.state == "unavailable" || entry.state == "unknown";
+        // Keep unavailable covers visible so the UI can style them; skip other domains.
+        if is_unavailable && domain != "cover" {
             continue;
         }
-        let domain = entity_id.split('.').next().unwrap_or("");
         let attrs = entry.attributes.as_ref();
         let name = attr_str(attrs, "friendly_name").unwrap_or(entity_id);
 
@@ -138,14 +285,19 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                 });
             }
             "cover" => {
-                let position = attrs
-                    .and_then(|a| a.get("current_position"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
+                let position = if is_unavailable {
+                    0
+                } else {
+                    attrs
+                        .and_then(|a| a.get("current_position"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0)
+                };
                 covers.push(HaCoverDisplay {
                     entity_id: entity_id.clone(),
                     name: name.to_string(),
                     position,
+                    state: entry.state.clone(),
                 });
             }
             "media_player" => {
@@ -200,6 +352,83 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
         media_players,
         scenes,
         weather,
+        refresh_sensors: true,
+    }
+}
+
+/// Consecutive HTTP 404/410 strikes required before blacklisting an entity.
+/// A single miss can be a fluke/timeout race; require sustained absence.
+const HA_ENTITY_SKIP_STRIKES: u32 = 3;
+
+/// Entity IDs blacklisted after [`HA_ENTITY_SKIP_STRIKES`] consecutive 404/410
+/// responses from `/api/states/{id}`.
+/// Process-wide because `HaApiClient` is constructed per REST invoke; cleared on
+/// config save/restore and HA WebSocket reconnect so fixing an entity id in
+/// config takes effect without a full app restart.
+static HA_ENTITY_SKIP: std::sync::LazyLock<Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Per-entity consecutive 404/410 failure counts (process-wide, like HA_ENTITY_SKIP).
+static HA_ENTITY_FAIL_COUNT: std::sync::LazyLock<Mutex<HashMap<String, u32>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn is_entity_skipped(entity_id: &str) -> bool {
+    HA_ENTITY_SKIP
+        .lock()
+        .map(|set| set.contains(entity_id))
+        .unwrap_or(false)
+}
+
+/// Record a successful fetch for `entity_id` — resets its consecutive-miss counter.
+fn record_entity_success(entity_id: &str) {
+    if let Ok(mut counts) = HA_ENTITY_FAIL_COUNT.lock() {
+        counts.remove(entity_id);
+    }
+}
+
+/// Record an HTTP 404/410 for `entity_id`. Blacklists only after
+/// [`HA_ENTITY_SKIP_STRIKES`] consecutive misses; any success resets the counter.
+fn record_entity_missing(entity_id: &str) {
+    if is_entity_skipped(entity_id) {
+        return;
+    }
+    let strikes = {
+        let Ok(mut counts) = HA_ENTITY_FAIL_COUNT.lock() else {
+            return;
+        };
+        let entry = counts.entry(entity_id.to_string()).or_insert(0);
+        *entry = entry.saturating_add(1);
+        *entry
+    };
+    if strikes < HA_ENTITY_SKIP_STRIKES {
+        log::debug!(
+            "HA entity {} returned 404/410 (strike {}/{}); will retry",
+            entity_id,
+            strikes,
+            HA_ENTITY_SKIP_STRIKES
+        );
+        return;
+    }
+    let newly_added = HA_ENTITY_SKIP
+        .lock()
+        .map(|mut set| set.insert(entity_id.to_string()))
+        .unwrap_or(false);
+    if newly_added {
+        log::info!(
+            "HA entity {} not found after {} consecutive 404/410 — disabled until config reload",
+            entity_id,
+            strikes
+        );
+    }
+}
+
+/// Clear the missing-entity killswitch and failure counters (config reload / HA reconnect).
+pub fn clear_entity_skip_list() {
+    if let Ok(mut set) = HA_ENTITY_SKIP.lock() {
+        set.clear();
+    }
+    if let Ok(mut counts) = HA_ENTITY_FAIL_COUNT.lock() {
+        counts.clear();
     }
 }
 
@@ -318,6 +547,9 @@ impl HaApiClient {
     pub async fn get_entities(&self, entity_ids: &[&str]) -> Result<Vec<HaState>, String> {
         let mut result = Vec::new();
         for &eid in entity_ids {
+            if is_entity_skipped(eid) {
+                continue;
+            }
             let response = self
                 .client
                 .get(format!("{}/api/states/{}", self.base_url, eid))
@@ -325,17 +557,22 @@ impl HaApiClient {
                 .send()
                 .await
                 .map_err(|e| format!("Failed to fetch entity {}: {}", eid, e))?;
-            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
                 return Err("HA authentication failed (401)".to_string());
             }
-            if !response.status().is_success() {
-                log::warn!(
-                    "HA entity {} returned HTTP {}, skipping",
-                    eid,
-                    response.status()
-                );
+            // Gone / missing entities: require HA_ENTITY_SKIP_STRIKES consecutive
+            // 404/410 before blacklisting (cleared on config reload / HA reconnect).
+            if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::GONE {
+                record_entity_missing(eid);
                 continue;
             }
+            if !status.is_success() {
+                log::warn!("HA entity {} returned HTTP {}, skipping", eid, status);
+                continue;
+            }
+            // HTTP success — entity exists; reset consecutive-miss counter.
+            record_entity_success(eid);
             if let Ok(item) = response.json::<serde_json::Value>().await {
                 if let (Some(entity_id), Some(state)) = (item.get("entity_id"), item.get("state")) {
                     if let (Some(eid_str), Some(state_str)) = (entity_id.as_str(), state.as_str()) {
@@ -660,10 +897,7 @@ impl HaWebSocketClient {
 
         // Emit initial filtered data immediately after populating state map
         // This ensures frontend has full data on WS connect
-        if let Ok(states_guard) = entity_states.lock() {
-            let filtered = compute_filtered_data(&states_guard);
-            let _ = app.emit("ha-filtered-update", &filtered);
-        }
+        emit_ha_filtered_coalesced(&app, &entity_states, true);
 
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -694,24 +928,33 @@ impl HaWebSocketClient {
                                                             state: state.to_string(),
                                                             attributes: attrs.clone(),
                                                         });
+                                                    }
 
-                                                        // Skip expensive processing and emits when window is hidden
-                                                        if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
-                                                            // Emit individual update (backward compat for buttonStates, etc.) only for whitelisted entities
-                                                            if whitelist_clone.contains(&eid) {
-                                                                let _ = app_clone.emit(
-                                                                    "ha-state-update",
-                                                                    serde_json::json!({
-                                                                        "entity_id": eid,
-                                                                        "state": state,
-                                                                        "attributes": attrs.unwrap_or(serde_json::Value::Null),
-                                                                    }),
-                                                                );
-                                                            }
+                                                    // Skip expensive processing and emits when window is hidden
+                                                    if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+                                                        // Emit individual update (backward compat for buttonStates, etc.) only for whitelisted entities
+                                                        if whitelist_clone.contains(&eid) {
+                                                            let _ = app_clone.emit(
+                                                                "ha-state-update",
+                                                                serde_json::json!({
+                                                                    "entity_id": eid,
+                                                                    "state": state,
+                                                                    "attributes": attrs.unwrap_or(serde_json::Value::Null),
+                                                                }),
+                                                            );
+                                                        }
 
-                                                            // Compute and emit pre-filtered entity data
-                                                            let filtered = compute_filtered_data(&states_guard);
-                                                            let _ = app_clone.emit("ha-filtered-update", &filtered);
+                                                        // Full filtered snapshot is expensive and was previously
+                                                        // emitted on EVERY house-wide state_changed (power sensors
+                                                        // alone can be 50–100/s), freezing WebKit. Only schedule
+                                                        // when the entity can appear in filtered arrays, and
+                                                        // coalesce to ~2 Hz with a trailing flush.
+                                                        if domain_triggers_live_filtered(&eid) {
+                                                            emit_ha_filtered_coalesced(
+                                                                &app_clone,
+                                                                &entity_states,
+                                                                false,
+                                                            );
                                                         }
                                                     }
                                                 }
@@ -752,5 +995,94 @@ impl HaWebSocketClient {
         if let Some(rx) = self.rx.take() {
             let _ = rx.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod entity_skip_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Process-global skip set + fail counters — serialize these tests.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn strike_until_skip(eid: &str) {
+        for _ in 0..HA_ENTITY_SKIP_STRIKES {
+            record_entity_missing(eid);
+        }
+    }
+
+    #[test]
+    fn requires_three_consecutive_misses_before_skip() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_entity_skip_list();
+        let eid = "button.washer_start";
+        assert!(!is_entity_skipped(eid));
+
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid), "1 miss must not blacklist");
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid), "2 misses must not blacklist");
+        record_entity_missing(eid);
+        assert!(
+            is_entity_skipped(eid),
+            "3 consecutive misses must blacklist"
+        );
+
+        // Further misses are a no-op (still skipped)
+        record_entity_missing(eid);
+        assert!(is_entity_skipped(eid));
+
+        clear_entity_skip_list();
+        assert!(!is_entity_skipped(eid));
+    }
+
+    #[test]
+    fn success_resets_consecutive_miss_counter() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_entity_skip_list();
+        let eid = "sensor.flaky";
+
+        record_entity_missing(eid);
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid));
+
+        record_entity_success(eid);
+
+        // After reset, need a fresh 3 strikes
+        record_entity_missing(eid);
+        record_entity_missing(eid);
+        assert!(!is_entity_skipped(eid));
+        record_entity_missing(eid);
+        assert!(is_entity_skipped(eid));
+
+        clear_entity_skip_list();
+    }
+
+    #[test]
+    fn clear_resets_skip_list_and_counters() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_entity_skip_list();
+
+        strike_until_skip("sensor.dead_one");
+        strike_until_skip("button.dead_two");
+        assert!(is_entity_skipped("sensor.dead_one"));
+        assert!(is_entity_skipped("button.dead_two"));
+
+        // Partial strikes on a third entity, then clear everything
+        record_entity_missing("sensor.partial");
+        record_entity_missing("sensor.partial");
+        clear_entity_skip_list();
+
+        assert!(!is_entity_skipped("sensor.dead_one"));
+        assert!(!is_entity_skipped("button.dead_two"));
+        assert!(!is_entity_skipped("sensor.partial"));
+
+        // Cleared counters: two more misses still not enough to skip
+        record_entity_missing("sensor.partial");
+        record_entity_missing("sensor.partial");
+        assert!(!is_entity_skipped("sensor.partial"));
+
+        clear_entity_skip_list();
     }
 }
