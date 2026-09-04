@@ -91,6 +91,16 @@ fn note_inverter_state_recv(live: &InverterState) {
     }
 }
 
+/// One Cerbo GX instance discovered under tank/pump/ev/evcharger portal topics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveredInstance {
+    pub instance: u32,
+    /// "tank" | "pump" | "ev" | "evcharger"
+    pub kind: String,
+    /// CustomName, else ProductName, when published.
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
     pub gt: Option<f64>,
@@ -138,6 +148,9 @@ pub struct InverterState {
     pub ev_present: bool,
     /// Same for evcharger/<i>/... messages.
     pub evcharger_present: bool,
+    /// Cerbo GX water (tank/pump) + EV (ev/evcharger) instances seen on MQTT.
+    /// Populated at connect/keepalive via broad portal subscriptions; Config UI lists them.
+    pub discovered_water_ev: Option<Vec<DiscoveredInstance>>,
     pub water_level: Option<f64>,
     pub water_valve: Option<bool>,
     pub pump_switch: Option<bool>,
@@ -469,9 +482,26 @@ impl AcLoad {
     }
 }
 
+/// Named Cerbo service (tank/pump/ev/evcharger) tracked for Config discovery.
+#[derive(Debug, Clone, Default)]
+struct NamedDevice {
+    custom_name: Option<String>,
+    product_name: Option<String>,
+}
+
+impl NamedDevice {
+    fn display_name(&self) -> Option<&str> {
+        self.custom_name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.product_name.as_deref().filter(|s| !s.is_empty()))
+    }
+}
+
 /// Devices discovered directly on the Cerbo GX MQTT broker
 /// (N/<portal>/battery/..., N/<portal>/solarcharger/...,
-/// N/<portal>/pvinverter/..., N/<portal>/acload/...), independent of the
+/// N/<portal>/pvinverter/..., N/<portal>/acload/...,
+/// N/<portal>/tank|pump|ev|evcharger/...), independent of the
 /// inverter-control daemon's inverter/state payload. BTreeMap keeps a stable
 /// instance-ordered list for the UI.
 #[derive(Default)]
@@ -483,6 +513,14 @@ struct CerboDevices {
     /// system/0 Ac/Grid + Ac/Consumption (preferred source for gt/tt).
     system: BTreeMap<u32, TrackedEntry<SystemTotals>>,
     acloads: BTreeMap<u32, TrackedEntry<AcLoad>>,
+    /// dbus-pump tank Level (+ names)
+    tanks: BTreeMap<u32, TrackedEntry<NamedDevice>>,
+    /// dbus-pump startstop (pump + valve share this service type)
+    pumps: BTreeMap<u32, TrackedEntry<NamedDevice>>,
+    /// dbus-ev vehicle instances
+    evs: BTreeMap<u32, TrackedEntry<NamedDevice>>,
+    /// dbus-evcharger wallbox instances
+    evchargers: BTreeMap<u32, TrackedEntry<NamedDevice>>,
 }
 
 impl CerboDevices {
@@ -505,6 +543,13 @@ impl CerboDevices {
         self.system
             .retain(|_, entry| entry.last_seen.elapsed() < ttl);
         self.acloads
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.tanks
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.pumps
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.evs.retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.evchargers
             .retain(|_, entry| entry.last_seen.elapsed() < ttl);
     }
 
@@ -796,8 +841,9 @@ pub struct MqttClient {
     app_handle: Option<tauri::AppHandle>,
     /// Shared so runtime inverter/portal discovery updates W/ ack topics.
     portal_id: Arc<Mutex<Option<String>>>,
-    /// Cerbo GX startstop device instances for (pump, valve) water topics.
-    water_instances: Option<(u32, u32)>,
+    /// Cerbo GX water instances: (tank, pump, valve). Any side may be None;
+    /// discovery fills gaps (saved id kept if still present, else first found).
+    water_instances: Option<(Option<u32>, Option<u32>, Option<u32>)>,
     /// Cerbo GX EV (vehicle) and evcharger instance pair for EV topics.
     /// Either side may be None — dbus-ev and dbus-evcharger are independent
     /// services, so the EV tile must populate if just one is configured.
@@ -1200,7 +1246,10 @@ impl MqttClient {
         }
     }
 
-    pub fn set_water_instances(&mut self, instances: Option<(u32, u32)>) {
+    pub fn set_water_instances(
+        &mut self,
+        instances: Option<(Option<u32>, Option<u32>, Option<u32>)>,
+    ) {
         self.water_instances = instances;
     }
 
@@ -1398,7 +1447,7 @@ impl MqttClient {
         state: Arc<Mutex<InverterState>>,
         app_handle: Option<tauri::AppHandle>,
         portal_id: Arc<Mutex<Option<String>>>,
-        water_instances: Option<(u32, u32)>,
+        water_instances: Option<(Option<u32>, Option<u32>, Option<u32>)>,
         ev_instances: Option<(Option<u32>, Option<u32>)>,
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
@@ -1563,17 +1612,14 @@ impl MqttClient {
             format!("N/{}/+/+/Alarms/#", id),
             // GUIv2 source of truth for alarm text/time/ack
             format!("N/{}/platform/+/Notifications/#", id),
-            // Water system published by dbus-pump on the GX (tank level %,
-            // pump/valve startstop state).
-            format!("N/{}/tank/+/Level", id),
-            format!("N/{}/pump/+/State", id),
-            // EV system: dbus-ev (vehicle SoC/Power) and dbus-evcharger (charger Power)
-            // dbus-ev uses bus name com.victronenergy.evcharger.<N>, so Soc/Power land
-            // under evcharger/<instance>/ path — subscribe both ev/ and evcharger/ to be safe.
-            format!("N/{}/ev/+/Soc", id),
-            format!("N/{}/ev/+/Ac/Power", id),
-            format!("N/{}/evcharger/+/Soc", id),
-            format!("N/{}/evcharger/+/Ac/Power", id),
+            // Water + EV: wildcards cover Level/State/Soc/Ac/Power + CustomName/
+            // ProductName so Config can list every instance the GX publishes.
+            format!("N/{}/tank/+/#", id),
+            format!("N/{}/pump/+/#", id),
+            // dbus-ev uses bus name com.victronenergy.evcharger.<N> on some
+            // installs, so Soc/Power may land under evcharger/<instance>/.
+            format!("N/{}/ev/+/#", id),
+            format!("N/{}/evcharger/+/#", id),
             // Active loads: Victron acload services (dbus-emporia-vue etc.).
             // Wildcard covers Ac/Power + CustomName + ProductName so names can
             // arrive after watts without a second subscribe burst.
@@ -1621,7 +1667,7 @@ impl MqttClient {
         state: &Arc<Mutex<InverterState>>,
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
-        water_instances: &Option<(u32, u32)>,
+        water_instances: &Option<(Option<u32>, Option<u32>, Option<u32>)>,
         ev_instances: &Option<(Option<u32>, Option<u32>)>,
         notifications: &Arc<Mutex<NotificationState>>,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
@@ -1751,58 +1797,144 @@ impl MqttClient {
                 }
             }
         } else if topic.starts_with("N/") && Self::parse_water_topic(topic).is_some() {
-            // dbus-pump on the GX: N/<portal>/tank/<i>/Level (%),
-            // N/<portal>/pump/<i>/State (0 stopped, 1 running).
-            if let (Some((kind, inst)), Some((pump_i, valve_i)), Some(value)) = (
-                Self::parse_water_topic(topic),
-                water_instances,
-                Self::parse_cerbo_value(payload),
-            ) {
+            // dbus-pump on the GX: N/<portal>/tank/<i>/Level|CustomName|ProductName,
+            // N/<portal>/pump/<i>/State|CustomName|ProductName.
+            // Always discover every instance; apply Level/State only for the
+            // active (preferred-if-still-present, else first-found) selection.
+            let Some((kind, inst, path)) = Self::parse_water_topic(topic) else {
+                return;
+            };
+            let discovered = cerbo_devices
+                .lock()
+                .ok()
+                .map(|mut d| {
+                    d.sweep_stale();
+                    Self::apply_named_discovery(&mut d, kind, inst, path, payload);
+                    true
+                })
+                .unwrap_or(false);
+            let mut applied_value = false;
+            if matches!(path, "Level" | "State") {
+                if let Some(value) = Self::parse_cerbo_value(payload) {
+                    let snapshot_prep = {
+                        let d = cerbo_devices.lock().ok();
+                        let (pref_tank, pref_pump, pref_valve) = match water_instances {
+                            Some((t, p, v)) => (*t, *p, *v),
+                            None => (None, None, None),
+                        };
+                        let active_tank = d
+                            .as_ref()
+                            .map(|dev| Self::resolve_active_instance(pref_tank, &dev.tanks))
+                            .unwrap_or(pref_tank);
+                        let active_pump = d
+                            .as_ref()
+                            .map(|dev| Self::resolve_active_instance(pref_pump, &dev.pumps))
+                            .unwrap_or(pref_pump);
+                        let active_valve = d
+                            .as_ref()
+                            .map(|dev| {
+                                // Prefer configured valve; else first pump that is not the active pump.
+                                if let Some(v) = pref_valve {
+                                    if dev.pumps.is_empty() || dev.pumps.contains_key(&v) {
+                                        return Some(v);
+                                    }
+                                }
+                                dev.pumps.keys().copied().find(|i| Some(*i) != active_pump)
+                            })
+                            .unwrap_or(pref_valve);
+                        (active_tank, active_pump, active_valve)
+                    };
+                    let (active_tank, active_pump, active_valve) = snapshot_prep;
+                    let mut guard = match state.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                    match (kind, path, inst) {
+                        ("tank", "Level", i) if Some(i) == active_tank => {
+                            guard.water_level = Some(value);
+                            applied_value = true;
+                        }
+                        ("pump", "State", i) if Some(i) == active_pump => {
+                            guard.pump_switch = Some(value >= 0.5);
+                            applied_value = true;
+                        }
+                        ("pump", "State", i) if Some(i) == active_valve => {
+                            guard.water_valve = Some(value >= 0.5);
+                            applied_value = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if discovered || applied_value {
                 let snapshot = {
                     let mut guard = match state.lock() {
                         Ok(g) => g,
                         Err(_) => return,
                     };
-                    match (kind, inst) {
-                        ("tank", _) => guard.water_level = Some(value),
-                        ("pump", i) if i == *pump_i => guard.pump_switch = Some(value >= 0.5),
-                        ("pump", i) if i == *valve_i => guard.water_valve = Some(value >= 0.5),
-                        _ => {}
+                    if let Ok(d) = cerbo_devices.lock() {
+                        Self::apply_cerbo_to_state(&d, &mut guard);
                     }
                     guard.clone()
                 };
                 Self::emit_state_update(app_handle, &snapshot, false);
             }
         } else if topic.starts_with("N/") && Self::parse_ev_topic(topic).is_some() {
-            // dbus-ev / dbus-evcharger on the GX:
-            // N/<portal>/ev/<i>/Soc, /ev/<i>/Ac/Power (W),
-            // N/<portal>/evcharger/<i>/Ac/Power (W).
-            // Apply per-side: each kind matches its own configured instance;
-            // either side may be None and the other still applies.
-            if let (Some((kind, inst, path)), Some(value)) = (
-                Self::parse_ev_topic(topic),
-                Self::parse_cerbo_value(payload),
-            ) {
-                let snapshot = {
+            // dbus-ev / dbus-evcharger on the GX. Discover every instance;
+            // apply Soc/Power only for the active selection (saved config if
+            // still present among discovered, else first found).
+            let Some((kind, inst, path)) = Self::parse_ev_topic(topic) else {
+                return;
+            };
+            let _ = cerbo_devices.lock().ok().map(|mut d| {
+                d.sweep_stale();
+                Self::apply_named_discovery(&mut d, kind, inst, path, payload);
+            });
+            let mut applied = false;
+            if matches!(path, "Soc" | "Ac/Power") {
+                if let Some(value) = Self::parse_cerbo_value(payload) {
+                    let effective = {
+                        let d = cerbo_devices.lock().ok();
+                        let ev_pref = ev_instances.as_ref().and_then(|(e, _)| *e);
+                        let evc_pref = ev_instances.as_ref().and_then(|(_, c)| *c);
+                        let active_ev = d
+                            .as_ref()
+                            .map(|dev| Self::resolve_active_instance(ev_pref, &dev.evs))
+                            .unwrap_or(ev_pref);
+                        let active_evc = d
+                            .as_ref()
+                            .map(|dev| Self::resolve_active_instance(evc_pref, &dev.evchargers))
+                            .unwrap_or(evc_pref);
+                        Some((active_ev, active_evc))
+                    };
                     let (mut guard, mut cache) = match (state.lock(), ev_cache.lock()) {
                         (Ok(g), Ok(c)) => (g, c),
                         _ => return,
                     };
-                    if Self::apply_ev_message(
-                        &mut guard,
-                        &mut cache,
-                        kind,
-                        inst,
-                        path,
-                        value,
-                        ev_instances,
+                    applied = Self::apply_ev_message(
+                        &mut guard, &mut cache, kind, inst, path, value, &effective,
                     )
-                    .is_none()
-                    {
-                        return;
-                    }
-                    guard.clone()
+                    .is_some();
+                }
+            }
+            // Always refresh discovered list onto state when we saw a topic.
+            let snapshot = {
+                let mut guard = match state.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
                 };
+                if let Ok(d) = cerbo_devices.lock() {
+                    Self::apply_cerbo_to_state(&d, &mut guard);
+                }
+                guard.clone()
+            };
+            if applied
+                || snapshot
+                    .discovered_water_ev
+                    .as_ref()
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+            {
                 Self::emit_state_update(app_handle, &snapshot, false);
             }
         } else if topic.starts_with("N/") && Self::parse_acload_topic(topic).is_some() {
@@ -1854,16 +1986,24 @@ impl MqttClient {
         }
     }
 
-    /// Parse a dbus-pump water topic: N/<portal>/tank/<i>/Level or
-    /// N/<portal>/pump/<i>/State -> Some((kind, instance)).
-    fn parse_water_topic(topic: &str) -> Option<(&str, u32)> {
+    /// Parse a dbus-pump water topic:
+    /// N/<portal>/tank/<i>/Level|CustomName|ProductName,
+    /// N/<portal>/pump/<i>/State|CustomName|ProductName
+    /// -> Some((kind, instance, path)).
+    fn parse_water_topic(topic: &str) -> Option<(&str, u32, &str)> {
         let rest = topic.strip_prefix("N/")?;
         let mut it = rest.split('/');
         let _portal = it.next()?;
         let kind = it.next()?;
         let inst: u32 = it.next()?.parse().ok()?;
-        match (kind, it.next()?) {
-            ("tank", "Level") | ("pump", "State") => Some((kind, inst)),
+        let path = it.next()?;
+        match (kind, path) {
+            ("tank", "Level")
+            | ("tank", "CustomName")
+            | ("tank", "ProductName")
+            | ("pump", "State")
+            | ("pump", "CustomName")
+            | ("pump", "ProductName") => Some((kind, inst, path)),
             _ => None,
         }
     }
@@ -1889,8 +2029,12 @@ impl MqttClient {
         match (kind, path) {
             ("ev", "Soc")
             | ("ev", "Ac/Power")
+            | ("ev", "CustomName")
+            | ("ev", "ProductName")
             | ("evcharger", "Soc")
-            | ("evcharger", "Ac/Power") => Some((kind, inst, path)),
+            | ("evcharger", "Ac/Power")
+            | ("evcharger", "CustomName")
+            | ("evcharger", "ProductName") => Some((kind, inst, path)),
             _ => None,
         }
     }
@@ -1949,6 +2093,53 @@ impl MqttClient {
             }
             _ => false,
         }
+    }
+
+    /// Record tank/pump/ev/evcharger instance (+ optional name) in CerboDevices.
+    fn apply_named_discovery(
+        devices: &mut CerboDevices,
+        kind: &str,
+        inst: u32,
+        path: &str,
+        payload: &str,
+    ) {
+        let map = match kind {
+            "tank" => &mut devices.tanks,
+            "pump" => &mut devices.pumps,
+            "ev" => &mut devices.evs,
+            "evcharger" => &mut devices.evchargers,
+            _ => return,
+        };
+        let entry = map.entry(inst).or_default();
+        entry.touch();
+        match path {
+            "CustomName" => {
+                if let Some(n) = Self::parse_cerbo_name(payload) {
+                    entry.data.custom_name = Some(n);
+                }
+            }
+            "ProductName" => {
+                if let Some(n) = Self::parse_cerbo_name(payload) {
+                    entry.data.product_name = Some(n);
+                }
+            }
+            // Level / State / Soc / Ac/Power — presence alone is enough.
+            _ => {}
+        }
+    }
+
+    /// Prefer `preferred` when discovery is empty or still contains it;
+    /// otherwise the lowest discovered instance id.
+    fn resolve_active_instance(
+        preferred: Option<u32>,
+        discovered: &BTreeMap<u32, TrackedEntry<NamedDevice>>,
+    ) -> Option<u32> {
+        if let Some(p) = preferred {
+            if discovered.is_empty() || discovered.contains_key(&p) {
+                return Some(p);
+            }
+        }
+        discovered.keys().next().copied()
     }
 
     /// Cerbo flashmq JSON envelope: {"value": <number>}.
@@ -2447,6 +2638,39 @@ impl MqttClient {
             for (id, n) in names {
                 dest.insert(id, n);
             }
+        }
+        // Water & EV instance inventory for Config (stable instance order).
+        let mut discovered = Vec::new();
+        for (inst, entry) in &devices.tanks {
+            discovered.push(DiscoveredInstance {
+                instance: *inst,
+                kind: "tank".to_string(),
+                name: entry.data.display_name().map(str::to_string),
+            });
+        }
+        for (inst, entry) in &devices.pumps {
+            discovered.push(DiscoveredInstance {
+                instance: *inst,
+                kind: "pump".to_string(),
+                name: entry.data.display_name().map(str::to_string),
+            });
+        }
+        for (inst, entry) in &devices.evs {
+            discovered.push(DiscoveredInstance {
+                instance: *inst,
+                kind: "ev".to_string(),
+                name: entry.data.display_name().map(str::to_string),
+            });
+        }
+        for (inst, entry) in &devices.evchargers {
+            discovered.push(DiscoveredInstance {
+                instance: *inst,
+                kind: "evcharger".to_string(),
+                name: entry.data.display_name().map(str::to_string),
+            });
+        }
+        if !discovered.is_empty() {
+            st.discovered_water_ev = Some(discovered);
         }
     }
 
@@ -3371,7 +3595,7 @@ mod tests {
     #[test]
     fn portal_topic_filter_count_fits_mqtt_queue_capacity() {
         // Keep in sync with subscribe_portal_topics filter list.
-        const PORTAL_FILTER_COUNT: usize = 15;
+        const PORTAL_FILTER_COUNT: usize = 13;
         assert!(
             PORTAL_FILTER_COUNT < MQTT_QUEUE_CAPACITY,
             "portal filters ({PORTAL_FILTER_COUNT}) must leave headroom in              MQTT_QUEUE_CAPACITY ({MQTT_QUEUE_CAPACITY}) for concurrent              publishes/subscribes from inside connection.iter()"
@@ -3682,7 +3906,7 @@ mod tests {
     fn parses_tank_level_topic() {
         assert_eq!(
             MqttClient::parse_water_topic("N/abc123/tank/21/Level"),
-            Some(("tank", 21))
+            Some(("tank", 21, "Level"))
         );
     }
 
@@ -3690,7 +3914,15 @@ mod tests {
     fn parses_pump_state_topic() {
         assert_eq!(
             MqttClient::parse_water_topic("N/abc123/pump/2/State"),
-            Some(("pump", 2))
+            Some(("pump", 2, "State"))
+        );
+    }
+
+    #[test]
+    fn parses_tank_custom_name_topic() {
+        assert_eq!(
+            MqttClient::parse_water_topic("N/abc123/tank/21/CustomName"),
+            Some(("tank", 21, "CustomName"))
         );
     }
 
@@ -5206,5 +5438,83 @@ mod tests {
         assert!(guard.dryer_power.is_none());
         // Daemon-only flag still merges
         assert_eq!(guard.dry_run, Some(true));
+    }
+
+    #[test]
+    fn resolve_active_keeps_preferred_when_present() {
+        let mut map = BTreeMap::new();
+        map.insert(1, TrackedEntry::default());
+        map.insert(2, TrackedEntry::default());
+        assert_eq!(MqttClient::resolve_active_instance(Some(2), &map), Some(2));
+    }
+
+    #[test]
+    fn resolve_active_falls_back_to_first_when_preferred_missing() {
+        let mut map = BTreeMap::new();
+        map.insert(5, TrackedEntry::default());
+        map.insert(9, TrackedEntry::default());
+        assert_eq!(MqttClient::resolve_active_instance(Some(40), &map), Some(5));
+    }
+
+    #[test]
+    fn resolve_active_keeps_preferred_while_discovery_empty() {
+        let map: BTreeMap<u32, TrackedEntry<NamedDevice>> = BTreeMap::new();
+        assert_eq!(
+            MqttClient::resolve_active_instance(Some(22), &map),
+            Some(22)
+        );
+    }
+
+    #[test]
+    fn apply_named_discovery_tracks_tank_and_name() {
+        let mut d = CerboDevices::default();
+        MqttClient::apply_named_discovery(&mut d, "tank", 21, "Level", "{\"value\": 66.0}");
+        MqttClient::apply_named_discovery(
+            &mut d,
+            "tank",
+            21,
+            "CustomName",
+            "{\"value\": \"Cistern\"}",
+        );
+        MqttClient::apply_named_discovery(&mut d, "pump", 1, "State", "{\"value\": 1}");
+        MqttClient::apply_named_discovery(
+            &mut d,
+            "evcharger",
+            40,
+            "Ac/Power",
+            "{\"value\": 1200.0}",
+        );
+        MqttClient::apply_named_discovery(
+            &mut d,
+            "ev",
+            22,
+            "ProductName",
+            "{\"value\": \"EV Vehicle\"}",
+        );
+        let mut st = InverterState::default();
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        let list = st.discovered_water_ev.expect("discovered list");
+        assert!(list
+            .iter()
+            .any(|i| i.kind == "tank" && i.instance == 21 && i.name.as_deref() == Some("Cistern")));
+        assert!(list.iter().any(|i| i.kind == "pump" && i.instance == 1));
+        assert!(list.iter().any(|i| i.kind == "ev"
+            && i.instance == 22
+            && i.name.as_deref() == Some("EV Vehicle")));
+        assert!(list
+            .iter()
+            .any(|i| i.kind == "evcharger" && i.instance == 40));
+    }
+
+    #[test]
+    fn parses_ev_custom_name() {
+        assert_eq!(
+            MqttClient::parse_ev_topic("N/portal/ev/22/CustomName"),
+            Some(("ev", 22, "CustomName"))
+        );
+        assert_eq!(
+            MqttClient::parse_ev_topic("N/portal/evcharger/40/ProductName"),
+            Some(("evcharger", 40, "ProductName"))
+        );
     }
 }
