@@ -646,6 +646,9 @@ fn start_ha_polling(app: tauri::AppHandle) {
                 .await
             {
                 Ok(mut ws_client) => {
+                    // Retry previously-404 entities after a successful reconnect
+                    // (HA may have added them; avoids re-spam during failed reconnect loops).
+                    ha_api::clear_entity_skip_list();
                     info!("HA WebSocket connected");
                     let _ = app.emit("ha-connection-status", true);
                     let _ = app.emit("ha-state-update", serde_json::json!({ "connected": true }));
@@ -777,7 +780,10 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 
 #[tauri::command]
 async fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
-    save_config_encrypted(&app, &config)
+    save_config_encrypted(&app, &config)?;
+    // Fixed / newly configured entity IDs should be polled again without app restart.
+    ha_api::clear_entity_skip_list();
+    Ok(())
 }
 
 #[tauri::command]
@@ -826,6 +832,7 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
     let config: FullConfig =
         serde_json::from_str(&content).map_err(|e| format!("Invalid backup file: {}", e))?;
     save_config_encrypted(&app, &config)?;
+    ha_api::clear_entity_skip_list();
     info!("Config restored from {}", path.display());
     Ok(true)
 }
@@ -924,6 +931,9 @@ async fn get_ha_appliance_states(
     token: String,
 ) -> Result<Vec<ha_api::HaState>, String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
+    // Legacy fallback list for installs without section entity config.
+    // Prefer get_ha_entity_states with configured IDs. Missing entities (404/410)
+    // are killswitched in HaApiClient::get_entities so they are not polled forever.
     let entity_ids = [
         // Dishwasher
         "binary_sensor.dishwasher_running",

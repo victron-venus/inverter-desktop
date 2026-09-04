@@ -346,6 +346,40 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
     }
 }
 
+/// Entity IDs that returned HTTP 404/410 from `/api/states/{id}`.
+/// Process-wide because `HaApiClient` is constructed per REST invoke; cleared on
+/// config save/restore and HA WebSocket reconnect so fixing an entity id in
+/// config takes effect without a full app restart.
+static HA_ENTITY_SKIP: std::sync::LazyLock<Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn is_entity_skipped(entity_id: &str) -> bool {
+    HA_ENTITY_SKIP
+        .lock()
+        .map(|set| set.contains(entity_id))
+        .unwrap_or(false)
+}
+
+fn blacklist_missing_entity(entity_id: &str) {
+    let newly_added = HA_ENTITY_SKIP
+        .lock()
+        .map(|mut set| set.insert(entity_id.to_string()))
+        .unwrap_or(false);
+    if newly_added {
+        log::info!(
+            "HA entity {} not found — disabled until config reload",
+            entity_id
+        );
+    }
+}
+
+/// Clear the missing-entity killswitch (config reload / HA reconnect).
+pub fn clear_entity_skip_list() {
+    if let Ok(mut set) = HA_ENTITY_SKIP.lock() {
+        set.clear();
+    }
+}
+
 #[derive(Clone)]
 pub struct HaApiClient {
     base_url: String,
@@ -461,6 +495,9 @@ impl HaApiClient {
     pub async fn get_entities(&self, entity_ids: &[&str]) -> Result<Vec<HaState>, String> {
         let mut result = Vec::new();
         for &eid in entity_ids {
+            if is_entity_skipped(eid) {
+                continue;
+            }
             let response = self
                 .client
                 .get(format!("{}/api/states/{}", self.base_url, eid))
@@ -468,15 +505,18 @@ impl HaApiClient {
                 .send()
                 .await
                 .map_err(|e| format!("Failed to fetch entity {}: {}", eid, e))?;
-            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
                 return Err("HA authentication failed (401)".to_string());
             }
-            if !response.status().is_success() {
-                log::warn!(
-                    "HA entity {} returned HTTP {}, skipping",
-                    eid,
-                    response.status()
-                );
+            // Gone / missing entities are blacklisted for this process lifetime
+            // (cleared on config reload or HA reconnect) so we stop polling + WARNing.
+            if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::GONE {
+                blacklist_missing_entity(eid);
+                continue;
+            }
+            if !status.is_success() {
+                log::warn!("HA entity {} returned HTTP {}, skipping", eid, status);
                 continue;
             }
             if let Ok(item) = response.json::<serde_json::Value>().await {
@@ -901,5 +941,42 @@ impl HaWebSocketClient {
         if let Some(rx) = self.rx.take() {
             let _ = rx.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod entity_skip_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Process-global skip set — serialize these tests.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn blacklist_skips_subsequent_checks() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_entity_skip_list();
+        let eid = "button.washer_start";
+        assert!(!is_entity_skipped(eid));
+        blacklist_missing_entity(eid);
+        assert!(is_entity_skipped(eid));
+        // Second blacklist is a no-op (still skipped)
+        blacklist_missing_entity(eid);
+        assert!(is_entity_skipped(eid));
+        clear_entity_skip_list();
+        assert!(!is_entity_skipped(eid));
+    }
+
+    #[test]
+    fn clear_only_affects_skip_list() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_entity_skip_list();
+        blacklist_missing_entity("sensor.dead_one");
+        blacklist_missing_entity("button.dead_two");
+        assert!(is_entity_skipped("sensor.dead_one"));
+        assert!(is_entity_skipped("button.dead_two"));
+        clear_entity_skip_list();
+        assert!(!is_entity_skipped("sensor.dead_one"));
+        assert!(!is_entity_skipped("button.dead_two"));
     }
 }
