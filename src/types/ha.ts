@@ -19,6 +19,8 @@ export interface HaCoverDisplay {
   entity_id: string
   name: string
   position: number
+  /** HA cover state: open / closed / opening / closing / unavailable / unknown */
+  state?: string
 }
 
 export interface HaMediaPlayerDisplay {

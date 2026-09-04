@@ -6,6 +6,7 @@
     :disabled="disabled || loading"
     :aria-busy="loading || undefined"
     :aria-pressed="toggle ? active : undefined"
+    :title="unavailable ? 'Unavailable' : undefined"
   >
     <Loader2 v-if="loading" :size="iconSize" class="animate-spin shrink-0" />
     <slot />
@@ -24,6 +25,8 @@ const props = withDefaults(
     active?: boolean
     /** When true, exposes aria-pressed from active */
     toggle?: boolean
+    /** Entity exists but HA state is unavailable/unknown — visual only, still clickable */
+    unavailable?: boolean
     disabled?: boolean
     loading?: boolean
     type?: 'button' | 'submit' | 'reset'
@@ -33,6 +36,7 @@ const props = withDefaults(
     size: 'md',
     active: false,
     toggle: false,
+    unavailable: false,
     disabled: false,
     loading: false,
     type: 'button',
@@ -49,7 +53,8 @@ const btnClass = computed(() => {
   if (props.size === 'sm') classes.push('classic-btn-sm')
   else if (props.size === 'lg') classes.push('classic-btn-lg')
 
-  if (props.active) classes.push('classic-btn-on')
+  if (props.active && !props.unavailable) classes.push('classic-btn-on')
+  if (props.unavailable) classes.push('classic-btn-unavailable')
   return classes
 })
 

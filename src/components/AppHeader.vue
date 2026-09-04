@@ -23,6 +23,7 @@
           class="min-w-[55px]"
           toggle
           :active="toggleStates?.[toggle.id] === 'on'"
+          :unavailable="isToggleUnavailable(toggleStates?.[toggle.id])"
           @click="$emit('send', 'toggle', { entity: toggle.entity })"
         >
           {{ toggle.label.toUpperCase() }}
@@ -45,6 +46,7 @@
 <script setup lang="ts">
 import { FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
 import UiButton from './UiButton.vue'
+import { isHaUnavailableState } from '../utils'
 
 defineProps<{
   dryRun: boolean
@@ -60,4 +62,8 @@ defineEmits<{
   send: [action: string, payload?: Record<string, unknown>]
   'toggle-theme': []
 }>()
+
+function isToggleUnavailable(state: string | undefined): boolean {
+  return isHaUnavailableState(state)
+}
 </script>

@@ -80,16 +80,32 @@ export function isInverterControlFlag(entityOrId: string): boolean {
   return inverterControlFlagKey(entityOrId) !== null
 }
 
+/** True when HA reports the entity exists but has no usable state. */
+export function isHaUnavailableState(state: string | null | undefined): boolean {
+  if (state === undefined || state === null) return false
+  const lower = String(state).trim().toLowerCase()
+  return !lower || lower === 'unavailable' || lower === 'unknown'
+}
+
+/** Map raw HA entity state to on / off / unavailable for toggles & home tiles. */
+export function normalizeHaToggleState(raw: string): 'on' | 'off' | 'unavailable' {
+  const lower = String(raw).trim().toLowerCase()
+  if (!lower || lower === 'unavailable' || lower === 'unknown') return 'unavailable'
+  // Covers / locks often use open/closed rather than on/off.
+  if (lower === 'on' || lower === 'open' || lower === 'opening' || lower === 'unlocked') return 'on'
+  return 'off'
+}
+
 /** Header-toggle display: the 7 control flags always use MQTT `booleans`. */
 export function resolveHeaderToggleState(
   toggle: { id: string; entity: string },
   haEntityStates: Record<string, string>,
   haEnabled: boolean,
   mqttBooleans: Record<string, unknown>
-): 'on' | 'off' {
+): 'on' | 'off' | 'unavailable' {
   const controlFlag = isInverterControlFlag(toggle.entity) || isInverterControlFlag(toggle.id)
   if (!controlFlag && haEnabled && haEntityStates[toggle.entity] !== undefined) {
-    return haEntityStates[toggle.entity] === 'on' ? 'on' : 'off'
+    return normalizeHaToggleState(haEntityStates[toggle.entity])
   }
   const entityKey = toggle.entity.split('.').pop() || toggle.id
   const rawVal = mqttBooleans[toggle.id] ?? mqttBooleans[entityKey] ?? mqttBooleans[toggle.entity]

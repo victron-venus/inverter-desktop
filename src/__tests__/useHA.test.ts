@@ -44,11 +44,11 @@ function filterCovers(
   const result: HaCoverDisplay[] = []
   for (const [entityId, attrs] of Object.entries(entityAttributes)) {
     if (!entityId.startsWith('cover.')) continue
-    const state = entityStates[entityId]
-    if (state === 'unavailable' || state === 'unknown') continue
+    const state = entityStates[entityId] || 'unknown'
     const name = (attrs.friendly_name as string) || entityId
-    const position = (attrs.current_position as number) ?? 0
-    result.push({ entity_id: entityId, name, position })
+    const unavailable = state === 'unavailable' || state === 'unknown'
+    const position = unavailable ? 0 : ((attrs.current_position as number) ?? 0)
+    result.push({ entity_id: entityId, name, position, state })
   }
   return result
 }
@@ -137,6 +137,7 @@ describe('filterCovers', () => {
     const result = filterCovers(mockStates, mockAttrs)
     expect(result).toHaveLength(1)
     expect(result[0].entity_id).toBe('cover.blind')
+    expect(result[0].state).toBe('open')
   })
 
   it('extracts position from attributes', () => {
@@ -148,6 +149,15 @@ describe('filterCovers', () => {
     const attrs = { 'cover.test': { friendly_name: 'Test' } }
     const states = { 'cover.test': 'open' }
     const result = filterCovers(states, attrs)
+    expect(result[0].position).toBe(0)
+  })
+
+  it('keeps unavailable covers with state for UI styling', () => {
+    const attrs = { 'cover.dead': { friendly_name: 'Dead Blind' } }
+    const states = { 'cover.dead': 'unavailable' }
+    const result = filterCovers(states, attrs)
+    expect(result).toHaveLength(1)
+    expect(result[0].state).toBe('unavailable')
     expect(result[0].position).toBe(0)
   })
 })

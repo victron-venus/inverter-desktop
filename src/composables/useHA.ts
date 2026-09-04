@@ -12,7 +12,7 @@ import type {
   HaSensorDisplay,
   HaWeatherDisplay,
 } from '../types/ha'
-import { isInverterControlFlag, resolveHeaderToggleState } from '../utils'
+import { isInverterControlFlag, normalizeHaToggleState, resolveHeaderToggleState } from '../utils'
 import { appConfig, applyInverterState, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
@@ -433,7 +433,7 @@ export function useHA() {
           haEnabled.value &&
           haEntityStates.value[btn.entity] !== undefined
         ) {
-          states[btn.id] = haEntityStates.value[btn.entity] === 'on' ? 'on' : 'off'
+          states[btn.id] = normalizeHaToggleState(haEntityStates.value[btn.entity])
         } else {
           const stateKey = btn.state_key || `home_${btn.id}`
           let val = state.value.booleans?.[stateKey]

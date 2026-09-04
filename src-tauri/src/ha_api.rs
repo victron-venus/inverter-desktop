@@ -192,6 +192,9 @@ pub struct HaCoverDisplay {
     pub entity_id: String,
     pub name: String,
     pub position: i64,
+    /// HA state: open / closed / opening / closing / unavailable / unknown
+    #[serde(default)]
+    pub state: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -246,10 +249,12 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
     let mut weather = None;
 
     for (entity_id, entry) in entity_states {
-        if entry.state == "unavailable" || entry.state == "unknown" {
+        let domain = entity_id.split('.').next().unwrap_or("");
+        let is_unavailable = entry.state == "unavailable" || entry.state == "unknown";
+        // Keep unavailable covers visible so the UI can style them; skip other domains.
+        if is_unavailable && domain != "cover" {
             continue;
         }
-        let domain = entity_id.split('.').next().unwrap_or("");
         let attrs = entry.attributes.as_ref();
         let name = attr_str(attrs, "friendly_name").unwrap_or(entity_id);
 
@@ -280,14 +285,19 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
                 });
             }
             "cover" => {
-                let position = attrs
-                    .and_then(|a| a.get("current_position"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
+                let position = if is_unavailable {
+                    0
+                } else {
+                    attrs
+                        .and_then(|a| a.get("current_position"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0)
+                };
                 covers.push(HaCoverDisplay {
                     entity_id: entity_id.clone(),
                     name: name.to_string(),
                     position,
+                    state: entry.state.clone(),
                 });
             }
             "media_player" => {

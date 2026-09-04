@@ -275,16 +275,25 @@
 
 .scrollbar-hide::-webkit-scrollbar { display: none; }
 
-/* Home-grid tile: compact 2-col cells; labels wrap at spaces (max 2 lines). */
+/* HOME button grid: 2 equal columns; cells do not stretch to tallest label. */
+.home-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.125rem;
+  align-items: start;
+}
+
+/* Home-grid tile: fixed compact height; labels wrap at spaces (max 2 lines). */
 .classic-btn-tile,
-.classic-btn-3d {
-  height: auto !important;
-  min-height: 2.25rem;
-  max-height: 3.1rem;
+.classic-btn-3d,
+.home-btn-tile.classic-btn {
+  height: 2.5rem !important;
+  min-height: 2.5rem !important;
+  max-height: 2.5rem !important;
   width: 100%;
   min-width: 0 !important;
   max-width: 100%;
-  padding: 0.3rem 0.35rem;
+  padding: 0.25rem 0.35rem !important;
   border-radius: 0.45rem;
   flex-direction: column;
   flex-wrap: nowrap;
@@ -299,29 +308,81 @@
   box-shadow: none !important;
   border-bottom-width: 1px !important;
 }
+
 .classic-btn-tile .home-tile-label,
 .classic-btn-3d .home-tile-label,
 .classic-btn-tile > span,
 .classic-btn-3d > span {
-  display: -webkit-box !important;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
+  display: block !important;
   min-width: 0;
   max-width: 100%;
   width: 100%;
   white-space: normal !important;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
+  /* 2-line clamp without -webkit-box (more reliable wrap-at-space) */
+  max-height: calc(1.15em * 2);
+  overflow: hidden;
   font-size: 0.5625rem;
   font-weight: 600;
   line-height: 1.15;
   text-align: center;
 }
-.classic-btn-unavailable {
-  opacity: 0.45;
-  filter: grayscale(0.35);
+
+.classic-btn-tile:hover,
+.classic-btn-3d:hover {
+  transform: none !important;
+}
+
+.classic-btn-tile:active,
+.classic-btn-3d:active {
+  transform: none !important;
+  box-shadow: none !important;
+  border-bottom-width: 1px !important;
+}
+
+.classic-btn-tile.classic-btn-on,
+.classic-btn-3d.classic-btn-on {
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+/* Entity exists but HA state is unavailable/unknown — distinct from OFF + disabled */
+.classic-btn-unavailable,
+.classic-btn-unavailable.classic-btn-on {
+  opacity: 0.55 !important;
+  background-color: #e5e5ea !important;
+  border-color: #aeaeb2 !important;
   border-style: dashed !important;
+  color: #8e8e93 !important;
+  filter: none !important;
   cursor: not-allowed;
+}
+
+.classic-btn-unavailable:hover,
+.classic-btn-unavailable.classic-btn-on:hover {
+  background-color: #e5e5ea !important;
+  filter: none !important;
+}
+
+.dark .classic-btn-unavailable,
+.dark .classic-btn-unavailable.classic-btn-on {
+  background-color: #2a2a2c !important;
+  border-color: #636366 !important;
+  color: #8e8e93 !important;
+}
+
+.dark .classic-btn-unavailable:hover,
+.dark .classic-btn-unavailable.classic-btn-on:hover {
+  background-color: #2a2a2c !important;
+}
+
+.ha-entity-unavailable {
+  opacity: 0.55;
+}
+
+.ha-entity-unavailable .text-slate-500,
+.ha-entity-unavailable .text-slate-600,
+.ha-entity-unavailable .dark\:text-slate-400 {
+  color: #8e8e93 !important;
 }

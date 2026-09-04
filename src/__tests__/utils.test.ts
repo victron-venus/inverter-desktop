@@ -5,7 +5,9 @@ import {
   formatDuration,
   formatInverterState,
   formatTimestamp,
+  isHaUnavailableState,
   isInverterControlFlag,
+  normalizeHaToggleState,
   resolveHeaderToggleState,
 } from '../utils'
 
@@ -138,6 +140,35 @@ describe('resolveHeaderToggleState', () => {
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 'true' })).toBe('on')
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 1 })).toBe('on')
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 0 })).toBe('off')
+  })
+
+  it('returns unavailable for HA unavailable/unknown non-flag entities', () => {
+    const toggle = { id: 'garage', entity: 'switch.garage' }
+    expect(resolveHeaderToggleState(toggle, { 'switch.garage': 'unavailable' }, true, {})).toBe(
+      'unavailable'
+    )
+    expect(resolveHeaderToggleState(toggle, { 'switch.garage': 'unknown' }, true, {})).toBe(
+      'unavailable'
+    )
+  })
+})
+
+describe('isHaUnavailableState / normalizeHaToggleState', () => {
+  it('detects unavailable and unknown', () => {
+    expect(isHaUnavailableState('unavailable')).toBe(true)
+    expect(isHaUnavailableState('unknown')).toBe(true)
+    expect(isHaUnavailableState('')).toBe(true)
+    expect(isHaUnavailableState('on')).toBe(false)
+    expect(isHaUnavailableState(undefined)).toBe(false)
+  })
+
+  it('normalizes on/off/open/unavailable', () => {
+    expect(normalizeHaToggleState('on')).toBe('on')
+    expect(normalizeHaToggleState('open')).toBe('on')
+    expect(normalizeHaToggleState('off')).toBe('off')
+    expect(normalizeHaToggleState('closed')).toBe('off')
+    expect(normalizeHaToggleState('unavailable')).toBe('unavailable')
+    expect(normalizeHaToggleState('unknown')).toBe('unavailable')
   })
 })
 
