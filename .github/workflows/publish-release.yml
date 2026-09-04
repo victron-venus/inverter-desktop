@@ -1,4 +1,7 @@
 ---
+# Attach a source tarball to an EXISTING release only.
+# Never create the GitHub Release here — that raced ahead of release.yml
+# (tauri-action) and published v2.5.2 with notes but zero binaries.
 name: Publish Release Assets
 
 on:
@@ -23,31 +26,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create Release Archive
+      - name: Skip if release does not exist yet
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG not created yet — Release workflow owns creation; skipping source upload."
+          fi
+
+      - name: Create Release Archive
+        if: steps.gate.outputs.exists == 'true'
+        id: archive
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
           PKG_NAME="inverter-desktop"
-          ARCHIVE="${PKG_NAME}-${GITHUB_REF#refs/tags/}.tar.gz"
+          ARCHIVE="${PKG_NAME}-${TAG}.tar.gz"
           mkdir -p "${PKG_NAME}"
           cp -r src package.json tsconfig.json vite.config.ts README.md LICENSE "${PKG_NAME}/" 2>/dev/null || true
           tar -czf "$ARCHIVE" "${PKG_NAME}/"
-          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_OUTPUT
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_OUTPUT"
 
-      - name: Detect Prerelease
-        id: detect
+      - name: Upload source archive to existing release
+        if: steps.gate.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          if [[ "$TAG" =~ -(alpha|beta|rc)\.[0-9]+ || "$TAG" =~ - ]]; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
-        with:
-          body_path: release.txt
-          files: ${{ steps.archive.outputs.ARCHIVE }}
-          prerelease: ${{ steps.detect.outputs.is_prerelease == 'true' }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          gh release upload "$TAG" "${{ steps.archive.outputs.ARCHIVE }}" --clobber
