@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rumqttc::{Client, MqttOptions, QoS};
+use rumqttc::{Client, MqttOptions, QoS, SubscribeFilter};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -10,7 +10,14 @@ use crate::ha_api::HaEntityEntry;
 
 const MQTT_KEEP_ALIVE_SECS: u64 = 60;
 const KEEPALIVE_INTERVAL_SECS: u64 = 45;
-const MQTT_QUEUE_CAPACITY: usize = 10;
+/// Must stay above the burst of control requests we enqueue from inside
+/// `connection.iter()` handlers. rumqttc `Client::subscribe` uses a *blocking*
+/// send on this channel; if the handler fills it while the event loop is
+/// stuck in that same handler, the MQTT thread deadlocks permanently.
+/// `subscribe_portal_topics` historically issued one subscribe per filter; with
+/// acload (3512a15) that became 11 > 10 and froze the loop right after
+/// "Discovered Cerbo portal ID" — UI stuck at all zeros, no state emits.
+const MQTT_QUEUE_CAPACITY: usize = 64;
 const CONSOLE_MAX_LINES: usize = 50;
 const MIN_STATE_EMIT_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -51,6 +58,34 @@ fn note_state_emit(kind: &str) {
             .is_ok()
     {
         log::info!("mqtt-state-update emitted x{n} (last={kind})");
+    }
+}
+
+/// Rate-limited confirmation that inverter/state MQTT messages are arriving
+/// and parsing (one line every ~5s). Absence of this line with portal
+/// discovery present means the daemon is not publishing or the MQTT loop
+/// is stuck before handle_message.
+fn note_inverter_state_recv(raw: &RawInverterState) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static RECVS: AtomicU64 = AtomicU64::new(0);
+    static LAST_LOG_MS: AtomicU64 = AtomicU64::new(0);
+    let n = RECVS.fetch_add(1, Ordering::Relaxed) + 1;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let prev = LAST_LOG_MS.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(prev) >= 5000
+        && LAST_LOG_MS
+            .compare_exchange(prev, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        log::info!(
+            "inverter/state received x{n} (gt={:?} tt={:?} soc={:?})",
+            raw.gt,
+            raw.tt,
+            raw.battery_soc
+        );
     }
 }
 
@@ -612,6 +647,9 @@ pub struct MqttClient {
     /// Throttled last-good EV sample cache (see EvCache docs). Wrapped in
     /// Mutex so the run_mqtt_loop closure can hold an Arc clone.
     ev_cache: Arc<Mutex<EvCache>>,
+    /// Cleared by [`Self::stop`] so leaked reconnect loops from a replaced
+    /// client exit instead of discovering the portal N more times.
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Notification pushed by inverter-control on {prefix}/notifications.
@@ -768,6 +806,20 @@ impl MqttClient {
             status_event: "mqtt-connection-status".to_string(),
             ha_entity_states: None,
             ev_cache: Arc::new(Mutex::new(EvCache::default())),
+            shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Stop the background reconnect loop and disconnect the broker client.
+    /// Call before replacing this client in `connect_mqtt` so orphaned loops
+    /// do not keep discovering the portal and fighting for messages.
+    pub fn stop(&self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut slot) = self.client.lock() {
+            if let Some(client) = slot.take() {
+                let _ = client.disconnect();
+            }
         }
     }
 
@@ -911,9 +963,14 @@ impl MqttClient {
         let ha_entity_states = self.ha_entity_states.clone();
         let client_slot = self.client.clone();
         let ev_cache = self.ev_cache.clone();
+        let shutdown = self.shutdown.clone();
 
         tauri::async_runtime::spawn(async move {
             loop {
+                if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                    log::info!("MQTT client stopped, exiting reconnect loop");
+                    break;
+                }
                 // Log error separately so `result` drops before the await
                 {
                     let is_err = Self::run_mqtt_loop(
@@ -937,6 +994,10 @@ impl MqttClient {
                     )
                     .await
                     .is_err();
+                    if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                        log::info!("MQTT client stopped after disconnect");
+                        break;
+                    }
                     if is_err {
                         log::error!("MQTT loop ended (err), reconnecting in 5s...");
                     } else {
@@ -1109,8 +1170,12 @@ impl MqttClient {
     }
 
     /// Subscribe the GX portal topics (alarms + dbus-pump water + active loads).
+    ///
+    /// Uses a single `subscribe_many` request so we never fill rumqttc's
+    /// bounded request channel from inside `connection.iter()` (that deadlocks
+    /// the event loop — see MQTT_QUEUE_CAPACITY).
     fn subscribe_portal_topics(client: &Client, id: &str) {
-        for filter in [
+        let filters = [
             format!("N/{}/+/Alarms/#", id),
             // Water system published by dbus-pump on the GX (tank level %,
             // pump/valve startstop state).
@@ -1132,10 +1197,18 @@ impl MqttClient {
             format!("N/{}/battery/+/#", id),
             format!("N/{}/solarcharger/+/#", id),
             format!("N/{}/pvinverter/+/#", id),
-        ] {
-            if let Err(e) = client.subscribe(&filter, QoS::AtLeastOnce) {
-                log::warn!("Failed to subscribe to {}: {:?}", filter, e);
-            }
+            // VE.Bus grid/consumption totals when inverter-control is down.
+            format!("N/{}/vebus/+/#", id),
+        ];
+        let n = filters.len();
+        let topics: Vec<SubscribeFilter> = filters
+            .into_iter()
+            .map(|path| SubscribeFilter::new(path, QoS::AtLeastOnce))
+            .collect();
+        if let Err(e) = client.subscribe_many(topics) {
+            log::warn!("Failed to subscribe portal topics for {}: {:?}", id, e);
+        } else {
+            log::info!("Subscribed to {n} Cerbo portal topic filters for {id}");
         }
     }
 
@@ -1168,16 +1241,26 @@ impl MqttClient {
         ev_cache: &Arc<Mutex<EvCache>>,
     ) {
         if topic == "inverter/state" {
-            if let Ok(raw) = serde_json::from_str::<RawInverterState>(payload) {
-                Self::process_state_update(
-                    raw,
-                    state.clone(),
-                    app_handle.clone(),
-                    notifications.clone(),
-                    ha_entity_states.clone(),
-                    Some(cerbo_devices.clone()),
-                    ev_cache.clone(),
-                );
+            match serde_json::from_str::<RawInverterState>(payload) {
+                Ok(raw) => {
+                    note_inverter_state_recv(&raw);
+                    Self::process_state_update(
+                        raw,
+                        state.clone(),
+                        app_handle.clone(),
+                        notifications.clone(),
+                        ha_entity_states.clone(),
+                        Some(cerbo_devices.clone()),
+                        ev_cache.clone(),
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Bad inverter/state payload ({} bytes): {}",
+                        payload.len(),
+                        e
+                    );
+                }
             }
         } else if topic == "inverter/notifications" {
             match serde_json::from_str::<MqttNotification>(payload) {
@@ -2139,6 +2222,20 @@ mod tests {
         assert_eq!(raw.battery_power, Some(1200.0));
         assert_eq!(raw.battery_voltage, Some(52.4));
         assert_eq!(raw.battery_current, Some(-23.1));
+    }
+
+    /// Guardrail: portal subscribe burst must fit the rumqttc request channel
+    /// even if someone reverts subscribe_many back to per-filter subscribe.
+    /// Regression: 3512a15 added acload as the 11th filter while capacity was
+    /// 10, deadlocking the MQTT thread inside the portal discovery handler.
+    #[test]
+    fn portal_topic_filter_count_fits_mqtt_queue_capacity() {
+        // Keep in sync with subscribe_portal_topics filter list.
+        const PORTAL_FILTER_COUNT: usize = 12;
+        assert!(
+            PORTAL_FILTER_COUNT < MQTT_QUEUE_CAPACITY,
+            "portal filters ({PORTAL_FILTER_COUNT}) must leave headroom in              MQTT_QUEUE_CAPACITY ({MQTT_QUEUE_CAPACITY}) for concurrent              publishes/subscribes from inside connection.iter()"
+        );
     }
 
     #[test]

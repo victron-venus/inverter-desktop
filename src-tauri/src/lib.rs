@@ -848,10 +848,17 @@ async fn connect_mqtt(
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
-    let mut client_guard = mqtt_client
-        .0
-        .lock()
-        .map_err(|e| format!("Internal error: {}", e))?;
+    // Drop/stop any previous client first so its reconnect loop cannot keep
+    // discovering the portal (xN) and racing the new connection.
+    {
+        let mut client_guard = mqtt_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        if let Some(old) = client_guard.take() {
+            old.stop();
+        }
+    }
     let mut client = MqttClient::new(
         host,
         port,
@@ -869,6 +876,10 @@ async fn connect_mqtt(
     client.set_ev_instances(Some((ev_instance, evcharger_instance)));
     client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
+    let mut client_guard = mqtt_client
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = Some(client);
     Ok(())
 }
@@ -1197,7 +1208,9 @@ async fn connect_ha_mqtt(
             .0
             .lock()
             .map_err(|e| format!("Internal error: {}", e))?;
-        *client_guard = None;
+        if let Some(old) = client_guard.take() {
+            old.stop();
+        }
     }
     let mut client = MqttClient::new(
         host,
