@@ -4,6 +4,7 @@ import {
   formatUptime,
   formatDuration,
   formatInverterState,
+  formatTimestamp,
   isInverterControlFlag,
   resolveHeaderToggleState,
 } from '../utils'
@@ -137,5 +138,22 @@ describe('resolveHeaderToggleState', () => {
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 'true' })).toBe('on')
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 1 })).toBe('on')
     expect(resolveHeaderToggleState(toggle, {}, false, { no_feed: 0 })).toBe('off')
+  })
+})
+
+describe('formatTimestamp', () => {
+  it('shows minutes and hours like GUIv2', () => {
+    const now = Date.now()
+    expect(formatTimestamp(new Date(now - 5 * 60 * 1000).toISOString())).toBe('5m ago')
+    expect(formatTimestamp(new Date(now - (10 * 60 + 16) * 60 * 1000).toISOString())).toBe(
+      '10h 16m ago'
+    )
+    expect(formatTimestamp(new Date(now - 2 * 60 * 60 * 1000).toISOString())).toBe('2h ago')
+  })
+
+  it('does not hardcode 30 min ago for fresh timestamps', () => {
+    const ts = new Date(Date.now() - 2 * 60 * 1000).toISOString()
+    expect(formatTimestamp(ts)).toBe('2m ago')
+    expect(formatTimestamp(ts)).not.toBe('30 min ago')
   })
 })

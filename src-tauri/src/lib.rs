@@ -831,6 +831,35 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn acknowledge_victron_banner(id: String, mqtt_client: State<'_, MqttState>) -> Result<(), String> {
+    // id: victron-platform-<inst>-<slot>
+    let rest = id
+        .strip_prefix("victron-platform-")
+        .ok_or_else(|| format!("Not a Victron platform banner id: {id}"))?;
+    let mut parts = rest.splitn(2, '-');
+    let platform_instance: u32 = parts
+        .next()
+        .ok_or("missing platform instance")?
+        .parse()
+        .map_err(|e| format!("bad platform instance: {e}"))?;
+    let slot: u32 = parts
+        .next()
+        .ok_or("missing slot")?
+        .parse()
+        .map_err(|e| format!("bad slot: {e}"))?;
+    let client = mqtt_client
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {e}"))?;
+    let client = client
+        .as_ref()
+        .ok_or_else(|| "MQTT client not connected".to_string())?;
+    client
+        .acknowledge_victron_notification(platform_instance, slot)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn connect_mqtt(
     host: String,
@@ -1264,6 +1293,7 @@ pub fn run() {
             get_state,
             perform_action,
             connect_mqtt,
+            acknowledge_victron_banner,
             connect_ha_mqtt,
             get_config,
             save_config,

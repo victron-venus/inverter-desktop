@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use rumqttc::{Client, MqttOptions, QoS, SubscribeFilter};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -778,6 +778,11 @@ pub struct MqttClient {
     camera_topic: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     alarms: Arc<Mutex<HashMap<String, u8>>>,
+    /// Venus-platform notification slots (GUIv2 Notifications/[0-19]).
+    platform_notifs: Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
+    /// Once any platform Notifications/* message arrives, raw Alarms/*
+    /// banners are suppressed to avoid duplicate/generic "Dvcc alarm" text.
+    platform_notifs_seen: Arc<std::sync::atomic::AtomicBool>,
     status_event: String,
     ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
     /// Throttled last-good EV sample cache (see EvCache docs). Wrapped in
@@ -800,6 +805,80 @@ pub struct MqttNotification {
     pub source: String,
     #[serde(default)]
     pub ts: String,
+}
+
+/// One Venus-platform notification slot (GUIv2 source of truth).
+/// MQTT: N/<portal>/platform/<inst>/Notifications/<slot>/<field>
+#[derive(Debug, Clone, Default)]
+struct PlatformNotifSlot {
+    platform_instance: u32,
+    slot: u32,
+    description: Option<String>,
+    device_name: Option<String>,
+    service: Option<String>,
+    /// Unix seconds when the notification was generated (GUIv2 DateTime).
+    date_time: Option<i64>,
+    /// 0=Warning, 1=Alarm, 2=Info
+    notif_type: Option<i64>,
+    active: Option<bool>,
+    acknowledged: Option<bool>,
+    silenced: Option<bool>,
+}
+
+impl PlatformNotifSlot {
+    fn banner_id(&self) -> String {
+        format!("victron-platform-{}-{}", self.platform_instance, self.slot)
+    }
+
+    fn level(&self) -> &'static str {
+        match self.notif_type.unwrap_or(1) {
+            0 => "warning",
+            2 => "info",
+            _ => "alarm",
+        }
+    }
+
+    fn should_show(&self) -> bool {
+        // Match GUIv2: hide once acknowledged; need a description to render.
+        if self.acknowledged.unwrap_or(false) {
+            return false;
+        }
+        let desc = self.description.as_deref().unwrap_or("").trim();
+        !desc.is_empty()
+    }
+
+    fn to_notification(&self) -> Option<MqttNotification> {
+        if !self.should_show() {
+            return None;
+        }
+        let title = self
+            .description
+            .as_deref()
+            .unwrap_or("Alarm")
+            .trim()
+            .to_string();
+        let body = self
+            .device_name
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| self.service.as_deref().filter(|s| !s.trim().is_empty()))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let ts = self
+            .date_time
+            .and_then(|secs| Utc.timestamp_opt(secs, 0).single())
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+        Some(MqttNotification {
+            id: self.banner_id(),
+            level: self.level().to_string(),
+            title,
+            body,
+            source: "victron".to_string(),
+            ts,
+        })
+    }
 }
 
 /// Split CamelCase into words: "HighCellVoltage" -> ["High", "Cell", "Voltage"]
@@ -939,6 +1018,8 @@ impl MqttClient {
                 high_load: std::collections::HashMap::new(),
             })),
             alarms: Arc::new(Mutex::new(HashMap::new())),
+            platform_notifs: Arc::new(Mutex::new(HashMap::new())),
+            platform_notifs_seen: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             status_event: "mqtt-connection-status".to_string(),
             ha_entity_states: None,
             ev_cache: Arc::new(Mutex::new(EvCache::default())),
@@ -1095,6 +1176,8 @@ impl MqttClient {
         let cam_topic_owned = self.camera_topic.clone();
         let notifications = self.notifications.clone();
         let alarms = self.alarms.clone();
+        let platform_notifs = self.platform_notifs.clone();
+        let platform_notifs_seen = self.platform_notifs_seen.clone();
         let status_event = self.status_event.clone();
         let ha_entity_states = self.ha_entity_states.clone();
         let client_slot = self.client.clone();
@@ -1123,6 +1206,8 @@ impl MqttClient {
                         cam_topic_owned.clone(),
                         notifications.clone(),
                         alarms.clone(),
+                        platform_notifs.clone(),
+                        platform_notifs_seen.clone(),
                         ha_entity_states.clone(),
                         &status_event,
                         client_slot.clone(),
@@ -1170,6 +1255,8 @@ impl MqttClient {
         camera_topic: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
         alarms: Arc<Mutex<HashMap<String, u8>>>,
+        platform_notifs: Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
+        platform_notifs_seen: Arc<std::sync::atomic::AtomicBool>,
         ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         status_event: &str,
         client_slot: Arc<Mutex<Option<Client>>>,
@@ -1229,6 +1316,8 @@ impl MqttClient {
         let ev_c = ev_instances;
         let notif_c = notifications.clone();
         let alarms_c = alarms.clone();
+        let platform_notifs_c = platform_notifs.clone();
+        let platform_notifs_seen_c = platform_notifs_seen.clone();
         let ha_states_c = ha_entity_states.clone();
         let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
         let cerbo_c = cerbo_devices.clone();
@@ -1266,6 +1355,8 @@ impl MqttClient {
                             &ev_c,
                             &notif_c,
                             &alarms_c,
+                            &platform_notifs_c,
+                            &platform_notifs_seen_c,
                             &ha_states_c,
                             &cerbo_c,
                             &ev_cache_c,
@@ -1312,7 +1403,12 @@ impl MqttClient {
     /// the event loop — see MQTT_QUEUE_CAPACITY).
     fn subscribe_portal_topics(client: &Client, id: &str) {
         let filters = [
+            // Legacy dbus-mqtt: N/<portal>/<service>_<inst>/Alarms/<Name>
             format!("N/{}/+/Alarms/#", id),
+            // Modern dbus-flashmq: N/<portal>/<service>/<inst>/Alarms/<Name>
+            format!("N/{}/+/+/Alarms/#", id),
+            // GUIv2 source of truth for alarm text/time/ack
+            format!("N/{}/platform/+/Notifications/#", id),
             // Water system published by dbus-pump on the GX (tank level %,
             // pump/valve startstop state).
             format!("N/{}/tank/+/Level", id),
@@ -1375,6 +1471,8 @@ impl MqttClient {
         ev_instances: &Option<(Option<u32>, Option<u32>)>,
         notifications: &Arc<Mutex<NotificationState>>,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
+        platform_notifs: &Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
+        platform_notifs_seen: &Arc<std::sync::atomic::AtomicBool>,
         ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         cerbo_devices: &Arc<Mutex<CerboDevices>>,
         ev_cache: &Arc<Mutex<EvCache>>,
@@ -1422,8 +1520,26 @@ impl MqttClient {
                 }
                 Err(e) => log::warn!("Bad notification payload on {}: {}", topic, e),
             }
+        } else if topic.starts_with("N/")
+            && topic.contains("/platform/")
+            && topic.contains("/Notifications/")
+        {
+            Self::handle_platform_notification_message(
+                topic,
+                payload,
+                platform_notifs,
+                platform_notifs_seen,
+                app_handle,
+            );
         } else if topic.starts_with("N/") && topic.contains("/Alarms/") {
-            Self::handle_alarm_message(topic, payload, alarms, app_handle);
+            Self::handle_alarm_message(
+                topic,
+                payload,
+                alarms,
+                platform_notifs_seen,
+                cerbo_devices,
+                app_handle,
+            );
         } else if topic == "inverter/console" {
             let snapshot = {
                 let mut guard = match state.lock() {
@@ -2120,14 +2236,205 @@ impl MqttClient {
         }
     }
 
-    /// Track a Victron alarm topic (N/<portal>/<service>/Alarms/<Name>, value 0/1/2)
-    /// and emit banner notifications on transitions. Value 0 clears the banner.
+    /// Parse N/<portal>/platform/<inst>/Notifications/<slot>/<Field>
+    fn parse_platform_notif_topic(topic: &str) -> Option<(u32, u32, &str)> {
+        let parts: Vec<&str> = topic.split('/').collect();
+        // N / portal / platform / inst / Notifications / slot / Field
+        if parts.len() < 7 {
+            return None;
+        }
+        if parts.get(0) != Some(&"N") || parts.get(2) != Some(&"platform") {
+            return None;
+        }
+        if parts.get(4) != Some(&"Notifications") {
+            return None;
+        }
+        let inst: u32 = parts.get(3)?.parse().ok()?;
+        let slot: u32 = parts.get(5)?.parse().ok()?;
+        if slot > 20 {
+            return None;
+        }
+        let field = *parts.get(6)?;
+        Some((inst, slot, field))
+    }
+
+    fn json_value_bool(v: &serde_json::Value) -> Option<bool> {
+        v.get("value").and_then(|x| {
+            x.as_bool()
+                .or_else(|| x.as_u64().map(|n| n != 0))
+                .or_else(|| x.as_i64().map(|n| n != 0))
+                .or_else(|| {
+                    x.as_str().map(|s| {
+                        let t = s.trim();
+                        t == "1" || t.eq_ignore_ascii_case("true")
+                    })
+                })
+        })
+    }
+
+    fn json_value_i64(v: &serde_json::Value) -> Option<i64> {
+        v.get("value").and_then(|x| {
+            x.as_i64()
+                .or_else(|| x.as_u64().map(|n| n as i64))
+                .or_else(|| x.as_f64().map(|n| n as i64))
+                .or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))
+        })
+    }
+
+    fn json_value_string(v: &serde_json::Value) -> Option<String> {
+        v.get("value").and_then(|x| {
+            if x.is_null() {
+                return None;
+            }
+            if let Some(s) = x.as_str() {
+                let t = s.trim();
+                if t.is_empty() {
+                    return None;
+                }
+                return Some(t.to_string());
+            }
+            Some(x.to_string().trim_matches('"').to_string())
+        })
+    }
+
+    /// Venus-platform Notifications — same data GUIv2 uses for alarm text/time.
+    fn handle_platform_notification_message(
+        topic: &str,
+        payload: &str,
+        platform_notifs: &Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
+        platform_notifs_seen: &Arc<std::sync::atomic::AtomicBool>,
+        app_handle: &Option<tauri::AppHandle>,
+    ) {
+        let Some((inst, slot, field)) = Self::parse_platform_notif_topic(topic) else {
+            return;
+        };
+        platform_notifs_seen.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) else {
+            return;
+        };
+
+        let notification = {
+            let mut map = match platform_notifs.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            let entry = map.entry(slot).or_insert_with(|| PlatformNotifSlot {
+                platform_instance: inst,
+                slot,
+                ..Default::default()
+            });
+            entry.platform_instance = inst;
+            entry.slot = slot;
+            match field {
+                "Description" => entry.description = Self::json_value_string(&json),
+                "DeviceName" => entry.device_name = Self::json_value_string(&json),
+                "Service" => entry.service = Self::json_value_string(&json),
+                "DateTime" => entry.date_time = Self::json_value_i64(&json),
+                "Type" => entry.notif_type = Self::json_value_i64(&json),
+                "Active" => entry.active = Self::json_value_bool(&json),
+                "Acknowledged" => entry.acknowledged = Self::json_value_bool(&json),
+                "Silenced" => entry.silenced = Self::json_value_bool(&json),
+                _ => {}
+            }
+            entry.clone()
+        };
+
+        let Some(ref handle) = app_handle else {
+            return;
+        };
+        if let Some(n) = notification.to_notification() {
+            let _ = handle.emit("mqtt-notification", n);
+        } else {
+            let _ = handle.emit(
+                "mqtt-notification-clear",
+                serde_json::json!({ "id": notification.banner_id() }),
+            );
+        }
+    }
+
+    /// Parse alarm topic in either legacy or modern form.
+    /// Returns (service_type, instance_opt, alarm_name).
+    fn parse_alarm_topic(topic: &str) -> Option<(&str, Option<u32>, &str)> {
+        let parts: Vec<&str> = topic.split('/').collect();
+        // Modern: N/<portal>/<service>/<inst>/Alarms/<Name>
+        // Legacy: N/<portal>/<service>_<inst>/Alarms/<Name>
+        if parts.len() < 5 || parts.first() != Some(&"N") {
+            return None;
+        }
+        if parts.get(3) == Some(&"Alarms") {
+            let service_inst = parts.get(2)?;
+            let alarm_name = *parts.get(4)?;
+            if let Some((svc, inst_s)) = service_inst.rsplit_once('_') {
+                if let Ok(inst) = inst_s.parse::<u32>() {
+                    return Some((svc, Some(inst), alarm_name));
+                }
+            }
+            return Some((service_inst, None, alarm_name));
+        }
+        if parts.get(4) == Some(&"Alarms") {
+            let service = *parts.get(2)?;
+            let inst = parts.get(3)?.parse::<u32>().ok();
+            let alarm_name = *parts.get(5)?;
+            return Some((service, inst, alarm_name));
+        }
+        if let Some(pos) = parts.iter().position(|p| *p == "Alarms") {
+            let alarm_name = *parts.get(pos + 1)?;
+            let before = *parts.get(pos.checked_sub(1)?)?;
+            if let Ok(inst) = before.parse::<u32>() {
+                let service = *parts.get(pos.checked_sub(2)?)?;
+                return Some((service, Some(inst), alarm_name));
+            }
+            return Some((before, None, alarm_name));
+        }
+        None
+    }
+
+    fn resolve_alarm_device_name(
+        service: &str,
+        instance: Option<u32>,
+        cerbo_devices: &Arc<Mutex<CerboDevices>>,
+    ) -> Option<String> {
+        let Ok(devices) = cerbo_devices.lock() else {
+            return None;
+        };
+        let inst = instance?;
+        match service {
+            "battery" => devices
+                .batteries
+                .get(&inst)
+                .and_then(|e| e.data.display_name().map(|s| s.to_string())),
+            "solarcharger" => devices
+                .chargers
+                .get(&inst)
+                .and_then(|e| e.data.display_name().map(|s| s.to_string())),
+            "pvinverter" => devices
+                .pv_inverters
+                .get(&inst)
+                .and_then(|e| e.data.display_name().map(|s| s.to_string())),
+            "acload" => devices
+                .acloads
+                .get(&inst)
+                .and_then(|e| e.data.display_name().map(|s| s.to_string())),
+            "vebus" => Some(format!("VE.Bus {inst}")),
+            other => Some(format!("{other} {inst}")),
+        }
+    }
+
+    /// Track a Victron alarm topic (fallback when platform Notifications unavailable).
+    /// Value 0 clears the banner. Suppressed once platform notifications are seen.
     fn handle_alarm_message(
         topic: &str,
         payload: &str,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
+        platform_notifs_seen: &Arc<std::sync::atomic::AtomicBool>,
+        cerbo_devices: &Arc<Mutex<CerboDevices>>,
         app_handle: &Option<tauri::AppHandle>,
     ) {
+        if platform_notifs_seen.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+
         let value = serde_json::from_str::<serde_json::Value>(payload)
             .ok()
             .and_then(|v| v.get("value").and_then(|x| x.as_u64()))
@@ -2148,31 +2455,34 @@ impl MqttClient {
             return;
         }
 
-        let parts: Vec<&str> = topic.split('/').collect();
-        // N/<portal>/<service_type>_<instance>/Alarms/<AlarmName>
-        let alarm_name = parts.get(4).copied().unwrap_or(topic);
+        let (service, instance, alarm_name) = match Self::parse_alarm_topic(topic) {
+            Some(t) => t,
+            None => return,
+        };
         let id = format!("victron-{}", topic);
 
         if let Some(ref handle) = app_handle {
             if value == 1 || value == 2 {
                 let level = if value == 2 { "alarm" } else { "warning" };
-                let state_txt = if value == 2 { "Alarm" } else { "Warning" };
-                // Extract portal ID for more informative messages (topic format: N/<portal>/<service>/Alarms/<alarm_name>)
-                let portal_id = parts.get(1).copied().unwrap_or("unknown");
+                let pretty = pretty_alarm_name(alarm_name);
+                let title = pretty
+                    .strip_suffix(" alarm")
+                    .unwrap_or(pretty.as_str())
+                    .to_string();
+                let device = Self::resolve_alarm_device_name(service, instance, cerbo_devices)
+                    .unwrap_or_else(|| match instance {
+                        Some(i) => format!("{service} {i}"),
+                        None => service.to_string(),
+                    });
                 let _ = handle.emit(
                     "mqtt-notification",
                     MqttNotification {
                         id,
                         level: level.to_string(),
-                        title: pretty_alarm_name(alarm_name), // Show specific alarm name as title
-                        body: format!(
-                            "{} on {}: {}",
-                            pretty_alarm_name(alarm_name),
-                            portal_id,
-                            state_txt
-                        ),
+                        title,
+                        body: device,
                         source: "victron".to_string(),
-                        ts: Utc::now().to_rfc3339(), // Add timestamp
+                        ts: Utc::now().to_rfc3339(),
                     },
                 );
             } else {
@@ -2520,6 +2830,45 @@ impl MqttClient {
         bools.get(key).copied()
     }
 
+    /// Acknowledge + silence a Venus-platform notification slot (GUIv2 behaviour).
+    /// Publishes W/<portal>/platform/<inst>/Notifications/<slot>/{Silenced,Acknowledged}.
+    pub fn acknowledge_victron_notification(
+        &self,
+        platform_instance: u32,
+        slot: u32,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let portal = self
+            .portal_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or("Cerbo portal ID not configured")?;
+        let guard = self
+            .client
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        let client = guard.as_ref().ok_or("MQTT client not connected")?;
+        let payload = r#"{"value":1}"#;
+        for field in ["Silenced", "Acknowledged"] {
+            let topic = format!(
+                "W/{}/platform/{}/Notifications/{}/{}",
+                portal, platform_instance, slot, field
+            );
+            client.publish(topic, QoS::AtLeastOnce, false, payload)?;
+        }
+        // Optimistic local clear — Cerbo will also clear via N/ Acknowledged echo.
+        if let Ok(mut map) = self.platform_notifs.lock() {
+            if let Some(entry) = map.get_mut(&slot) {
+                entry.acknowledged = Some(true);
+                entry.silenced = Some(true);
+            }
+        }
+        if let Some(ref handle) = self.app_handle {
+            let id = format!("victron-platform-{}-{}", platform_instance, slot);
+            let _ = handle.emit("mqtt-notification-clear", serde_json::json!({ "id": id }));
+        }
+        Ok(())
+    }
+
     pub fn publish_command(
         &self,
         action: &str,
@@ -2669,11 +3018,88 @@ mod tests {
     #[test]
     fn portal_topic_filter_count_fits_mqtt_queue_capacity() {
         // Keep in sync with subscribe_portal_topics filter list.
-        const PORTAL_FILTER_COUNT: usize = 13;
+        const PORTAL_FILTER_COUNT: usize = 15;
         assert!(
             PORTAL_FILTER_COUNT < MQTT_QUEUE_CAPACITY,
             "portal filters ({PORTAL_FILTER_COUNT}) must leave headroom in              MQTT_QUEUE_CAPACITY ({MQTT_QUEUE_CAPACITY}) for concurrent              publishes/subscribes from inside connection.iter()"
         );
+    }
+
+    #[test]
+    fn parse_platform_notif_topic_extracts_slot_and_field() {
+        assert_eq!(
+            MqttClient::parse_platform_notif_topic(
+                "N/b827eb123/platform/0/Notifications/3/Description"
+            ),
+            Some((0, 3, "Description"))
+        );
+        assert_eq!(
+            MqttClient::parse_platform_notif_topic(
+                "N/b827eb123/platform/0/Notifications/AcknowledgeAll"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_alarm_topic_modern_and_legacy() {
+        assert_eq!(
+            MqttClient::parse_alarm_topic("N/portal/battery/288/Alarms/HighVoltage"),
+            Some(("battery", Some(288), "HighVoltage"))
+        );
+        assert_eq!(
+            MqttClient::parse_alarm_topic("N/portal/battery_288/Alarms/HighVoltage"),
+            Some(("battery", Some(288), "HighVoltage"))
+        );
+        assert_eq!(
+            MqttClient::parse_alarm_topic("N/portal/system/0/Alarms/Dvcc"),
+            Some(("system", Some(0), "Dvcc"))
+        );
+    }
+
+    #[test]
+    fn platform_slot_banner_uses_description_device_and_datetime() {
+        let slot = PlatformNotifSlot {
+            platform_instance: 0,
+            slot: 2,
+            description: Some("High voltage".into()),
+            device_name: Some("JBD Battery Chain 1".into()),
+            service: Some("com.victronenergy.battery.ttyUSB0".into()),
+            date_time: Some(1_700_000_000),
+            notif_type: Some(1),
+            active: Some(true),
+            acknowledged: Some(false),
+            silenced: Some(false),
+        };
+        let n = slot.to_notification().expect("show");
+        assert_eq!(n.title, "High voltage");
+        assert_eq!(n.body, "JBD Battery Chain 1");
+        assert_eq!(n.level, "alarm");
+        assert!(n.ts.contains("2023-"), "unexpected ts {}", n.ts);
+        assert_eq!(n.id, "victron-platform-0-2");
+    }
+
+    #[test]
+    fn platform_slot_hides_when_acknowledged() {
+        let mut slot = PlatformNotifSlot {
+            platform_instance: 0,
+            slot: 1,
+            description: Some("High voltage".into()),
+            device_name: Some("Batt".into()),
+            notif_type: Some(1),
+            active: Some(true),
+            acknowledged: Some(true),
+            ..Default::default()
+        };
+        assert!(slot.to_notification().is_none());
+        slot.acknowledged = Some(false);
+        assert!(slot.to_notification().is_some());
+    }
+
+    #[test]
+    fn pretty_alarm_name_high_voltage() {
+        assert_eq!(pretty_alarm_name("HighVoltage"), "High voltage alarm");
+        assert_eq!(pretty_alarm_name("Dvcc"), "Dvcc alarm");
     }
 
     #[test]

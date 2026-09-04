@@ -2,6 +2,7 @@ import { markRaw, ref, shallowRef } from 'vue'
 // shallowRef + replace-with-new-object (see applyInverterState): nested loads/etc.
 // update when MQTT sends a fresh snapshot. markRaw avoids deep-proxying big payloads.
 import type { AppConfig } from '../config'
+import { invoke } from '@tauri-apps/api/core'
 
 export interface InverterState {
   gt?: number
@@ -210,11 +211,24 @@ export function isBannerDismissed(id: string): boolean {
   return dismissedIds.has(id)
 }
 
-/** User dismissed the banner — hidden until a new notification reuses a fresh id. */
-export function dismissBanner(id: string) {
+/**
+ * User dismissed the banner.
+ * Victron platform notifications are acknowledged/silenced on the Cerbo via MQTT
+ * (same as GUIv2); local dismissedIds are not used so a failed ack can reappear.
+ * Other sources stay locally dismissed until a fresh id arrives.
+ */
+export async function dismissBanner(id: string): Promise<void> {
+  clearBanner(id)
+  if (id.startsWith('victron-platform-')) {
+    try {
+      await invoke('acknowledge_victron_banner', { id })
+    } catch (e) {
+      console.warn('Failed to acknowledge Victron alarm on Cerbo:', e)
+    }
+    return
+  }
   dismissedIds.add(id)
   saveDismissedIds()
-  clearBanner(id)
 }
 
 /** Add or replace by id (dedupe for hourly re-publishes). */
