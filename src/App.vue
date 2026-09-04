@@ -379,9 +379,14 @@ const essText = computed(() => {
 })
 
 const mpptTotal = computed(() => state.value.mppt_total || 0)
-const pvInvertersTotal = computed(() =>
-  (state.value.pv_inverters || []).reduce((sum, p) => sum + (p.power || 0), 0)
-)
+const pvInvertersTotal = computed(() => {
+  const invs = state.value.pv_inverters
+  if (invs?.length) {
+    return invs.reduce((sum, p) => sum + (p.power || 0), 0)
+  }
+  // Fallback: legacy daemon publishes per-inverter power aggregates
+  return (state.value.pv_inverter_individual || []).reduce((sum, p) => sum + (p || 0), 0)
+})
 
 const batteries = computed(() => {
   const tiles: Array<{
@@ -440,6 +445,14 @@ const solarSources = computed(() => {
         pvVoltage: p.voltage,
         current: p.current,
         power: p.power || 0,
+      })
+    })
+  } else if (state.value.pv_inverter_individual?.length) {
+    // Fallback: daemon publishes per-inverter power aggregates as Vec<f64>
+    state.value.pv_inverter_individual.forEach((power, i) => {
+      sources.push({
+        name: `PV Inverter ${i + 1}`,
+        power,
       })
     })
   }
