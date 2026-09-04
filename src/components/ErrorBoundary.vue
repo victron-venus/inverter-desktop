@@ -10,20 +10,8 @@
       {{ errorMessage || 'An unexpected error occurred. The app will attempt to recover.' }}
     </p>
     <div v-if="showRetry" class="flex gap-2">
-      <button
-        type="button"
-        @click="resetError"
-        class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
-      >
-        Try Again
-      </button>
-      <button
-        type="button"
-        @click="reloadApp"
-        class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-      >
-        Reload App
-      </button>
+      <UiButton variant="primary" size="lg" @click="resetError">Try Again</UiButton>
+      <UiButton size="lg" @click="reloadApp">Reload App</UiButton>
     </div>
     <details v-if="errorStack" class="mt-6 w-full max-w-2xl">
       <summary class="cursor-pointer text-slate-400 hover:text-white">Error Details</summary>
@@ -36,6 +24,7 @@
 
 <script setup lang="ts">
 import { ref, onErrorCaptured, onMounted } from 'vue'
+import UiButton from './UiButton.vue'
 import { logger } from '../logger'
 
 const hasError = ref(false)

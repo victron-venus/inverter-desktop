@@ -34,13 +34,7 @@
           github.com/victron-venus/inverter-desktop
         </button>
 
-        <button
-          type="button"
-          @click="closeWindow"
-          class="classic-btn w-full !normal-case !py-2 !text-xs !classic-btn-on"
-        >
-          Close
-        </button>
+        <UiButton variant="primary" size="lg" class="w-full" @click="closeWindow"> Close </UiButton>
       </div>
     </div>
   </ErrorBoundary>
@@ -49,6 +43,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import ErrorBoundary from './components/ErrorBoundary.vue'
+import UiButton from './components/UiButton.vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'

@@ -1,6 +1,6 @@
 <template>
   <div class="notification-bell relative">
-    <button type="button" class="classic-btn relative" @click="showPanel = !showPanel">
+    <UiButton class="relative !px-2" variant="ghost" @click="showPanel = !showPanel">
       🔔
       <span
         v-if="unreadCount > 0"
@@ -8,7 +8,7 @@
       >
         {{ unreadCount > 9 ? '9+' : unreadCount }}
       </span>
-    </button>
+    </UiButton>
 
     <div
       v-if="showPanel"
@@ -68,6 +68,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
 import {
   notifications,

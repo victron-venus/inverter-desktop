@@ -55,88 +55,212 @@
 
 }
 
-/* Exact port from v1.0.9 .toggle-btn - MOVED OUTSIDE LAYERS FOR PRIORITY */
+/* ── Button system (2026, dense desktop) ─────────────────────────────
+   Hierarchy: primary / secondary (default) / ghost / danger
+   Toggle active: .classic-btn-on
+   Home-grid tile: .classic-btn-tile (alias: .classic-btn-3d)
+*/
 .classic-btn {
-  cursor: pointer !important;
-  padding: 2px 6px !important;
-  border-radius: 4px !important;
-  font-size: 9px !important;
-  font-weight: 600 !important;
-  border: 1px solid #555 !important;
-  transition: all 0.15s !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 4px !important;
-  margin: 1px !important;
-  background-color: #333 !important;
-  color: #bbb !important;
-  text-transform: none !important;
-  height: auto !important;
-  line-height: normal !important;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 1.5rem;
+  min-height: 1.5rem;
+  padding: 0 0.55rem;
+  margin: 0;
+  border-radius: 0.4rem;
+  border: 1px solid transparent;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease,
+    opacity 0.12s ease;
+  background-color: #e8e8ed;
+  color: #3a3a3c;
+  border-color: #d1d1d6;
+  box-shadow: none;
 }
 
 .classic-btn:hover {
-  transform: scale(1.02) !important;
-  filter: brightness(1.1) !important;
+  background-color: #dcdcde;
+  border-color: #c7c7cc;
 }
 
-/* State: ON - Exact v1.0.9 .toggle-btn.on */
-.classic-btn-on {
-  background-color: #2e7d32 !important;
-  border-color: #4caf50 !important;
-  color: #ffffff !important;
+.classic-btn:active {
+  background-color: #d1d1d6;
 }
 
-/* Dark mode — visible buttons */
+.classic-btn:focus {
+  outline: none;
+}
+
+.classic-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, white);
+  outline-offset: 1px;
+}
+
+.classic-btn:disabled,
+.classic-btn[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .dark .classic-btn {
-  background-color: #333 !important;
-  color: #bbb !important;
-  border-color: #555 !important;
+  background-color: #2c2c2e;
+  color: #d1d1d6;
+  border-color: #3a3a3c;
 }
 
-/* Light mode */
-:not(.dark) .classic-btn {
-  background-color: #ddd !important;
-  color: #333 !important;
-  border-color: #ccc !important;
+.dark .classic-btn:hover {
+  background-color: #3a3a3c;
+  border-color: #48484a;
 }
 
-:not(.dark) .classic-btn-on {
-  background-color: #2e7d32 !important;
-  border-color: #4caf50 !important;
-  color: #ffffff !important;
+.dark .classic-btn:active {
+  background-color: #48484a;
 }
 
-/* 3D raised look for Home section buttons */
+/* Active / toggled ON — calm green, not neon */
+.classic-btn-on {
+  background-color: color-mix(in srgb, var(--color-battery) 22%, #ffffff) !important;
+  border-color: color-mix(in srgb, var(--color-battery) 55%, #ffffff) !important;
+  color: #1b5e20 !important;
+}
+
+.classic-btn-on:hover {
+  background-color: color-mix(in srgb, var(--color-battery) 30%, #ffffff) !important;
+}
+
+.dark .classic-btn-on {
+  background-color: color-mix(in srgb, var(--color-battery) 28%, #1c1c1e) !important;
+  border-color: color-mix(in srgb, var(--color-battery) 50%, #3a3a3c) !important;
+  color: #a5d6a7 !important;
+}
+
+.dark .classic-btn-on:hover {
+  background-color: color-mix(in srgb, var(--color-battery) 38%, #1c1c1e) !important;
+}
+
+/* Primary — accent fill (save, confirm, sign-in) */
+.classic-btn-primary {
+  background-color: var(--color-accent) !important;
+  border-color: color-mix(in srgb, var(--color-accent) 70%, #006064) !important;
+  color: #0a0a0a !important;
+}
+
+.classic-btn-primary:hover {
+  filter: brightness(1.06);
+}
+
+.classic-btn-primary:active {
+  filter: brightness(0.96);
+}
+
+.dark .classic-btn-primary {
+  color: #041016 !important;
+}
+
+/* Ghost — low emphasis */
+.classic-btn-ghost {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #636366 !important;
+}
+
+.classic-btn-ghost:hover {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+  color: #1c1c1e !important;
+}
+
+.dark .classic-btn-ghost {
+  color: #8e8e93 !important;
+}
+
+.dark .classic-btn-ghost:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  color: #f2f2f7 !important;
+}
+
+/* Danger — soft red for destructive / override reset */
+.classic-btn-danger {
+  background-color: color-mix(in srgb, #f44336 12%, #ffffff) !important;
+  border-color: color-mix(in srgb, #f44336 35%, #d1d1d6) !important;
+  color: #c62828 !important;
+}
+
+.classic-btn-danger:hover {
+  background-color: color-mix(in srgb, #f44336 20%, #ffffff) !important;
+}
+
+.dark .classic-btn-danger {
+  background-color: color-mix(in srgb, #f44336 18%, #1c1c1e) !important;
+  border-color: color-mix(in srgb, #f44336 40%, #3a3a3c) !important;
+  color: #ef9a9a !important;
+}
+
+.dark .classic-btn-danger:hover {
+  background-color: color-mix(in srgb, #f44336 28%, #1c1c1e) !important;
+}
+
+/* Size helpers */
+.classic-btn-sm {
+  height: 1.25rem;
+  min-height: 1.25rem;
+  padding: 0 0.4rem;
+  font-size: 0.5625rem;
+  border-radius: 0.35rem;
+}
+
+.classic-btn-lg {
+  height: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  font-size: 0.8125rem;
+  border-radius: 0.5rem;
+}
+
+/* Home-grid tile: flat, slightly taller — replaces skeuomorphic 3D */
+.classic-btn-tile,
 .classic-btn-3d {
-  border-bottom-width: 3px !important;
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.15)) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 3px rgba(0, 0, 0, 0.4) !important;
-}
-
-.classic-btn-3d:hover {
-  transform: translateY(-1px) scale(1.02) !important;
-}
-
-.classic-btn-3d:active {
-  transform: translateY(1px) !important;
+  height: auto;
+  min-height: 2rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 0.45rem;
+  flex-direction: column;
+  gap: 0.15rem;
+  background-image: none !important;
+  box-shadow: none !important;
   border-bottom-width: 1px !important;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5) !important;
 }
 
+.classic-btn-tile:hover,
+.classic-btn-3d:hover {
+  transform: none !important;
+}
+
+.classic-btn-tile:active,
+.classic-btn-3d:active {
+  transform: none !important;
+  box-shadow: none !important;
+  border-bottom-width: 1px !important;
+}
+
+.classic-btn-tile.classic-btn-on,
 .classic-btn-3d.classic-btn-on {
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.18), rgba(0, 0, 0, 0.08)) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 2px 3px rgba(0, 0, 0, 0.4) !important;
-}
-
-/* Light mode 3D adjust */
-:not(.dark) .classic-btn-3d {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 2px 3px rgba(0, 0, 0, 0.15) !important;
-}
-
-:not(.dark) .classic-btn-3d.classic-btn-on {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 2px 3px rgba(0, 0, 0, 0.2) !important;
+  background-image: none !important;
+  box-shadow: none !important;
 }
 
 @layer components {

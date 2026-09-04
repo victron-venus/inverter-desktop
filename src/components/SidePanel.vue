@@ -45,41 +45,41 @@
           {{ Math.round(waterLevel) }} %
         </div>
         <div class="flex gap-1 items-center">
-          <button
+          <UiButton
             v-if="pumpSwitch != null"
-            type="button"
-            class="classic-btn"
-            :class="{ 'classic-btn-on': pumpSwitch === true }"
+            size="sm"
+            toggle
+            :active="pumpSwitch === true"
             @click="$emit('send', 'water_mode', { which: 'pump', mode: pumpSwitch ? 2 : 1 })"
           >
             {{ $t('sections.pump') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="waterValve != null"
-            type="button"
-            class="classic-btn"
-            :class="{ 'classic-btn-on': waterValve === true }"
+            size="sm"
+            toggle
+            :active="waterValve === true"
             @click="onValveClick"
           >
             {{ $t('sections.valve') }}
-          </button>
+          </UiButton>
           <!-- Reset chip shown only while dbus-pump /Mode is a manual override -->
-          <button
+          <UiButton
             v-if="waterPumpMode === 1 || waterPumpMode === 2"
-            type="button"
-            class="classic-btn opacity-80 text-red-500"
+            size="sm"
+            variant="danger"
             @click="$emit('send', 'water_mode', { which: 'pump', mode: 0 })"
           >
             {{ $t('sections.auto') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="waterValveMode === 1 || waterValveMode === 2"
-            type="button"
-            class="classic-btn opacity-80 text-red-500"
+            size="sm"
+            variant="danger"
             @click="$emit('send', 'water_mode', { which: 'valve', mode: 0 })"
           >
             {{ $t('sections.auto') }}
-          </button>
+          </UiButton>
         </div>
       </div>
     </div>
@@ -93,12 +93,13 @@
         <HomeIcon :size="10" /> {{ $t('sections.home') }}
       </div>
       <div class="p-1 flex flex-wrap gap-0.5 overflow-y-auto max-h-[300px]">
-        <button
-          type="button"
+        <UiButton
           v-for="btn in homeButtons"
           :key="btn.id"
-          class="classic-btn classic-btn-3d !flex-1 !min-w-[50px] !normal-case flex flex-col items-center gap-0.5"
-          :class="{ 'classic-btn-on': buttonStates[btn.id] === 'on' }"
+          variant="tile"
+          class="!flex-1 !min-w-[50px]"
+          toggle
+          :active="buttonStates[btn.id] === 'on'"
           @click="$emit('send', 'toggle', { entity: btn.entity })"
         >
           <component
@@ -107,8 +108,10 @@
             :size="14"
             class="opacity-70"
           />
-          <span class="text-[9px] leading-tight">{{ getHomeButtonLabel(btn.label) }}</span>
-        </button>
+          <span class="text-[9px] leading-tight font-semibold">{{
+            getHomeButtonLabel(btn.label)
+          }}</span>
+        </UiButton>
       </div>
     </div>
 
@@ -274,27 +277,27 @@
             <span class="text-[9px] text-slate-400 truncate">{{ mp.state }}</span>
           </div>
           <div class="flex gap-0.5 shrink-0">
-            <button
-              type="button"
-              class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
+            <UiButton
+              size="sm"
+              class="!px-1.5"
               @click="$emit('media-control', mp.entity_id, 'play')"
             >
               ▶
-            </button>
-            <button
-              type="button"
-              class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
+            </UiButton>
+            <UiButton
+              size="sm"
+              class="!px-1.5"
               @click="$emit('media-control', mp.entity_id, 'pause')"
             >
               ⏸
-            </button>
-            <button
-              type="button"
-              class="classic-btn !px-1.5 !py-0.5 !text-[9px]"
+            </UiButton>
+            <UiButton
+              size="sm"
+              class="!px-1.5"
               @click="$emit('media-control', mp.entity_id, 'stop')"
             >
               ⏹
-            </button>
+            </UiButton>
           </div>
         </div>
       </div>
@@ -348,22 +351,21 @@
           </div>
         </div>
         <div v-if="washerStartEntity || washerPauseEntity" class="flex gap-1 justify-end">
-          <button
+          <UiButton
             v-if="washerStartEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
+            variant="primary"
             @click="$emit('send', 'press', { entity: washerStartEntity })"
           >
             {{ $t('sections.start') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="washerPauseEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
             @click="$emit('send', 'press', { entity: washerPauseEntity })"
           >
             {{ $t('sections.pause') }}
-          </button>
+          </UiButton>
         </div>
       </div>
 
@@ -387,22 +389,21 @@
           </div>
         </div>
         <div v-if="dryerStartEntity || dryerPauseEntity" class="flex gap-1 justify-end">
-          <button
+          <UiButton
             v-if="dryerStartEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
+            variant="primary"
             @click="$emit('send', 'press', { entity: dryerStartEntity })"
           >
             {{ $t('sections.start') }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             v-if="dryerPauseEntity"
-            type="button"
-            class="classic-btn"
+            size="sm"
             @click="$emit('send', 'press', { entity: dryerPauseEntity })"
           >
             {{ $t('sections.pause') }}
-          </button>
+          </UiButton>
         </div>
       </div>
     </div>
@@ -417,15 +418,14 @@
         <span class="ml-auto text-[10px]">{{ scenesExpanded ? '▼' : '▶' }}</span>
       </div>
       <div v-if="scenesExpanded" class="p-1 flex flex-wrap gap-0.5">
-        <button
-          type="button"
+        <UiButton
           v-for="scene in haScenes"
           :key="scene.entity_id"
-          class="classic-btn !flex-1 !min-w-[50px] !normal-case !text-[10px]"
+          class="!flex-1 !min-w-[50px] !text-[10px]"
           @click="$emit('scene-activate', scene.entity_id)"
         >
           {{ scene.name }}
-        </button>
+        </UiButton>
       </div>
     </div>
   </div>
@@ -448,6 +448,7 @@ import {
   WashingMachine,
 } from '@lucide/vue'
 import { ref } from 'vue'
+import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
 import type {
   HaCoverDisplay,

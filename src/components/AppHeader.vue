@@ -1,49 +1,50 @@
 <template>
   <div class="classic-card mb-1.5 p-1 flex items-center gap-1 w-full">
-    <div class="flex flex-wrap gap-0.5 items-center flex-1">
-      <button
-        type="button"
-        class="classic-btn min-w-[28px]"
-        :class="{ 'classic-btn-on': dryRun }"
-        @click="$emit('send', 'dry_run')"
-      >
-        <FlaskConical :size="7" /> DRY
-      </button>
+    <div class="flex flex-wrap gap-1 items-center flex-1">
+      <UiButton class="min-w-[28px]" toggle :active="dryRun" @click="$emit('send', 'dry_run')">
+        <FlaskConical :size="10" /> DRY
+      </UiButton>
 
-      <button
-        type="button"
-        class="classic-btn min-w-[45px]"
-        :class="{ 'classic-btn-on': essClass === 'on' }"
+      <UiButton
+        class="min-w-[45px]"
+        toggle
+        :active="essClass === 'on'"
         @click="$emit('send', 'ess_mode')"
       >
-        <Zap :size="7" /> {{ essText.toUpperCase() }}
-      </button>
+        <Zap :size="10" /> {{ essText.toUpperCase() }}
+      </UiButton>
 
       <template v-if="showHeaderToggles !== false && headerToggles.length > 0">
-        <div class="w-px h-3 bg-slate-300 mx-0.5"></div>
+        <div class="w-px h-3 bg-slate-300 dark:bg-slate-600 mx-0.5"></div>
 
-        <button
-          type="button"
+        <UiButton
           v-for="toggle in headerToggles"
           :key="toggle.id"
-          class="classic-btn min-w-[55px]"
-          :class="{ 'classic-btn-on': toggleStates?.[toggle.id] === 'on' }"
+          class="min-w-[55px]"
+          toggle
+          :active="toggleStates?.[toggle.id] === 'on'"
           @click="$emit('send', 'toggle', { entity: toggle.entity })"
         >
           {{ toggle.label.toUpperCase() }}
-        </button>
+        </UiButton>
       </template>
     </div>
 
-    <button type="button" class="classic-btn min-w-[20px]" @click="$emit('toggle-theme')">
-      <Sun v-if="isDark" :size="8" />
-      <Moon v-else :size="8" />
-    </button>
+    <UiButton
+      class="min-w-[22px] !px-1.5"
+      variant="ghost"
+      :title="isDark ? 'Light mode' : 'Dark mode'"
+      @click="$emit('toggle-theme')"
+    >
+      <Sun v-if="isDark" :size="11" />
+      <Moon v-else :size="11" />
+    </UiButton>
   </div>
 </template>
 
 <script setup lang="ts">
 import { FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
+import UiButton from './UiButton.vue'
 
 defineProps<{
   dryRun: boolean

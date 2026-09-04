@@ -43,26 +43,26 @@
       </div>
 
       <div class="flex flex-col gap-2">
-        <button
-          type="button"
+        <UiButton
+          variant="primary"
+          size="lg"
+          class="w-full"
+          :loading="loading"
           @click="handleLogin"
-          :disabled="loading"
-          class="classic-btn !h-[36px] !bg-accent !border-emerald-600 !text-white flex items-center justify-center gap-2"
         >
-          <Loader2 v-if="loading" :size="14" class="animate-spin" />
-          <span>Sign In</span>
-        </button>
+          Sign In
+        </UiButton>
 
-        <button
-          type="button"
+        <UiButton
           v-if="biometricAvailable"
-          @click="handleBiometric"
+          size="lg"
+          class="w-full"
           :disabled="loading"
-          class="classic-btn !h-[36px] flex items-center justify-center gap-2"
+          @click="handleBiometric"
         >
           <Fingerprint :size="14" />
-          <span>Use Biometric</span>
-        </button>
+          Use Biometric
+        </UiButton>
       </div>
     </div>
   </div>
@@ -71,7 +71,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { Lock, Loader2, Fingerprint } from '@lucide/vue'
+import { Lock, Fingerprint } from '@lucide/vue'
+import UiButton from './UiButton.vue'
 import { logger } from '../logger'
 
 const emit = defineEmits<{

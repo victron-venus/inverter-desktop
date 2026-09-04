@@ -23,17 +23,17 @@
           >
             <RotateCcw :size="12" />
           </button>
-          <button
-            type="button"
-            @click="handleSave"
-            :disabled="saving"
-            class="classic-btn !h-[18px] !text-[7px] !bg-accent !border-emerald-600 !text-white flex items-center gap-1 shadow-md"
+          <UiButton
+            variant="primary"
+            size="sm"
+            class="!h-[22px] gap-1 shadow-sm"
+            :loading="saving"
             title="Save changes"
+            @click="handleSave"
           >
-            <Save :size="10" v-if="!saving" />
-            <Loader2 :size="10" v-else class="animate-spin" />
+            <Save v-if="!saving" :size="10" />
             <span>SAVE</span>
-          </button>
+          </UiButton>
           <button
             type="button"
             @click="handleClose"
@@ -162,22 +162,22 @@
                   >Interface Theme</span
                 >
                 <div class="flex gap-1">
-                  <button
-                    type="button"
+                  <UiButton
+                    class="flex-1"
+                    toggle
+                    :active="config.color_scheme === 'dark'"
                     @click="config.color_scheme = 'dark'"
-                    class="classic-btn !normal-case flex-1"
-                    :class="{ 'classic-btn-on': config.color_scheme === 'dark' }"
                   >
                     Dark
-                  </button>
-                  <button
-                    type="button"
+                  </UiButton>
+                  <UiButton
+                    class="flex-1"
+                    toggle
+                    :active="config.color_scheme === 'light'"
                     @click="config.color_scheme = 'light'"
-                    class="classic-btn !normal-case flex-1"
-                    :class="{ 'classic-btn-on': config.color_scheme === 'light' }"
                   >
                     Light
-                  </button>
+                  </UiButton>
                 </div>
               </div>
             </div>
@@ -263,22 +263,17 @@
                   />
                 </div>
                 <div class="flex gap-2 mt-1">
-                  <button
-                    type="button"
-                    @click="testHaConnection"
-                    :disabled="testingHa"
-                    class="classic-btn flex-1 !normal-case"
-                  >
+                  <UiButton class="flex-1" :loading="testingHa" @click="testHaConnection">
                     {{ testingHa ? 'Testing...' : 'Test Connection' }}
-                  </button>
-                  <button
-                    type="button"
-                    @click="handleFetchHaEntities"
+                  </UiButton>
+                  <UiButton
+                    class="flex-1"
                     :disabled="discoveryLoading || !haDirectMonitoringEnabled"
-                    class="classic-btn flex-1 !normal-case"
+                    :loading="discoveryLoading"
+                    @click="handleFetchHaEntities"
                   >
                     Fetch Entities
-                  </button>
+                  </UiButton>
                 </div>
 
                 <div
@@ -952,26 +947,14 @@
                 <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
                   Export the current configuration to a JSON file or import one previously saved.
                 </p>
-                <button
-                  type="button"
-                  @click="handleBackup"
-                  :disabled="backupBusy"
-                  class="classic-btn flex-1 !normal-case"
-                >
-                  <Download :size="12" v-if="!backupBusy" />
-                  <Loader2 :size="12" v-else class="animate-spin" />
+                <UiButton class="flex-1 w-full" :loading="backupBusy" @click="handleBackup">
+                  <Download v-if="!backupBusy" :size="12" />
                   Save Configuration
-                </button>
-                <button
-                  type="button"
-                  @click="handleRestore"
-                  :disabled="backupBusy"
-                  class="classic-btn flex-1 !normal-case"
-                >
-                  <Upload :size="12" v-if="!backupBusy" />
-                  <Loader2 :size="12" v-else class="animate-spin" />
+                </UiButton>
+                <UiButton class="flex-1 w-full" :disabled="backupBusy" @click="handleRestore">
+                  <Upload :size="12" />
                   Load Configuration
-                </button>
+                </UiButton>
               </div>
             </div>
 
@@ -1135,21 +1118,15 @@
               </button>
             </div>
             <div class="flex gap-2">
-              <button
-                type="button"
-                @click="discoveryDialog = false"
-                class="classic-btn flex-1 !normal-case"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                @click="addDiscoveredEntities"
+              <UiButton class="flex-1" @click="discoveryDialog = false"> Cancel </UiButton>
+              <UiButton
+                variant="primary"
+                class="flex-1"
                 :disabled="!selectedDiscovery.length"
-                class="classic-btn !bg-accent !border-emerald-600 !text-white flex-1 !normal-case disabled:!bg-slate-300"
+                @click="addDiscoveredEntities"
               >
                 Add ({{ selectedDiscovery.length }})
-              </button>
+              </UiButton>
             </div>
           </footer>
         </div>
@@ -1178,6 +1155,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ErrorBoundary from './components/ErrorBoundary.vue'
+import UiButton from './components/UiButton.vue'
 import { logger } from './logger'
 
 const { t: $t } = useI18n()
