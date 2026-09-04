@@ -127,6 +127,7 @@ export function useConnection() {
         username: config.mqtt_login || null,
         password: config.mqtt_password || null,
         portalId: config.portal_id || null,
+        waterTankInstance: config.water_tank_instance ?? null,
         waterPumpInstance: config.water_pump_instance ?? null,
         waterValveInstance: config.water_valve_instance ?? null,
         evchargerInstance: config.evcharger_instance ?? 40,
