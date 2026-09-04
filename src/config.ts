@@ -39,6 +39,8 @@ export interface AppConfig {
   ha_dryer_pause_entity?: string
   ha_dishwasher_running_entity?: string
   ha_dishwasher_duration_entity?: string
+  /** Cerbo GX tank instance for water level (auto-discovered when unset) */
+  water_tank_instance?: number
   /** dbus-pump startstop instances on the Cerbo GX (defaults 1/2) */
   water_pump_instance?: number
   water_valve_instance?: number
