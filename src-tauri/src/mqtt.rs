@@ -810,6 +810,11 @@ pub struct MqttNotification {
 
 /// One Venus-platform notification slot (GUIv2 source of truth).
 /// MQTT: N/<portal>/platform/<inst>/Notifications/<slot>/<field>
+///
+/// Venus publishes: Description, DeviceName, Service, DateTime, Type,
+/// Active, Acknowledged, Silenced. No cell id / voltage / threshold —
+/// those live on separate battery paths (System/MaxCellVoltage,
+/// System/MaxVoltageCellId, Cell/*/Voltage) and are not in this payload.
 #[derive(Debug, Clone, Default)]
 struct PlatformNotifSlot {
     platform_instance: u32,

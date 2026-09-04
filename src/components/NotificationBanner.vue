@@ -9,12 +9,13 @@
       <AlertOctagon v-if="banner.level === 'alarm'" :size="15" class="shrink-0" />
       <TriangleAlert v-else-if="banner.level === 'warning'" :size="15" class="shrink-0" />
       <Info v-else :size="15" class="shrink-0" />
-      <span class="font-bold shrink-0">{{ banner.title }}</span>
-      <span v-if="banner.body" class="opacity-80 truncate flex-1 min-w-0">{{ banner.body }}</span>
-      <span v-if="banner.ts" class="text-[10px] opacity-60 ml-1">{{
-        formatTimestamp(banner.ts)
-      }}</span>
-      <span class="flex-1" />
+      <div class="flex items-center gap-2 min-w-0 flex-1">
+        <span class="font-bold shrink-0">{{ banner.title }}</span>
+        <span v-if="banner.body" class="opacity-80 truncate min-w-0">{{ banner.body }}</span>
+      </div>
+      <span v-if="banner.ts" class="text-[10px] opacity-60 shrink-0 whitespace-nowrap tabular-nums">
+        {{ formatTimestamp(banner.ts) }}
+      </span>
       <button
         type="button"
         class="shrink-0 rounded p-0.5 opacity-50 transition-opacity hover:opacity-100 cursor-pointer"
