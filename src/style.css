@@ -231,18 +231,42 @@
   border-radius: 0.5rem;
 }
 
-/* Home-grid tile: flat, slightly taller — replaces skeuomorphic 3D */
+/* Home-grid tile: flat, slightly taller — replaces skeuomorphic 3D.
+   Overrides base .classic-btn nowrap so long friendly names (e.g. "Garage opener")
+   wrap at spaces up to ~2 lines instead of overflowing. */
 .classic-btn-tile,
 .classic-btn-3d {
   height: auto;
   min-height: 2rem;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.35rem 0.45rem;
   border-radius: 0.45rem;
   flex-direction: column;
   gap: 0.15rem;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-height: 1.15;
+  text-align: center;
   background-image: none !important;
   box-shadow: none !important;
   border-bottom-width: 1px !important;
+}
+
+/* Label inside tile: prefer up to 2 centered lines */
+.classic-btn-tile > span,
+.classic-btn-3d > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .classic-btn-tile:hover,

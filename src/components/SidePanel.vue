@@ -97,7 +97,7 @@
           v-for="btn in homeButtons"
           :key="btn.id"
           variant="tile"
-          class="!flex-1 !min-w-[50px]"
+          class="!flex-1 !min-w-0 !basis-[calc(50%-0.125rem)] max-w-full"
           toggle
           :active="buttonStates[btn.id] === 'on'"
           @click="$emit('send', 'toggle', { entity: btn.entity })"
@@ -106,11 +106,12 @@
             :is="getHomeButtonIcon(btn.entity, btn.label)"
             v-if="getHomeButtonIcon(btn.entity, btn.label)"
             :size="14"
-            class="opacity-70"
+            class="opacity-70 shrink-0"
           />
-          <span class="text-[9px] leading-tight font-semibold">{{
-            getHomeButtonLabel(btn.label)
-          }}</span>
+          <span
+            class="text-[9px] leading-tight font-semibold min-w-0 w-full text-center break-words"
+            >{{ getHomeButtonLabel(btn.label) }}</span
+          >
         </UiButton>
       </div>
     </div>
