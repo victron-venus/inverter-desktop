@@ -768,7 +768,8 @@ pub struct MqttClient {
     username: Option<String>,
     password: Option<String>,
     app_handle: Option<tauri::AppHandle>,
-    portal_id: Option<String>,
+    /// Shared so runtime inverter/portal discovery updates W/ ack topics.
+    portal_id: Arc<Mutex<Option<String>>>,
     /// Cerbo GX startstop device instances for (pump, valve) water topics.
     water_instances: Option<(u32, u32)>,
     /// Cerbo GX EV (vehicle) and evcharger instance pair for EV topics.
@@ -1007,7 +1008,7 @@ impl MqttClient {
             username,
             password,
             app_handle: None,
-            portal_id: None,
+            portal_id: Arc::new(Mutex::new(None)),
             water_instances: None,
             ev_instances: None,
             camera_topic: None,
@@ -1049,7 +1050,9 @@ impl MqttClient {
     }
 
     pub fn set_portal_id(&mut self, id: Option<String>) {
-        self.portal_id = id;
+        if let Ok(mut g) = self.portal_id.lock() {
+            *g = id;
+        }
     }
 
     pub fn set_water_instances(&mut self, instances: Option<(u32, u32)>) {
@@ -1249,7 +1252,7 @@ impl MqttClient {
         client_id: &str,
         state: Arc<Mutex<InverterState>>,
         app_handle: Option<tauri::AppHandle>,
-        portal_id: Option<String>,
+        portal_id: Arc<Mutex<Option<String>>>,
         water_instances: Option<(u32, u32)>,
         ev_instances: Option<(Option<u32>, Option<u32>)>,
         camera_topic: Option<String>,
@@ -1294,10 +1297,12 @@ impl MqttClient {
 
         // Victron alarms + dbus-pump water topics for a configured portal
         let mut active_portal: Option<String> = None;
-        if let Some(id) = portal_id.as_deref().filter(|s| !s.is_empty()) {
-            Self::subscribe_portal_topics(&client, id);
-            Self::spawn_keepalive(client.clone(), id.to_string());
-            active_portal = Some(id.to_string());
+        if let Ok(guard) = portal_id.lock() {
+            if let Some(id) = guard.as_deref().filter(|s| !s.is_empty()) {
+                Self::subscribe_portal_topics(&client, id);
+                Self::spawn_keepalive(client.clone(), id.to_string());
+                active_portal = Some(id.to_string());
+            }
         }
 
         if let Some(ref cam_topic) = camera_topic {
@@ -1318,6 +1323,7 @@ impl MqttClient {
         let alarms_c = alarms.clone();
         let platform_notifs_c = platform_notifs.clone();
         let platform_notifs_seen_c = platform_notifs_seen.clone();
+        let portal_id_c = portal_id.clone();
         let ha_states_c = ha_entity_states.clone();
         let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
         let cerbo_c = cerbo_devices.clone();
@@ -1339,6 +1345,9 @@ impl MqttClient {
                             if !id.is_empty() && active_portal.as_deref() != Some(id.as_str()) {
                                 log::info!("Discovered Cerbo portal ID {}", id);
                                 active_portal = Some(id.clone());
+                                if let Ok(mut g) = portal_id_c.lock() {
+                                    *g = Some(id.clone());
+                                }
                                 Self::subscribe_portal_topics(&client, &id);
                                 Self::spawn_keepalive(client.clone(), id);
                             }
@@ -2837,11 +2846,16 @@ impl MqttClient {
         platform_instance: u32,
         slot: u32,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let portal = self
-            .portal_id
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or("Cerbo portal ID not configured")?;
+        let portal = {
+            let guard = self
+                .portal_id
+                .lock()
+                .map_err(|e| format!("Internal error: {e}"))?;
+            guard
+                .clone()
+                .filter(|s| !s.is_empty())
+                .ok_or("Cerbo portal ID not configured")?
+        };
         let guard = self
             .client
             .lock()
