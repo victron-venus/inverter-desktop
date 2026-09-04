@@ -43,6 +43,8 @@ export interface InverterState {
     current?: number
     power?: number
   }>
+  // Legacy daemon aggregate: power per inverter (no V/I), fallback when pv_inverters empty
+  pv_inverter_individual?: number[]
   batteries?: Array<{
     name?: string
     serial?: string

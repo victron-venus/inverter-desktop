@@ -45,6 +45,7 @@ pub struct InverterState {
     pub mppt_individual: Option<Vec<f64>>,
     pub mppt_chargers: Option<Vec<MpptCharger>>,
     pub pv_inverters: Option<Vec<PvInverter>>,
+    pub pv_inverter_individual: Option<Vec<f64>>,
     pub batteries: Option<Vec<Battery>>,
     pub loads: Option<std::collections::HashMap<String, f64>>,
     pub ui_config: Option<UiConfig>,
@@ -100,6 +101,7 @@ struct RawInverterState {
     mppt_individual: Option<Vec<f64>>,
     mppt_chargers: Option<Vec<MpptCharger>>,
     pv_inverters: Option<Vec<PvInverter>>,
+    pv_inverter_individual: Option<Vec<f64>>,
     batteries: Option<Vec<Battery>>,
     loads: Option<std::collections::HashMap<String, f64>>,
     ui_config: Option<UiConfig>,
@@ -1378,12 +1380,17 @@ impl MqttClient {
                 let entry = devices.pv_inverters.entry(inst).or_default();
                 entry.touch();
                 let p = &mut entry.data;
+                // Store instance on first discovery so the UI can distinguish
+                // devices with identical names across different Cerbo instances.
+                if p.instance.is_none() {
+                    p.instance = Some(inst);
+                }
                 match path {
                     // Ac/Power is the device total; L1 Power equals it on
                     // single-phase units but is accepted as a fallback.
-                    "Ac/Power" | "Ac/L1/Power" => p.power = val,
-                    "Ac/L1/Voltage" => p.voltage = val,
-                    "Ac/L1/Current" => p.current = val,
+                    "Ac/Power" | "Ac/L1/Power" | "Ac/L2/Power" => p.power = val,
+                    "Ac/L1/Voltage" | "Ac/L2/Voltage" => p.voltage = val,
+                    "Ac/L1/Current" | "Ac/L2/Current" => p.current = val,
                     "ProductName" => p.name = Self::parse_cerbo_name(payload),
                     "Serial" => p.serial = Self::parse_cerbo_name(payload),
                     _ => return false,
@@ -1766,6 +1773,7 @@ impl MqttClient {
         // Collection fields — replace when daemon sends them
         merge_opt!(mppt_chargers, raw.mppt_chargers);
         merge_opt!(pv_inverters, raw.pv_inverters);
+        merge_opt!(pv_inverter_individual, raw.pv_inverter_individual);
         merge_opt!(batteries, raw.batteries);
         merge_opt!(loads, raw.loads);
 
