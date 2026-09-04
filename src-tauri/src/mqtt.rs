@@ -156,14 +156,19 @@ struct RawInverterState {
     t2: Option<f64>,
     solar_total: Option<f64>,
     battery_soc: Option<f64>,
-    // Daemon historically publishes short keys bp/bc/bv alongside/instead of
-    // the long names. Accept both so the battery tile ticks from inverter/state.
-    #[serde(alias = "bp")]
+    // Canonical + short battery keys. Do NOT use #[serde(alias = "bp")] etc:
+    // the daemon publishes BOTH forms in one object, and serde aliases treat
+    // them as the same field → "duplicate field `battery_power`" and the
+    // entire inverter/state payload is rejected (Consumption/Setpoint stay 0).
     battery_power: Option<f64>,
-    #[serde(alias = "bv")]
     battery_voltage: Option<f64>,
-    #[serde(alias = "bc")]
     battery_current: Option<f64>,
+    /// Short key historically published alongside/instead of battery_power.
+    bp: Option<f64>,
+    /// Short key historically published alongside/instead of battery_voltage.
+    bv: Option<f64>,
+    /// Short key historically published alongside/instead of battery_current.
+    bc: Option<f64>,
     setpoint: Option<f64>,
     inverter_state: Option<String>,
     version: Option<String>,
@@ -198,6 +203,22 @@ struct RawInverterState {
     dryer_power: Option<serde_json::Value>,
     latest_version: Option<String>,
     console: Option<Vec<String>>,
+}
+
+impl RawInverterState {
+    /// Prefer canonical battery_* keys; fall back to short bp/bv/bc when the
+    /// long form is absent. Safe when both are present (no serde duplicate).
+    fn resolve_short_battery_keys(&mut self) {
+        if self.battery_power.is_none() {
+            self.battery_power = self.bp;
+        }
+        if self.battery_voltage.is_none() {
+            self.battery_voltage = self.bv;
+        }
+        if self.battery_current.is_none() {
+            self.battery_current = self.bc;
+        }
+    }
 }
 
 fn coerce_bool(v: &serde_json::Value) -> bool {
@@ -1242,7 +1263,8 @@ impl MqttClient {
     ) {
         if topic == "inverter/state" {
             match serde_json::from_str::<RawInverterState>(payload) {
-                Ok(raw) => {
+                Ok(mut raw) => {
+                    raw.resolve_short_battery_keys();
                     note_inverter_state_recv(&raw);
                     Self::process_state_update(
                         raw,
@@ -2217,11 +2239,41 @@ mod tests {
 
     #[test]
     fn raw_inverter_state_accepts_short_battery_aliases() {
-        let raw: RawInverterState =
+        let mut raw: RawInverterState =
             serde_json::from_str(r#"{"gt":1.0,"bp":1200.0,"bv":52.4,"bc":-23.1}"#).expect("parse");
+        raw.resolve_short_battery_keys();
         assert_eq!(raw.battery_power, Some(1200.0));
         assert_eq!(raw.battery_voltage, Some(52.4));
         assert_eq!(raw.battery_current, Some(-23.1));
+    }
+
+    /// Regression: daemon JSON includes BOTH canonical and short battery keys.
+    /// serde `alias` treated them as one field and rejected the whole payload
+    /// ("duplicate field `battery_power`"), zeroing Consumption/Setpoint.
+    #[test]
+    fn raw_inverter_state_accepts_canonical_and_short_battery_keys_together() {
+        let json = r#"{
+            "gt": 100.0,
+            "tt": 2500.0,
+            "setpoint": -500.0,
+            "battery_power": 1800.5,
+            "bp": 999.0,
+            "battery_voltage": 53.2,
+            "bv": 40.0,
+            "battery_current": -12.5,
+            "bc": 0.0,
+            "battery_soc": 88.0
+        }"#;
+        let mut raw: RawInverterState = serde_json::from_str(json).expect("parse both keys");
+        raw.resolve_short_battery_keys();
+        // Prefer canonical when both present.
+        assert_eq!(raw.battery_power, Some(1800.5));
+        assert_eq!(raw.battery_voltage, Some(53.2));
+        assert_eq!(raw.battery_current, Some(-12.5));
+        assert_eq!(raw.gt, Some(100.0));
+        assert_eq!(raw.tt, Some(2500.0));
+        assert_eq!(raw.setpoint, Some(-500.0));
+        assert_eq!(raw.battery_soc, Some(88.0));
     }
 
     /// Guardrail: portal subscribe burst must fit the rumqttc request channel
