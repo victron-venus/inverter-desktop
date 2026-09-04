@@ -653,11 +653,11 @@
   display: none;
 }
 
-/* HOME button grid */
+/* HOME button grid — dense 3-up so tiles stay narrow */
 .home-btn-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.1875rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.15rem;
   align-items: start;
 }
 
@@ -665,22 +665,22 @@
 .classic-btn-tile,
 .classic-btn-3d,
 .home-btn-tile.classic-btn {
-  height: 2.5rem !important;
-  min-height: 2.5rem !important;
-  max-height: 2.5rem !important;
+  height: auto !important;
+  min-height: 2.1rem !important;
+  max-height: 2.75rem !important;
   width: 100%;
   min-width: 0 !important;
   max-width: 100%;
-  padding: 0.25rem 0.35rem !important;
-  border-radius: 0.45rem;
+  padding: 0.2rem 0.25rem !important;
+  border-radius: 0.4rem;
   flex-direction: column;
   flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
-  gap: 0.1rem;
+  gap: 0.05rem;
   white-space: normal !important;
   overflow: hidden;
-  line-height: 1.15 !important;
+  line-height: 1.1 !important;
   text-align: center;
   background-image: none !important;
   box-shadow: none !important;
@@ -698,11 +698,11 @@
   white-space: pre-line !important;
   overflow-wrap: break-word;
   word-break: normal;
-  max-height: calc(1.15em * 2);
+  max-height: calc(1.1em * 2);
   overflow: hidden;
-  font-size: 0.5625rem;
+  font-size: 0.5rem;
   font-weight: 600;
-  line-height: 1.15;
+  line-height: 1.1;
   text-align: center;
 }
 
@@ -763,4 +763,32 @@
 .ha-entity-unavailable .dark\:text-slate-400,
 .ha-entity-unavailable .text-muted {
   color: #8e8e93 !important;
+}
+
+/* SidePanel dense chrome 2026 */
+.side-panel .classic-header {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.625rem;
+}
+.side-panel .classic-card {
+  border-radius: var(--radius-card);
+}
+.side-panel .classic-card > div:last-child {
+  padding: 0.5rem !important;
+}
+.side-panel .home-btn-grid {
+  gap: 0.1rem;
+}
+.side-panel .classic-inset {
+  padding: 0.15rem 0.3rem;
+}
+.app-shell {
+  background-image:
+    radial-gradient(ellipse at top left, color-mix(in srgb, var(--color-accent) 4%, transparent) 0%, transparent 40%),
+    radial-gradient(ellipse at bottom right, color-mix(in srgb, var(--color-battery) 3%, transparent) 0%, transparent 45%);
+}
+.dark .app-shell {
+  background-image:
+    radial-gradient(ellipse at top left, color-mix(in srgb, var(--color-accent) 3%, transparent) 0%, transparent 40%),
+    radial-gradient(ellipse at bottom right, color-mix(in srgb, var(--color-battery) 2%, transparent) 0%, transparent 45%);
 }

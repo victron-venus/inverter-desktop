@@ -1,5 +1,8 @@
 <template>
   <div class="classic-card h-full overflow-hidden flex flex-col">
+    <div class="classic-header">
+      <span class="text-[10px] font-semibold tracking-tight">Power · 24h</span>
+    </div>
     <VChart
       class="chart-wrap w-full flex-1"
       :option="chartOption"
