@@ -65,7 +65,9 @@ fn note_state_emit(kind: &str) {
 /// and parsing (one line every ~5s). Absence of this line with portal
 /// discovery present means the daemon is not publishing or the MQTT loop
 /// is stuck before handle_message.
-fn note_inverter_state_recv(raw: &RawInverterState) {
+/// Throttled recv counter for inverter/state. Live gt/tt/soc are Cerbo-only
+/// (systemcalc + voltage_soc); never log raw daemon fields for those tiles.
+fn note_inverter_state_recv(live: &InverterState) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static RECVS: AtomicU64 = AtomicU64::new(0);
     static LAST_LOG_MS: AtomicU64 = AtomicU64::new(0);
@@ -81,10 +83,10 @@ fn note_inverter_state_recv(raw: &RawInverterState) {
             .is_ok()
     {
         log::info!(
-            "inverter/state received x{n} (gt={:?} tt={:?} soc={:?})",
-            raw.gt,
-            raw.tt,
-            raw.battery_soc
+            "inverter/state received x{n} (live gt={:?} tt={:?} soc={:?})",
+            live.gt,
+            live.tt,
+            live.battery_soc
         );
     }
 }
@@ -151,13 +153,22 @@ pub struct InverterState {
 
 #[derive(Deserialize, Default)]
 struct RawInverterState {
+    // Deserialized for completeness / tests; never merged into live tiles.
+    #[allow(dead_code)]
     gt: Option<f64>,
+    #[allow(dead_code)]
     g1: Option<f64>,
+    #[allow(dead_code)]
     g2: Option<f64>,
+    #[allow(dead_code)]
     tt: Option<f64>,
+    #[allow(dead_code)]
     t1: Option<f64>,
+    #[allow(dead_code)]
     t2: Option<f64>,
     solar_total: Option<f64>,
+    // Never merged — Cerbo voltage_soc owns the SoC tile.
+    #[allow(dead_code)]
     battery_soc: Option<f64>,
     // Canonical + short battery keys. Do NOT use #[serde(alias = "bp")] etc:
     // the daemon publishes BOTH forms in one object, and serde aliases treat
@@ -195,10 +206,11 @@ struct RawInverterState {
     // ev_charging_kw, ev_power, car_soc are intentionally absent —
     // EV telemetry comes only from Cerbo MQTT via apply_ev_message + EvCache,
     // not from the daemon's inverter/state payload.
-    // battery_*, loads, grid/consumption, setpoint/mode, MPPT/PV/batteries
-    // arrays, solar_total, and water may still appear in the JSON for
-    // fallback; process_state_update skips merging them once Cerbo (or HA
-    // for appliances) owns those tiles — same EV wipe-protection pattern.
+    // gt/g1/g2, tt/t1/t2, battery_soc: intentionally never merged — live
+    // tiles come from Cerbo only (systemcalc g1+g2 / t1+t2, voltage_soc).
+    // battery power/V/A, loads, setpoint/mode, MPPT/PV/batteries arrays, and
+    // solar_total may still appear for fallback; process_state_update skips
+    // merging them once Cerbo owns those tiles — same EV wipe-protection.
     // water_* / washer_* / dryer_* / dishwasher_*: intentionally absent —
     // water from Cerbo tank/pump handlers; appliances from HA entities only.
     // Ignoring them in JSON prevents daemon zeros from being tempting to merge.
@@ -508,6 +520,7 @@ impl CerboDevices {
     }
 
     /// systemcalc Ac/Grid seen — Cerbo owns gt/g1/g2 (vebus is fallback only).
+    #[allow(dead_code)] // overlay uses system fields directly; kept for owns_* API
     fn owns_grid(&self) -> bool {
         self.system
             .values()
@@ -518,6 +531,7 @@ impl CerboDevices {
     }
 
     /// systemcalc Ac/Consumption seen — Cerbo owns tt/t1/t2.
+    #[allow(dead_code)] // overlay uses system fields directly; kept for owns_* API
     fn owns_consumption(&self) -> bool {
         self.system
             .values()
@@ -1621,7 +1635,6 @@ impl MqttClient {
             match serde_json::from_str::<RawInverterState>(payload) {
                 Ok(mut raw) => {
                     raw.resolve_short_battery_keys();
-                    note_inverter_state_recv(&raw);
                     Self::process_state_update(
                         raw,
                         state.clone(),
@@ -1631,6 +1644,10 @@ impl MqttClient {
                         Some(cerbo_devices.clone()),
                         ev_cache.clone(),
                     );
+                    // Log Cerbo-derived live tiles after merge, not raw daemon gt/tt/soc.
+                    if let Ok(guard) = state.lock() {
+                        note_inverter_state_recv(&guard);
+                    }
                 }
                 Err(e) => {
                     log::warn!(
@@ -2882,12 +2899,12 @@ impl MqttClient {
 
         // Snapshot which Cerbo maps already own live tiles so daemon
         // zeros/partials cannot clobber them (same pattern as EV / shunt).
+        // gt/tt/soc are never taken from daemon — Cerbo apply_cerbo_to_state
+        // owns those tiles (systemcalc + voltage_soc) whether or not owns_* yet.
         let cerbo_flags = cerbo_devices.as_ref().and_then(|c| {
             c.lock().ok().map(|d| {
                 (
                     d.has_shunt(),
-                    d.owns_grid(),
-                    d.owns_consumption(),
                     d.owns_vebus_mode(),
                     d.owns_chargers(),
                     d.owns_pv(),
@@ -2899,37 +2916,21 @@ impl MqttClient {
         });
         let (
             cerbo_has_shunt,
-            cerbo_owns_grid,
-            cerbo_owns_consumption,
             cerbo_owns_vebus_mode,
             cerbo_owns_chargers,
             cerbo_owns_pv,
             cerbo_owns_batteries,
             cerbo_owns_solar,
             cerbo_has_acloads,
-        ) = cerbo_flags.unwrap_or((
-            false, false, false, false, false, false, false, false, false,
-        ));
+        ) = cerbo_flags.unwrap_or((false, false, false, false, false, false, false));
 
-        // Grid / consumption / solar: Cerbo systemcalc + chargers/PV first.
-        if !cerbo_owns_grid {
-            merge_opt!(gt, raw.gt);
-            merge_opt!(g1, raw.g1);
-            merge_opt!(g2, raw.g2);
-        }
-        if !cerbo_owns_consumption {
-            merge_opt!(tt, raw.tt);
-            merge_opt!(t1, raw.t1);
-            merge_opt!(t2, raw.t2);
-        }
+        // Never merge gt/g1/g2, tt/t1/t2, or battery_soc from daemon —
+        // treat inverter-control as not providing them (Cerbo only).
         if !cerbo_owns_solar {
             merge_opt!(solar_total, raw.solar_total);
         }
-        // Battery bank totals: Cerbo shunt owns them (same pattern as EV —
-        // do not let daemon inverter/state overwrite shunt-derived W/V/A/%).
-        // Fallback to daemon only when no Cerbo shunt has been discovered yet.
+        // Battery power/V/A: shunt-gated daemon fallback. SoC never from daemon.
         if !cerbo_has_shunt {
-            merge_opt!(battery_soc, raw.battery_soc);
             merge_opt!(battery_power, raw.battery_power);
             merge_opt!(battery_voltage, raw.battery_voltage);
             merge_opt!(battery_current, raw.battery_current);
@@ -4885,8 +4886,8 @@ mod tests {
         assert_eq!(guard.battery_current, Some(-5.1));
         // Voltage-derived SoC, not daemon 11%.
         assert_eq!(guard.battery_soc, Some(voltage_soc(52.0)));
-        // No Cerbo system/vebus yet → daemon gt still merges as fallback.
-        assert_eq!(guard.gt, Some(10.0));
+        // Daemon gt must never merge — Cerbo systemcalc is the only source.
+        assert_eq!(guard.gt, None);
     }
 
     fn empty_notifications() -> Arc<Mutex<NotificationState>> {
@@ -4896,6 +4897,53 @@ mod tests {
             high_solar: AlertState::new(),
             high_load: std::collections::HashMap::new(),
         }))
+    }
+
+    #[test]
+    fn process_state_update_never_merges_daemon_gt_tt_soc() {
+        // Even with no Cerbo discovery yet, gt/tt/soc stay Cerbo-only
+        // (None / prior values) — daemon inverter/state is ignored for them.
+        let state = Arc::new(Mutex::new(InverterState {
+            gt: Some(123.0),
+            tt: Some(456.0),
+            battery_soc: Some(77.0),
+            ..Default::default()
+        }));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+
+        let raw = RawInverterState {
+            gt: Some(0.0),
+            g1: Some(1.0),
+            g2: Some(2.0),
+            tt: Some(0.0),
+            t1: Some(3.0),
+            t2: Some(4.0),
+            battery_soc: Some(11.0),
+            battery_power: Some(50.0),
+            version: Some("daemon".into()),
+            ..Default::default()
+        };
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            empty_notifications(),
+            None,
+            None,
+            ev_cache,
+        );
+
+        let guard = state.lock().unwrap();
+        assert_eq!(guard.gt, Some(123.0));
+        assert_eq!(guard.g1, None);
+        assert_eq!(guard.g2, None);
+        assert_eq!(guard.tt, Some(456.0));
+        assert_eq!(guard.t1, None);
+        assert_eq!(guard.t2, None);
+        assert_eq!(guard.battery_soc, Some(77.0));
+        // Power still has shunt-gated daemon fallback when no Cerbo shunt.
+        assert_eq!(guard.battery_power, Some(50.0));
+        assert_eq!(guard.version.as_deref(), Some("daemon"));
     }
 
     #[test]
