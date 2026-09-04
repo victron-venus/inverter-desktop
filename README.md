@@ -79,13 +79,13 @@ This repository follows a multi-channel release strategy managed by GitHub Actio
 3. Drag **Inverter Dashboard.app** to Applications
 4. On first run: Right-click → Open → Open (bypasses Gatekeeper)
 
-> **Note:** If you see the message “Inverter Desktop.app is damaged and can’t be opened”, macOS has quarantined the downloaded app. Remove the quarantine attribute with:
+> **Note:** If you see the message “Inverter Desktop.app is damaged and can’t be opened”, macOS has quarantined the download. Remove the quarantine attribute from the `.dmg` before opening it:
 >
 > ```bash
-> xattr -d com.apple.quarantine "Inverter Desktop.app"
+> xattr -d com.apple.quarantine ~/Downloads/Inverter.Desktop_2.5.2_aarch64.dmg
 > ```
 >
-> (If you copied the app to /Applications, use the full path.) After removing the attribute, the app will launch normally.
+> (Use the matching `*_x64.dmg` on Intel Macs, or the full path if the file is elsewhere.) After removing the attribute, open the `.dmg` and launch normally.
 
 ### Windows
 
