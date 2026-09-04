@@ -3,27 +3,43 @@
 @variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* Exact 1.0.17 Color Palette */
+  /* Energy accents — keep existing cyan/green/battery family */
   --color-grid: #2196f3;
   --color-consumption: #f44336;
   --color-solar: #ff9800;
   --color-battery: #4caf50;
   --color-accent: #00bcd4;
-  --color-text-dim: #757575;
+  --color-text-dim: #8e8e93;
 
-  /* Backgrounds */
-  --color-bg-page: #efeff4; /* Slightly grey "podlozhka" */
+  /* Light surfaces */
+  --color-bg-page: #f2f2f4;
   --color-bg-card: #ffffff;
-  --color-border-card: #dcdce2; /* Darkened for visibility in light mode */
-  --color-text-main: #333333;
+  --color-bg-muted: #f0f0f2;
+  --color-bg-elevated: #ffffff;
+  --color-border-card: rgba(60, 60, 67, 0.12);
+  --color-text-main: #1c1c1e;
+  --color-text-secondary: #636366;
 
-  /* Dark Mode Palette - Now with actual dark backgrounds */
-  --color-dark-bg-page: #0a0a0a; /* Darker black */
-  --color-dark-bg-card: #1c1c1e; /* Apple dark card grey */
-  --color-dark-border-card: #3a3a3c; /* Brightened for visibility in dark mode */
-  --color-dark-text-main: #e0e0e0;
+  /* Dark surfaces — first-class, calm utility */
+  --color-dark-bg-page: #0b0b0d;
+  --color-dark-bg-card: #161618;
+  --color-dark-bg-muted: #1a1a1c;
+  --color-dark-bg-elevated: #1c1c1e;
+  --color-dark-border-card: rgba(255, 255, 255, 0.08);
+  --color-dark-text-main: #f5f5f7;
+  --color-dark-text-secondary: #98989d;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  /* Radius scale */
+  --radius-card: 0.625rem;
+  --radius-control: 0.4375rem;
+  --radius-chip: 0.375rem;
+
+  /* Legacy aliases used by a few components */
+  --color-apple-blue: #00bcd4;
+  --color-apple-border: rgba(60, 60, 67, 0.12);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
 }
 
 @layer base {
@@ -31,28 +47,166 @@
     @apply font-sans antialiased overflow-hidden text-[12px];
     background-color: var(--color-bg-page);
     color: var(--color-text-main);
+    letter-spacing: -0.01em;
   }
 
-  /* Night mode background - correctly syncing with dark theme now */
-  .dark body {
+  .dark body,
+  body.dark {
     background-color: var(--color-dark-bg-page);
     color: var(--color-dark-text-main);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 28%, transparent);
   }
 }
 
 @layer components {
-  /* Card: Standard appearance */
+  /* Card surface — soft border, clear hierarchy, dense */
   .classic-card {
-    @apply border rounded-[3px] shadow-none;
+    border: 1px solid var(--color-border-card);
+    border-radius: var(--radius-card);
     background-color: var(--color-bg-card);
-    border-color: var(--color-border-card);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
   }
 
   .dark .classic-card {
     background-color: var(--color-dark-bg-card);
     border-color: var(--color-dark-border-card);
+    box-shadow: none;
   }
 
+  /* Section header — sentence case, compact, no chunky uppercase */
+  .classic-header {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.3125rem 0.5rem;
+    border-bottom: 1px solid var(--color-border-card);
+    background-color: color-mix(in srgb, var(--color-bg-muted) 70%, var(--color-bg-card));
+    color: var(--color-text-secondary);
+    font-size: 0.6875rem; /* 11px */
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    line-height: 1.2;
+  }
+
+  .dark .classic-header {
+    background-color: color-mix(in srgb, var(--color-dark-bg-muted) 80%, var(--color-dark-bg-card));
+    border-color: var(--color-dark-border-card);
+    color: var(--color-dark-text-secondary);
+  }
+
+  /* Compact input */
+  .classic-input {
+    height: 1.625rem;
+    padding: 0 0.5rem;
+    border-radius: var(--radius-control);
+    border: 1px solid color-mix(in srgb, var(--color-border-card) 100%, #000);
+    background-color: #fff;
+    color: var(--color-text-main);
+    font-size: 0.6875rem;
+    outline: none;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+
+  .classic-input:focus {
+    border-color: color-mix(in srgb, var(--color-accent) 65%, #94a3b8);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+
+  .dark .classic-input {
+    background-color: var(--color-dark-bg-elevated);
+    border-color: var(--color-dark-border-card);
+    color: var(--color-dark-text-main);
+  }
+
+  .dark .classic-input:focus {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, #3a3a3c);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+
+  /* Config / form labels — calm, not shouting */
+  .classic-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    color: var(--color-text-secondary);
+  }
+
+  .dark .classic-label {
+    color: var(--color-dark-text-secondary);
+  }
+
+  .classic-section-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-transform: none;
+    color: var(--color-text-main);
+  }
+
+  .dark .classic-section-title {
+    color: var(--color-dark-text-main);
+  }
+
+  .classic-subsection-title {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    color: var(--color-text-main);
+  }
+
+  .dark .classic-subsection-title {
+    color: var(--color-dark-text-main);
+  }
+
+  /* Nested cell inside a card (batteries / solar / weather chips) */
+  .classic-inset {
+    border: 1px solid color-mix(in srgb, var(--color-border-card) 90%, transparent);
+    border-radius: var(--radius-chip);
+    background-color: color-mix(in srgb, var(--color-bg-muted) 55%, transparent);
+    padding: 0.25rem 0.375rem;
+  }
+
+  .dark .classic-inset {
+    border-color: var(--color-dark-border-card);
+    background-color: color-mix(in srgb, var(--color-dark-bg-muted) 70%, transparent);
+  }
+
+  /* Stat tile label */
+  .classic-stat-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--color-text-secondary);
+    margin-bottom: 0.125rem;
+  }
+
+  .dark .classic-stat-label {
+    color: var(--color-dark-text-secondary);
+  }
+
+  /* Context menu / floating panel alias */
+  .apple-card {
+    border: 1px solid var(--color-border-card);
+    border-radius: 0.75rem;
+    background-color: color-mix(in srgb, var(--color-bg-card) 92%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  }
+
+  .dark .apple-card {
+    background-color: color-mix(in srgb, var(--color-dark-bg-elevated) 92%, transparent);
+    border-color: var(--color-dark-border-card);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
+  }
 }
 
 /* ── Button system (2026, dense desktop) ─────────────────────────────
@@ -232,35 +386,6 @@
 }
 
 
-@layer components {
-
-  /* Card Header Style: Increased to 11px to match 0.7rem from v1.0.9 */
-  .classic-header {
-    @apply px-1.5 py-0.5 border-b text-[11px] font-bold uppercase tracking-wider text-slate-600;
-    background-color: var(--color-bg-card);
-    border-color: var(--color-border-card);
-  }
-
-  .dark .classic-header {
-    background-color: var(--color-dark-bg-card);
-    border-color: var(--color-dark-border-card);
-    color: #e0e0e0;
-  }
-
-  /* Compact Input */
-  .classic-input {
-    @apply h-6 px-1.5 rounded-[2px] border text-[11px] outline-none focus:border-blue-500 transition-none;
-    background-color: #fff;
-    border-color: #ced4da;
-    color: #333;
-  }
-
-  .dark .classic-input {
-    background-color: #1a1a1a;
-    border-color: #444;
-    color: #e0e0e0;
-  }
-}
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -270,7 +395,7 @@
   border-radius: 10px;
 }
 .dark ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .scrollbar-hide::-webkit-scrollbar { display: none; }

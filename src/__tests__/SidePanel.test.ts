@@ -100,8 +100,9 @@ describe('SidePanel', () => {
         ],
       },
     })
-    expect(wrapper.text()).toContain('Button 1')
-    expect(wrapper.text()).toContain('Button 2')
+    const normalized = wrapper.text().replace(/\s+/g, ' ')
+    expect(normalized).toContain('Button 1')
+    expect(normalized).toContain('Button 2')
   })
 
   it('marks unavailable home tiles with classic-btn-unavailable', () => {
@@ -122,7 +123,7 @@ describe('SidePanel', () => {
     expect(buttons[1].classes()).toContain('classic-btn-on')
     expect(buttons[1].classes()).not.toContain('classic-btn-unavailable')
     expect(wrapper.find('.home-btn-grid').exists()).toBe(true)
-    expect(wrapper.find('.home-tile-label').text()).toContain('Garage opener')
+    expect(wrapper.find('.home-tile-label').text().replace(/\s+/g, ' ')).toContain('Garage opener')
   })
 
   it('hides home section when showHomeSection false', () => {

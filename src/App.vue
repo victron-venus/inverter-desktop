@@ -2,7 +2,7 @@
   <ErrorBoundary>
     <div
       id="app"
-      class="h-screen flex flex-col p-1 select-none overflow-hidden"
+      class="h-screen flex flex-col p-1.5 select-none overflow-hidden"
       @contextmenu.prevent="onContextMenu"
     >
       <!-- Dashboard Header: Compact buttons and theme switcher -->
@@ -166,7 +166,7 @@
       <!-- Toast Notification -->
       <div
         v-if="message"
-        class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full shadow-lg text-[10px] font-bold border animate-in slide-in-from-bottom duration-200 uppercase tracking-wider"
+        class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full shadow-lg text-[11px] font-semibold border animate-in slide-in-from-bottom duration-200 tracking-tight"
         :class="
           messageType === 'error'
             ? 'bg-red-500 border-red-600 text-white'

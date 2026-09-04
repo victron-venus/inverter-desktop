@@ -1,6 +1,6 @@
 <template>
   <div
-    class="flex items-center justify-center gap-2 text-[11px] font-medium text-slate-500 mt-1.5 pb-1"
+    class="flex items-center justify-center gap-2 text-[10px] font-medium text-slate-500 dark:text-slate-500 mt-1.5 pb-0.5"
   >
     <div v-if="haEnabled" class="flex items-center gap-1">
       <div

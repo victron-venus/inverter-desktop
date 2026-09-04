@@ -7,18 +7,18 @@
   >
     <button
       type="button"
-      class="w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 hover:bg-apple-blue hover:text-white transition-colors group"
+      class="w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 hover:bg-accent hover:text-black transition-colors group"
       @click="$emit('open-config')"
     >
       <Settings :size="14" class="group-hover:text-white transition-colors" />
       Settings
     </button>
 
-    <hr class="my-1 border-apple-border border-opacity-30" />
+    <hr class="my-1 border-black/10 dark:border-white/10" />
 
     <button
       type="button"
-      class="w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 hover:bg-apple-blue hover:text-white transition-colors group"
+      class="w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 hover:bg-accent hover:text-black transition-colors group"
       @click="$emit('check-updates')"
     >
       <Download :size="14" class="group-hover:text-white transition-colors" />

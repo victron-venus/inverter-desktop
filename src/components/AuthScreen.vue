@@ -1,8 +1,6 @@
 <template>
   <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
-    <div
-      class="w-[320px] bg-white dark:bg-[#1a1a1a] rounded-lg shadow-2xl border border-slate-200 dark:border-slate-700 p-6 flex flex-col gap-4"
-    >
+    <div class="w-[320px] classic-card !rounded-xl shadow-2xl p-6 flex flex-col gap-4">
       <div class="flex flex-col items-center gap-2">
         <Lock :size="32" class="text-accent" />
         <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">
@@ -21,7 +19,7 @@
             v-model="username"
             type="text"
             placeholder="Username"
-            class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#0a0a0a] px-3 py-2 text-[13px] text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-accent"
+            class="classic-input !h-9 !px-3 !text-[13px] w-full"
             @keyup.enter="handleLogin"
           />
         </div>
@@ -32,7 +30,7 @@
             v-model="password"
             type="password"
             placeholder="Password"
-            class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#0a0a0a] px-3 py-2 text-[13px] text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-accent"
+            class="classic-input !h-9 !px-3 !text-[13px] w-full"
             @keyup.enter="handleLogin"
           />
         </div>

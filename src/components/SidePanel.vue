@@ -133,7 +133,7 @@
           <div
             v-for="(day, idx) in haWeather.forecast.slice(0, 5)"
             :key="idx"
-            class="flex flex-col items-center min-w-[40px] px-1 py-0.5 rounded bg-slate-50 dark:bg-slate-800/50"
+            class="classic-inset flex flex-col items-center min-w-[40px] !px-1 !py-0.5"
           >
             <span class="text-[8px] text-slate-400">{{
               (day.datetime as string)?.slice(5, 10) || ''

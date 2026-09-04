@@ -74,8 +74,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
 
     const { timestamps, grid, solar, battery, setpoint } = historyData
     const dark = isDarkRef.value
-    const textColor = dark ? '#e0e0e0' : '#333'
-    const gridColor = dark ? '#444' : '#e0e0e0'
+    const textColor = dark ? '#98989d' : '#636366'
+    const gridColor = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
     const timeData = timestamps.map((ts) => ts * 1000)
 
     chartOption.value = {
@@ -83,10 +83,12 @@ export function useChart(isDarkRef: Ref<boolean>) {
       backgroundColor: 'transparent',
       tooltip: {
         trigger: 'axis',
-        backgroundColor: dark ? '#242424' : '#fff',
-        borderColor: dark ? '#444' : '#ccc',
-        axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
-        textStyle: { color: textColor, fontSize: 10 },
+        backgroundColor: dark ? '#1c1c1e' : '#ffffff',
+        borderColor: dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
+        borderWidth: 1,
+        extraCssText: 'border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);padding:6px 8px;',
+        axisPointer: { type: 'cross', label: { backgroundColor: dark ? '#3a3a3c' : '#8e8e93' } },
+        textStyle: { color: dark ? '#f5f5f7' : '#1c1c1e', fontSize: 10 },
         formatter: (params: TooltipParam[]) => {
           const date = new Date(params[0].value[0])
           const timeStr = date.toLocaleTimeString([], {

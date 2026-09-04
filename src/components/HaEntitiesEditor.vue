@@ -22,7 +22,7 @@
       <div
         v-for="(entity, index) in haEntitiesList"
         :key="entity.id || `home-${index}`"
-        class="classic-card !rounded p-2 flex flex-col gap-2 bg-white dark:bg-slate-900"
+        class="classic-inset !rounded-lg p-2 flex flex-col gap-2"
       >
         <div class="flex items-center gap-2">
           <div class="flex-1 grid grid-cols-2 gap-2">

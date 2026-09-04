@@ -1,5 +1,5 @@
 <template>
-  <div class="classic-card mb-1.5 p-1 flex items-center gap-1 w-full">
+  <div class="classic-card mb-1.5 px-1.5 py-1 flex items-center gap-1 w-full">
     <div class="flex flex-wrap gap-1 items-center flex-1">
       <UiButton class="min-w-[28px]" toggle :active="dryRun" @click="$emit('send', 'dry_run')">
         <FlaskConical :size="10" /> DRY
@@ -11,11 +11,11 @@
         :active="essClass === 'on'"
         @click="$emit('send', 'ess_mode')"
       >
-        <Zap :size="10" /> {{ essText.toUpperCase() }}
+        <Zap :size="10" /> {{ essText }}
       </UiButton>
 
       <template v-if="showHeaderToggles !== false && headerToggles.length > 0">
-        <div class="w-px h-3 bg-slate-300 dark:bg-slate-600 mx-0.5"></div>
+        <div class="w-px h-3 bg-black/10 dark:bg-white/10 mx-0.5"></div>
 
         <UiButton
           v-for="toggle in headerToggles"
@@ -26,7 +26,7 @@
           :unavailable="isToggleUnavailable(toggleStates?.[toggle.id])"
           @click="$emit('send', 'toggle', { entity: toggle.entity })"
         >
-          {{ toggle.label.toUpperCase() }}
+          {{ toggle.label }}
         </UiButton>
       </template>
     </div>

@@ -3,14 +3,14 @@
     <div
       v-for="banner in bannerNotifications"
       :key="banner.id"
-      class="flex items-center gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-tight"
+      class="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] leading-tight"
       :class="levelClasses[banner.level] ?? levelClasses.info"
     >
       <AlertOctagon v-if="banner.level === 'alarm'" :size="15" class="shrink-0" />
       <TriangleAlert v-else-if="banner.level === 'warning'" :size="15" class="shrink-0" />
       <Info v-else :size="15" class="shrink-0" />
       <div class="flex items-center gap-2 min-w-0 flex-1">
-        <span class="font-bold shrink-0">{{ banner.title }}</span>
+        <span class="font-semibold shrink-0">{{ banner.title }}</span>
         <span v-if="banner.body" class="opacity-80 truncate min-w-0">{{ banner.body }}</span>
       </div>
       <span v-if="banner.ts" class="text-[10px] opacity-60 shrink-0 whitespace-nowrap tabular-nums">

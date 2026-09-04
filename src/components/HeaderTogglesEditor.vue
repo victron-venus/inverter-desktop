@@ -22,7 +22,7 @@
       <div
         v-for="(toggle, index) in headerTogglesList"
         :key="toggle.id || `toggle-${index}`"
-        class="classic-card !rounded p-2 flex items-center gap-2 bg-white dark:bg-slate-900"
+        class="classic-inset !rounded-lg p-2 flex items-center gap-2"
       >
         <div class="flex-1 grid grid-cols-2 gap-2">
           <div class="flex flex-col gap-0.5">
