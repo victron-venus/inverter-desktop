@@ -472,7 +472,7 @@ watch(
     if (isWindowHidden.value) return
     if (newState.gt !== undefined) addHistoryPoint(newState)
   },
-  { deep: false }
+  { deep: true }
 )
 
 onMounted(async () => {
