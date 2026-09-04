@@ -341,73 +341,69 @@
 
       <div
         v-if="showWasher !== false && washerActive"
-        class="classic-card px-2 py-1 flex flex-col gap-0.5"
+        class="classic-card px-2 py-1 flex items-center gap-1.5"
       >
-        <div class="flex justify-between items-center">
-          <span class="text-[10px] font-semibold text-muted tracking-tight">{{
-            $t('sections.washer')
-          }}</span>
-          <div class="flex items-center gap-1.5">
-            <span class="text-[10px] font-semibold text-battery tracking-tight">{{
-              $t('sections.running')
-            }}</span>
-            <span v-if="washerRemainingTime" class="text-[11px] font-semibold text-main tabular">{{
-              washerRemainingTime
-            }}</span>
+        <span class="text-[10px] font-semibold text-muted tracking-tight shrink-0">{{
+          $t('sections.washer')
+        }}</span>
+        <div class="ml-auto flex items-center gap-1.5 shrink-0">
+          <div v-if="washerStartEntity || washerPauseEntity" class="flex gap-1">
+            <UiButton
+              v-if="washerStartEntity"
+              size="sm"
+              variant="primary"
+              @click="$emit('send', 'press', { entity: washerStartEntity })"
+            >
+              {{ $t('sections.start') }}
+            </UiButton>
+            <UiButton
+              v-if="washerPauseEntity"
+              size="sm"
+              @click="$emit('send', 'press', { entity: washerPauseEntity })"
+            >
+              {{ $t('sections.pause') }}
+            </UiButton>
           </div>
-        </div>
-        <div v-if="washerStartEntity || washerPauseEntity" class="flex gap-1 justify-end">
-          <UiButton
-            v-if="washerStartEntity"
-            size="sm"
-            variant="primary"
-            @click="$emit('send', 'press', { entity: washerStartEntity })"
-          >
-            {{ $t('sections.start') }}
-          </UiButton>
-          <UiButton
-            v-if="washerPauseEntity"
-            size="sm"
-            @click="$emit('send', 'press', { entity: washerPauseEntity })"
-          >
-            {{ $t('sections.pause') }}
-          </UiButton>
+          <span class="text-[10px] font-semibold text-battery tracking-tight">{{
+            $t('sections.running')
+          }}</span>
+          <span v-if="washerRemainingTime" class="text-[11px] font-semibold text-main tabular">{{
+            washerRemainingTime
+          }}</span>
         </div>
       </div>
 
       <div
         v-if="showDryer !== false && dryerActive"
-        class="classic-card px-2 py-1 flex flex-col gap-0.5"
+        class="classic-card px-2 py-1 flex items-center gap-1.5"
       >
-        <div class="flex justify-between items-center">
-          <span class="text-[10px] font-semibold text-muted tracking-tight">{{
-            $t('sections.dryer')
-          }}</span>
-          <div class="flex items-center gap-1.5">
-            <span class="text-[10px] font-semibold text-battery tracking-tight">{{
-              $t('sections.running')
-            }}</span>
-            <span v-if="dryerRemainingTime" class="text-[11px] font-semibold text-main tabular">{{
-              dryerRemainingTime
-            }}</span>
+        <span class="text-[10px] font-semibold text-muted tracking-tight shrink-0">{{
+          $t('sections.dryer')
+        }}</span>
+        <div class="ml-auto flex items-center gap-1.5 shrink-0">
+          <div v-if="dryerStartEntity || dryerPauseEntity" class="flex gap-1">
+            <UiButton
+              v-if="dryerStartEntity"
+              size="sm"
+              variant="primary"
+              @click="$emit('send', 'press', { entity: dryerStartEntity })"
+            >
+              {{ $t('sections.start') }}
+            </UiButton>
+            <UiButton
+              v-if="dryerPauseEntity"
+              size="sm"
+              @click="$emit('send', 'press', { entity: dryerPauseEntity })"
+            >
+              {{ $t('sections.pause') }}
+            </UiButton>
           </div>
-        </div>
-        <div v-if="dryerStartEntity || dryerPauseEntity" class="flex gap-1 justify-end">
-          <UiButton
-            v-if="dryerStartEntity"
-            size="sm"
-            variant="primary"
-            @click="$emit('send', 'press', { entity: dryerStartEntity })"
-          >
-            {{ $t('sections.start') }}
-          </UiButton>
-          <UiButton
-            v-if="dryerPauseEntity"
-            size="sm"
-            @click="$emit('send', 'press', { entity: dryerPauseEntity })"
-          >
-            {{ $t('sections.pause') }}
-          </UiButton>
+          <span class="text-[10px] font-semibold text-battery tracking-tight">{{
+            $t('sections.running')
+          }}</span>
+          <span v-if="dryerRemainingTime" class="text-[11px] font-semibold text-main tabular">{{
+            dryerRemainingTime
+          }}</span>
         </div>
       </div>
     </div>
