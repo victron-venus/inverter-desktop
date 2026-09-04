@@ -429,42 +429,195 @@
                 </div>
               </div>
 
-              <!-- Water & EV Entities -->
+              <!-- Cerbo Water & EV (MQTT instance discovery) -->
               <div
                 v-if="config.show_advanced_settings"
                 class="flex flex-col gap-3 p-3 classic-inset !rounded-lg !p-3"
               >
-                <h3 class="classic-subsection-title">Water &amp; EV Entities</h3>
+                <h3 class="classic-subsection-title">Cerbo Water &amp; EV</h3>
                 <p class="text-[10px] text-muted px-1">
-                  With a Cerbo GX portal ID configured, water data comes from the GX (MQTT, via
-                  dbus-pump). Pump/valve automation lives in dbus-pump - no manual control here.
+                  Instances are auto-discovered from the Cerbo GX MQTT portal (dbus-pump / dbus-ev /
+                  dbus-evcharger) after connect. Select which instance feeds the dashboard; values
+                  still come from Cerbo, not Home Assistant entity IDs.
                 </p>
-                <div class="flex items-center gap-4">
-                  <label for="evcharger_instance" class="classic-label px-1"
-                    >EV Charger Instance</label
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div class="flex flex-col gap-1.5">
+                    <span class="classic-label px-1">Water tanks</span>
+                    <p v-if="!discoveredTanks.length" class="text-[10px] text-muted px-1 italic">
+                      Waiting for tank/+/… MQTT topics…
+                    </p>
+                    <button
+                      v-for="item in discoveredTanks"
+                      :key="'tank-' + item.instance"
+                      type="button"
+                      class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border text-left text-[11px] transition-colors"
+                      :class="
+                        config.water_tank_instance === item.instance
+                          ? 'border-accent/60 bg-accent/10 text-main'
+                          : 'border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] text-main hover:border-accent/40'
+                      "
+                      @click="config.water_tank_instance = item.instance"
+                    >
+                      <span class="font-bold truncate">{{
+                        item.name || 'Tank ' + item.instance
+                      }}</span>
+                      <span class="text-muted shrink-0">#{{ item.instance }}</span>
+                    </button>
+                  </div>
+
+                  <div class="flex flex-col gap-1.5">
+                    <span class="classic-label px-1">Pumps &amp; valves</span>
+                    <p v-if="!discoveredPumps.length" class="text-[10px] text-muted px-1 italic">
+                      Waiting for pump/+/… MQTT topics…
+                    </p>
+                    <div
+                      v-for="item in discoveredPumps"
+                      :key="'pump-' + item.instance"
+                      class="flex flex-col gap-1 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e]"
+                    >
+                      <div class="flex items-center justify-between gap-2 text-[11px] text-main">
+                        <span class="font-bold truncate">{{
+                          item.name || 'Pump ' + item.instance
+                        }}</span>
+                        <span class="text-muted shrink-0">#{{ item.instance }}</span>
+                      </div>
+                      <div class="flex gap-2">
+                        <button
+                          type="button"
+                          class="flex-1 py-0.5 rounded text-[10px] font-semibold border transition-colors"
+                          :class="
+                            config.water_pump_instance === item.instance
+                              ? 'border-accent/60 bg-accent/10 text-main'
+                              : 'border-black/[0.08] dark:border-white/[0.1] text-muted'
+                          "
+                          @click="config.water_pump_instance = item.instance"
+                        >
+                          Use as pump
+                        </button>
+                        <button
+                          type="button"
+                          class="flex-1 py-0.5 rounded text-[10px] font-semibold border transition-colors"
+                          :class="
+                            config.water_valve_instance === item.instance
+                              ? 'border-accent/60 bg-accent/10 text-main'
+                              : 'border-black/[0.08] dark:border-white/[0.1] text-muted'
+                          "
+                          @click="config.water_valve_instance = item.instance"
+                        >
+                          Use as valve
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="flex flex-col gap-1.5">
+                    <span class="classic-label px-1">EV vehicles</span>
+                    <p v-if="!discoveredEvs.length" class="text-[10px] text-muted px-1 italic">
+                      Waiting for ev/+/… MQTT topics…
+                    </p>
+                    <button
+                      v-for="item in discoveredEvs"
+                      :key="'ev-' + item.instance"
+                      type="button"
+                      class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border text-left text-[11px] transition-colors"
+                      :class="
+                        config.ev_instance === item.instance
+                          ? 'border-accent/60 bg-accent/10 text-main'
+                          : 'border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] text-main hover:border-accent/40'
+                      "
+                      @click="config.ev_instance = item.instance"
+                    >
+                      <span class="font-bold truncate">{{
+                        item.name || 'EV ' + item.instance
+                      }}</span>
+                      <span class="text-muted shrink-0">#{{ item.instance }}</span>
+                    </button>
+                  </div>
+
+                  <div class="flex flex-col gap-1.5">
+                    <span class="classic-label px-1">EV chargers</span>
+                    <p
+                      v-if="!discoveredEvchargers.length"
+                      class="text-[10px] text-muted px-1 italic"
+                    >
+                      Waiting for evcharger/+/… MQTT topics…
+                    </p>
+                    <button
+                      v-for="item in discoveredEvchargers"
+                      :key="'evc-' + item.instance"
+                      type="button"
+                      class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border text-left text-[11px] transition-colors"
+                      :class="
+                        config.evcharger_instance === item.instance
+                          ? 'border-accent/60 bg-accent/10 text-main'
+                          : 'border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] text-main hover:border-accent/40'
+                      "
+                      @click="config.evcharger_instance = item.instance"
+                    >
+                      <span class="font-bold truncate">{{
+                        item.name || 'Charger ' + item.instance
+                      }}</span>
+                      <span class="text-muted shrink-0">#{{ item.instance }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <details class="mt-1">
+                  <summary
+                    class="text-[10px] text-muted px-1 cursor-pointer select-none hover:text-main"
                   >
-                  <input
-                    id="evcharger_instance"
-                    v-model.number="config.evcharger_instance"
-                    type="number"
-                    min="1"
-                    class="classic-input w-24"
-                  />
-                </div>
-                <div class="flex items-center gap-4">
-                  <label for="ev_instance" class="classic-label px-1">EV Vehicle Instance</label>
-                  <input
-                    id="ev_instance"
-                    v-model.number="config.ev_instance"
-                    type="number"
-                    min="1"
-                    class="classic-input w-24"
-                  />
-                  <p class="text-[10px] text-muted px-1 italic">
-                    EV data comes from the GX via MQTT (dbus-ev / dbus-evcharger). Defaults: 40
-                    (charger) / 22 (vehicle).
-                  </p>
-                </div>
+                    Manual instance override
+                  </summary>
+                  <div class="flex flex-col gap-2 mt-2 px-1">
+                    <div class="flex flex-wrap items-center gap-3">
+                      <label class="classic-label">Tank</label>
+                      <input
+                        v-model.number="config.water_tank_instance"
+                        type="number"
+                        min="0"
+                        class="classic-input w-20"
+                      />
+                      <label class="classic-label">Pump</label>
+                      <input
+                        v-model.number="config.water_pump_instance"
+                        type="number"
+                        min="1"
+                        class="classic-input w-20"
+                      />
+                      <label class="classic-label">Valve</label>
+                      <input
+                        v-model.number="config.water_valve_instance"
+                        type="number"
+                        min="1"
+                        class="classic-input w-20"
+                      />
+                    </div>
+                    <div class="flex flex-wrap items-center gap-3">
+                      <label class="classic-label">EV vehicle</label>
+                      <input
+                        id="ev_instance"
+                        v-model.number="config.ev_instance"
+                        type="number"
+                        min="1"
+                        class="classic-input w-20"
+                      />
+                      <label class="classic-label">EV charger</label>
+                      <input
+                        id="evcharger_instance"
+                        v-model.number="config.evcharger_instance"
+                        type="number"
+                        min="1"
+                        class="classic-input w-20"
+                      />
+                    </div>
+                    <p class="text-[10px] text-muted italic">
+                      Optional fallback when discovery is empty. Saved values are kept when they
+                      still appear in the discovered list; otherwise the first found instance is
+                      used for live tiles.
+                    </p>
+                  </div>
+                </details>
               </div>
             </div>
 
@@ -942,9 +1095,10 @@
 
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
-import { emit } from '@tauri-apps/api/event'
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { InverterState } from './composables/useInverterState'
 import { useI18n } from 'vue-i18n'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import UiButton from './components/UiButton.vue'
@@ -1007,6 +1161,49 @@ const {
 } = useHAEntityManager()
 
 const activeTab = ref('mqtt')
+
+type DiscoveredInst = {
+  instance: number
+  kind: string
+  name?: string | null
+}
+const discoveredWaterEv = ref<DiscoveredInst[]>([])
+const discoveredTanks = computed(() => discoveredWaterEv.value.filter((i) => i.kind === 'tank'))
+const discoveredPumps = computed(() => discoveredWaterEv.value.filter((i) => i.kind === 'pump'))
+const discoveredEvs = computed(() => discoveredWaterEv.value.filter((i) => i.kind === 'ev'))
+const discoveredEvchargers = computed(() =>
+  discoveredWaterEv.value.filter((i) => i.kind === 'evcharger')
+)
+
+function ingestDiscovered(list: DiscoveredInst[] | null | undefined) {
+  if (!list || !list.length) return
+  discoveredWaterEv.value = list
+  // Auto-pick sensible defaults when saved config is missing from discovery.
+  const tanks = list.filter((i) => i.kind === 'tank')
+  const pumps = list.filter((i) => i.kind === 'pump')
+  const evs = list.filter((i) => i.kind === 'ev')
+  const chargers = list.filter((i) => i.kind === 'evcharger')
+  const pick = (current: number | undefined, items: DiscoveredInst[]) => {
+    if (!items.length) return current
+    if (current != null && items.some((i) => i.instance === current)) return current
+    return items[0].instance
+  }
+  config.water_tank_instance = pick(config.water_tank_instance, tanks)
+  config.water_pump_instance = pick(config.water_pump_instance, pumps)
+  // Valve: keep saved if present; else first pump that is not the active pump
+  if (pumps.length) {
+    const valve = config.water_valve_instance
+    if (valve == null || !pumps.some((i) => i.instance === valve)) {
+      const alt = pumps.find((i) => i.instance !== config.water_pump_instance)
+      if (alt) config.water_valve_instance = alt.instance
+    }
+  }
+  config.ev_instance = pick(config.ev_instance, evs)
+  config.evcharger_instance = pick(config.evcharger_instance, chargers)
+}
+
+let unlistenMqttState: UnlistenFn | null = null
+
 const sections = [
   { id: 'mqtt', label: 'MQTT Broker', icon: Wifi },
   { id: 'ha', label: 'Home Assistant', icon: Home },
@@ -1203,6 +1400,15 @@ onMounted(async () => {
     loadFromConfig(cfg)
     // Re-apply after loading to be absolutely sure
     applyTheme(cfg.color_scheme)
+    try {
+      const st = await invoke<InverterState>('get_state')
+      ingestDiscovered(st.discovered_water_ev ?? undefined)
+    } catch (e) {
+      logger.warn('get_state for water/EV discovery failed:', e)
+    }
+    unlistenMqttState = await listen<InverterState>('mqtt-state-update', (event) => {
+      ingestDiscovered(event.payload?.discovered_water_ev ?? undefined)
+    })
   } catch (err) {
     logger.error('Config init failed:', err)
   }
@@ -1210,5 +1416,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   globalThis.removeEventListener('keydown', handleKeyDown)
+  if (unlistenMqttState) {
+    unlistenMqttState()
+    unlistenMqttState = null
+  }
 })
 </script>
