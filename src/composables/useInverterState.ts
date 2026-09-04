@@ -1,5 +1,6 @@
-import { ref } from 'vue'
-// Use ref for deep reactivity so that nested properties (like state.value.loads) updates are tracked.
+import { markRaw, ref, shallowRef } from 'vue'
+// shallowRef + replace-with-new-object (see applyInverterState): nested loads/etc.
+// update when MQTT sends a fresh snapshot. markRaw avoids deep-proxying big payloads.
 import type { AppConfig } from '../config'
 
 export interface InverterState {
@@ -101,7 +102,7 @@ export interface InverterState {
   evcharger_present?: boolean
 }
 
-export const state = ref<InverterState>({
+export const state = shallowRef<InverterState>({
   booleans: {},
   features: {},
   ui_config: {},
@@ -110,6 +111,20 @@ export const state = ref<InverterState>({
 export const mqttConnected = ref(false)
 export const haMqttConnected = ref<boolean | null>(null)
 export const appConfig = ref<AppConfig | null>(null)
+
+/** Non-destructive merge into dashboard state. Skips null/undefined so partial
+ *  MQTT snapshots and serde nulls cannot wipe live telemetry. Always assigns a
+ *  new markRaw object so shallowRef watchers/tiles re-render. */
+export function applyInverterState(newState: InverterState) {
+  const prev = state.value
+  const merged: InverterState = { ...prev }
+  for (const [key, val] of Object.entries(newState)) {
+    if (val !== undefined && val !== null) {
+      ;(merged as Record<string, unknown>)[key] = val
+    }
+  }
+  state.value = markRaw(merged)
+}
 
 export interface NotificationEntry {
   id: number

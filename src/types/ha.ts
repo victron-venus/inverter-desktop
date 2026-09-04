@@ -48,4 +48,6 @@ export interface HaFilteredData {
   media_players: HaMediaPlayerDisplay[]
   scenes: HaSceneDisplay[]
   weather: HaWeatherDisplay | null
+  /** When true, replace haSensors. Live ticks omit sensors to keep WebKit free. */
+  refresh_sensors?: boolean
 }

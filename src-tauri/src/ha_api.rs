@@ -29,27 +29,50 @@ static HA_FILTERED_COALESCE: std::sync::LazyLock<Mutex<HaFilteredEmitCoalesce>> 
         })
     });
 
-fn domain_affects_filtered(entity_id: &str) -> bool {
+/// Domains that are safe to live-push via `ha-filtered-update`.
+///
+/// `sensor` / `binary_sensor` are intentionally excluded: a typical HA install
+/// has hundreds of them (power clamps alone can tick 50-100/s). Rebuilding and
+/// IPC-emitting the full sensor list — even coalesced to 2 Hz — saturates
+/// WebKit and freezes MQTT-driven main tiles. Sensors are snapshotted on WS
+/// connect (force emit) and via `get_ha_filtered_data`; they are not live-ticked.
+fn domain_triggers_live_filtered(entity_id: &str) -> bool {
     matches!(
         entity_id.split('.').next().unwrap_or(""),
-        "sensor" | "binary_sensor" | "number" | "cover" | "media_player" | "scene" | "weather"
+        "number" | "cover" | "media_player" | "scene" | "weather"
     )
 }
 
 fn emit_ha_filtered_now(
     app: &tauri::AppHandle,
     entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    include_sensors: bool,
 ) {
     if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    let filtered = {
+    let mut filtered = {
         let Ok(guard) = entity_states.lock() else {
             return;
         };
         compute_filtered_data(&guard)
     };
+    // Live ticks omit the bulky sensors array so Vue does not re-render hundreds
+    // of SidePanel rows on every coalesce flush. Connect/force sets refresh_sensors.
+    if !include_sensors {
+        filtered.sensors.clear();
+    }
+    filtered.refresh_sensors = include_sensors;
     let _ = app.emit("ha-filtered-update", &filtered);
+}
+
+/// Force a full filtered snapshot (including sensors) — used on WS connect and
+/// when the window becomes visible again.
+pub fn force_emit_ha_filtered(
+    app: &tauri::AppHandle,
+    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+) {
+    emit_ha_filtered_coalesced(app, entity_states, true);
 }
 
 /// Emit filtered HA entity arrays to the frontend, coalesced to at most one
@@ -69,7 +92,7 @@ fn emit_ha_filtered_coalesced(
             c.last_emit = Some(Instant::now());
             c.flush_scheduled = false;
         }
-        emit_ha_filtered_now(app, entity_states);
+        emit_ha_filtered_now(app, entity_states, true);
         return;
     }
 
@@ -98,7 +121,8 @@ fn emit_ha_filtered_coalesced(
     }
 
     if emit_now {
-        emit_ha_filtered_now(app, entity_states);
+        // Live path: never ship the full sensors inventory.
+        emit_ha_filtered_now(app, entity_states, false);
         return;
     }
 
@@ -117,7 +141,7 @@ fn emit_ha_filtered_coalesced(
                 }
             };
             if should_emit {
-                emit_ha_filtered_now(&app, &entity_states);
+                emit_ha_filtered_now(&app, &entity_states, false);
             }
         });
     }
@@ -201,6 +225,10 @@ pub struct HaFilteredData {
     pub media_players: Vec<HaMediaPlayerDisplay>,
     pub scenes: Vec<HaSceneDisplay>,
     pub weather: Option<HaWeatherDisplay>,
+    /// When true, frontend should replace `haSensors`. Live ticks set this false
+    /// so the bulky sensor list is not re-rendered continuously.
+    #[serde(default)]
+    pub refresh_sensors: bool,
 }
 
 #[derive(Clone)]
@@ -314,6 +342,7 @@ pub fn compute_filtered_data(entity_states: &HashMap<String, HaEntityEntry>) -> 
         media_players,
         scenes,
         weather,
+        refresh_sensors: true,
     }
 }
 
@@ -826,7 +855,7 @@ impl HaWebSocketClient {
                                                         // alone can be 50–100/s), freezing WebKit. Only schedule
                                                         // when the entity can appear in filtered arrays, and
                                                         // coalesce to ~2 Hz with a trailing flush.
-                                                        if domain_affects_filtered(&eid) {
+                                                        if domain_triggers_live_filtered(&eid) {
                                                             emit_ha_filtered_coalesced(
                                                                 &app_clone,
                                                                 &entity_states,

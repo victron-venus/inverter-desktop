@@ -1109,15 +1109,23 @@ async fn send_notification(
 }
 
 #[tauri::command]
-fn set_window_hidden(hidden: bool, app: tauri::AppHandle, mqtt_client: State<'_, MqttState>) {
+fn set_window_hidden(
+    hidden: bool,
+    app: tauri::AppHandle,
+    mqtt_client: State<'_, MqttState>,
+    ha_entity_states: State<'_, HaEntityStates>,
+) {
     ha_api::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
     if !hidden {
         if let Ok(guard) = mqtt_client.0.lock() {
             if let Some(ref client) = *guard {
                 let state = client.get_state();
-                crate::mqtt::MqttClient::emit_state_update(&Some(app), &state, true);
+                crate::mqtt::MqttClient::emit_state_update(&Some(app.clone()), &state, true);
             }
         }
+        // Sensors are omitted from live ha-filtered ticks; force a full snapshot
+        // (incl. sensors) whenever the window is shown again.
+        ha_api::force_emit_ha_filtered(&app, &ha_entity_states.0);
     }
 }
 
@@ -1219,7 +1227,15 @@ pub fn run() {
     let ha_entity_states = HaEntityStates(Arc::new(Mutex::new(HashMap::new())));
 
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                // Default TRACE from dependencies (tungstenite) floods the log
+                // file with every HA WS frame and starves the UI thread/disk.
+                .level(log::LevelFilter::Info)
+                .level_for("tungstenite", log::LevelFilter::Warn)
+                .level_for("tokio_tungstenite", log::LevelFilter::Warn)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())

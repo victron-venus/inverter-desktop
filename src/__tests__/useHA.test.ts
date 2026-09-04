@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
-import { mqttConnected, state } from '../composables/useInverterState'
+import { applyInverterState, mqttConnected, state } from '../composables/useInverterState'
 import { useMQTTState } from '../composables/useMQTTState'
 import type { HaCoverDisplay, HaSensorDisplay, HaWeatherDisplay } from '../types/ha'
 import { resolveHeaderToggleState } from '../utils'
@@ -224,46 +224,46 @@ describe('computeToggleStates', () => {
 
 describe('evSectionVisible latch', () => {
   it('latches true once ev_present is seen and never clears', async () => {
-    state.value.ev_present = false
-    state.value.evcharger_present = false
+    // shallowRef(state): mutate via applyInverterState (object replace), matching MQTT path
+    applyInverterState({ ev_present: false, evcharger_present: false })
     mqttConnected.value = true
     const { evSectionVisible, evLatch } = useMQTTState()
     evLatch.value = false
     expect(evSectionVisible.value).toBe(false)
 
-    state.value.ev_present = true
+    applyInverterState({ ev_present: true })
     await nextTick()
     expect(evSectionVisible.value).toBe(true)
 
-    state.value.ev_present = false
+    applyInverterState({ ev_present: false })
     mqttConnected.value = false
     await nextTick()
     expect(evSectionVisible.value).toBe(true)
   })
 
   it('latches from evcharger_present', async () => {
-    state.value.ev_present = false
-    state.value.evcharger_present = false
+    applyInverterState({ ev_present: false, evcharger_present: false })
     mqttConnected.value = true
     const { evSectionVisible, evLatch } = useMQTTState()
     evLatch.value = false
     expect(evSectionVisible.value).toBe(false)
 
-    state.value.evcharger_present = true
+    applyInverterState({ evcharger_present: true })
     await nextTick()
     expect(evSectionVisible.value).toBe(true)
   })
 
   it('stays hidden when no presence was ever seen', async () => {
-    state.value.ev_present = undefined
-    state.value.evcharger_present = undefined
+    // Reset presence bits by replacing state object (undefined fields stay absent
+    // after merge if previously set — clear explicitly with a fresh base).
+    state.value = { booleans: {}, features: {}, ui_config: {} }
     mqttConnected.value = true
     const { evSectionVisible, evLatch } = useMQTTState()
     evLatch.value = false
     expect(evSectionVisible.value).toBe(false)
 
     mqttConnected.value = false
-    state.value.ev_present = false
+    applyInverterState({ ev_present: false })
     await nextTick()
     expect(evSectionVisible.value).toBe(false)
   })

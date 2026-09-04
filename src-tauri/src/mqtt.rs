@@ -33,6 +33,27 @@ static STATE_EMIT_COALESCE: std::sync::LazyLock<Mutex<StateEmitCoalesce>> =
         })
     });
 
+/// Rate-limited counter so we can confirm mqtt-state-update IPC is flowing
+/// without flooding the log (one line every ~5s).
+fn note_state_emit(kind: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static EMITS: AtomicU64 = AtomicU64::new(0);
+    static LAST_LOG_MS: AtomicU64 = AtomicU64::new(0);
+    let n = EMITS.fetch_add(1, Ordering::Relaxed) + 1;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let prev = LAST_LOG_MS.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(prev) >= 5000
+        && LAST_LOG_MS
+            .compare_exchange(prev, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        log::info!("mqtt-state-update emitted x{n} (last={kind})");
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
     pub gt: Option<f64>,
@@ -100,8 +121,13 @@ struct RawInverterState {
     t2: Option<f64>,
     solar_total: Option<f64>,
     battery_soc: Option<f64>,
+    // Daemon historically publishes short keys bp/bc/bv alongside/instead of
+    // the long names. Accept both so the battery tile ticks from inverter/state.
+    #[serde(alias = "bp")]
     battery_power: Option<f64>,
+    #[serde(alias = "bv")]
     battery_voltage: Option<f64>,
+    #[serde(alias = "bc")]
     battery_current: Option<f64>,
     setpoint: Option<f64>,
     inverter_state: Option<String>,
@@ -800,6 +826,7 @@ impl MqttClient {
                 c.pending = None;
             }
             let _ = handle.emit("mqtt-state-update", state);
+            note_state_emit("force");
             return;
         }
 
@@ -833,6 +860,7 @@ impl MqttClient {
 
         if emit_now {
             let _ = handle.emit("mqtt-state-update", state);
+            note_state_emit("now");
             return;
         }
 
@@ -857,6 +885,7 @@ impl MqttClient {
                         crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
                     if !still_hidden {
                         let _ = handle.emit("mqtt-state-update", &snapshot);
+                        note_state_emit("flush");
                     }
                 }
             });
@@ -2101,6 +2130,15 @@ mod tests {
         map.insert("binary_sensor.dryer_running".to_string(), entry("Dryer"));
         map.insert("switch.shutoff_valve".to_string(), entry("Shutoff Valve"));
         map
+    }
+
+    #[test]
+    fn raw_inverter_state_accepts_short_battery_aliases() {
+        let raw: RawInverterState =
+            serde_json::from_str(r#"{"gt":1.0,"bp":1200.0,"bv":52.4,"bc":-23.1}"#).expect("parse");
+        assert_eq!(raw.battery_power, Some(1200.0));
+        assert_eq!(raw.battery_voltage, Some(52.4));
+        assert_eq!(raw.battery_current, Some(-23.1));
     }
 
     #[test]

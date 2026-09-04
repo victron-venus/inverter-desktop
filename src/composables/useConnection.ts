@@ -1,12 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
-import { markRaw } from 'vue'
 import { getAppConfig } from '../config'
 import { logger } from '../logger'
 import {
   addNotification,
   appConfig,
+  applyInverterState,
   type BannerNotification,
   clearBanner,
   haMqttConnected,
@@ -52,20 +52,19 @@ export function useConnection() {
   let mqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
   let haMqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
 
+  let processStateCount = 0
+  let processStateLastLogMs = 0
+
   function processState(newState: InverterState) {
-    const prev = state.value
-    // Non-destructive merge: preserve existing values when incoming field is
-    // undefined. Prevents transient null/undefined from wiping valid numbers
-    // during partial MQTT messages or reconnection bursts.
-    // JSON null IS undefined for our purposes — do not let null overwrite
-    // an existing number/string for telemetry fields.
-    const merged: InverterState = { ...prev }
-    for (const [key, val] of Object.entries(newState)) {
-      if (val !== undefined && val !== null) {
-        ;(merged as Record<string, unknown>)[key] = val
-      }
+    applyInverterState(newState)
+    processStateCount += 1
+    const now = Date.now()
+    if (now - processStateLastLogMs >= 5000) {
+      processStateLastLogMs = now
+      logger.log(
+        `mqtt processState x${processStateCount} gt=${state.value.gt} tt=${state.value.tt} soc=${state.value.battery_soc}`
+      )
     }
-    state.value = markRaw(merged)
   }
 
   async function connectMqtt() {

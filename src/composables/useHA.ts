@@ -13,7 +13,7 @@ import type {
   HaWeatherDisplay,
 } from '../types/ha'
 import { isInverterControlFlag, resolveHeaderToggleState } from '../utils'
-import { appConfig, type InverterState, state } from './useInverterState'
+import { appConfig, applyInverterState, type InverterState, state } from './useInverterState'
 
 function coerceBool(v: unknown): boolean {
   return v === true || v === 1 || v === 'true' || v === '1' || v === 'on' || v === 'online'
@@ -177,9 +177,22 @@ export function useHA() {
         fetchHaStates()
         const applianceEntities = configuredSectionEntities(appConfig)
         if (applianceEntities.length > 0) fetchHaEntityStates(applianceEntities)
+        // Merge — never assign get_state raw (serde nulls would wipe tiles).
         const initial = await invoke<InverterState>('get_state')
         if (initial) {
-          state.value = markRaw(initial)
+          applyInverterState(initial)
+        }
+        // Sensors are not live-ticked (WebKit freeze); refresh snapshot on show.
+        try {
+          const filtered = await invoke<HaFilteredData>('get_ha_filtered_data')
+          haSensors.value = markRaw(filtered.sensors)
+          haNumbers.value = markRaw(filtered.numbers)
+          haCovers.value = markRaw(filtered.covers)
+          haMediaPlayers.value = markRaw(filtered.media_players)
+          haScenes.value = markRaw(filtered.scenes)
+          haWeather.value = filtered.weather ? markRaw(filtered.weather) : null
+        } catch (e) {
+          logger.warn('Failed to refresh HA filtered snapshot:', e)
         }
       }
     } catch (e) {
@@ -205,9 +218,12 @@ export function useHA() {
     unlistenHaFiltered = await listen<HaFilteredData>('ha-filtered-update', (event) => {
       if (windowHidden) return
       const data = event.payload
-      // markRaw: these are opaque display snapshots from Rust; deep-proxying
-      // hundreds of sensors on every tick was contributing to WebKit freezes.
-      haSensors.value = markRaw(data.sensors)
+      // markRaw: opaque display snapshots from Rust — avoid deep proxies.
+      // Sensors only refresh on connect/force (refresh_sensors); live ticks
+      // omit them so SidePanel does not re-render the whole house inventory.
+      if (data.refresh_sensors) {
+        haSensors.value = markRaw(data.sensors)
+      }
       haNumbers.value = markRaw(data.numbers)
       haCovers.value = markRaw(data.covers)
       haMediaPlayers.value = markRaw(data.media_players)
