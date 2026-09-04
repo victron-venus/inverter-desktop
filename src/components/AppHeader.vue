@@ -1,6 +1,6 @@
 <template>
-  <div class="classic-card mb-1.5 px-1.5 py-1 flex items-center gap-1 w-full">
-    <div class="flex flex-wrap gap-1 items-center flex-1">
+  <div class="classic-card px-1.5 py-1 flex items-center gap-1 w-full">
+    <div class="flex flex-wrap gap-1 items-center flex-1 min-w-0">
       <UiButton class="min-w-[28px]" toggle :active="dryRun" @click="$emit('send', 'dry_run')">
         <FlaskConical :size="10" /> DRY
       </UiButton>
@@ -15,7 +15,7 @@
       </UiButton>
 
       <template v-if="showHeaderToggles !== false && headerToggles.length > 0">
-        <div class="w-px h-3 bg-black/10 dark:bg-white/10 mx-0.5"></div>
+        <div class="soft-divider mx-0.5"></div>
 
         <UiButton
           v-for="toggle in headerToggles"
@@ -32,7 +32,7 @@
     </div>
 
     <UiButton
-      class="min-w-[22px] !px-1.5"
+      class="min-w-[22px] !px-1.5 shrink-0"
       variant="ghost"
       :title="isDark ? 'Light mode' : 'Dark mode'"
       @click="$emit('toggle-theme')"

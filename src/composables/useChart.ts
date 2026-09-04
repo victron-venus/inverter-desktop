@@ -75,7 +75,7 @@ export function useChart(isDarkRef: Ref<boolean>) {
     const { timestamps, grid, solar, battery, setpoint } = historyData
     const dark = isDarkRef.value
     const textColor = dark ? '#98989d' : '#636366'
-    const gridColor = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
+    const gridColor = dark ? 'rgba(255,255,255,0.055)' : 'rgba(0,0,0,0.055)'
     const timeData = timestamps.map((ts) => ts * 1000)
 
     chartOption.value = {
@@ -86,7 +86,7 @@ export function useChart(isDarkRef: Ref<boolean>) {
         backgroundColor: dark ? '#1c1c1e' : '#ffffff',
         borderColor: dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
         borderWidth: 1,
-        extraCssText: 'border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);padding:6px 8px;',
+        extraCssText: 'border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,0.16);padding:7px 9px;',
         axisPointer: { type: 'cross', label: { backgroundColor: dark ? '#3a3a3c' : '#8e8e93' } },
         textStyle: { color: dark ? '#f5f5f7' : '#1c1c1e', fontSize: 10 },
         formatter: (params: TooltipParam[]) => {
@@ -111,9 +111,9 @@ export function useChart(isDarkRef: Ref<boolean>) {
         top: 0,
         itemWidth: 12,
         itemHeight: 8,
-        textStyle: { color: textColor, fontSize: 10 },
+        textStyle: { color: textColor, fontSize: 10, fontWeight: 500 },
       },
-      grid: { top: 25, bottom: 25, left: 40, right: 10, containLabel: false },
+      grid: { top: 28, bottom: 24, left: 42, right: 12, containLabel: false },
       xAxis: {
         type: 'time',
         axisLine: { lineStyle: { color: gridColor } },
@@ -141,8 +141,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
           sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, grid[i] || 0]),
-          lineStyle: { color: '#2196f3', width: 2 },
-          areaStyle: { color: 'rgba(33,150,243,0.1)' },
+          lineStyle: { color: '#3b82f6', width: 1.75 },
+          areaStyle: { color: 'rgba(59,130,246,0.09)' },
         },
         {
           name: 'Solar',
@@ -151,8 +151,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
           sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, solar[i] || 0]),
-          lineStyle: { color: '#ff9800', width: 2 },
-          areaStyle: { color: 'rgba(255,152,0,0.1)' },
+          lineStyle: { color: '#f59e0b', width: 1.75 },
+          areaStyle: { color: 'rgba(245,158,11,0.09)' },
         },
         {
           name: 'Battery',
@@ -161,8 +161,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
           sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, battery[i] || 0]),
-          lineStyle: { color: '#4caf50', width: 2 },
-          areaStyle: { color: 'rgba(76,175,80,0.1)' },
+          lineStyle: { color: '#22c55e', width: 1.75 },
+          areaStyle: { color: 'rgba(34,197,94,0.09)' },
         },
         {
           name: 'Setpoint',
@@ -171,7 +171,7 @@ export function useChart(isDarkRef: Ref<boolean>) {
           sampling: 'lttb',
           showSymbol: false,
           data: timeData.map((t, i) => [t, setpoint[i] || 0]),
-          lineStyle: { color: '#00bcd4', width: 2, type: 'dashed' },
+          lineStyle: { color: '#06b6d4', width: 1.5, type: 'dashed' },
           areaStyle: { opacity: 0 },
         },
       ],

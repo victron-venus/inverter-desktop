@@ -1,23 +1,17 @@
 <template>
   <ErrorBoundary>
-    <div
-      class="h-screen bg-[#f2f2f4] dark:bg-[#0b0b0d] text-slate-800 dark:text-slate-200 flex flex-col font-sans select-none overflow-hidden"
-    >
+    <div class="app-shell h-screen flex flex-col select-none overflow-hidden">
       <!-- macOS style titlebar (simulated) -->
-      <div
-        class="h-[36px] flex items-center justify-between px-3 border-b border-black/8 dark:border-white/8 bg-white/90 dark:bg-[#121214]/90 backdrop-blur-md"
-      >
+      <div class="config-titlebar h-[36px] flex items-center justify-between px-3">
         <div class="flex items-center gap-2">
-          <Settings :size="14" class="text-slate-900 dark:text-slate-300" />
-          <span class="text-[12px] font-semibold tracking-tight text-slate-900 dark:text-slate-100"
-            >Configuration</span
-          >
+          <Settings :size="14" class="text-muted" />
+          <span class="text-[12px] font-semibold tracking-tight text-main">Configuration</span>
         </div>
         <div class="flex items-center gap-1.5">
           <button
             type="button"
             @click="handleReset"
-            class="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-900 dark:text-slate-300"
+            class="p-1 rounded-md hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors text-muted hover:text-main"
             title="Reset to defaults"
           >
             <RotateCcw :size="12" />
@@ -25,7 +19,7 @@
           <UiButton
             variant="primary"
             size="sm"
-            class="!h-[22px] gap-1 shadow-sm"
+            class="!h-[22px] gap-1"
             :loading="saving"
             title="Save changes"
             @click="handleSave"
@@ -36,7 +30,7 @@
           <button
             type="button"
             @click="handleClose"
-            class="p-1 rounded hover:bg-red-500 hover:text-white transition-colors text-slate-900 dark:text-slate-300"
+            class="p-1 rounded-md hover:bg-consumption hover:text-white transition-colors text-muted hover:text-main"
           >
             <X :size="12" />
           </button>
@@ -46,20 +40,14 @@
       <!-- Main Layout -->
       <div class="flex-1 flex overflow-hidden">
         <!-- Sidebar -->
-        <div
-          class="w-[160px] border-r border-black/8 dark:border-white/8 bg-[#f6f6f8] dark:bg-[#0e0e10] p-1.5 flex flex-col gap-0.5"
-        >
+        <div class="config-sidebar w-[160px] p-1.5 flex flex-col gap-0.5">
           <button
             type="button"
             v-for="s in sections"
             :key="s.id"
             @click="activeTab = s.id"
-            class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-semibold transition-all tracking-tight"
-            :class="
-              activeTab === s.id
-                ? 'bg-white dark:bg-[#1c1c1e] border border-black/8 dark:border-white/10 text-slate-800 dark:text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-500 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
-            "
+            class="config-nav-item"
+            :class="activeTab === s.id ? 'config-nav-item-active' : ''"
           >
             <component :is="s.icon" :size="14" />
             {{ s.label }}
@@ -67,11 +55,11 @@
         </div>
 
         <!-- Content Area -->
-        <div class="flex-1 overflow-y-auto p-5 bg-[#fafafa] dark:bg-[#121214]">
+        <div class="flex-1 overflow-y-auto p-5 bg-[#f7f7f8] dark:bg-[#121214]">
           <div class="max-w-xl mx-auto flex flex-col gap-6">
             <!-- MQTT Section -->
             <div v-if="activeTab === 'mqtt'" class="flex flex-col gap-4">
-              <header class="border-b border-black/8 dark:border-white/8 pb-2">
+              <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">Broker Settings</h2>
               </header>
 
@@ -126,9 +114,7 @@
                   class="classic-input w-full"
                   placeholder="e.g. a1b2c3d4e5f6"
                 />
-                <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
-                  Keep-alive for Cerbo GX.
-                </p>
+                <p class="text-[10px] text-muted px-1 italic">Keep-alive for Cerbo GX.</p>
               </div>
 
               <div class="flex flex-col gap-2" role="radiogroup" aria-label="Interface Theme">
@@ -156,9 +142,9 @@
 
             <!-- Home Assistant Section -->
             <div v-if="activeTab === 'ha'" class="flex flex-col gap-4">
-              <header class="border-b border-black/8 dark:border-white/8 pb-2">
+              <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">Home Assistant</h2>
-                <p class="text-[10px] text-slate-500 dark:text-slate-500 mt-1">
+                <p class="text-[10px] text-muted mt-1">
                   HA API is for home devices (garage, laundry, EV, covers). Inverter control flags
                   always go to Cerbo MQTT, even when API is enabled.
                 </p>
@@ -189,15 +175,9 @@
                   <div class="flex flex-col gap-1">
                     <span class="classic-label px-1">Status</span>
                     <div
-                      class="h-8 flex items-center px-2 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] text-[10px] font-semibold"
+                      class="h-8 flex items-center px-2 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] text-[10px] font-semibold"
                     >
-                      <span
-                        :class="
-                          haDirectMonitoringEnabled
-                            ? 'text-green-500'
-                            : 'text-slate-600 dark:text-slate-500'
-                        "
-                      >
+                      <span :class="haDirectMonitoringEnabled ? 'text-green-500' : 'text-muted'">
                         API: {{ haDirectMonitoringEnabled ? 'Enabled' : 'Disabled' }}
                       </span>
                     </div>
@@ -283,28 +263,26 @@
                   </div>
                 </div>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_advanced_settings"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Advanced settings</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Advanced settings</span>
                 </label>
                 <div v-if="config.show_advanced_settings" class="flex flex-col gap-1">
                   <span class="classic-label px-1">Camera Monitoring</span>
                   <label
-                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                   >
                     <input
                       type="checkbox"
                       v-model="config.camera_enabled"
                       class="rounded border-slate-300 text-accent focus:ring-accent"
                     />
-                    <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
+                    <span class="text-[11px] font-bold text-main"
                       >Enable camera event detection</span
                     >
                   </label>
@@ -321,7 +299,7 @@
                     class="classic-input w-full disabled:opacity-50"
                     placeholder="e.g. frigate/+/events"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     MQTT topic with wildcard for camera events on HA broker.
                   </p>
                 </div>
@@ -342,7 +320,7 @@
                     class="classic-input w-full"
                     placeholder="sensor.dryer_remaining_time"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Remaining time sensor (e.g. 10:02). Section shows while the dryer is running.
                   </p>
                 </div>
@@ -357,7 +335,7 @@
                     class="classic-input w-full"
                     placeholder="button.dryer_remote_start"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Optional START button shown in the Dryer section.
                   </p>
                 </div>
@@ -372,7 +350,7 @@
                     class="classic-input w-full"
                     placeholder="button.dryer_pause"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Optional PAUSE button shown in the Dryer section.
                   </p>
                 </div>
@@ -385,7 +363,7 @@
                     class="classic-input w-full"
                     placeholder="sensor.washer_remaining_time"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Remaining time sensor. Section shows while the washer is running.
                   </p>
                 </div>
@@ -400,7 +378,7 @@
                     class="classic-input w-full"
                     placeholder="button.washer_remote_start"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Optional START button shown in the Washer section.
                   </p>
                 </div>
@@ -415,7 +393,7 @@
                     class="classic-input w-full"
                     placeholder="button.washer_pause"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Optional PAUSE button shown in the Washer section.
                   </p>
                 </div>
@@ -430,7 +408,7 @@
                     class="classic-input w-full"
                     placeholder="binary_sensor.dishwasher_running"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Binary sensor that turns on while the dishwasher runs.
                   </p>
                 </div>
@@ -445,7 +423,7 @@
                     class="classic-input w-full"
                     placeholder="sensor.dishwasher_duration"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     Runtime since midnight (e.g. 00:32:24), shown next to the section.
                   </p>
                 </div>
@@ -457,7 +435,7 @@
                 class="flex flex-col gap-3 p-3 classic-inset !rounded-lg !p-3"
               >
                 <h3 class="classic-subsection-title">Water &amp; EV Entities</h3>
-                <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1">
+                <p class="text-[10px] text-muted px-1">
                   With a Cerbo GX portal ID configured, water data comes from the GX (MQTT, via
                   dbus-pump). Pump/valve automation lives in dbus-pump - no manual control here.
                 </p>
@@ -482,7 +460,7 @@
                     min="1"
                     class="classic-input w-24"
                   />
-                  <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                  <p class="text-[10px] text-muted px-1 italic">
                     EV data comes from the GX via MQTT (dbus-ev / dbus-evcharger). Defaults: 40
                     (charger) / 22 (vehicle).
                   </p>
@@ -492,7 +470,7 @@
 
             <!-- Sections Visibility -->
             <div v-if="activeTab === 'sections'" class="flex flex-col gap-4">
-              <header class="border-b border-black/8 dark:border-white/8 pb-2">
+              <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">Section Visibility</h2>
               </header>
 
@@ -500,28 +478,24 @@
               <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
                 <h3 class="classic-subsection-title">Inverter & Solar</h3>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_batteries"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Batteries</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Batteries</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_solar_production"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Solar Production</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Solar Production</span>
                 </label>
               </div>
 
@@ -529,28 +503,24 @@
               <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
                 <h3 class="classic-subsection-title">Energy Stats</h3>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_active_loads"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Active Loads</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Active Loads</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_daily_stats"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Daily Stats</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Daily Stats</span>
                 </label>
               </div>
 
@@ -558,165 +528,145 @@
               <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
                 <h3 class="classic-subsection-title">Home Area</h3>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_ev"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">EV</span>
+                  <span class="text-[11px] font-bold text-main">EV</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_washer"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Washer</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Washer</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_dryer"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Dryer</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Dryer</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_dishwasher"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Dishwasher</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Dishwasher</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_home_section"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Home Buttons</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Home Buttons</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_header_toggles"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  <span class="text-[11px] font-bold text-main">{{
                     $t('config.headerToggles')
                   }}</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_ha_sensors"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
-                    $t('config.sensors')
-                  }}</span>
+                  <span class="text-[11px] font-bold text-main">{{ $t('config.sensors') }}</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_ha_numbers"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
-                    $t('config.numbers')
-                  }}</span>
+                  <span class="text-[11px] font-bold text-main">{{ $t('config.numbers') }}</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_ha_covers"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
-                    $t('config.covers')
-                  }}</span>
+                  <span class="text-[11px] font-bold text-main">{{ $t('config.covers') }}</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_ha_media"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
+                  <span class="text-[11px] font-bold text-main">{{
                     $t('config.mediaPlayers')
                   }}</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_ha_scenes"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
-                    $t('config.scenes')
-                  }}</span>
+                  <span class="text-[11px] font-bold text-main">{{ $t('config.scenes') }}</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_ha_weather"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">{{
-                    $t('config.weather')
-                  }}</span>
+                  <span class="text-[11px] font-bold text-main">{{ $t('config.weather') }}</span>
                 </label>
                 <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
                   <input
                     type="checkbox"
                     v-model="config.show_console"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300"
-                    >Console</span
-                  >
+                  <span class="text-[11px] font-bold text-main">Console</span>
                 </label>
 
                 <!-- App Settings -->
                 <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
                   <h3 class="classic-subsection-title">App Settings</h3>
                   <label
-                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                   >
                     <input
                       type="checkbox"
@@ -724,9 +674,7 @@
                       @change="config.auto_start = ($event.target as HTMLInputElement).checked"
                       class="rounded border-slate-300 text-accent focus:ring-accent"
                     />
-                    <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">
-                      Launch at system startup
-                    </span>
+                    <span class="text-[11px] font-bold text-main"> Launch at system startup </span>
                   </label>
                 </div>
 
@@ -734,7 +682,7 @@
                 <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
                   <h3 class="classic-subsection-title">Authentication</h3>
                   <label
-                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                   >
                     <input
                       type="checkbox"
@@ -742,9 +690,7 @@
                       @change="config.auth_enabled = ($event.target as HTMLInputElement).checked"
                       class="rounded border-slate-300 text-accent focus:ring-accent"
                     />
-                    <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">
-                      Enable authentication
-                    </span>
+                    <span class="text-[11px] font-bold text-main"> Enable authentication </span>
                   </label>
                   <div v-if="config.auth_enabled" class="flex flex-col gap-2 mt-1">
                     <div class="flex flex-col gap-1">
@@ -756,7 +702,7 @@
                         type="text"
                         v-model="config.auth_username"
                         placeholder="Enter username"
-                        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-slate-700 dark:text-slate-300"
+                        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-main"
                       />
                     </div>
                     <div class="flex flex-col gap-1">
@@ -768,11 +714,11 @@
                         type="password"
                         v-model="config.auth_password"
                         placeholder="Enter password"
-                        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-slate-700 dark:text-slate-300"
+                        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-main"
                       />
                     </div>
                     <label
-                      class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/8 dark:border-white/10 bg-white dark:bg-[#1a1a1c] cursor-pointer group hover:border-accent/40 transition-colors"
+                      class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                     >
                       <input
                         type="checkbox"
@@ -782,7 +728,7 @@
                         "
                         class="rounded border-slate-300 text-accent focus:ring-accent"
                       />
-                      <span class="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                      <span class="text-[11px] font-bold text-main">
                         Allow biometric authentication (Touch ID / Windows Hello)
                       </span>
                     </label>
@@ -793,12 +739,12 @@
 
             <!-- Backup Section -->
             <div v-if="activeTab === 'backup'" class="flex flex-col gap-4">
-              <header class="border-b border-black/8 dark:border-white/8 pb-2">
+              <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">Backup</h2>
               </header>
 
               <div class="flex flex-col gap-3 p-3 classic-inset !rounded-lg !p-3">
-                <p class="text-[10px] text-slate-500 dark:text-slate-500 px-1 italic">
+                <p class="text-[10px] text-muted px-1 italic">
                   Export the current configuration to a JSON file or import one previously saved.
                 </p>
                 <UiButton class="flex-1 w-full" :loading="backupBusy" @click="handleBackup">
@@ -814,7 +760,7 @@
 
             <!-- Entities Section -->
             <div v-if="activeTab === 'entities'" class="flex flex-col gap-6">
-              <header class="border-b border-black/8 dark:border-white/8 pb-2">
+              <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">UI Controls</h2>
               </header>
 
@@ -867,7 +813,7 @@
           class="classic-card w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden dark:bg-[#121212] shadow-2xl animate-in fade-in duration-150"
         >
           <header
-            class="p-3 border-b border-black/8 dark:border-white/8 flex items-center justify-between bg-[#f6f6f8] dark:bg-[#121214]"
+            class="p-3 border-b border-black/[0.06] dark:border-white/[0.07] flex items-center justify-between bg-[#f6f6f8] dark:bg-[#121214]"
           >
             <h3 class="classic-subsection-title text-xs">Discover Entities</h3>
             <button
@@ -924,7 +870,7 @@
                   >
                     {{ e.friendly_name }}
                   </div>
-                  <div class="text-[9px] text-slate-500 dark:text-slate-500 font-mono">
+                  <div class="text-[9px] text-muted font-mono">
                     {{ e.entity_id }}
                   </div>
                 </div>
@@ -935,7 +881,7 @@
             </template>
           </div>
           <footer
-            class="p-3 border-t border-black/8 dark:border-white/8 flex flex-col gap-2 bg-[#f6f6f8] dark:bg-[#121214]"
+            class="p-3 border-t border-black/[0.06] dark:border-white/[0.07] flex flex-col gap-2 bg-[#f6f6f8] dark:bg-[#121214]"
           >
             <div class="flex gap-1 p-0.5 bg-slate-200/50 dark:bg-slate-800 rounded">
               <button
@@ -1225,11 +1171,11 @@ const applyTheme = (scheme: string | null | undefined) => {
 
   // Force background to prevent system-level dark mode overrides if any
   if (isDark) {
-    document.documentElement.style.backgroundColor = '#0a0a0a'
-    document.body.style.backgroundColor = '#0a0a0a'
+    document.documentElement.style.backgroundColor = '#0c0c0e'
+    document.body.style.backgroundColor = '#0c0c0e'
   } else {
-    document.documentElement.style.backgroundColor = '#efeff4'
-    document.body.style.backgroundColor = '#efeff4'
+    document.documentElement.style.backgroundColor = '#f4f4f6'
+    document.body.style.backgroundColor = '#f4f4f6'
   }
 }
 

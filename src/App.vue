@@ -2,11 +2,11 @@
   <ErrorBoundary>
     <div
       id="app"
-      class="h-screen flex flex-col p-1.5 select-none overflow-hidden"
+      class="app-shell h-screen flex flex-col p-1.5 gap-1 select-none overflow-hidden"
       @contextmenu.prevent="onContextMenu"
     >
       <!-- Dashboard Header: Compact buttons and theme switcher -->
-      <div class="flex items-center justify-between mb-1">
+      <div class="flex items-center justify-between">
         <AppHeader
           :dryRun="coerceBool(state.dry_run)"
           :essClass="essClass"
@@ -21,7 +21,7 @@
       </div>
 
       <!-- Dashboard Content: Grid and Panels -->
-      <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1 scrollbar-hide">
+      <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1.5 scrollbar-hide min-h-0">
         <DailyStats v-if="appConfig?.show_daily_stats !== false" />
 
         <NotificationBanner />
@@ -44,7 +44,7 @@
           :inverterState="state.inverter_state"
         />
 
-        <div class="grid grid-cols-1 md:grid-cols-12 gap-1 md:auto-rows-fr">
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-1.5 md:auto-rows-fr">
           <div class="md:col-span-8 h-[280px] md:h-auto md:min-h-[280px]">
             <ChartPanel :chartOption="chartOption" />
           </div>
@@ -129,27 +129,27 @@
       <!-- Video Popup Overlay -->
       <div
         v-if="videoPopup.show"
-        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-md animate-in fade-in duration-200"
       >
         <div
-          class="relative w-full max-w-4xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl border border-slate-800"
+          class="relative w-full max-w-4xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-white/10"
         >
           <!-- Camera Name Header -->
           <div
             class="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-center"
           >
             <div class="flex items-center gap-2">
-              <div class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
-              <span class="text-xs font-bold text-white uppercase tracking-widest"
-                >LIVE: {{ videoPopup.cameraName }}</span
+              <div class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></div>
+              <span class="text-[11px] font-semibold text-white tracking-tight"
+                >Live · {{ videoPopup.cameraName }}</span
               >
             </div>
             <button
               type="button"
               @click="videoPopup.show = false"
-              class="p-1.5 rounded-full bg-white/10 text-white hover:bg-red-500 transition-colors"
+              class="p-1.5 rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
             >
-              <X :size="20" />
+              <X :size="18" />
             </button>
           </div>
 
@@ -166,12 +166,8 @@
       <!-- Toast Notification -->
       <div
         v-if="message"
-        class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full shadow-lg text-[11px] font-semibold border animate-in slide-in-from-bottom duration-200 tracking-tight"
-        :class="
-          messageType === 'error'
-            ? 'bg-red-500 border-red-600 text-white'
-            : 'bg-green-500 border-green-600 text-white'
-        "
+        class="app-toast fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] animate-in slide-in-from-bottom duration-200"
+        :class="messageType === 'error' ? 'app-toast-err' : 'app-toast-ok'"
       >
         {{ message }}
       </div>

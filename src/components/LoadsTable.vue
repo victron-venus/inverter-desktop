@@ -1,19 +1,18 @@
 <template>
-  <div v-if="loads.length" class="classic-card mb-1 overflow-hidden">
+  <div v-if="loads.length" class="classic-card overflow-hidden">
     <div class="classic-header !py-0 !px-2 !h-[22px]"><Zap :size="10" /> Active Loads</div>
     <div
-      class="divide-y divide-slate-50 dark:divide-slate-800/30 max-h-[min(40vh,280px)] overflow-y-auto overscroll-contain"
+      class="divide-y divide-black/[0.04] dark:divide-white/[0.05] max-h-[min(40vh,280px)] overflow-y-auto overscroll-contain"
     >
       <div
         v-for="load in loads"
         :key="load.id || load.name"
-        class="flex justify-between items-center px-2 py-0.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
+        class="row-hover flex justify-between items-center px-2 py-0.5"
       >
-        <span
-          class="text-[11px] font-medium text-slate-600 dark:text-slate-400 capitalize tracking-tight"
-          >{{ load.name }}</span
-        >
-        <span class="text-[11px] font-bold" :class="loadColor(load)"
+        <span class="text-[11px] font-medium text-muted capitalize tracking-tight">{{
+          load.name
+        }}</span>
+        <span class="text-[11px] font-semibold tabular" :class="loadColor(load)"
           >{{ Math.floor(load.value) }}W</span
         >
       </div>
@@ -29,8 +28,8 @@ defineProps<{
 }>()
 
 function loadColor(load: { name: string; value: number; isGeneration?: boolean }): string {
-  if (load.isGeneration) return 'text-green-600'
-  if (/(total|balance)/i.test(load.name)) return 'text-red-600'
-  return load.value < 0 ? 'text-green-600' : 'text-slate-700 dark:text-slate-300'
+  if (load.isGeneration) return 'text-battery'
+  if (/(total|balance)/i.test(load.name)) return 'text-consumption'
+  return load.value < 0 ? 'text-battery' : 'text-main'
 }
 </script>

@@ -4,7 +4,7 @@
       🔔
       <span
         v-if="unreadCount > 0"
-        class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center font-bold"
+        class="absolute -top-1 -right-1 min-w-3.5 h-3.5 px-0.5 rounded-full bg-consumption text-white text-[8px] flex items-center justify-center font-bold tabular"
       >
         {{ unreadCount > 9 ? '9+' : unreadCount }}
       </span>
@@ -12,19 +12,19 @@
 
     <div
       v-if="showPanel"
-      class="absolute bottom-full right-0 mb-2 w-72 max-h-80 overflow-y-auto classic-card z-50"
+      class="absolute bottom-full right-0 mb-2 w-72 max-h-80 overflow-y-auto apple-card z-50"
     >
       <div
-        class="flex items-center justify-between px-2 py-1 border-b border-slate-200 dark:border-slate-700"
+        class="flex items-center justify-between px-2.5 py-1.5 border-b border-black/[0.06] dark:border-white/[0.08]"
       >
-        <span class="text-[10px] font-bold text-slate-500 uppercase">{{
+        <span class="text-[10px] font-semibold text-muted tracking-tight">{{
           $t('notifications.title')
         }}</span>
-        <div class="flex gap-1">
+        <div class="flex gap-2">
           <button
             type="button"
             v-if="notifications.length > 0"
-            class="text-[9px] text-blue-500 hover:underline"
+            class="text-[9px] font-semibold text-accent hover:opacity-80"
             @click="markAllRead"
           >
             {{ $t('notifications.markAllRead') }}
@@ -32,35 +32,30 @@
           <button
             type="button"
             v-if="notifications.length > 0"
-            class="text-[9px] text-red-500 hover:underline"
+            class="text-[9px] font-semibold text-consumption hover:opacity-80"
             @click="clearAll"
           >
             {{ $t('notifications.clear') }}
           </button>
         </div>
       </div>
-      <div
-        v-if="notifications.length === 0"
-        class="px-2 py-3 text-[10px] text-slate-400 text-center"
-      >
+      <div v-if="notifications.length === 0" class="px-2.5 py-4 text-[10px] text-muted text-center">
         {{ $t('notifications.noNotifications') }}
       </div>
       <div
         v-for="n in notifications"
         :key="n.id"
-        class="px-2 py-1 border-b border-slate-100 dark:border-slate-800 last:border-0 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer"
+        class="row-hover px-2.5 py-1.5 border-b border-black/[0.04] dark:border-white/[0.05] last:border-0 cursor-pointer"
         :class="{ 'opacity-50': n.read }"
         @click="markRead(n.id)"
       >
-        <div class="flex items-start justify-between">
-          <span class="text-[10px] font-bold text-slate-700 dark:text-slate-300">{{
-            n.title
-          }}</span>
-          <span class="text-[8px] text-slate-400 whitespace-nowrap ml-1">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-[10px] font-semibold text-main tracking-tight">{{ n.title }}</span>
+          <span class="text-[8px] text-muted whitespace-nowrap tabular">
             {{ formatTime(n.timestamp) }}
           </span>
         </div>
-        <div class="text-[9px] text-slate-500 truncate">{{ n.body }}</div>
+        <div class="text-[9px] text-muted truncate mt-0.5">{{ n.body }}</div>
       </div>
     </div>
   </div>

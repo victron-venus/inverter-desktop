@@ -1,19 +1,19 @@
 <template>
-  <div v-if="lines.length > 0" class="console-log classic-card mt-1">
+  <div v-if="lines.length > 0" class="console-log classic-card">
     <button
       type="button"
-      class="w-full flex items-center justify-between px-2 py-0.5 text-xs font-mono opacity-70 hover:opacity-100 transition-opacity"
+      class="w-full flex items-center justify-between px-2 py-0.5 text-[10px] font-mono text-muted hover:text-main transition-colors"
       @click="expanded = !expanded"
     >
       <span>Console ({{ lines.length }})</span>
-      <span>{{ expanded ? '▼' : '▶' }}</span>
+      <span class="opacity-70">{{ expanded ? '▾' : '▸' }}</span>
     </button>
     <div
       v-if="expanded"
       ref="scrollEl"
-      class="max-h-40 overflow-y-auto px-2 pb-1 font-mono text-[10px] leading-tight space-y-px"
+      class="max-h-40 overflow-y-auto px-2 pb-1.5 font-mono text-[10px] leading-tight space-y-px border-t border-black/[0.04] dark:border-white/[0.05]"
     >
-      <div v-for="(line, i) in lines" :key="i" class="text-gray-400 dark:text-gray-500 break-all">
+      <div v-for="(line, i) in lines" :key="i" class="text-muted break-all">
         {{ line }}
       </div>
     </div>

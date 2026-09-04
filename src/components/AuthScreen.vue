@@ -1,19 +1,21 @@
 <template>
-  <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+  <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/55 backdrop-blur-md">
     <div class="w-[320px] classic-card !rounded-xl shadow-2xl p-6 flex flex-col gap-4">
       <div class="flex flex-col items-center gap-2">
-        <Lock :size="32" class="text-accent" />
-        <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">
-          Authentication Required
-        </h2>
-        <p class="text-[11px] text-slate-500 text-center">
+        <div
+          class="w-11 h-11 rounded-full flex items-center justify-center bg-accent/15 text-accent"
+        >
+          <Lock :size="20" />
+        </div>
+        <h2 class="text-[15px] font-semibold tracking-tight text-main">Authentication Required</h2>
+        <p class="text-[11px] text-muted text-center leading-relaxed">
           Enter your credentials to access Inverter Desktop
         </p>
       </div>
 
       <div class="flex flex-col gap-3">
         <div class="flex flex-col gap-1">
-          <label for="aus_username" class="text-[10px] font-medium text-slate-500">Username</label>
+          <label for="aus_username" class="classic-label px-0.5">Username</label>
           <input
             id="aus_username"
             v-model="username"
@@ -24,7 +26,7 @@
           />
         </div>
         <div class="flex flex-col gap-1">
-          <label for="aus_password" class="text-[10px] font-medium text-slate-500">Password</label>
+          <label for="aus_password" class="classic-label px-0.5">Password</label>
           <input
             id="aus_password"
             v-model="password"
@@ -36,7 +38,7 @@
         </div>
       </div>
 
-      <div v-if="error" class="text-[11px] text-red-500 text-center">
+      <div v-if="error" class="text-[11px] text-consumption text-center">
         {{ error }}
       </div>
 
