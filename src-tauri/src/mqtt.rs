@@ -120,6 +120,9 @@ pub struct InverterState {
     pub pv_inverter_individual: Option<Vec<f64>>,
     pub batteries: Option<Vec<Battery>>,
     pub loads: Option<std::collections::HashMap<String, f64>>,
+    /// Cerbo acload instance id → CustomName/ProductName. Loads stay keyed by
+    /// stable instance id so power updates never flash raw ids once a name is known.
+    pub load_names: Option<std::collections::HashMap<String, String>>,
     pub ui_config: Option<UiConfig>,
     pub daily_stats: Option<DailyStats>,
     pub solar_forecast: Option<SolarForecast>,
@@ -192,6 +195,9 @@ struct RawInverterState {
     // ev_charging_kw, ev_power, car_soc are intentionally absent —
     // EV telemetry comes only from Cerbo MQTT via apply_ev_message + EvCache,
     // not from the daemon's inverter/state payload.
+    // battery_* and loads may still be present for fallback when Cerbo has
+    // not discovered a shunt / acload yet; process_state_update skips them
+    // once Cerbo owns those tiles.
     water_level: Option<f64>,
     water_valve: Option<serde_json::Value>,
     pump_switch: Option<serde_json::Value>,
@@ -244,6 +250,26 @@ fn voltage_soc(voltage: f64) -> f64 {
         .round()
 }
 
+/// Victron VE.Bus /State codes — mirrors inverter-control INVERTER_STATES.
+fn inverter_state_name(code: u32) -> String {
+    match code {
+        0 => "Off".into(),
+        1 => "Low Power".into(),
+        2 => "Fault".into(),
+        3 => "Bulk".into(),
+        4 => "Absorption".into(),
+        5 => "Float".into(),
+        6 => "Storage".into(),
+        7 => "Equalize".into(),
+        8 => "Passthru".into(),
+        9 => "Inverting".into(),
+        10 => "Power assist".into(),
+        11 => "Power supply".into(),
+        252 => "External control".into(),
+        other => format!("? ({other})"),
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EssMode {
     pub mode_name: Option<String>,
@@ -292,6 +318,21 @@ pub struct Vebus {
     pub l2_power: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ac_power: Option<f64>,
+    /// Hub4/L1/AcPowerSetpoint (W).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setpoint: Option<f64>,
+    /// VE.Bus /State label (Bulk, Absorption, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inverter_state: Option<String>,
+}
+
+/// systemcalc aggregates on com.victronenergy.system (MQTT N/.../system/0/...).
+#[derive(Debug, Clone, Default)]
+struct SystemTotals {
+    g1: Option<f64>,
+    g2: Option<f64>,
+    t1: Option<f64>,
+    t2: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -388,17 +429,41 @@ impl DeviceIdentity for Battery {
     }
 }
 
+/// One Victron acload service (dbus-emporia-vue circuit, etc.) discovered on
+/// the Cerbo GX MQTT broker. Watts stay keyed by instance; display name is
+/// cached separately so UI never flickers back to bare ids.
+#[derive(Debug, Clone, Default)]
+struct AcLoad {
+    power: Option<f64>,
+    /// CustomName when published (preferred).
+    custom_name: Option<String>,
+    /// ProductName fallback when CustomName has not arrived yet.
+    product_name: Option<String>,
+}
+
+impl AcLoad {
+    fn display_name(&self) -> Option<&str> {
+        self.custom_name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.product_name.as_deref().filter(|s| !s.is_empty()))
+    }
+}
+
 /// Devices discovered directly on the Cerbo GX MQTT broker
 /// (N/<portal>/battery/..., N/<portal>/solarcharger/...,
-/// N/<portal>/pvinverter/...), independent of the inverter-control daemon's
-/// inverter/state payload. BTreeMap keeps a stable instance-ordered list for
-/// the UI.
+/// N/<portal>/pvinverter/..., N/<portal>/acload/...), independent of the
+/// inverter-control daemon's inverter/state payload. BTreeMap keeps a stable
+/// instance-ordered list for the UI.
 #[derive(Default)]
 struct CerboDevices {
     batteries: BTreeMap<u32, TrackedEntry<Battery>>,
     chargers: BTreeMap<u32, TrackedEntry<MpptCharger>>,
     pv_inverters: BTreeMap<u32, TrackedEntry<PvInverter>>,
     vebus: BTreeMap<u32, TrackedEntry<Vebus>>,
+    /// system/0 Ac/Grid + Ac/Consumption (preferred source for gt/tt).
+    system: BTreeMap<u32, TrackedEntry<SystemTotals>>,
+    acloads: BTreeMap<u32, TrackedEntry<AcLoad>>,
 }
 
 impl CerboDevices {
@@ -418,6 +483,21 @@ impl CerboDevices {
             .retain(|_, entry| entry.last_seen.elapsed() < ttl);
         self.vebus
             .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.system
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+        self.acloads
+            .retain(|_, entry| entry.last_seen.elapsed() < ttl);
+    }
+
+    fn has_shunt(&self) -> bool {
+        self.batteries.values().any(|e| {
+            e.data
+                .name
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("shunt")
+        })
     }
 }
 
@@ -1209,17 +1289,20 @@ impl MqttClient {
             format!("N/{}/ev/+/Ac/Power", id),
             format!("N/{}/evcharger/+/Soc", id),
             format!("N/{}/evcharger/+/Ac/Power", id),
-            // Active loads: Victron acload services published by dbus-emporia-vue
-            // and other Victron D-Bus acload sources. Format: N/<portal>/acload/<i>/Ac/Power
-            format!("N/{}/acload/+/Ac/Power", id),
+            // Active loads: Victron acload services (dbus-emporia-vue etc.).
+            // Wildcard covers Ac/Power + CustomName + ProductName so names can
+            // arrive after watts without a second subscribe burst.
+            format!("N/{}/acload/+/#", id),
             // Directly discovered GX devices: battery bank(s) + MPPT chargers
             // + AC PV inverters of any vendor, so the app finds them even
             // when inverter-control is down.
             format!("N/{}/battery/+/#", id),
             format!("N/{}/solarcharger/+/#", id),
             format!("N/{}/pvinverter/+/#", id),
-            // VE.Bus grid/consumption totals when inverter-control is down.
+            // VE.Bus: ActiveIn grid fallback, Hub4 setpoint, /State.
             format!("N/{}/vebus/+/#", id),
+            // systemcalc: Ac/Grid + Ac/Consumption (tt/t1/t2) without daemon.
+            format!("N/{}/system/+/#", id),
         ];
         let n = filters.len();
         let topics: Vec<SubscribeFilter> = filters
@@ -1401,22 +1484,30 @@ impl MqttClient {
                 Self::emit_state_update(app_handle, &snapshot, false);
             }
         } else if topic.starts_with("N/") && Self::parse_acload_topic(topic).is_some() {
-            // dbus-emporia-vue / Victron acload services on the GX:
-            // N/<portal>/acload/<i>/Ac/Power (W).
-            // High-frequency: update loads under lock, then rely on coalesced
-            // emit (do not force per-circuit IPC spam).
-            if let Some(value) = Self::parse_cerbo_value(payload) {
-                let Some(inst) = Self::parse_acload_topic(topic) else {
-                    return;
-                };
+            // dbus-emporia-vue / Victron acload on the GX:
+            // N/<portal>/acload/<i>/Ac/Power | CustomName | ProductName.
+            // Cache under CerboDevices (stable instance key); overlay onto
+            // state.loads / state.load_names so daemon merges cannot rename.
+            let Some((inst, path)) = Self::parse_acload_topic(topic) else {
+                return;
+            };
+            let applied = cerbo_devices
+                .lock()
+                .ok()
+                .map(|mut d| {
+                    d.sweep_stale();
+                    Self::apply_acload_message(&mut d, inst, path, payload)
+                })
+                .unwrap_or(false);
+            if applied {
                 let snapshot = {
                     let mut guard = match state.lock() {
                         Ok(g) => g,
                         Err(_) => return,
                     };
-                    let loads = guard.loads.get_or_insert_with(Default::default);
-                    // Instance id (e.g. "85") matches dbus-emporia-vue service instance.
-                    loads.insert(inst.to_string(), value);
+                    if let Ok(d) = cerbo_devices.lock() {
+                        Self::apply_cerbo_to_state(&d, &mut guard);
+                    }
                     guard.clone()
                 };
                 Self::emit_state_update(app_handle, &snapshot, false);
@@ -1482,22 +1573,60 @@ impl MqttClient {
         }
     }
 
-    /// Parse a dbus-emporia-vue / Victron acload topic:
-    /// N/<portal>/acload/<instance>/Ac/Power -> Some(instance).
-    fn parse_acload_topic(topic: &str) -> Option<&str> {
-        // Match: N/<portal>/acload/<instance>/Ac/Power
+    /// Parse a Victron acload topic:
+    /// N/<portal>/acload/<instance>/Ac/Power|CustomName|ProductName
+    /// -> Some((instance, path)).
+    fn parse_acload_topic(topic: &str) -> Option<(u32, &str)> {
         let rest = topic.strip_prefix("N/")?;
-        let mut it = rest.split('/');
+        let mut it = rest.splitn(6, '/');
         let _portal = it.next()?;
         if it.next()? != "acload" {
             return None;
         }
-        let instance = it.next()?;
-        // Verify remaining is exactly "Ac/Power"
-        if it.next()? != "Ac" || it.next()? != "Power" {
-            return None;
+        let inst: u32 = it.next()?.parse().ok()?;
+        let p1 = it.next()?;
+        let path = match it.next() {
+            Some(p2) if p1 == "Ac" && p2 == "Power" => "Ac/Power",
+            Some(_) => return None,
+            None => p1,
+        };
+        match path {
+            "Ac/Power" | "CustomName" | "ProductName" => Some((inst, path)),
+            _ => None,
         }
-        Some(instance)
+    }
+
+    /// Apply one acload MQTT message into CerboDevices.acloads.
+    /// Returns true when the message mapped to a known path.
+    fn apply_acload_message(
+        devices: &mut CerboDevices,
+        inst: u32,
+        path: &str,
+        payload: &str,
+    ) -> bool {
+        let entry = devices.acloads.entry(inst).or_default();
+        entry.touch();
+        let a = &mut entry.data;
+        match path {
+            "Ac/Power" => {
+                a.power = Self::parse_cerbo_value(payload);
+                true
+            }
+            "CustomName" => {
+                if let Some(n) = Self::parse_cerbo_name(payload) {
+                    a.custom_name = Some(n);
+                }
+                true
+            }
+            "ProductName" => {
+                // CustomName wins; only fill product when custom is empty.
+                if let Some(n) = Self::parse_cerbo_name(payload) {
+                    a.product_name = Some(n);
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Cerbo flashmq JSON envelope: {"value": <number>}.
@@ -1555,7 +1684,12 @@ impl MqttClient {
             return None;
         }
         let (kind, rest) = rest.split_once('/')?;
-        if kind != "battery" && kind != "solarcharger" && kind != "pvinverter" && kind != "vebus" {
+        if kind != "battery"
+            && kind != "solarcharger"
+            && kind != "pvinverter"
+            && kind != "vebus"
+            && kind != "system"
+        {
             return None;
         }
         let (inst, path) = rest.split_once('/')?;
@@ -1638,8 +1772,28 @@ impl MqttClient {
                 match path {
                     "Ac/L1/Power" => v.l1_power = val,
                     "Ac/L2/Power" => v.l2_power = val,
-                    "Ac/ActiveIn/L1/Power" => v.l1_power = val, // fallback or grid-in
+                    "Ac/ActiveIn/L1/Power" => v.l1_power = val, // fallback grid-in
+                    "Ac/ActiveIn/L2/Power" => v.l2_power = val,
                     "Ac/Out/P" | "Ac/Power" => v.ac_power = val,
+                    "Hub4/L1/AcPowerSetpoint" => v.setpoint = val,
+                    "State" => {
+                        if let Some(code) = val {
+                            v.inverter_state = Some(inverter_state_name(code as u32));
+                        }
+                    }
+                    _ => return false,
+                }
+                true
+            }
+            "system" => {
+                let entry = devices.system.entry(inst).or_default();
+                entry.touch();
+                let s = &mut entry.data;
+                match path {
+                    "Ac/Grid/L1/Power" => s.g1 = val,
+                    "Ac/Grid/L2/Power" => s.g2 = val,
+                    "Ac/Consumption/L1/Power" => s.t1 = val,
+                    "Ac/Consumption/L2/Power" => s.t2 = val,
                     _ => return false,
                 }
                 true
@@ -1826,20 +1980,81 @@ impl MqttClient {
             );
             st.pv_inverters = Some(pv_inverters);
         }
-        if let Some(entry) = devices.vebus.values().next() {
-            // Use the first VE.Bus device found to set grid power (gt, g1, g2)
-            let v = &entry.data;
-            if let Some(l1) = v.l1_power {
-                st.g1 = Some(l1);
+        // Prefer systemcalc grid/consumption (same paths as inverter-control).
+        if let Some(entry) = devices.system.values().next() {
+            let s = &entry.data;
+            if let Some(g1) = s.g1 {
+                st.g1 = Some(g1);
             }
-            if let Some(l2) = v.l2_power {
-                st.g2 = Some(l2);
+            if let Some(g2) = s.g2 {
+                st.g2 = Some(g2);
             }
-            // Compute total gt from g1 + g2 if both present, else fallback to ac_power
+            if let Some(t1) = s.t1 {
+                st.t1 = Some(t1);
+            }
+            if let Some(t2) = s.t2 {
+                st.t2 = Some(t2);
+            }
             if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
                 st.gt = Some(g1 + g2);
-            } else if let Some(ac_power) = v.ac_power {
-                st.gt = Some(ac_power);
+            }
+            match (st.t1, st.t2) {
+                (Some(t1), Some(t2)) => st.tt = Some(t1 + t2),
+                (Some(t1), None) => st.tt = Some(t1),
+                (None, Some(t2)) => st.tt = Some(t2),
+                _ => {}
+            }
+        }
+
+        if let Some(entry) = devices.vebus.values().next() {
+            let v = &entry.data;
+            // Grid from vebus only when systemcalc has not filled it.
+            if st.g1.is_none() {
+                if let Some(l1) = v.l1_power {
+                    st.g1 = Some(l1);
+                }
+            }
+            if st.g2.is_none() {
+                if let Some(l2) = v.l2_power {
+                    st.g2 = Some(l2);
+                }
+            }
+            if st.gt.is_none() {
+                if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
+                    st.gt = Some(g1 + g2);
+                } else if let Some(ac_power) = v.ac_power {
+                    st.gt = Some(ac_power);
+                }
+            }
+            // Live ESS setpoint + charger mode — chart/tile even without daemon.
+            if let Some(sp) = v.setpoint {
+                st.setpoint = Some(sp);
+            }
+            if let Some(ref mode) = v.inverter_state {
+                st.inverter_state = Some(mode.clone());
+            }
+        }
+        if !devices.acloads.is_empty() {
+            // Stable instance-id keys for watts; names live in load_names so
+            // power updates never rekey the map back to bare ids.
+            let mut loads = std::collections::HashMap::new();
+            let mut names = std::collections::HashMap::new();
+            for (inst, entry) in &devices.acloads {
+                let id = inst.to_string();
+                if let Some(p) = entry.data.power {
+                    loads.insert(id.clone(), p);
+                }
+                if let Some(n) = entry.data.display_name() {
+                    names.insert(id, n.to_string());
+                }
+            }
+            st.loads = Some(loads);
+            // Preserve previously known names for instances that briefly lose
+            // CustomName publishes; only overwrite/extend, never wipe known names
+            // when the overlay has a partial name set.
+            let dest = st.load_names.get_or_insert_with(Default::default);
+            for (id, n) in names {
+                dest.insert(id, n);
             }
         }
     }
@@ -1954,10 +2169,19 @@ impl MqttClient {
         merge_opt!(t1, raw.t1);
         merge_opt!(t2, raw.t2);
         merge_opt!(solar_total, raw.solar_total);
-        merge_opt!(battery_soc, raw.battery_soc);
-        merge_opt!(battery_power, raw.battery_power);
-        merge_opt!(battery_voltage, raw.battery_voltage);
-        merge_opt!(battery_current, raw.battery_current);
+        // Battery bank totals: Cerbo shunt owns them (same pattern as EV —
+        // do not let daemon inverter/state overwrite shunt-derived W/V/A/%).
+        // Fallback to daemon only when no Cerbo shunt has been discovered yet.
+        let cerbo_has_shunt = cerbo_devices
+            .as_ref()
+            .and_then(|c| c.lock().ok().map(|d| d.has_shunt()))
+            .unwrap_or(false);
+        if !cerbo_has_shunt {
+            merge_opt!(battery_soc, raw.battery_soc);
+            merge_opt!(battery_power, raw.battery_power);
+            merge_opt!(battery_voltage, raw.battery_voltage);
+            merge_opt!(battery_current, raw.battery_current);
+        }
         merge_opt!(setpoint, raw.setpoint);
         merge_opt!(inverter_state, raw.inverter_state);
         merge_opt!(version, raw.version);
@@ -2009,7 +2233,16 @@ impl MqttClient {
         merge_opt!(pv_inverters, raw.pv_inverters);
         merge_opt!(pv_inverter_individual, raw.pv_inverter_individual);
         merge_opt!(batteries, raw.batteries);
-        merge_opt!(loads, raw.loads);
+        // Active loads: Cerbo acload services own the map (instance-keyed +
+        // load_names). Daemon loads are often name-keyed and would replace the
+        // Cerbo map on every inverter/state → UI flickers ids ↔ names.
+        let cerbo_has_acloads = cerbo_devices
+            .as_ref()
+            .and_then(|c| c.lock().ok().map(|d| !d.acloads.is_empty()))
+            .unwrap_or(false);
+        if !cerbo_has_acloads {
+            merge_opt!(loads, raw.loads);
+        }
 
         // mppt_total is derived from mppt_individual (compute from merged value)
         new_state.mppt_total = new_state.mppt_individual.as_ref().map(|v| v.iter().sum());
@@ -2048,7 +2281,13 @@ impl MqttClient {
                                 .entry(name.clone())
                                 .or_insert_with(AlertState::new);
                             if alert.should_alert() {
-                                let display_name = Self::load_display_name(name, &ha_entity_states);
+                                let display_name = new_state
+                                    .load_names
+                                    .as_ref()
+                                    .and_then(|m| m.get(name).cloned())
+                                    .unwrap_or_else(|| {
+                                        Self::load_display_name(name, &ha_entity_states)
+                                    });
                                 let title = "High Load".to_string();
                                 let body = format!("{}: {}", display_name, fmt_watts(*power));
                                 alert_notifications.push((title.clone(), body.clone()));
@@ -2276,6 +2515,67 @@ mod tests {
         assert_eq!(raw.battery_soc, Some(88.0));
     }
 
+    #[test]
+    fn system_consumption_and_vebus_setpoint_overlay_state() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "system",
+            0,
+            "Ac/Consumption/L1/Power",
+            r#"{"value": 1200.0}"#
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "system",
+            0,
+            "Ac/Consumption/L2/Power",
+            r#"{"value": 800.0}"#
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "system",
+            0,
+            "Ac/Grid/L1/Power",
+            r#"{"value": -50.0}"#
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "system",
+            0,
+            "Ac/Grid/L2/Power",
+            r#"{"value": 20.0}"#
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "vebus",
+            276,
+            "Hub4/L1/AcPowerSetpoint",
+            r#"{"value": -615.0}"#
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "vebus",
+            276,
+            "State",
+            r#"{"value": 3}"#
+        ));
+
+        let mut st = InverterState::default();
+        // Daemon zeros must not win over Cerbo overlay.
+        st.tt = Some(0.0);
+        st.setpoint = Some(0.0);
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        assert_eq!(st.t1, Some(1200.0));
+        assert_eq!(st.t2, Some(800.0));
+        assert_eq!(st.tt, Some(2000.0));
+        assert_eq!(st.g1, Some(-50.0));
+        assert_eq!(st.g2, Some(20.0));
+        assert_eq!(st.gt, Some(-30.0));
+        assert_eq!(st.setpoint, Some(-615.0));
+        assert_eq!(st.inverter_state.as_deref(), Some("Bulk"));
+    }
+
     /// Guardrail: portal subscribe burst must fit the rumqttc request channel
     /// even if someone reverts subscribe_many back to per-filter subscribe.
     /// Regression: 3512a15 added acload as the 11th filter while capacity was
@@ -2283,7 +2583,7 @@ mod tests {
     #[test]
     fn portal_topic_filter_count_fits_mqtt_queue_capacity() {
         // Keep in sync with subscribe_portal_topics filter list.
-        const PORTAL_FILTER_COUNT: usize = 12;
+        const PORTAL_FILTER_COUNT: usize = 13;
         assert!(
             PORTAL_FILTER_COUNT < MQTT_QUEUE_CAPACITY,
             "portal filters ({PORTAL_FILTER_COUNT}) must leave headroom in              MQTT_QUEUE_CAPACITY ({MQTT_QUEUE_CAPACITY}) for concurrent              publishes/subscribes from inside connection.iter()"
@@ -3318,5 +3618,216 @@ mod tests {
         );
         assert_eq!(st2.car_soc, Some(66.0)); // cached value preserved, not clobbered
         assert_eq!(st.car_soc, Some(66.0));
+    }
+
+    // -------------------------------------------------------------------------
+    // Active loads (Cerbo acload) — stable instance keys + name cache
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parses_acload_power_and_name_topics() {
+        assert_eq!(
+            MqttClient::parse_acload_topic("N/portal/acload/81/Ac/Power"),
+            Some((81, "Ac/Power"))
+        );
+        assert_eq!(
+            MqttClient::parse_acload_topic("N/portal/acload/88/CustomName"),
+            Some((88, "CustomName"))
+        );
+        assert_eq!(
+            MqttClient::parse_acload_topic("N/portal/acload/88/ProductName"),
+            Some((88, "ProductName"))
+        );
+        assert_eq!(
+            MqttClient::parse_acload_topic("N/portal/acload/88/Ac/Energy/Forward"),
+            None
+        );
+    }
+
+    #[test]
+    fn acload_custom_name_preferred_over_product_and_survives_power_update() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_acload_message(
+            &mut d,
+            81,
+            "Ac/Power",
+            "{\"value\": 420}"
+        ));
+        assert!(MqttClient::apply_acload_message(
+            &mut d,
+            81,
+            "ProductName",
+            "{\"value\": \"AC Load\"}"
+        ));
+        assert!(MqttClient::apply_acload_message(
+            &mut d,
+            81,
+            "CustomName",
+            "{\"value\": \"Kitchen\"}"
+        ));
+
+        let mut st = InverterState::default();
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        assert_eq!(st.loads.as_ref().unwrap().get("81"), Some(&420.0));
+        assert_eq!(
+            st.load_names
+                .as_ref()
+                .unwrap()
+                .get("81")
+                .map(String::as_str),
+            Some("Kitchen")
+        );
+
+        // Later power tick must NOT rekey loads or drop the cached name.
+        assert!(MqttClient::apply_acload_message(
+            &mut d,
+            81,
+            "Ac/Power",
+            "{\"value\": 455}"
+        ));
+        MqttClient::apply_cerbo_to_state(&d, &mut st);
+        assert_eq!(st.loads.as_ref().unwrap().get("81"), Some(&455.0));
+        assert_eq!(
+            st.load_names
+                .as_ref()
+                .unwrap()
+                .get("81")
+                .map(String::as_str),
+            Some("Kitchen"),
+            "name must survive power-only updates (no id flicker)"
+        );
+        // Map must stay instance-keyed — never rename the watts key to "Kitchen".
+        assert!(st.loads.as_ref().unwrap().get("Kitchen").is_none());
+    }
+
+    #[test]
+    fn process_state_update_does_not_replace_cerbo_loads_with_daemon_map() {
+        let state = Arc::new(Mutex::new(InverterState::default()));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+        let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
+
+        {
+            let mut d = cerbo_devices.lock().unwrap();
+            MqttClient::apply_acload_message(&mut d, 81, "Ac/Power", "{\"value\": 100}");
+            MqttClient::apply_acload_message(&mut d, 81, "CustomName", "{\"value\": \"Oven\"}");
+            let mut st = state.lock().unwrap();
+            MqttClient::apply_cerbo_to_state(&d, &mut st);
+        }
+
+        // Daemon publishes name-keyed loads — classic flicker source.
+        let mut daemon_loads = std::collections::HashMap::new();
+        daemon_loads.insert("Oven".to_string(), 999.0);
+        daemon_loads.insert("Dryer".to_string(), 50.0);
+        let raw = RawInverterState {
+            gt: Some(1.0),
+            loads: Some(daemon_loads),
+            ..Default::default()
+        };
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            Arc::new(Mutex::new(NotificationState {
+                high_consumption: AlertState::new(),
+                low_water: AlertState::new(),
+                high_solar: AlertState::new(),
+                high_load: std::collections::HashMap::new(),
+            })),
+            None,
+            Some(cerbo_devices),
+            ev_cache,
+        );
+
+        let guard = state.lock().unwrap();
+        assert_eq!(
+            guard.loads.as_ref().unwrap().get("81"),
+            Some(&100.0),
+            "Cerbo instance-keyed watts must survive daemon loads merge"
+        );
+        assert!(
+            guard.loads.as_ref().unwrap().get("Oven").is_none(),
+            "daemon name-keyed map must not replace Cerbo loads"
+        );
+        assert_eq!(
+            guard
+                .load_names
+                .as_ref()
+                .unwrap()
+                .get("81")
+                .map(String::as_str),
+            Some("Oven")
+        );
+    }
+
+    #[test]
+    fn process_state_update_skips_daemon_battery_when_cerbo_shunt_present() {
+        let state = Arc::new(Mutex::new(InverterState::default()));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+        let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
+
+        {
+            let mut d = cerbo_devices.lock().unwrap();
+            MqttClient::apply_device_message(
+                &mut d,
+                "battery",
+                2,
+                "ProductName",
+                "\"SmartShunt 500A/50mV\"",
+            );
+            MqttClient::apply_device_message(
+                &mut d,
+                "battery",
+                2,
+                "Dc/0/Voltage",
+                "{\"value\": 52.0}",
+            );
+            MqttClient::apply_device_message(
+                &mut d,
+                "battery",
+                2,
+                "Dc/0/Power",
+                "{\"value\": -265.0}",
+            );
+            MqttClient::apply_device_message(
+                &mut d,
+                "battery",
+                2,
+                "Dc/0/Current",
+                "{\"value\": -5.1}",
+            );
+            let mut st = state.lock().unwrap();
+            MqttClient::apply_cerbo_to_state(&d, &mut st);
+        }
+
+        let raw = RawInverterState {
+            battery_power: Some(9999.0),
+            battery_voltage: Some(40.0),
+            battery_current: Some(0.0),
+            battery_soc: Some(11.0),
+            gt: Some(10.0),
+            ..Default::default()
+        };
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            Arc::new(Mutex::new(NotificationState {
+                high_consumption: AlertState::new(),
+                low_water: AlertState::new(),
+                high_solar: AlertState::new(),
+                high_load: std::collections::HashMap::new(),
+            })),
+            None,
+            Some(cerbo_devices),
+            ev_cache,
+        );
+
+        let guard = state.lock().unwrap();
+        assert_eq!(guard.battery_power, Some(-265.0));
+        assert_eq!(guard.battery_voltage, Some(52.0));
+        assert_eq!(guard.battery_current, Some(-5.1));
+        // Voltage-derived SoC, not daemon 11%.
+        assert_eq!(guard.battery_soc, Some(voltage_soc(52.0)));
+        assert_eq!(guard.gt, Some(10.0)); // non-battery fields still merge
     }
 }

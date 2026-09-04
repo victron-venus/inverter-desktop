@@ -6,7 +6,7 @@
     <div class="divide-y divide-slate-50 dark:divide-slate-800/30">
       <div
         v-for="load in loads"
-        :key="load.name"
+        :key="load.id || load.name"
         class="flex justify-between items-center px-2 py-0.5 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors"
       >
         <span
@@ -25,7 +25,7 @@
 import { Zap } from '@lucide/vue'
 
 defineProps<{
-  loads: Array<{ name: string; value: number; isGeneration?: boolean }>
+  loads: Array<{ id?: string; name: string; value: number; isGeneration?: boolean }>
 }>()
 
 function loadColor(load: { name: string; value: number; isGeneration?: boolean }): string {

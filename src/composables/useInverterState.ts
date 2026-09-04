@@ -58,6 +58,8 @@ export interface InverterState {
     time_to_go?: string
   }>
   loads?: Record<string, number>
+  /** Cerbo acload instance id → CustomName/ProductName (stable; loads stay id-keyed). */
+  load_names?: Record<string, string>
   ui_config?: {
     home_buttons?: Array<{ id: string; label: string; entity: string; state_key?: string }>
     header_toggles?: Array<{ id: string; label: string; entity: string }>

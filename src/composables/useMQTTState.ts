@@ -49,12 +49,17 @@ const evSectionVisible = computed(() => evLatch.value)
 const acloads = computed(() => {
   const mqttLoads = state.value.loads
   if (!mqttLoads || Object.keys(mqttLoads).length === 0) return []
-  const items: Array<{ name: string; value: number; isGeneration: boolean }> = []
+  const nameMap = state.value.load_names ?? {}
+  const items: Array<{ id: string; name: string; value: number; isGeneration: boolean }> = []
   for (const [key, val] of Object.entries(mqttLoads)) {
     const v = typeof val === 'number' ? val : Number(val)
     if (!Number.isNaN(v) && Math.abs(v) > 2) {
-      const name = key.replace(/ Power 1S$/i, '').replace(/_/g, ' ') || key
-      items.push({ name, value: v, isGeneration: v < 0 })
+      // Prefer Cerbo CustomName/ProductName cache; never flash raw instance id
+      // once a name is known. Fallback formats legacy daemon keys.
+      const cached = nameMap[key]
+      const name =
+        (cached && cached.trim()) || key.replace(/ Power 1S$/i, '').replace(/_/g, ' ') || key
+      items.push({ id: key, name, value: v, isGeneration: v < 0 })
     }
   }
   items.sort((a, b) => {

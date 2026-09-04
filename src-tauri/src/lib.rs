@@ -266,9 +266,9 @@ struct FullConfig {
     ha_ev_clamp_entity: Option<String>,
     // NOTE: Most fields now come from inverter-control MQTT (D-Bus sourced):
     // gt, g1, g2, tt, t1, t2, solar_total, mppt_total
-    // battery_soc, battery_power, battery_voltage, battery_current
     // setpoint, daily_stats, mppt_chargers, batteries, mppt_individual
-    // loads (Vue circuits via D-Bus acload)
+    // Bank battery_* and active loads come from Cerbo GX MQTT (shunt / acload),
+    // not from daemon inverter/state — same pattern as EV.
     // Only configure fields NOT available from inverter-control:
     // gt (if you prefer HA CT meter over Victron D-Bus)
     ha_consumption_clamps: Option<Vec<String>>,
