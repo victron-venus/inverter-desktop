@@ -92,14 +92,19 @@
       <div class="classic-header flex items-center gap-1.5">
         <HomeIcon :size="10" /> {{ $t('sections.home') }}
       </div>
-      <div class="p-1 flex flex-wrap gap-0.5 overflow-y-auto max-h-[300px]">
+      <div class="p-1 grid grid-cols-2 gap-0.5 overflow-y-auto max-h-[300px] items-start">
         <UiButton
           v-for="btn in homeButtons"
           :key="btn.id"
           variant="tile"
-          class="!flex-1 !min-w-0 !basis-[calc(50%-0.125rem)] max-w-full"
+          class="!w-full !max-w-full !min-w-0 !h-auto !whitespace-normal"
           toggle
           :active="buttonStates[btn.id] === 'on'"
+          :class="{
+            'classic-btn-unavailable': ['unavailable', 'unknown'].includes(
+              (buttonStates[btn.id] || '').toLowerCase()
+            ),
+          }"
           @click="$emit('send', 'toggle', { entity: btn.entity })"
         >
           <component
@@ -108,10 +113,7 @@
             :size="14"
             class="opacity-70 shrink-0"
           />
-          <span
-            class="text-[9px] leading-tight font-semibold min-w-0 w-full text-center break-words"
-            >{{ getHomeButtonLabel(btn.label) }}</span
-          >
+          <span class="home-tile-label">{{ getHomeButtonLabel(btn.label) }}</span>
         </UiButton>
       </div>
     </div>
