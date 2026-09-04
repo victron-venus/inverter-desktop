@@ -350,6 +350,18 @@ pub struct Battery {
     pub state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_go: Option<String>,
+    /// From battery MQTT System/MaxCellVoltage -- not in platform Notifications.
+    #[serde(skip)]
+    pub max_cell_voltage: Option<f64>,
+    /// From battery MQTT System/MaxVoltageCellId.
+    #[serde(skip)]
+    pub max_voltage_cell_id: Option<String>,
+    /// From battery MQTT System/MinCellVoltage.
+    #[serde(skip)]
+    pub min_cell_voltage: Option<f64>,
+    /// From battery MQTT System/MinVoltageCellId.
+    #[serde(skip)]
+    pub min_voltage_cell_id: Option<String>,
 }
 
 /// Wrapper that tracks when a device was last seen via MQTT, enabling
@@ -885,6 +897,120 @@ impl PlatformNotifSlot {
             ts,
         })
     }
+}
+
+/// True when platform Description is a high/low (cell) voltage alarm we can
+/// enrich from battery System/Max*|Min* MQTT paths.
+fn voltage_cell_alarm_kind(description: &str) -> Option<&'static str> {
+    let d = description.to_lowercase();
+    let has_voltage = d.contains("voltage") || d.contains("cell");
+    if !has_voltage {
+        return None;
+    }
+    if d.contains("high") {
+        Some("high")
+    } else if d.contains("low") {
+        Some("low")
+    } else {
+        None
+    }
+}
+
+fn format_cell_detail(cell_id: Option<&str>, voltage: Option<f64>) -> Option<String> {
+    match (cell_id.map(str::trim).filter(|s| !s.is_empty()), voltage) {
+        (Some(id), Some(v)) => Some(format!("cell {id} · {v:.2}V")),
+        (None, Some(v)) => Some(format!("{v:.2}V")),
+        (Some(id), None) => Some(format!("cell {id}")),
+        _ => None,
+    }
+}
+
+fn battery_cell_detail_for_alarm(battery: &Battery, kind: &str) -> Option<String> {
+    match kind {
+        "high" => format_cell_detail(
+            battery.max_voltage_cell_id.as_deref(),
+            battery.max_cell_voltage,
+        ),
+        "low" => format_cell_detail(
+            battery.min_voltage_cell_id.as_deref(),
+            battery.min_cell_voltage,
+        ),
+        _ => None,
+    }
+}
+
+fn find_battery_for_platform_notif<'a>(
+    devices: &'a CerboDevices,
+    slot: &PlatformNotifSlot,
+) -> Option<&'a Battery> {
+    if let Some(dn) = slot
+        .device_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let dn_l = dn.to_lowercase();
+        if let Some(b) = devices.batteries.values().find_map(|e| {
+            e.data
+                .name
+                .as_deref()
+                .filter(|n| n.to_lowercase() == dn_l)
+                .map(|_| &e.data)
+        }) {
+            return Some(b);
+        }
+    }
+    // Service may embed the MQTT instance id.
+    if let Some(svc) = slot.service.as_deref() {
+        for (inst, e) in &devices.batteries {
+            if svc.contains(&inst.to_string()) {
+                return Some(&e.data);
+            }
+        }
+    }
+    let with_cells: Vec<_> = devices
+        .batteries
+        .values()
+        .filter(|e| {
+            e.data.max_cell_voltage.is_some()
+                || e.data.min_cell_voltage.is_some()
+                || e.data.max_voltage_cell_id.is_some()
+                || e.data.min_voltage_cell_id.is_some()
+        })
+        .collect();
+    if with_cells.len() == 1 {
+        return Some(&with_cells[0].data);
+    }
+    if devices.batteries.len() == 1 {
+        return Some(&devices.batteries.values().next()?.data);
+    }
+    None
+}
+
+fn enrich_platform_notification_body(
+    slot: &PlatformNotifSlot,
+    mut n: MqttNotification,
+    devices: &CerboDevices,
+) -> MqttNotification {
+    let Some(kind) = slot
+        .description
+        .as_deref()
+        .and_then(voltage_cell_alarm_kind)
+    else {
+        return n;
+    };
+    let Some(battery) = find_battery_for_platform_notif(devices, slot) else {
+        return n;
+    };
+    let Some(detail) = battery_cell_detail_for_alarm(battery, kind) else {
+        return n;
+    };
+    if n.body.trim().is_empty() {
+        n.body = detail;
+    } else if !n.body.contains(&detail) {
+        n.body = format!("{} · {}", n.body.trim(), detail);
+    }
+    n
 }
 
 /// Split CamelCase into words: "HighCellVoltage" -> ["High", "Cell", "Voltage"]
@@ -1543,6 +1669,7 @@ impl MqttClient {
                 payload,
                 platform_notifs,
                 platform_notifs_seen,
+                cerbo_devices,
                 app_handle,
             );
         } else if topic.starts_with("N/") && topic.contains("/Alarms/") {
@@ -1591,6 +1718,19 @@ impl MqttClient {
                         guard.clone()
                     };
                     Self::emit_state_update(app_handle, &snapshot, false);
+                    if kind == "battery" && Self::is_battery_cell_path(path) {
+                        Self::reemit_platform_notifications_with_cell_detail(
+                            platform_notifs,
+                            cerbo_devices,
+                            app_handle,
+                        );
+                        Self::reemit_alarm_notifications_with_cell_detail(
+                            alarms,
+                            platform_notifs_seen,
+                            cerbo_devices,
+                            app_handle,
+                        );
+                    }
                 }
             }
         } else if topic.starts_with("N/") && Self::parse_water_topic(topic).is_some() {
@@ -1838,6 +1978,30 @@ impl MqttClient {
             .unwrap_or_else(|| payload.trim().to_string());
         (!s.is_empty()).then_some(s)
     }
+    /// Cell id may be a string ("7") or number (7) in {"value": ...}.
+    /// Do not reuse parse_cerbo_name: numeric values fall back to the raw
+    /// JSON payload there.
+    fn parse_cerbo_cell_id(payload: &str) -> Option<String> {
+        let v = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+        let x = v.get("value")?;
+        if x.is_null() {
+            return None;
+        }
+        if let Some(s) = x.as_str() {
+            let t = s.trim();
+            return (!t.is_empty()).then(|| t.to_string());
+        }
+        if let Some(n) = x.as_i64().or_else(|| x.as_u64().map(|n| n as i64)) {
+            return Some(n.to_string());
+        }
+        if let Some(n) = x.as_f64() {
+            if n.fract().abs() < f64::EPSILON {
+                return Some(format!("{}", n as i64));
+            }
+            return Some(format!("{n}"));
+        }
+        None
+    }
 
     /// Parse N/<portal>/<kind>/<instance>/<path> for GX devices we discover
     /// ourselves (battery, solarcharger, pvinverter, vebus). Other kinds are left to
@@ -1876,6 +2040,9 @@ impl MqttClient {
                 let entry = devices.batteries.entry(inst).or_default();
                 entry.touch();
                 let b = &mut entry.data;
+                if b.instance.is_none() {
+                    b.instance = Some(inst);
+                }
                 match path {
                     "Soc" => b.soc = val,
                     "Dc/0/Voltage" => b.voltage = val,
@@ -1889,8 +2056,24 @@ impl MqttClient {
                     }
                     "Dc/0/Power" => b.power = val,
                     "ProductName" => b.name = Self::parse_cerbo_name(payload),
+                    "CustomName" => {
+                        // Prefer custom label when present (matches DeviceName).
+                        if let Some(n) = Self::parse_cerbo_name(payload) {
+                            b.name = Some(n);
+                        }
+                    }
                     "Serial" => b.serial = Self::parse_cerbo_name(payload),
                     "TimeToGo" => b.time_to_go = val.and_then(Self::format_time_to_go),
+                    // Cell extremes for High/Low (cell) voltage banner enrichment.
+                    // Platform Notifications do not carry these — only battery MQTT.
+                    "System/MaxCellVoltage" => b.max_cell_voltage = val,
+                    "System/MinCellVoltage" => b.min_cell_voltage = val,
+                    "System/MaxVoltageCellId" => {
+                        b.max_voltage_cell_id = Self::parse_cerbo_cell_id(payload)
+                    }
+                    "System/MinVoltageCellId" => {
+                        b.min_voltage_cell_id = Self::parse_cerbo_cell_id(payload)
+                    }
                     _ => return false,
                 }
                 true
@@ -2317,6 +2500,7 @@ impl MqttClient {
         payload: &str,
         platform_notifs: &Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
         platform_notifs_seen: &Arc<std::sync::atomic::AtomicBool>,
+        cerbo_devices: &Arc<Mutex<CerboDevices>>,
         app_handle: &Option<tauri::AppHandle>,
     ) {
         let Some((inst, slot, field)) = Self::parse_platform_notif_topic(topic) else {
@@ -2358,11 +2542,120 @@ impl MqttClient {
             return;
         };
         if let Some(n) = notification.to_notification() {
+            let n = if let Ok(devices) = cerbo_devices.lock() {
+                enrich_platform_notification_body(&notification, n, &devices)
+            } else {
+                n
+            };
             let _ = handle.emit("mqtt-notification", n);
         } else {
             let _ = handle.emit(
                 "mqtt-notification-clear",
                 serde_json::json!({ "id": notification.banner_id() }),
+            );
+        }
+    }
+
+    fn is_battery_cell_path(path: &str) -> bool {
+        matches!(
+            path,
+            "System/MaxCellVoltage"
+                | "System/MinCellVoltage"
+                | "System/MaxVoltageCellId"
+                | "System/MinVoltageCellId"
+        )
+    }
+
+    /// Re-emit visible platform banners so High/Low voltage bodies pick up
+    /// freshly arrived Max/Min cell fields from battery MQTT.
+    fn reemit_platform_notifications_with_cell_detail(
+        platform_notifs: &Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
+        cerbo_devices: &Arc<Mutex<CerboDevices>>,
+        app_handle: &Option<tauri::AppHandle>,
+    ) {
+        let Some(ref handle) = app_handle else {
+            return;
+        };
+        let slots: Vec<PlatformNotifSlot> = match platform_notifs.lock() {
+            Ok(g) => g.values().cloned().collect(),
+            Err(e) => e.into_inner().values().cloned().collect(),
+        };
+        let devices = match cerbo_devices.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        for slot in slots {
+            if let Some(n) = slot.to_notification() {
+                let n = enrich_platform_notification_body(&slot, n, &devices);
+                let _ = handle.emit("mqtt-notification", n);
+            }
+        }
+    }
+
+    /// Re-emit active Victron Alarms banners (fallback path) after cell fields update.
+    fn reemit_alarm_notifications_with_cell_detail(
+        alarms: &Arc<Mutex<HashMap<String, u8>>>,
+        platform_notifs_seen: &Arc<std::sync::atomic::AtomicBool>,
+        cerbo_devices: &Arc<Mutex<CerboDevices>>,
+        app_handle: &Option<tauri::AppHandle>,
+    ) {
+        if platform_notifs_seen.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let Some(ref handle) = app_handle else {
+            return;
+        };
+        let active: Vec<(String, u8)> = match alarms.lock() {
+            Ok(g) => g
+                .iter()
+                .filter(|(_, v)| **v == 1 || **v == 2)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
+            Err(e) => e
+                .into_inner()
+                .iter()
+                .filter(|(_, v)| **v == 1 || **v == 2)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
+        };
+        for (topic, value) in active {
+            let Some((service, instance, alarm_name)) = Self::parse_alarm_topic(&topic) else {
+                continue;
+            };
+            if service != "battery" {
+                continue;
+            }
+            let pretty = pretty_alarm_name(alarm_name);
+            let title = pretty
+                .strip_suffix(" alarm")
+                .unwrap_or(pretty.as_str())
+                .to_string();
+            if voltage_cell_alarm_kind(&title).is_none() {
+                continue;
+            }
+            let level = if value == 2 { "alarm" } else { "warning" };
+            let device = Self::resolve_alarm_device_name(service, instance, cerbo_devices)
+                .unwrap_or_else(|| match instance {
+                    Some(i) => format!("{service} {i}"),
+                    None => service.to_string(),
+                });
+            let body = Self::enrich_alarm_body_with_cell_detail(
+                service,
+                instance,
+                &title,
+                device,
+                cerbo_devices,
+            );
+            let _ = handle.emit(
+                "mqtt-notification",
+                MqttNotification {
+                    id: format!("victron-{topic}"),
+                    level: level.to_string(),
+                    title,
+                    body,
+                    source: "victron".to_string(),
+                    ts: Utc::now().to_rfc3339(),
+                },
             );
         }
     }
@@ -2402,6 +2695,39 @@ impl MqttClient {
             return Some((before, None, alarm_name));
         }
         None
+    }
+
+    fn enrich_alarm_body_with_cell_detail(
+        service: &str,
+        instance: Option<u32>,
+        title: &str,
+        device: String,
+        cerbo_devices: &Arc<Mutex<CerboDevices>>,
+    ) -> String {
+        if service != "battery" {
+            return device;
+        }
+        let Some(kind) = voltage_cell_alarm_kind(title) else {
+            return device;
+        };
+        let Some(inst) = instance else {
+            return device;
+        };
+        let Ok(devices) = cerbo_devices.lock() else {
+            return device;
+        };
+        let Some(detail) = devices
+            .batteries
+            .get(&inst)
+            .and_then(|e| battery_cell_detail_for_alarm(&e.data, kind))
+        else {
+            return device;
+        };
+        if device.trim().is_empty() {
+            detail
+        } else {
+            format!("{} · {}", device.trim(), detail)
+        }
     }
 
     fn resolve_alarm_device_name(
@@ -2488,13 +2814,20 @@ impl MqttClient {
                         Some(i) => format!("{service} {i}"),
                         None => service.to_string(),
                     });
+                let body = Self::enrich_alarm_body_with_cell_detail(
+                    service,
+                    instance,
+                    &title,
+                    device,
+                    cerbo_devices,
+                );
                 let _ = handle.emit(
                     "mqtt-notification",
                     MqttNotification {
                         id,
                         level: level.to_string(),
                         title,
-                        body: device,
+                        body,
                         source: "victron".to_string(),
                         ts: Utc::now().to_rfc3339(),
                     },
@@ -3113,6 +3446,199 @@ mod tests {
         assert!(slot.to_notification().is_none());
         slot.acknowledged = Some(false);
         assert!(slot.to_notification().is_some());
+    }
+
+    #[test]
+    fn apply_device_message_tracks_max_cell_voltage_fields() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "ProductName",
+            "{\"value\": \"JBD Battery Chain 1\"}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxCellVoltage",
+            "{\"value\": 3.62}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxVoltageCellId",
+            "{\"value\": 7}",
+        ));
+        let b = &d.batteries.get(&288).unwrap().data;
+        assert_eq!(b.instance, Some(288));
+        assert_eq!(b.max_cell_voltage, Some(3.62));
+        assert_eq!(b.max_voltage_cell_id.as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn platform_banner_appends_cell_detail_from_battery_mqtt() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "ProductName",
+            "{\"value\": \"JBD Battery Chain 1\"}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxCellVoltage",
+            "{\"value\": 3.62}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxVoltageCellId",
+            "{\"value\": \"7\"}",
+        ));
+        let slot = PlatformNotifSlot {
+            platform_instance: 0,
+            slot: 2,
+            description: Some("High voltage".into()),
+            device_name: Some("JBD Battery Chain 1".into()),
+            service: Some("com.victronenergy.battery.ttyUSB0".into()),
+            date_time: Some(1_700_000_000),
+            notif_type: Some(1),
+            active: Some(true),
+            acknowledged: Some(false),
+            silenced: Some(false),
+        };
+        let n = slot.to_notification().expect("show");
+        let n = enrich_platform_notification_body(&slot, n, &d);
+        assert_eq!(n.title, "High voltage");
+        assert_eq!(n.body, "JBD Battery Chain 1 · cell 7 · 3.62V");
+    }
+
+    #[test]
+    fn platform_banner_low_voltage_uses_min_cell_fields() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            1,
+            "ProductName",
+            "{\"value\": \"Pack\"}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            1,
+            "System/MinCellVoltage",
+            "{\"value\": 2.91}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            1,
+            "System/MinVoltageCellId",
+            "{\"value\": 3}",
+        ));
+        let slot = PlatformNotifSlot {
+            platform_instance: 0,
+            slot: 4,
+            description: Some("Low cell voltage".into()),
+            device_name: Some("Pack".into()),
+            notif_type: Some(1),
+            acknowledged: Some(false),
+            ..Default::default()
+        };
+        let n = enrich_platform_notification_body(&slot, slot.to_notification().expect("show"), &d);
+        assert_eq!(n.body, "Pack · cell 3 · 2.91V");
+    }
+
+    #[test]
+    fn platform_banner_high_cell_voltage_description_enriches() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "CustomName",
+            "{\"value\": \"JBD Battery Chain 1\"}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxCellVoltage",
+            "{\"value\": 3.62}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxVoltageCellId",
+            "{\"value\": 7}",
+        ));
+        let slot = PlatformNotifSlot {
+            platform_instance: 0,
+            slot: 2,
+            description: Some("HighCellVoltage".into()),
+            device_name: Some("JBD Battery Chain 1".into()),
+            notif_type: Some(1),
+            acknowledged: Some(false),
+            ..Default::default()
+        };
+        let n = enrich_platform_notification_body(&slot, slot.to_notification().expect("show"), &d);
+        assert_eq!(n.body, "JBD Battery Chain 1 · cell 7 · 3.62V");
+    }
+
+    #[test]
+    fn parse_cerbo_cell_id_accepts_number_and_string() {
+        assert_eq!(
+            MqttClient::parse_cerbo_cell_id("{\"value\": 7}").as_deref(),
+            Some("7")
+        );
+        assert_eq!(
+            MqttClient::parse_cerbo_cell_id("{\"value\": \"12\"}").as_deref(),
+            Some("12")
+        );
+    }
+
+    #[test]
+    fn enrich_alarm_body_appends_max_cell_detail() {
+        let mut d = CerboDevices::default();
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "ProductName",
+            "{\"value\": \"JBD Battery Chain 1\"}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxCellVoltage",
+            "{\"value\": 3.62}",
+        ));
+        assert!(MqttClient::apply_device_message(
+            &mut d,
+            "battery",
+            288,
+            "System/MaxVoltageCellId",
+            "{\"value\": 7}",
+        ));
+        let devices = Arc::new(Mutex::new(d));
+        let body = MqttClient::enrich_alarm_body_with_cell_detail(
+            "battery",
+            Some(288),
+            "High voltage",
+            "JBD Battery Chain 1".into(),
+            &devices,
+        );
+        assert_eq!(body, "JBD Battery Chain 1 · cell 7 · 3.62V");
     }
 
     #[test]
