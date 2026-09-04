@@ -1005,7 +1005,7 @@ impl MqttClient {
         Ok(())
     }
 
-    /// Subscribe the GX portal topics (alarms + dbus-pump water).
+    /// Subscribe the GX portal topics (alarms + dbus-pump water + active loads).
     fn subscribe_portal_topics(client: &Client, id: &str) {
         for filter in [
             format!("N/{}/+/Alarms/#", id),
@@ -1020,6 +1020,9 @@ impl MqttClient {
             format!("N/{}/ev/+/Ac/Power", id),
             format!("N/{}/evcharger/+/Soc", id),
             format!("N/{}/evcharger/+/Ac/Power", id),
+            // Active loads: Victron acload services published by dbus-emporia-vue
+            // and other Victron D-Bus acload sources. Format: N/<portal>/acload/<i>/Ac/Power
+            format!("N/{}/acload/+/Ac/Power", id),
             // Directly discovered GX devices: battery bank(s) + MPPT chargers
             // + AC PV inverters of any vendor, so the app finds them even
             // when inverter-control is down.
@@ -1168,6 +1171,20 @@ impl MqttClient {
                     }
                 }
             }
+        } else if topic.starts_with("N/") && Self::parse_acload_topic(topic).is_some() {
+            // dbus-emporia-vue / Victron acload services on the GX:
+            // N/<portal>/acload/<i>/Ac/Power (W).
+            if let Some(value) = Self::parse_cerbo_value(payload) {
+                if let Ok(mut guard) = state.lock() {
+                    let loads = guard.loads.get_or_insert_with(Default::default);
+                    // Use instance id (e.g. "85") as the key — matches the
+                    // dbus-emporia-vue service instance number.
+                    if let Some(inst) = Self::parse_acload_topic(topic) {
+                        loads.insert(inst.to_string(), value);
+                    }
+                    Self::emit_state_update(app_handle, &guard, false);
+                }
+            }
         } else if let Some(ref cam_t) = camera_topic {
             if match_mqtt_topic(topic, cam_t) {
                 if let Some(ref handle) = app_handle {
@@ -1227,6 +1244,24 @@ impl MqttClient {
             | ("evcharger", "Ac/Power") => Some((kind, inst, path)),
             _ => None,
         }
+    }
+
+    /// Parse a dbus-emporia-vue / Victron acload topic:
+    /// N/<portal>/acload/<instance>/Ac/Power -> Some(instance).
+    fn parse_acload_topic(topic: &str) -> Option<&str> {
+        // Match: N/<portal>/acload/<instance>/Ac/Power
+        let rest = topic.strip_prefix("N/")?;
+        let mut it = rest.split('/');
+        let _portal = it.next()?;
+        if it.next()? != "acload" {
+            return None;
+        }
+        let instance = it.next()?;
+        // Verify remaining is exactly "Ac/Power"
+        if it.next()? != "Ac" || it.next()? != "Power" {
+            return None;
+        }
+        Some(instance)
     }
 
     /// Cerbo flashmq JSON envelope: {"value": <number>}.
