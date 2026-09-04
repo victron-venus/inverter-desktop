@@ -195,18 +195,13 @@ struct RawInverterState {
     // ev_charging_kw, ev_power, car_soc are intentionally absent —
     // EV telemetry comes only from Cerbo MQTT via apply_ev_message + EvCache,
     // not from the daemon's inverter/state payload.
-    // battery_* and loads may still be present for fallback when Cerbo has
-    // not discovered a shunt / acload yet; process_state_update skips them
-    // once Cerbo owns those tiles.
-    water_level: Option<f64>,
-    water_valve: Option<serde_json::Value>,
-    pump_switch: Option<serde_json::Value>,
-    dishwasher_running: Option<serde_json::Value>,
-    dishwasher_duration: Option<u64>,
-    washer_time: Option<u64>,
-    washer_power: Option<serde_json::Value>,
-    dryer_time: Option<u64>,
-    dryer_power: Option<serde_json::Value>,
+    // battery_*, loads, grid/consumption, setpoint/mode, MPPT/PV/batteries
+    // arrays, solar_total, and water may still appear in the JSON for
+    // fallback; process_state_update skips merging them once Cerbo (or HA
+    // for appliances) owns those tiles — same EV wipe-protection pattern.
+    // water_* / washer_* / dryer_* / dishwasher_*: intentionally absent —
+    // water from Cerbo tank/pump handlers; appliances from HA entities only.
+    // Ignoring them in JSON prevents daemon zeros from being tempting to merge.
     latest_version: Option<String>,
     console: Option<Vec<String>>,
 }
@@ -498,6 +493,46 @@ impl CerboDevices {
                 .to_lowercase()
                 .contains("shunt")
         })
+    }
+
+    /// systemcalc Ac/Grid seen — Cerbo owns gt/g1/g2 (vebus is fallback only).
+    fn owns_grid(&self) -> bool {
+        self.system
+            .values()
+            .any(|e| e.data.g1.is_some() || e.data.g2.is_some())
+            || self.vebus.values().any(|e| {
+                e.data.l1_power.is_some() || e.data.l2_power.is_some() || e.data.ac_power.is_some()
+            })
+    }
+
+    /// systemcalc Ac/Consumption seen — Cerbo owns tt/t1/t2.
+    fn owns_consumption(&self) -> bool {
+        self.system
+            .values()
+            .any(|e| e.data.t1.is_some() || e.data.t2.is_some())
+    }
+
+    /// VE.Bus discovered — Cerbo owns Hub4 setpoint + /State label.
+    fn owns_vebus_mode(&self) -> bool {
+        self.vebus
+            .values()
+            .any(|e| e.data.setpoint.is_some() || e.data.inverter_state.is_some())
+    }
+
+    fn owns_chargers(&self) -> bool {
+        !self.chargers.is_empty()
+    }
+
+    fn owns_pv(&self) -> bool {
+        !self.pv_inverters.is_empty()
+    }
+
+    fn owns_batteries(&self) -> bool {
+        !self.batteries.is_empty()
+    }
+
+    fn owns_solar(&self) -> bool {
+        self.owns_chargers() || self.owns_pv()
     }
 }
 
@@ -1980,6 +2015,32 @@ impl MqttClient {
             );
             st.pv_inverters = Some(pv_inverters);
         }
+        // Chart/stat "solar total": prefer Cerbo maps; if only one side is on
+        // Cerbo, keep the other side from existing state (daemon fallback).
+        if devices.owns_solar() {
+            let mppt = if devices.owns_chargers() {
+                devices.chargers.values().filter_map(|e| e.data.power).sum()
+            } else {
+                st.mppt_total
+                    .or_else(|| st.mppt_individual.as_ref().map(|v| v.iter().sum()))
+                    .unwrap_or(0.0)
+            };
+            let pv = if devices.owns_pv() {
+                devices
+                    .pv_inverters
+                    .values()
+                    .filter_map(|e| e.data.power)
+                    .sum()
+            } else if let Some(ref invs) = st.pv_inverters {
+                invs.iter().filter_map(|p| p.power).sum()
+            } else {
+                st.pv_inverter_individual
+                    .as_ref()
+                    .map(|v| v.iter().sum())
+                    .unwrap_or(0.0)
+            };
+            st.solar_total = Some(mppt + pv);
+        }
         // Prefer systemcalc grid/consumption (same paths as inverter-control).
         if let Some(entry) = devices.system.values().next() {
             let s = &entry.data;
@@ -2162,64 +2223,84 @@ impl MqttClient {
             };
         }
 
-        merge_opt!(gt, raw.gt);
-        merge_opt!(g1, raw.g1);
-        merge_opt!(g2, raw.g2);
-        merge_opt!(tt, raw.tt);
-        merge_opt!(t1, raw.t1);
-        merge_opt!(t2, raw.t2);
-        merge_opt!(solar_total, raw.solar_total);
+        // Snapshot which Cerbo maps already own live tiles so daemon
+        // zeros/partials cannot clobber them (same pattern as EV / shunt).
+        let cerbo_flags = cerbo_devices.as_ref().and_then(|c| {
+            c.lock().ok().map(|d| {
+                (
+                    d.has_shunt(),
+                    d.owns_grid(),
+                    d.owns_consumption(),
+                    d.owns_vebus_mode(),
+                    d.owns_chargers(),
+                    d.owns_pv(),
+                    d.owns_batteries(),
+                    d.owns_solar(),
+                    !d.acloads.is_empty(),
+                )
+            })
+        });
+        let (
+            cerbo_has_shunt,
+            cerbo_owns_grid,
+            cerbo_owns_consumption,
+            cerbo_owns_vebus_mode,
+            cerbo_owns_chargers,
+            cerbo_owns_pv,
+            cerbo_owns_batteries,
+            cerbo_owns_solar,
+            cerbo_has_acloads,
+        ) = cerbo_flags.unwrap_or((
+            false, false, false, false, false, false, false, false, false,
+        ));
+
+        // Grid / consumption / solar: Cerbo systemcalc + chargers/PV first.
+        if !cerbo_owns_grid {
+            merge_opt!(gt, raw.gt);
+            merge_opt!(g1, raw.g1);
+            merge_opt!(g2, raw.g2);
+        }
+        if !cerbo_owns_consumption {
+            merge_opt!(tt, raw.tt);
+            merge_opt!(t1, raw.t1);
+            merge_opt!(t2, raw.t2);
+        }
+        if !cerbo_owns_solar {
+            merge_opt!(solar_total, raw.solar_total);
+        }
         // Battery bank totals: Cerbo shunt owns them (same pattern as EV —
         // do not let daemon inverter/state overwrite shunt-derived W/V/A/%).
         // Fallback to daemon only when no Cerbo shunt has been discovered yet.
-        let cerbo_has_shunt = cerbo_devices
-            .as_ref()
-            .and_then(|c| c.lock().ok().map(|d| d.has_shunt()))
-            .unwrap_or(false);
         if !cerbo_has_shunt {
             merge_opt!(battery_soc, raw.battery_soc);
             merge_opt!(battery_power, raw.battery_power);
             merge_opt!(battery_voltage, raw.battery_voltage);
             merge_opt!(battery_current, raw.battery_current);
         }
-        merge_opt!(setpoint, raw.setpoint);
-        merge_opt!(inverter_state, raw.inverter_state);
+        if !cerbo_owns_vebus_mode {
+            merge_opt!(setpoint, raw.setpoint);
+            merge_opt!(inverter_state, raw.inverter_state);
+        }
         merge_opt!(version, raw.version);
         merge_opt!(dashboard_version, raw.dashboard_version);
         merge_opt!(uptime, raw.uptime);
         merge_opt!(ha_connected, raw.ha_connected);
         merge_opt!(ha_direct_connected, raw.ha_direct_connected);
         merge_opt!(ess_mode, raw.ess_mode);
-        merge_opt!(mppt_individual, raw.mppt_individual);
+        if !cerbo_owns_chargers {
+            merge_opt!(mppt_individual, raw.mppt_individual);
+        }
         merge_opt!(ui_config, raw.ui_config);
         merge_opt!(daily_stats, raw.daily_stats);
         merge_opt!(solar_forecast, raw.solar_forecast);
-        // EV numbers come ONLY from MQTT (apply_ev_message + EvCache).
-        // Do NOT merge daemon zeros here — they overwrite MQTT telemetry.
-        merge_opt!(water_level, raw.water_level);
-        merge_opt!(dishwasher_duration, raw.dishwasher_duration);
-        merge_opt!(washer_time, raw.washer_time);
-        merge_opt!(dryer_time, raw.dryer_time);
+        // EV + water come ONLY from Cerbo MQTT handlers (apply_ev_message /
+        // tank+pump). Do NOT merge daemon values — they overwrite live tiles.
+        // Washer/dryer/dishwasher: UI reads HA entities only — skip daemon.
         merge_opt!(latest_version, raw.latest_version);
 
         // Bool coercions — keep existing if incoming is None
         if let Some(ref v) = raw.dry_run {
             new_state.dry_run = Some(coerce_bool(v));
-        }
-        if let Some(ref v) = raw.water_valve {
-            new_state.water_valve = Some(coerce_bool(v));
-        }
-        if let Some(ref v) = raw.pump_switch {
-            new_state.pump_switch = Some(coerce_bool(v));
-        }
-        if let Some(ref v) = raw.dishwasher_running {
-            new_state.dishwasher_running = Some(coerce_bool(v));
-        }
-        if let Some(ref v) = raw.washer_power {
-            new_state.washer_power = Some(coerce_bool(v));
-        }
-        if let Some(ref v) = raw.dryer_power {
-            new_state.dryer_power = Some(coerce_bool(v));
         }
 
         // Map coercions
@@ -2228,24 +2309,29 @@ impl MqttClient {
         }
         merge_opt!(features, raw.features);
 
-        // Collection fields — replace when daemon sends them
-        merge_opt!(mppt_chargers, raw.mppt_chargers);
-        merge_opt!(pv_inverters, raw.pv_inverters);
-        merge_opt!(pv_inverter_individual, raw.pv_inverter_individual);
-        merge_opt!(batteries, raw.batteries);
+        // Collection fields — Cerbo device maps win when discovered.
+        if !cerbo_owns_chargers {
+            merge_opt!(mppt_chargers, raw.mppt_chargers);
+        }
+        if !cerbo_owns_pv {
+            merge_opt!(pv_inverters, raw.pv_inverters);
+            merge_opt!(pv_inverter_individual, raw.pv_inverter_individual);
+        }
+        if !cerbo_owns_batteries {
+            merge_opt!(batteries, raw.batteries);
+        }
         // Active loads: Cerbo acload services own the map (instance-keyed +
         // load_names). Daemon loads are often name-keyed and would replace the
         // Cerbo map on every inverter/state → UI flickers ids ↔ names.
-        let cerbo_has_acloads = cerbo_devices
-            .as_ref()
-            .and_then(|c| c.lock().ok().map(|d| !d.acloads.is_empty()))
-            .unwrap_or(false);
         if !cerbo_has_acloads {
             merge_opt!(loads, raw.loads);
         }
 
-        // mppt_total is derived from mppt_individual (compute from merged value)
-        new_state.mppt_total = new_state.mppt_individual.as_ref().map(|v| v.iter().sum());
+        // mppt_total from daemon mppt_individual only when Cerbo has no chargers.
+        // Otherwise apply_cerbo_to_state owns mppt_total / solar_total.
+        if !cerbo_owns_chargers {
+            new_state.mppt_total = new_state.mppt_individual.as_ref().map(|v| v.iter().sum());
+        }
 
         // Console: append new lines, cap at max
         if let Some(new_lines) = raw.console {
@@ -3828,6 +3914,278 @@ mod tests {
         assert_eq!(guard.battery_current, Some(-5.1));
         // Voltage-derived SoC, not daemon 11%.
         assert_eq!(guard.battery_soc, Some(voltage_soc(52.0)));
-        assert_eq!(guard.gt, Some(10.0)); // non-battery fields still merge
+        // No Cerbo system/vebus yet → daemon gt still merges as fallback.
+        assert_eq!(guard.gt, Some(10.0));
+    }
+
+    fn empty_notifications() -> Arc<Mutex<NotificationState>> {
+        Arc::new(Mutex::new(NotificationState {
+            high_consumption: AlertState::new(),
+            low_water: AlertState::new(),
+            high_solar: AlertState::new(),
+            high_load: std::collections::HashMap::new(),
+        }))
+    }
+
+    #[test]
+    fn process_state_update_skips_daemon_grid_when_cerbo_system_present() {
+        let state = Arc::new(Mutex::new(InverterState::default()));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+        let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
+
+        {
+            let mut d = cerbo_devices.lock().unwrap();
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "system",
+                0,
+                "Ac/Grid/L1/Power",
+                "{\"value\": 120.0}",
+            ));
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "system",
+                0,
+                "Ac/Grid/L2/Power",
+                "{\"value\": 80.0}",
+            ));
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "system",
+                0,
+                "Ac/Consumption/L1/Power",
+                "{\"value\": 400.0}",
+            ));
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "system",
+                0,
+                "Ac/Consumption/L2/Power",
+                "{\"value\": 100.0}",
+            ));
+            let mut st = state.lock().unwrap();
+            MqttClient::apply_cerbo_to_state(&d, &mut st);
+        }
+
+        let raw = RawInverterState {
+            gt: Some(0.0),
+            g1: Some(0.0),
+            g2: Some(0.0),
+            tt: Some(0.0),
+            t1: Some(0.0),
+            t2: Some(0.0),
+            version: Some("daemon".into()),
+            ..Default::default()
+        };
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            empty_notifications(),
+            None,
+            Some(cerbo_devices),
+            ev_cache,
+        );
+
+        let guard = state.lock().unwrap();
+        assert_eq!(guard.g1, Some(120.0));
+        assert_eq!(guard.g2, Some(80.0));
+        assert_eq!(guard.gt, Some(200.0));
+        assert_eq!(guard.t1, Some(400.0));
+        assert_eq!(guard.t2, Some(100.0));
+        assert_eq!(guard.tt, Some(500.0));
+        assert_eq!(guard.version.as_deref(), Some("daemon"));
+    }
+
+    #[test]
+    fn process_state_update_skips_daemon_setpoint_when_cerbo_vebus_present() {
+        let state = Arc::new(Mutex::new(InverterState::default()));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+        let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
+
+        {
+            let mut d = cerbo_devices.lock().unwrap();
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "vebus",
+                276,
+                "Hub4/L1/AcPowerSetpoint",
+                "{\"value\": -1500.0}",
+            ));
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "vebus",
+                276,
+                "State",
+                "{\"value\": 9}",
+            ));
+            let mut st = state.lock().unwrap();
+            MqttClient::apply_cerbo_to_state(&d, &mut st);
+        }
+
+        let raw = RawInverterState {
+            setpoint: Some(0.0),
+            inverter_state: Some("Off".into()),
+            ess_mode: Some(EssMode {
+                mode_name: Some("Optimized".into()),
+                is_external: Some(true),
+            }),
+            ..Default::default()
+        };
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            empty_notifications(),
+            None,
+            Some(cerbo_devices),
+            ev_cache,
+        );
+
+        let guard = state.lock().unwrap();
+        assert_eq!(guard.setpoint, Some(-1500.0));
+        assert_eq!(guard.inverter_state.as_deref(), Some("Inverting"));
+        // ess_mode remains daemon-only
+        assert_eq!(
+            guard.ess_mode.as_ref().and_then(|m| m.mode_name.as_deref()),
+            Some("Optimized")
+        );
+    }
+
+    #[test]
+    fn process_state_update_skips_daemon_solar_when_cerbo_chargers_present() {
+        let state = Arc::new(Mutex::new(InverterState::default()));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+        let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
+
+        {
+            let mut d = cerbo_devices.lock().unwrap();
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "solarcharger",
+                1,
+                "Yield/Power",
+                "{\"value\": 700.0}",
+            ));
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "solarcharger",
+                1,
+                "ProductName",
+                "{\"value\": \"SmartSolar\"}",
+            ));
+            assert!(MqttClient::apply_device_message(
+                &mut d,
+                "pvinverter",
+                20,
+                "Ac/Power",
+                "{\"value\": 300.0}",
+            ));
+            let mut st = state.lock().unwrap();
+            MqttClient::apply_cerbo_to_state(&d, &mut st);
+        }
+
+        let raw = RawInverterState {
+            solar_total: Some(1.0),
+            mppt_individual: Some(vec![1.0, 2.0]),
+            mppt_chargers: Some(vec![MpptCharger {
+                name: Some("daemon-mppt".into()),
+                power: Some(1.0),
+                ..Default::default()
+            }]),
+            pv_inverters: Some(vec![PvInverter {
+                name: Some("daemon-pv".into()),
+                power: Some(1.0),
+                ..Default::default()
+            }]),
+            pv_inverter_individual: Some(vec![9.0]),
+            ..Default::default()
+        };
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            empty_notifications(),
+            None,
+            Some(cerbo_devices),
+            ev_cache,
+        );
+
+        let guard = state.lock().unwrap();
+        assert_eq!(guard.mppt_total, Some(700.0));
+        assert_eq!(guard.solar_total, Some(1000.0)); // 700 + 300
+        assert_eq!(
+            guard
+                .mppt_chargers
+                .as_ref()
+                .unwrap()
+                .first()
+                .and_then(|m| m.name.as_deref()),
+            Some("SmartSolar")
+        );
+        assert!(guard
+            .pv_inverters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|p| p.name.as_deref() != Some("daemon-pv")));
+        assert!(guard.mppt_individual.is_none());
+        assert!(guard.pv_inverter_individual.is_none());
+    }
+
+    #[test]
+    fn process_state_update_does_not_merge_water_or_appliances_from_daemon() {
+        let state = Arc::new(Mutex::new(InverterState {
+            water_level: Some(77.0),
+            water_valve: Some(true),
+            pump_switch: Some(false),
+            dishwasher_running: Some(false),
+            dishwasher_duration: Some(0),
+            washer_time: Some(0),
+            dryer_time: Some(0),
+            ..Default::default()
+        }));
+        let ev_cache = Arc::new(Mutex::new(EvCache::default()));
+
+        // Daemon JSON still may contain water/appliance keys — they must be
+        // ignored (fields removed from RawInverterState) so Cerbo/HA values stay.
+        let raw: RawInverterState = serde_json::from_str(
+            r#"{
+                "water_level": 0,
+                "water_valve": false,
+                "pump_switch": true,
+                "dishwasher_running": true,
+                "dishwasher_duration": 99,
+                "washer_time": 88,
+                "dryer_time": 77,
+                "washer_power": true,
+                "dryer_power": true,
+                "dry_run": true
+            }"#,
+        )
+        .expect("extra appliance keys must not fail deserialize");
+        MqttClient::process_state_update(
+            raw,
+            state.clone(),
+            None,
+            empty_notifications(),
+            None,
+            None,
+            ev_cache,
+        );
+
+        let guard = state.lock().unwrap();
+        // Cerbo/HA-owned: daemon keys must not overwrite
+        assert_eq!(guard.water_level, Some(77.0));
+        assert_eq!(guard.water_valve, Some(true));
+        assert_eq!(guard.pump_switch, Some(false));
+        assert_eq!(guard.dishwasher_running, Some(false));
+        assert_eq!(guard.dishwasher_duration, Some(0));
+        assert_eq!(guard.washer_time, Some(0));
+        assert_eq!(guard.dryer_time, Some(0));
+        assert!(guard.washer_power.is_none());
+        assert!(guard.dryer_power.is_none());
+        // Daemon-only flag still merges
+        assert_eq!(guard.dry_run, Some(true));
     }
 }

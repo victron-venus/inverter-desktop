@@ -264,13 +264,11 @@ struct FullConfig {
     ha_ev_soc_entity: Option<String>,
     ha_ev_charging_entity: Option<String>,
     ha_ev_clamp_entity: Option<String>,
-    // NOTE: Most fields now come from inverter-control MQTT (D-Bus sourced):
-    // gt, g1, g2, tt, t1, t2, solar_total, mppt_total
-    // setpoint, daily_stats, mppt_chargers, batteries, mppt_individual
-    // Bank battery_* and active loads come from Cerbo GX MQTT (shunt / acload),
-    // not from daemon inverter/state — same pattern as EV.
-    // Only configure fields NOT available from inverter-control:
-    // gt (if you prefer HA CT meter over Victron D-Bus)
+    // Live power tiles prefer Cerbo GX MQTT (system/vebus/shunt/acload/MPPT/PV/EV/water).
+    // Daemon inverter/state still supplies: daily_stats, solar_forecast, booleans,
+    // features, ess_mode, versions, dry_run, ui_config, console, HA connectivity flags.
+    // HA entities cover washer/dryer/dishwasher (not merged from daemon).
+    // Optional HA CT clamps if you prefer HA meters over Victron D-Bus:
     ha_consumption_clamps: Option<Vec<String>>,
     ha_generation_clamps: Option<Vec<String>>,
     color_scheme: Option<String>,
@@ -336,7 +334,7 @@ impl Default for FullConfig {
             ha_ev_soc_entity: None,
             ha_ev_charging_entity: None,
             ha_ev_clamp_entity: None,
-            // NOTE: Most fields now come from inverter-control MQTT (D-Bus sourced)
+            // Live tiles: Cerbo-first; daemon for stats/flags/config (see FullConfig note)
             ha_consumption_clamps: None,
             ha_generation_clamps: None,
             color_scheme: Some("dark".to_string()),
