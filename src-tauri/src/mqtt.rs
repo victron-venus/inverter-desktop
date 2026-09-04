@@ -14,8 +14,24 @@ const MQTT_QUEUE_CAPACITY: usize = 10;
 const CONSOLE_MAX_LINES: usize = 50;
 const MIN_STATE_EMIT_INTERVAL: Duration = Duration::from_millis(500);
 
-static LAST_STATE_EMIT: std::sync::LazyLock<Mutex<Option<Instant>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
+/// Coalesce high-frequency MQTT state IPC: emit at most every
+/// `MIN_STATE_EMIT_INTERVAL`, and when updates arrive during the quiet
+/// window schedule a single trailing flush of the *latest* snapshot so the
+/// UI never freezes on a dropped update (DROP throttle had no trailing emit).
+struct StateEmitCoalesce {
+    last_emit: Option<Instant>,
+    pending: Option<InverterState>,
+    flush_scheduled: bool,
+}
+
+static STATE_EMIT_COALESCE: std::sync::LazyLock<Mutex<StateEmitCoalesce>> =
+    std::sync::LazyLock::new(|| {
+        Mutex::new(StateEmitCoalesce {
+            last_emit: None,
+            pending: None,
+            flush_scheduled: false,
+        })
+    });
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
@@ -768,27 +784,83 @@ impl MqttClient {
     ) {
         let hidden = crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
         if hidden {
+            // Drop any queued trailing snapshot; window-shown force-emits fresh state.
+            if let Ok(mut c) = STATE_EMIT_COALESCE.lock() {
+                c.pending = None;
+            }
             return;
         }
         let Some(ref handle) = app_handle else {
             return;
         };
 
-        if !force {
-            if let Ok(mut last) = LAST_STATE_EMIT.lock() {
-                let now = Instant::now();
-                if let Some(prev) = *last {
-                    if now.duration_since(prev) < MIN_STATE_EMIT_INTERVAL {
-                        return;
-                    }
-                }
-                *last = Some(now);
+        if force {
+            if let Ok(mut c) = STATE_EMIT_COALESCE.lock() {
+                c.last_emit = Some(Instant::now());
+                c.pending = None;
             }
-        } else if let Ok(mut last) = LAST_STATE_EMIT.lock() {
-            *last = Some(Instant::now());
+            let _ = handle.emit("mqtt-state-update", state);
+            return;
         }
 
-        let _ = handle.emit("mqtt-state-update", state);
+        let mut schedule_delay: Option<Duration> = None;
+        let mut emit_now = false;
+
+        if let Ok(mut c) = STATE_EMIT_COALESCE.lock() {
+            let now = Instant::now();
+            let since_last = c.last_emit.map(|prev| now.duration_since(prev));
+            let within_interval = since_last
+                .map(|d| d < MIN_STATE_EMIT_INTERVAL)
+                .unwrap_or(false);
+
+            if within_interval {
+                // Coalesce: keep latest snapshot and schedule one trailing flush.
+                c.pending = Some(state.clone());
+                if !c.flush_scheduled {
+                    c.flush_scheduled = true;
+                    let elapsed = since_last.unwrap_or(Duration::ZERO);
+                    schedule_delay = Some(MIN_STATE_EMIT_INTERVAL.saturating_sub(elapsed));
+                }
+            } else {
+                c.last_emit = Some(now);
+                c.pending = None;
+                emit_now = true;
+            }
+        } else {
+            // Poisoned coalesce lock — still try to deliver the update.
+            emit_now = true;
+        }
+
+        if emit_now {
+            let _ = handle.emit("mqtt-state-update", state);
+            return;
+        }
+
+        if let Some(delay) = schedule_delay {
+            let handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let to_emit = {
+                    if let Ok(mut c) = STATE_EMIT_COALESCE.lock() {
+                        c.flush_scheduled = false;
+                        let pending = c.pending.take();
+                        if pending.is_some() {
+                            c.last_emit = Some(Instant::now());
+                        }
+                        pending
+                    } else {
+                        None
+                    }
+                };
+                if let Some(snapshot) = to_emit {
+                    let still_hidden =
+                        crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+                    if !still_hidden {
+                        let _ = handle.emit("mqtt-state-update", &snapshot);
+                    }
+                }
+            });
+        }
     }
 
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1101,14 +1173,19 @@ impl MqttClient {
         } else if topic.starts_with("N/") && topic.contains("/Alarms/") {
             Self::handle_alarm_message(topic, payload, alarms, app_handle);
         } else if topic == "inverter/console" {
-            if let Ok(mut guard) = state.lock() {
+            let snapshot = {
+                let mut guard = match state.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
                 let console = guard.console.get_or_insert_with(Vec::new);
                 console.push(payload.to_string());
                 if console.len() > CONSOLE_MAX_LINES {
                     console.remove(0);
                 }
-                Self::emit_state_update(app_handle, &guard, false);
-            }
+                guard.clone()
+            };
+            Self::emit_state_update(app_handle, &snapshot, false);
         } else if topic.starts_with("N/") && Self::parse_device_topic(topic).is_some() {
             // Directly discovered GX device value (battery/solarcharger).
             if let Some((kind, inst, path)) = Self::parse_device_topic(topic) {
@@ -1121,12 +1198,17 @@ impl MqttClient {
                     })
                     .unwrap_or(false);
                 if applied {
-                    if let Ok(mut guard) = state.lock() {
+                    let snapshot = {
+                        let mut guard = match state.lock() {
+                            Ok(g) => g,
+                            Err(_) => return,
+                        };
                         if let Ok(d) = cerbo_devices.lock() {
                             Self::apply_cerbo_to_state(&d, &mut guard);
                         }
-                        Self::emit_state_update(app_handle, &guard, false);
-                    }
+                        guard.clone()
+                    };
+                    Self::emit_state_update(app_handle, &snapshot, false);
                 }
             }
         } else if topic.starts_with("N/") && Self::parse_water_topic(topic).is_some() {
@@ -1137,15 +1219,20 @@ impl MqttClient {
                 water_instances,
                 Self::parse_cerbo_value(payload),
             ) {
-                if let Ok(mut guard) = state.lock() {
+                let snapshot = {
+                    let mut guard = match state.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
                     match (kind, inst) {
                         ("tank", _) => guard.water_level = Some(value),
                         ("pump", i) if i == *pump_i => guard.pump_switch = Some(value >= 0.5),
                         ("pump", i) if i == *valve_i => guard.water_valve = Some(value >= 0.5),
                         _ => {}
                     }
-                    Self::emit_state_update(app_handle, &guard, false);
-                }
+                    guard.clone()
+                };
+                Self::emit_state_update(app_handle, &snapshot, false);
             }
         } else if topic.starts_with("N/") && Self::parse_ev_topic(topic).is_some() {
             // dbus-ev / dbus-evcharger on the GX:
@@ -1157,7 +1244,11 @@ impl MqttClient {
                 Self::parse_ev_topic(topic),
                 Self::parse_cerbo_value(payload),
             ) {
-                if let (Ok(mut guard), Ok(mut cache)) = (state.lock(), ev_cache.lock()) {
+                let snapshot = {
+                    let (mut guard, mut cache) = match (state.lock(), ev_cache.lock()) {
+                        (Ok(g), Ok(c)) => (g, c),
+                        _ => return,
+                    };
                     if Self::apply_ev_message(
                         &mut guard,
                         &mut cache,
@@ -1167,25 +1258,34 @@ impl MqttClient {
                         value,
                         ev_instances,
                     )
-                    .is_some()
+                    .is_none()
                     {
-                        Self::emit_state_update(app_handle, &guard, false);
+                        return;
                     }
-                }
+                    guard.clone()
+                };
+                Self::emit_state_update(app_handle, &snapshot, false);
             }
         } else if topic.starts_with("N/") && Self::parse_acload_topic(topic).is_some() {
             // dbus-emporia-vue / Victron acload services on the GX:
             // N/<portal>/acload/<i>/Ac/Power (W).
+            // High-frequency: update loads under lock, then rely on coalesced
+            // emit (do not force per-circuit IPC spam).
             if let Some(value) = Self::parse_cerbo_value(payload) {
-                if let Ok(mut guard) = state.lock() {
+                let Some(inst) = Self::parse_acload_topic(topic) else {
+                    return;
+                };
+                let snapshot = {
+                    let mut guard = match state.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
                     let loads = guard.loads.get_or_insert_with(Default::default);
-                    // Use instance id (e.g. "85") as the key — matches the
-                    // dbus-emporia-vue service instance number.
-                    if let Some(inst) = Self::parse_acload_topic(topic) {
-                        loads.insert(inst.to_string(), value);
-                    }
-                    Self::emit_state_update(app_handle, &guard, false);
-                }
+                    // Instance id (e.g. "85") matches dbus-emporia-vue service instance.
+                    loads.insert(inst.to_string(), value);
+                    guard.clone()
+                };
+                Self::emit_state_update(app_handle, &snapshot, false);
             }
         } else if let Some(ref cam_t) = camera_topic {
             if match_mqtt_topic(topic, cam_t) {
@@ -1945,10 +2045,12 @@ impl MqttClient {
         // restore_into ran above BEFORE emit so the emitted snapshot already
         // carries cached EV values (prevents the blink where the clone from
         // before apply_ev_message lands sees null EV numbers).
-        Self::emit_state_update(&app_handle, &new_state, false);
+        // Persist under the mutex *before* emit so concurrent Cerbo handlers
+        // (acload/device/EV) merge onto the latest daemon state.
         if let Ok(mut guard) = state.lock() {
-            *guard = new_state;
+            *guard = new_state.clone();
         }
+        Self::emit_state_update(&app_handle, &new_state, false);
     }
 
     /// Returns the current value of an inverter-control flag (true=on, false=off),

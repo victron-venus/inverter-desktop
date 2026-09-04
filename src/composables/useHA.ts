@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { computed, type Ref, ref, watch } from 'vue'
+import { computed, markRaw, type Ref, ref, watch } from 'vue'
 import type { AppConfig } from '../config'
 import { logger } from '../logger'
 import type {
@@ -179,7 +179,7 @@ export function useHA() {
         if (applianceEntities.length > 0) fetchHaEntityStates(applianceEntities)
         const initial = await invoke<InverterState>('get_state')
         if (initial) {
-          state.value = initial
+          state.value = markRaw(initial)
         }
       }
     } catch (e) {
@@ -205,12 +205,14 @@ export function useHA() {
     unlistenHaFiltered = await listen<HaFilteredData>('ha-filtered-update', (event) => {
       if (windowHidden) return
       const data = event.payload
-      haSensors.value = data.sensors
-      haNumbers.value = data.numbers
-      haCovers.value = data.covers
-      haMediaPlayers.value = data.media_players
-      haScenes.value = data.scenes
-      haWeather.value = data.weather
+      // markRaw: these are opaque display snapshots from Rust; deep-proxying
+      // hundreds of sensors on every tick was contributing to WebKit freezes.
+      haSensors.value = markRaw(data.sensors)
+      haNumbers.value = markRaw(data.numbers)
+      haCovers.value = markRaw(data.covers)
+      haMediaPlayers.value = markRaw(data.media_players)
+      haScenes.value = markRaw(data.scenes)
+      haWeather.value = data.weather ? markRaw(data.weather) : null
     })
 
     unlistenHaConn = await listen<boolean>('ha-connection-status', (event) => {

@@ -2,12 +2,126 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 // Import config loading functions from lib
 use crate::load_config;
 
 pub static WINDOW_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Coalesce high-frequency `ha-filtered-update` IPC: HA may emit dozens of
+/// `state_changed` events per second (every power sensor in the house). Emitting
+/// a full filtered snapshot on each event saturates WebKit IPC and freezes the
+/// dashboard even though MQTT/`ha-state-update` data is arriving.
+const MIN_HA_FILTERED_EMIT_INTERVAL: Duration = Duration::from_millis(500);
+
+struct HaFilteredEmitCoalesce {
+    last_emit: Option<Instant>,
+    flush_scheduled: bool,
+}
+
+static HA_FILTERED_COALESCE: std::sync::LazyLock<Mutex<HaFilteredEmitCoalesce>> =
+    std::sync::LazyLock::new(|| {
+        Mutex::new(HaFilteredEmitCoalesce {
+            last_emit: None,
+            flush_scheduled: false,
+        })
+    });
+
+fn domain_affects_filtered(entity_id: &str) -> bool {
+    matches!(
+        entity_id.split('.').next().unwrap_or(""),
+        "sensor" | "binary_sensor" | "number" | "cover" | "media_player" | "scene" | "weather"
+    )
+}
+
+fn emit_ha_filtered_now(
+    app: &tauri::AppHandle,
+    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+) {
+    if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let filtered = {
+        let Ok(guard) = entity_states.lock() else {
+            return;
+        };
+        compute_filtered_data(&guard)
+    };
+    let _ = app.emit("ha-filtered-update", &filtered);
+}
+
+/// Emit filtered HA entity arrays to the frontend, coalesced to at most one
+/// update per `MIN_HA_FILTERED_EMIT_INTERVAL` with a trailing flush of the
+/// latest map snapshot so the SidePanel never freezes on dropped ticks.
+fn emit_ha_filtered_coalesced(
+    app: &tauri::AppHandle,
+    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    force: bool,
+) {
+    if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    if force {
+        if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
+            c.last_emit = Some(Instant::now());
+            c.flush_scheduled = false;
+        }
+        emit_ha_filtered_now(app, entity_states);
+        return;
+    }
+
+    let mut schedule_delay: Option<Duration> = None;
+    let mut emit_now = false;
+
+    if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
+        let now = Instant::now();
+        let since_last = c.last_emit.map(|prev| now.duration_since(prev));
+        let within_interval = since_last
+            .map(|d| d < MIN_HA_FILTERED_EMIT_INTERVAL)
+            .unwrap_or(false);
+
+        if within_interval {
+            if !c.flush_scheduled {
+                c.flush_scheduled = true;
+                let elapsed = since_last.unwrap_or(Duration::ZERO);
+                schedule_delay = Some(MIN_HA_FILTERED_EMIT_INTERVAL.saturating_sub(elapsed));
+            }
+        } else {
+            c.last_emit = Some(now);
+            emit_now = true;
+        }
+    } else {
+        emit_now = true;
+    }
+
+    if emit_now {
+        emit_ha_filtered_now(app, entity_states);
+        return;
+    }
+
+    if let Some(delay) = schedule_delay {
+        let app = app.clone();
+        let entity_states = Arc::clone(entity_states);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let should_emit = {
+                if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
+                    c.flush_scheduled = false;
+                    c.last_emit = Some(Instant::now());
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_emit {
+                emit_ha_filtered_now(&app, &entity_states);
+            }
+        });
+    }
+}
 
 fn attr_str<'a>(attrs: Option<&'a serde_json::Value>, key: &str) -> Option<&'a str> {
     attrs.and_then(|a| a.get(key)).and_then(|v| v.as_str())
@@ -660,10 +774,7 @@ impl HaWebSocketClient {
 
         // Emit initial filtered data immediately after populating state map
         // This ensures frontend has full data on WS connect
-        if let Ok(states_guard) = entity_states.lock() {
-            let filtered = compute_filtered_data(&states_guard);
-            let _ = app.emit("ha-filtered-update", &filtered);
-        }
+        emit_ha_filtered_coalesced(&app, &entity_states, true);
 
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -694,24 +805,33 @@ impl HaWebSocketClient {
                                                             state: state.to_string(),
                                                             attributes: attrs.clone(),
                                                         });
+                                                    }
 
-                                                        // Skip expensive processing and emits when window is hidden
-                                                        if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
-                                                            // Emit individual update (backward compat for buttonStates, etc.) only for whitelisted entities
-                                                            if whitelist_clone.contains(&eid) {
-                                                                let _ = app_clone.emit(
-                                                                    "ha-state-update",
-                                                                    serde_json::json!({
-                                                                        "entity_id": eid,
-                                                                        "state": state,
-                                                                        "attributes": attrs.unwrap_or(serde_json::Value::Null),
-                                                                    }),
-                                                                );
-                                                            }
+                                                    // Skip expensive processing and emits when window is hidden
+                                                    if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+                                                        // Emit individual update (backward compat for buttonStates, etc.) only for whitelisted entities
+                                                        if whitelist_clone.contains(&eid) {
+                                                            let _ = app_clone.emit(
+                                                                "ha-state-update",
+                                                                serde_json::json!({
+                                                                    "entity_id": eid,
+                                                                    "state": state,
+                                                                    "attributes": attrs.unwrap_or(serde_json::Value::Null),
+                                                                }),
+                                                            );
+                                                        }
 
-                                                            // Compute and emit pre-filtered entity data
-                                                            let filtered = compute_filtered_data(&states_guard);
-                                                            let _ = app_clone.emit("ha-filtered-update", &filtered);
+                                                        // Full filtered snapshot is expensive and was previously
+                                                        // emitted on EVERY house-wide state_changed (power sensors
+                                                        // alone can be 50–100/s), freezing WebKit. Only schedule
+                                                        // when the entity can appear in filtered arrays, and
+                                                        // coalesce to ~2 Hz with a trailing flush.
+                                                        if domain_affects_filtered(&eid) {
+                                                            emit_ha_filtered_coalesced(
+                                                                &app_clone,
+                                                                &entity_states,
+                                                                false,
+                                                            );
                                                         }
                                                     }
                                                 }
