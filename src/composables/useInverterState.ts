@@ -106,7 +106,7 @@ export interface InverterState {
   /** Cerbo GX tank/pump/ev/evcharger instances discovered via MQTT. */
   discovered_water_ev?: Array<{
     instance: number
-    kind: 'tank' | 'pump' | 'ev' | 'evcharger' | string
+    kind: 'tank' | 'pump' | 'ev' | 'evcharger'
     name?: string | null
   }> | null
 }
