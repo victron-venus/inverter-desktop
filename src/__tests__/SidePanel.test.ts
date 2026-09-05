@@ -66,7 +66,7 @@ describe('SidePanel', () => {
   it('shows water section with level in percent', () => {
     const wrapper = mount(SidePanel, { props: baseProps })
     expect(wrapper.text()).toContain('sections.water')
-    expect(wrapper.text()).toContain('42 %')
+    expect(wrapper.text()).toContain('42%')
   })
 
   it('shows pump and valve status badges without toggle buttons', () => {
