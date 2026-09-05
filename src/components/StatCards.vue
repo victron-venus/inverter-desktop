@@ -1,8 +1,8 @@
 <template>
-  <div class="stat-cards grid grid-cols-2 md:grid-cols-5 gap-3">
+  <div class="stat-cards grid grid-cols-2 md:grid-cols-5">
     <!-- Grid -->
     <div
-      class="classic-card metric-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]"
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
     >
       <div class="classic-stat-label">Grid</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-grid">
@@ -15,7 +15,7 @@
 
     <!-- Consumption -->
     <div
-      class="classic-card metric-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]"
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
     >
       <div class="classic-stat-label">Consumption</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-consumption">
@@ -28,7 +28,7 @@
 
     <!-- Solar -->
     <div
-      class="classic-card metric-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]"
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
     >
       <div class="classic-stat-label">Solar</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-solar">
@@ -42,7 +42,7 @@
 
     <!-- Battery -->
     <div
-      class="classic-card metric-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]"
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
     >
       <div class="classic-stat-label">Battery</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-battery">
@@ -57,7 +57,7 @@
 
     <!-- Setpoint -->
     <div
-      class="classic-card metric-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]"
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
     >
       <div class="classic-stat-label">Setpoint</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-accent">
