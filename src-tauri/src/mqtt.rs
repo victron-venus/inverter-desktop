@@ -2681,7 +2681,7 @@ impl MqttClient {
         if parts.len() < 7 {
             return None;
         }
-        if parts.get(0) != Some(&"N") || parts.get(2) != Some(&"platform") {
+        if parts.first() != Some(&"N") || parts.get(2) != Some(&"platform") {
             return None;
         }
         if parts.get(4) != Some(&"Notifications") {
@@ -3573,10 +3573,12 @@ mod tests {
             r#"{"value": 3}"#
         ));
 
-        let mut st = InverterState::default();
-        // Daemon zeros must not win over Cerbo overlay.
-        st.tt = Some(0.0);
-        st.setpoint = Some(0.0);
+        let mut st = InverterState {
+            // Daemon zeros must not win over Cerbo overlay.
+            tt: Some(0.0),
+            setpoint: Some(0.0),
+            ..Default::default()
+        };
         MqttClient::apply_cerbo_to_state(&d, &mut st);
         assert_eq!(st.t1, Some(1200.0));
         assert_eq!(st.t2, Some(800.0));
@@ -3596,9 +3598,9 @@ mod tests {
     fn portal_topic_filter_count_fits_mqtt_queue_capacity() {
         // Keep in sync with subscribe_portal_topics filter list.
         const PORTAL_FILTER_COUNT: usize = 13;
-        assert!(
+        const _: () = assert!(
             PORTAL_FILTER_COUNT < MQTT_QUEUE_CAPACITY,
-            "portal filters ({PORTAL_FILTER_COUNT}) must leave headroom in              MQTT_QUEUE_CAPACITY ({MQTT_QUEUE_CAPACITY}) for concurrent              publishes/subscribes from inside connection.iter()"
+            "portal filters must leave headroom in MQTT_QUEUE_CAPACITY for concurrent publishes/subscribes from inside connection.iter()"
         );
     }
 
