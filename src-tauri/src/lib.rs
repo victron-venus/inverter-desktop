@@ -276,6 +276,8 @@ struct FullConfig {
     ha_entities: Option<Vec<HaEntityConfig>>,
     header_toggles_config: Option<Vec<HeaderToggle>>,
     portal_id: Option<String>,
+    #[serde(default)]
+    water_tank_instance: Option<u32>,
     water_pump_instance: Option<u32>,
     water_valve_instance: Option<u32>,
     #[serde(default = "default_evcharger_instance")]
@@ -342,6 +344,7 @@ impl Default for FullConfig {
             header_toggles_config: None,
             portal_id: None,
             // dbus-pump defaults on the GX (see dbus-pump local_config.example.py)
+            water_tank_instance: None,
             water_pump_instance: Some(1),
             water_valve_instance: Some(2),
             evcharger_instance: Some(40),
@@ -874,6 +877,7 @@ async fn connect_mqtt(
     username: Option<String>,
     password: Option<String>,
     portal_id: Option<String>,
+    water_tank_instance: Option<u32>,
     water_pump_instance: Option<u32>,
     water_valve_instance: Option<u32>,
     evcharger_instance: Option<u32>,
@@ -903,10 +907,11 @@ async fn connect_mqtt(
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
-    client.set_water_instances(match (water_pump_instance, water_valve_instance) {
-        (Some(p), Some(v)) => Some((p, v)),
-        _ => None,
-    });
+    client.set_water_instances(Some((
+        water_tank_instance,
+        water_pump_instance,
+        water_valve_instance,
+    )));
     client.set_ev_instances(Some((ev_instance, evcharger_instance)));
     client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
@@ -1555,6 +1560,7 @@ pub fn run() {
                         let username = config.mqtt_login.clone();
                         let password = config.mqtt_password.clone();
                         let portal_id = config.portal_id.clone();
+                        let water_tank_instance = config.water_tank_instance;
                         let water_pump_instance = config.water_pump_instance;
                         let water_valve_instance = config.water_valve_instance;
                         let evcharger_instance = config.evcharger_instance.or(Some(40));
@@ -1568,6 +1574,7 @@ pub fn run() {
                             username,
                             password,
                             portal_id,
+                            water_tank_instance,
                             water_pump_instance,
                             water_valve_instance,
                             evcharger_instance,
