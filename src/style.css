@@ -773,9 +773,7 @@
 .side-panel .classic-card {
   border-radius: var(--radius-card);
 }
-.side-panel .classic-card > div:last-child {
-  padding: 0.5rem !important;
-}
+/* card body density comes from template p-1; no blanket override */
 .side-panel .home-btn-grid {
   gap: 0.1rem;
 }
