@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col gap-1 h-full side-panel">
+  <div class="flex flex-col gap-1.5 h-full side-panel">
     <!-- EV Section -->
     <div v-if="showEv !== false && evSectionVisible" class="classic-card">
       <div class="classic-header flex items-center gap-1.5">
