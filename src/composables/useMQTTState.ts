@@ -7,11 +7,28 @@ const pumpSwitchState = computed(() => state.value.pump_switch ?? null)
 const waterValveState = computed(() => state.value.water_valve ?? null)
 const waterPumpMode = computed(() => state.value.water_pump_mode ?? null)
 const waterValveMode = computed(() => state.value.water_valve_mode ?? null)
+
+function hasDiscoveredWater(): boolean {
+  const list = state.value.discovered_water_ev
+  if (!list || list.length === 0) return false
+  return list.some((i) => i.kind === 'tank' || i.kind === 'pump')
+}
+
+// Latch discovery presence (Config parity). Live Level/State also show the card
+// via the computed below so shallowRef nested writes remain test-friendly.
+const waterLatch = ref(false)
+watchEffect(() => {
+  if (hasDiscoveredWater()) {
+    waterLatch.value = true
+  }
+})
 const waterSectionVisible = computed(
   () =>
+    waterLatch.value ||
     state.value.water_level != null ||
     state.value.water_valve != null ||
-    state.value.pump_switch != null
+    state.value.pump_switch != null ||
+    hasDiscoveredWater()
 )
 
 // EV from Cerbo MQTT (dbus-ev / dbus-evcharger)
@@ -83,7 +100,8 @@ export function useMQTTState() {
     evPowerWatts,
     evSectionVisible,
     acloads,
-    /** Exposed for tests — resets the EV latch between test runs. */
+    /** Exposed for tests — resets latches between test runs. */
+    waterLatch,
     evLatch,
   }
 }

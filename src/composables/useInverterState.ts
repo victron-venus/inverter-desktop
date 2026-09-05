@@ -103,6 +103,12 @@ export interface InverterState {
   ev_present?: boolean
   /** True once any evcharger/<i>/... message has been seen on Cerbo MQTT. */
   evcharger_present?: boolean
+  /** Cerbo GX tank/pump/ev/evcharger instances discovered via MQTT. */
+  discovered_water_ev?: Array<{
+    instance: number
+    kind: 'tank' | 'pump' | 'ev' | 'evcharger' | string
+    name?: string | null
+  }> | null
 }
 
 export const state = shallowRef<InverterState>({
