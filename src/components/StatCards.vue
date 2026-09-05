@@ -1,7 +1,9 @@
 <template>
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-1.5">
+  <div class="stat-cards grid grid-cols-2 md:grid-cols-5">
     <!-- Grid -->
-    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
+    <div
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
+    >
       <div class="classic-stat-label">Grid</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-grid">
         {{ formatPower(gt) }}
@@ -12,7 +14,9 @@
     </div>
 
     <!-- Consumption -->
-    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
+    <div
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
+    >
       <div class="classic-stat-label">Consumption</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-consumption">
         {{ formatPower(tt) }}
@@ -23,7 +27,9 @@
     </div>
 
     <!-- Solar -->
-    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
+    <div
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
+    >
       <div class="classic-stat-label">Solar</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-solar">
         {{ formatPower(solarTotal) }}
@@ -35,7 +41,9 @@
     </div>
 
     <!-- Battery -->
-    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
+    <div
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
+    >
       <div class="classic-stat-label">Battery</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-battery">
         {{ Math.floor(batterySoc || 0) }}%
@@ -48,7 +56,9 @@
     </div>
 
     <!-- Setpoint -->
-    <div class="classic-card px-1.5 py-1.5 flex flex-col items-center justify-center min-h-[76px]">
+    <div
+      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
+    >
       <div class="classic-stat-label">Setpoint</div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-accent">
         {{ formatPower(setpoint) }}
