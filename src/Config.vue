@@ -571,22 +571,25 @@
                   </summary>
                   <div class="flex flex-col gap-2 mt-2 px-1">
                     <div class="flex flex-wrap items-center gap-3">
-                      <label class="classic-label">Tank</label>
+                      <label for="water_tank_instance" class="classic-label">Tank</label>
                       <input
+                        id="water_tank_instance"
                         v-model.number="config.water_tank_instance"
                         type="number"
                         min="0"
                         class="classic-input w-20"
                       />
-                      <label class="classic-label">Pump</label>
+                      <label for="water_pump_instance" class="classic-label">Pump</label>
                       <input
+                        id="water_pump_instance"
                         v-model.number="config.water_pump_instance"
                         type="number"
                         min="1"
                         class="classic-input w-20"
                       />
-                      <label class="classic-label">Valve</label>
+                      <label for="water_valve_instance" class="classic-label">Valve</label>
                       <input
+                        id="water_valve_instance"
                         v-model.number="config.water_valve_instance"
                         type="number"
                         min="1"
@@ -594,7 +597,7 @@
                       />
                     </div>
                     <div class="flex flex-wrap items-center gap-3">
-                      <label class="classic-label">EV vehicle</label>
+                      <label for="ev_instance" class="classic-label">EV vehicle</label>
                       <input
                         id="ev_instance"
                         v-model.number="config.ev_instance"
@@ -602,7 +605,7 @@
                         min="1"
                         class="classic-input w-20"
                       />
-                      <label class="classic-label">EV charger</label>
+                      <label for="evcharger_instance" class="classic-label">EV charger</label>
                       <input
                         id="evcharger_instance"
                         v-model.number="config.evcharger_instance"
