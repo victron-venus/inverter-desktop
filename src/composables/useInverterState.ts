@@ -219,9 +219,10 @@ export function isBannerDismissed(id: string): boolean {
 
 /**
  * User dismissed the banner.
- * Victron platform notifications are acknowledged/silenced on the Cerbo via MQTT
- * (same as GUIv2); local dismissedIds are not used so a failed ack can reappear.
- * Other sources stay locally dismissed until a fresh id arrives.
+ * Victron platform notifications are acknowledged on Cerbo via MQTT
+ * (AcknowledgeAll + per-slot Silenced/Acknowledged, GUIv2 ecosystem).
+ * Local dismissedIds are not used for platform ids — Rust holds user_dismissed
+ * until Active clears. Other sources stay locally dismissed until a fresh id.
  */
 export async function dismissBanner(id: string): Promise<void> {
   clearBanner(id)
