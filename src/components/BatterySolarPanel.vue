@@ -8,6 +8,7 @@
           v-for="(bat, bi) in batteries"
           :key="bat.serial ?? bat.instance ?? `${bi}-${bat.name}`"
           class="classic-inset flex-1 min-w-[130px]"
+          :title="bat.name"
         >
           <div class="text-[10px] font-semibold text-main tracking-tight truncate">
             {{ bat.name }}
@@ -50,6 +51,7 @@
           v-for="(src, si) in solarSources"
           :key="src.serial ?? src.instance ?? `${si}-${src.name}`"
           class="classic-inset flex-1 min-w-[90px]"
+          :title="src.name"
         >
           <div class="text-[10px] font-semibold text-main tracking-tight truncate">
             {{ src.name }}
