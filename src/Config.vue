@@ -1317,6 +1317,9 @@ const sections = [
 const testingHa = ref(false)
 const haTestResult = ref('')
 const haTestSuccess = ref(false)
+const testingGateway = ref(false)
+const gatewayTestResult = ref('')
+const gatewayTestSuccess = ref(false)
 const backupBusy = ref(false)
 
 const haDirectMonitoringEnabled = computed(() => {
@@ -1337,6 +1340,43 @@ watch(
 )
 
 const entityRules = [(v: string) => !!v || 'Required']
+
+async function testGatewayConnection() {
+  const url = (config.gateway_url || '').trim()
+  const clientId = (config.gateway_access_client_id || '').trim()
+  const clientSecret = (config.gateway_access_client_secret || '').trim()
+  if (!url || !clientId || !clientSecret) {
+    gatewayTestResult.value = 'URL, Access Client ID and Secret required'
+    gatewayTestSuccess.value = false
+    return
+  }
+  testingGateway.value = true
+  gatewayTestResult.value = ''
+  try {
+    const result = await invoke<{ status: string; mqtt_connected?: boolean | null }>(
+      'test_gateway_connection',
+      {
+        url,
+        accessClientId: clientId,
+        accessClientSecret: clientSecret,
+        apiToken: (config.gateway_api_token || '').trim() || null,
+      }
+    )
+    const mqtt =
+      result.mqtt_connected === true
+        ? 'MQTT connected'
+        : result.mqtt_connected === false
+          ? 'MQTT disconnected'
+          : 'MQTT unknown'
+    gatewayTestResult.value = `OK (${result.status}) — ${mqtt}`
+    gatewayTestSuccess.value = true
+  } catch (e) {
+    gatewayTestResult.value = `Failed: ${e?.toString() || e}`
+    gatewayTestSuccess.value = false
+  } finally {
+    testingGateway.value = false
+  }
+}
 
 async function testHaConnection() {
   if (!config.ha_url || !config.ha_longlived_token) {
