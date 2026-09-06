@@ -210,7 +210,8 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
         }
     }
     let mppt_total: f64 = mppt_powers.iter().sum();
-    if !mppts.is_empty() {
+    let has_mppt = !mppts.is_empty();
+    if has_mppt {
         st.mppt_chargers = Some(mppts);
         st.mppt_individual = Some(mppt_powers);
         st.mppt_total = Some(mppt_total);
@@ -253,12 +254,17 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
         }
     }
     let pv_total: f64 = pv_powers.iter().sum();
-    if !pvs.is_empty() {
+    let has_pv = !pvs.is_empty();
+    if has_pv {
         st.pv_inverters = Some(pvs);
         st.pv_inverter_individual = Some(pv_powers.clone());
     }
 
-    st.solar_total = Some(mppt_total + pv_total);
+    // Only set when we saw at least one producer — Some(0) would overwrite a
+    // richer LAN MQTT value if both sources briefly race.
+    if has_mppt || has_pv {
+        st.solar_total = Some(mppt_total + pv_total);
+    }
 
     // Battery devices (for multi-battery UI)
     let mut bat_insts: Vec<u32> = snap
@@ -286,6 +292,7 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
             })
             .map(|s| s.to_string());
         if voltage.is_some() || power.is_some() || name.is_some() {
+            let bat_state = current.map(crate::mqtt::MqttClient::state_from_current);
             bats.push(Battery {
                 name,
                 serial: None,
@@ -294,7 +301,7 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
                 voltage,
                 current,
                 power,
-                state: None,
+                state: bat_state,
                 time_to_go: None,
                 max_cell_voltage: None,
                 max_voltage_cell_id: None,

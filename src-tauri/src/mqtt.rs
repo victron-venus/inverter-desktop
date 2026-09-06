@@ -21,6 +21,11 @@ const MQTT_QUEUE_CAPACITY: usize = 64;
 const CONSOLE_MAX_LINES: usize = 50;
 const MIN_STATE_EMIT_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Cleared by [`MqttClient::stop`] so a replaced/stopped LAN client cannot keep
+/// pushing `mqtt-state-update` while Remote Gateway owns the UI (dual-writer comb).
+static MQTT_STATE_EMIT_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Coalesce high-frequency MQTT state IPC: emit at most every
 /// `MIN_STATE_EMIT_INTERVAL`, and when updates arrive during the quiet
 /// window schedule a single trailing flush of the *latest* snapshot so the
@@ -1229,6 +1234,11 @@ impl MqttClient {
     pub fn stop(&self) {
         self.shutdown
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        MQTT_STATE_EMIT_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut c) = STATE_EMIT_COALESCE.lock() {
+            c.pending = None;
+            c.flush_scheduled = false;
+        }
         if let Ok(mut slot) = self.client.lock() {
             if let Some(client) = slot.take() {
                 let _ = client.disconnect();
@@ -1278,6 +1288,9 @@ impl MqttClient {
         state: &InverterState,
         force: bool,
     ) {
+        if !MQTT_STATE_EMIT_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let hidden = crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
         if hidden {
             // Drop any queued trailing snapshot; window-shown force-emits fresh state.
@@ -1363,6 +1376,9 @@ impl MqttClient {
     }
 
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.shutdown
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        MQTT_STATE_EMIT_ENABLED.store(true, std::sync::atomic::Ordering::SeqCst);
         let host = self.host.clone();
         let port = self.port;
         let username = self.username.clone();
@@ -2172,7 +2188,7 @@ impl MqttClient {
 
     /// Charging/Discharging/Idle from current sign, ±0.5 A deadband —
     /// mirrors inverter_control's _battery_state.
-    fn state_from_current(amps: f64) -> String {
+    pub(crate) fn state_from_current(amps: f64) -> String {
         if amps > 0.5 {
             "Charging".to_string()
         } else if amps < -0.5 {

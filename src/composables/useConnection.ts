@@ -40,6 +40,9 @@ async function send(action: string, payload: Record<string, unknown> = {}) {
 }
 
 const OFFLINE_DELAY_MS = 10_000
+/** When true, gateway is preferred; we may temporarily fall back to LAN MQTT. */
+let preferIgw = false
+let igwRecoveryTimer: ReturnType<typeof setInterval> | null = null
 
 export function useConnection() {
   let unlistenStateUpdate: (() => void) | null = null
@@ -95,6 +98,12 @@ export function useConnection() {
           mqttOfflineTimer = setTimeout(() => {
             mqttOfflineTimer = null
             mqttConnected.value = false
+            // IGW poller went dark — fall back to LAN MQTT so the UI stays live,
+            // then probe IGW until it recovers (exclusive again).
+            if (preferIgw && dataSource.value === 'igw') {
+              logger.log('IGW offline — falling back to LAN MQTT')
+              void fallbackToLanMqtt()
+            }
           }, OFFLINE_DELAY_MS)
         }
       })
@@ -128,6 +137,8 @@ export function useConnection() {
         config.gateway_access_client_id &&
         config.gateway_access_client_secret
       ) {
+        preferIgw = true
+        stopIgwRecoveryProbe()
         await invoke('connect_gateway', {
           url: config.gateway_url,
           accessClientId: config.gateway_access_client_id,
@@ -137,6 +148,8 @@ export function useConnection() {
         dataSource.value = 'igw'
         notify('Gateway', 'Connected remotely')
       } else {
+        preferIgw = false
+        stopIgwRecoveryProbe()
         await invoke('connect_mqtt', {
           host: config.mqtt_host,
           port: config.mqtt_port,
@@ -220,6 +233,81 @@ export function useConnection() {
   let mqttReconnectTimer: ReturnType<typeof setTimeout> | null = null
   let haMqttReconnectTimer: ReturnType<typeof setTimeout> | null = null
 
+  async function fallbackToLanMqtt() {
+    try {
+      const config = await getAppConfig()
+      // Force LAN MQTT even though gateway_enabled stays true in config.
+      await invoke('connect_mqtt', {
+        host: config.mqtt_host,
+        port: config.mqtt_port,
+        username: config.mqtt_login || null,
+        password: config.mqtt_password || null,
+        portalId: config.portal_id || null,
+        waterTankInstance: config.water_tank_instance ?? null,
+        waterPumpInstance: config.water_pump_instance ?? null,
+        waterValveInstance: config.water_valve_instance ?? null,
+        evchargerInstance: config.evcharger_instance ?? 40,
+        evInstance: config.ev_instance ?? 22,
+        cameraTopic: null,
+      })
+      dataSource.value = 'mqtt'
+      mqttConnected.value = true
+      notify('MQTT', 'IGW offline — using Cerbo LAN')
+      startIgwRecoveryProbe()
+    } catch (e) {
+      logger.error('LAN MQTT fallback failed:', e)
+    }
+  }
+
+  function stopIgwRecoveryProbe() {
+    if (igwRecoveryTimer) {
+      clearInterval(igwRecoveryTimer)
+      igwRecoveryTimer = null
+    }
+  }
+
+  function startIgwRecoveryProbe() {
+    stopIgwRecoveryProbe()
+    if (!preferIgw) return
+    igwRecoveryTimer = setInterval(() => {
+      void tryRecoverIgw()
+    }, 15_000)
+  }
+
+  async function tryRecoverIgw() {
+    if (!preferIgw || dataSource.value === 'igw') return
+    try {
+      const config = await getAppConfig()
+      if (
+        !config.gateway_enabled ||
+        !config.gateway_url ||
+        !config.gateway_access_client_id ||
+        !config.gateway_access_client_secret
+      ) {
+        return
+      }
+      await invoke('test_gateway_connection', {
+        url: config.gateway_url,
+        accessClientId: config.gateway_access_client_id,
+        accessClientSecret: config.gateway_access_client_secret,
+        apiToken: config.gateway_api_token || null,
+      })
+      logger.log('IGW reachable again — switching back (stops LAN MQTT)')
+      stopIgwRecoveryProbe()
+      await invoke('connect_gateway', {
+        url: config.gateway_url,
+        accessClientId: config.gateway_access_client_id,
+        accessClientSecret: config.gateway_access_client_secret,
+        apiToken: config.gateway_api_token || null,
+      })
+      dataSource.value = 'igw'
+      mqttConnected.value = true
+      notify('Gateway', 'IGW restored')
+    } catch {
+      // still down
+    }
+  }
+
   function reconnectAfterDelay(delay = 2000) {
     if (mqttReconnectTimer) clearTimeout(mqttReconnectTimer)
     mqttReconnectTimer = setTimeout(() => {
@@ -253,6 +341,7 @@ export function useConnection() {
   }
 
   function cleanup() {
+    stopIgwRecoveryProbe()
     for (const fn of [
       unlistenStateUpdate,
       unlistenConnectionStatus,
