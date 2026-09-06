@@ -135,14 +135,10 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
         _ => None,
     };
 
-    let batt_v = path_num(&snap.system, "0/Dc/Battery/Voltage");
-    let batt_i = path_num(&snap.system, "0/Dc/Battery/Current");
-    let batt_p = path_num(&snap.system, "0/Dc/Battery/Power");
-    st.battery_voltage = batt_v;
-    st.battery_current = batt_i;
-    st.battery_power = batt_p;
-    // Match LAN path: bank % from voltage (shunt SoC is unreliable while charging).
-    st.battery_soc = batt_v.map(voltage_soc);
+    // Bank V/I/P/SoC: prefer SmartShunt (same as LAN `apply_cerbo_to_state`).
+    // system/0/Dc/Battery/* is a parallel aggregate and often disagrees with the shunt
+    // (e.g. 25.2 A system vs 23.5 A shunt) — that was the IGW vs MQTT mismatch.
+    // Filled after the battery device list below.
 
     // VE.Bus: first instance with Hub4 setpoint / State.
     let mut setpoint = None;
@@ -199,9 +195,15 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
             if let Some(p) = power {
                 mppt_powers.push(p);
             }
+            let serial = snap
+                .solarcharger
+                .get(&format!("{inst}/Serial"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             mppts.push(MpptCharger {
                 name,
-                serial: None,
+                serial,
                 instance: Some(inst),
                 pv_voltage: pv_v,
                 current,
@@ -291,11 +293,17 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
                     .and_then(|v| v.as_str())
             })
             .map(|s| s.to_string());
-        if voltage.is_some() || power.is_some() || name.is_some() {
+        let serial = snap
+            .battery
+            .get(&format!("{inst}/Serial"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        if voltage.is_some() || power.is_some() || current.is_some() || name.is_some() {
             let bat_state = current.map(crate::mqtt::MqttClient::state_from_current);
             bats.push(Battery {
                 name,
-                serial: None,
+                serial,
                 instance: Some(inst),
                 soc,
                 voltage,
@@ -303,15 +311,48 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
                 power,
                 state: bat_state,
                 time_to_go: None,
-                max_cell_voltage: None,
-                max_voltage_cell_id: None,
-                min_cell_voltage: None,
-                min_voltage_cell_id: None,
+                max_cell_voltage: path_num(&snap.battery, &format!("{inst}/System/MaxCellVoltage")),
+                max_voltage_cell_id: snap
+                    .battery
+                    .get(&format!("{inst}/System/MaxVoltageCellId"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                min_cell_voltage: path_num(&snap.battery, &format!("{inst}/System/MinCellVoltage")),
+                min_voltage_cell_id: snap
+                    .battery
+                    .get(&format!("{inst}/System/MinVoltageCellId"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             });
         }
     }
     if !bats.is_empty() {
+        // Bank totals from SmartShunt only (never sum chains — double-counts).
+        if let Some(shunt) = bats.iter().find(|b| {
+            b.name
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("shunt")
+        }) {
+            st.battery_voltage = shunt.voltage;
+            st.battery_current = Some(shunt.current.unwrap_or(0.0));
+            st.battery_power = Some(shunt.power.unwrap_or(0.0));
+            st.battery_soc = shunt.voltage.map(voltage_soc);
+        } else {
+            let batt_v = path_num(&snap.system, "0/Dc/Battery/Voltage");
+            st.battery_voltage = batt_v;
+            st.battery_current = path_num(&snap.system, "0/Dc/Battery/Current");
+            st.battery_power = path_num(&snap.system, "0/Dc/Battery/Power");
+            st.battery_soc = batt_v.map(voltage_soc);
+        }
         st.batteries = Some(bats);
+    } else {
+        let batt_v = path_num(&snap.system, "0/Dc/Battery/Voltage");
+        st.battery_voltage = batt_v;
+        st.battery_current = path_num(&snap.system, "0/Dc/Battery/Current");
+        st.battery_power = path_num(&snap.system, "0/Dc/Battery/Power");
+        st.battery_soc = batt_v.map(voltage_soc);
     }
 
     // Water tank level (first tank with Level)
@@ -596,5 +637,55 @@ mod tests {
         assert_eq!(st.setpoint, Some(-2100.0));
         assert_eq!(st.inverter_state.as_deref(), Some("Bulk"));
         assert!(st.battery_soc.is_some());
+    }
+
+    #[test]
+    fn bank_totals_prefer_smartshunt_over_system() {
+        let mut snap = GatewaySnapshot::default();
+        // Divergent system aggregate (what Cerbo systemcalc publishes).
+        snap.system
+            .insert("0/Dc/Battery/Voltage".into(), json!(53.56));
+        snap.system
+            .insert("0/Dc/Battery/Current".into(), json!(25.2));
+        snap.system
+            .insert("0/Dc/Battery/Power".into(), json!(1349.7));
+        // Per-device batteries — bank must follow the shunt, not the sum of chains.
+        snap.battery
+            .insert("289/ProductName".into(), json!("SmartShunt 500A/50mV"));
+        snap.battery.insert("289/Dc/0/Voltage".into(), json!(53.55));
+        snap.battery.insert("289/Dc/0/Current".into(), json!(23.5));
+        snap.battery.insert("289/Dc/0/Power".into(), json!(1258.4));
+        snap.battery
+            .insert("512/ProductName".into(), json!("JBD Battery Chain 1"));
+        snap.battery.insert("512/Dc/0/Current".into(), json!(7.03));
+        snap.battery.insert("512/Dc/0/Power".into(), json!(376.0));
+
+        let st = snapshot_to_state(&snap);
+        assert_eq!(st.battery_current, Some(23.5));
+        assert_eq!(st.battery_power, Some(1258.4));
+        assert_eq!(st.battery_voltage, Some(53.55));
+        assert_eq!(st.batteries.as_ref().map(|b| b.len()), Some(2));
+    }
+
+    #[test]
+    fn solar_total_sums_mppt_yield_and_ac_pv() {
+        let mut snap = GatewaySnapshot::default();
+        snap.solarcharger
+            .insert("290/Yield/Power".into(), json!(403.57));
+        snap.solarcharger
+            .insert("291/Yield/Power".into(), json!(594.33));
+        snap.solarcharger
+            .insert("292/Yield/Power".into(), json!(455.39));
+        snap.pvinverter.insert("369/Ac/Power".into(), json!(235.0));
+        snap.pvinverter.insert("9895/Ac/Power".into(), json!(278.0));
+
+        let st = snapshot_to_state(&snap);
+        assert_eq!(st.mppt_total, Some(403.57 + 594.33 + 455.39));
+        assert_eq!(
+            st.solar_total,
+            Some(403.57 + 594.33 + 455.39 + 235.0 + 278.0)
+        );
+        assert_eq!(st.mppt_chargers.as_ref().map(|c| c.len()), Some(3));
+        assert_eq!(st.pv_inverters.as_ref().map(|c| c.len()), Some(2));
     }
 }
