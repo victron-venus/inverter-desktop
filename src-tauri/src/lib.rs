@@ -896,15 +896,11 @@ async fn acknowledge_victron_banner(
             .0
             .lock()
             .map_err(|e| format!("Internal error: {e}"))?;
-        if let Some(client) = guard.as_ref() {
-            Some(
-                client
-                    .acknowledge_victron_notification(platform_instance, slot)
-                    .map_err(|e| e.to_string()),
-            )
-        } else {
-            None
-        }
+        guard.as_ref().map(|client| {
+            client
+                .acknowledge_victron_notification(platform_instance, slot)
+                .map_err(|e| e.to_string())
+        })
     };
     match mqtt_result {
         Some(Ok(())) => return Ok(()),
