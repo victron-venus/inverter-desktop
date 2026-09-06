@@ -2,6 +2,7 @@ export default {
   status: {
     ha: 'HA',
     mqtt: 'MQTT',
+    igw: 'IGW',
     haMqtt: 'HA MQTT',
     uptime: 'Uptime',
     desktop: 'Desktop',

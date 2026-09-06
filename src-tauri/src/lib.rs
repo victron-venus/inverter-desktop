@@ -1692,77 +1692,9 @@ pub fn run() {
                 }
             }
 
-            // Attempt to connect MQTT or remote gateway if configured
-            let app_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(config) = load_config(&app_handle) {
-                    let connect_handle = app_handle.clone();
-                    let mqtt_state = app_handle.state::<MqttState>();
-                    let gateway_state = app_handle.state::<GatewayState>();
-                    let gateway_url = config
-                        .gateway_url
-                        .as_deref()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                    let access_id = config.gateway_access_client_id.clone().unwrap_or_default();
-                    let access_secret = config
-                        .gateway_access_client_secret
-                        .clone()
-                        .unwrap_or_default();
-                    if config.gateway_enabled
-                        && !gateway_url.is_empty()
-                        && !access_id.trim().is_empty()
-                        && !access_secret.trim().is_empty()
-                    {
-                        let _ = connect_gateway(
-                            gateway_url,
-                            access_id,
-                            access_secret,
-                            config.gateway_api_token.clone(),
-                            connect_handle,
-                            mqtt_state,
-                            gateway_state,
-                        )
-                        .await;
-                        return;
-                    }
-                    let host = config.mqtt_host.trim().to_string();
-                    if !host.is_empty() {
-                        let port = if config.mqtt_port == 0 {
-                            DEFAULT_MQTT_PORT
-                        } else {
-                            config.mqtt_port
-                        };
-                        let username = config.mqtt_login.clone();
-                        let password = config.mqtt_password.clone();
-                        let portal_id = config.portal_id.clone();
-                        let water_tank_instance = config.water_tank_instance;
-                        let water_pump_instance = config.water_pump_instance;
-                        let water_valve_instance = config.water_valve_instance;
-                        let evcharger_instance = config.evcharger_instance.or(Some(40));
-                        let ev_instance = config.ev_instance.or(Some(22));
-                        let camera_topic = config.camera_topic.clone();
-                        let _ = connect_mqtt(
-                            host,
-                            port,
-                            username,
-                            password,
-                            portal_id,
-                            water_tank_instance,
-                            water_pump_instance,
-                            water_valve_instance,
-                            evcharger_instance,
-                            ev_instance,
-                            camera_topic,
-                            connect_handle,
-                            mqtt_state,
-                            gateway_state,
-                        )
-                        .await;
-                    }
-                }
-            });
+            // Connection is owned by the frontend (`connectMqtt` /
+            // `connect_gateway`) so we do not race a second Cerbo MQTT
+            // client against remote gateway mode on startup.
 
             // Show window on startup
             info!("Showing main window...");

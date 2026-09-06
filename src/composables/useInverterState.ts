@@ -118,6 +118,7 @@ export const state = shallowRef<InverterState>({
 })
 
 export const mqttConnected = ref(false)
+export const dataSource = ref<'mqtt' | 'igw'>('mqtt')
 export const haMqttConnected = ref<boolean | null>(null)
 export const appConfig = ref<AppConfig | null>(null)
 

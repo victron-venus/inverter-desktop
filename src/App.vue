@@ -110,6 +110,7 @@
         :haEnabled="haEnabled"
         :haConnected="haConnected"
         :mqttConnected="mqttConnected"
+        :dataSource="dataSource"
         :haMqttConnected="haMqttConnected"
         :uptime="state.uptime"
         :appVersion="appVersion"
@@ -207,6 +208,7 @@ import { logger } from './logger'
 const {
   state,
   mqttConnected,
+  dataSource,
   haMqttConnected,
   appConfig,
   connectMqtt,

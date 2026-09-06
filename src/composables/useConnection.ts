@@ -9,6 +9,7 @@ import {
   applyInverterState,
   type BannerNotification,
   clearBanner,
+  dataSource,
   haMqttConnected,
   type InverterState,
   mqttConnected,
@@ -133,6 +134,7 @@ export function useConnection() {
           accessClientSecret: config.gateway_access_client_secret,
           apiToken: config.gateway_api_token || null,
         })
+        dataSource.value = 'igw'
         notify('Gateway', 'Connected remotely')
       } else {
         await invoke('connect_mqtt', {
@@ -148,6 +150,7 @@ export function useConnection() {
           evInstance: config.ev_instance ?? 22,
           cameraTopic: null,
         })
+        dataSource.value = 'mqtt'
         notify('MQTT', 'Connected to inverter')
       }
 
@@ -196,7 +199,9 @@ export function useConnection() {
           // Already connected — all good
           return
         }
-        logger.log('Wake detected, reconnecting MQTT...')
+        logger.log(
+          `Wake detected, reconnecting ${dataSource.value === 'igw' ? 'gateway' : 'MQTT'}...`
+        )
         reconnectAfterDelay()
       })
 
@@ -288,6 +293,7 @@ export function useConnection() {
   return {
     state,
     mqttConnected,
+    dataSource,
     haMqttConnected,
     appConfig,
     connectMqtt,
