@@ -24,6 +24,7 @@ export function useConfigForm() {
         show_ha_weather: true,
         show_console: true,
         show_advanced_settings: false,
+        gateway_enabled: false,
       }
       for (const [key, val] of Object.entries(boolDefaults)) {
         if (config[key as keyof AppConfig] === undefined) {

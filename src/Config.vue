@@ -140,6 +140,103 @@
               </div>
             </div>
 
+            <!-- Remote Gateway (Cloudflare Access + inverter-gateway) -->
+            <div v-if="activeTab === 'gateway'" class="flex flex-col gap-4">
+              <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
+                <h2 class="classic-section-title">Remote Gateway</h2>
+                <p class="text-[10px] text-muted mt-1">
+                  Reach Cerbo via public HTTPS through Cloudflare Access and inverter-gateway. LAN
+                  MQTT settings stay for local use; enable this when you are away from home.
+                </p>
+              </header>
+
+              <label class="flex items-center gap-2 px-1 cursor-pointer">
+                <input
+                  id="gateway_enabled"
+                  v-model="config.gateway_enabled"
+                  type="checkbox"
+                  class="rounded border-black/20 dark:border-white/20"
+                />
+                <span class="text-[12px] text-main">Enable remote gateway</span>
+              </label>
+
+              <div class="flex flex-col gap-3 p-3 classic-inset !rounded-lg !p-3">
+                <div class="flex flex-col gap-1">
+                  <label for="gateway_url" class="classic-label px-1">Gateway URL</label>
+                  <input
+                    id="gateway_url"
+                    v-model="config.gateway_url"
+                    type="url"
+                    class="classic-input w-full"
+                    placeholder="https://victron.example.com"
+                    autocomplete="off"
+                  />
+                  <p class="text-[10px] text-muted px-1 italic">
+                    Public hostname only (https). Trailing slash optional.
+                  </p>
+                </div>
+
+                <div class="flex flex-col gap-1">
+                  <label for="gateway_access_client_id" class="classic-label px-1"
+                    >Access Client ID</label
+                  >
+                  <input
+                    id="gateway_access_client_id"
+                    v-model="config.gateway_access_client_id"
+                    type="text"
+                    class="classic-input w-full"
+                    placeholder="….access"
+                    autocomplete="off"
+                  />
+                </div>
+
+                <div class="flex flex-col gap-1">
+                  <label for="gateway_access_client_secret" class="classic-label px-1"
+                    >Access Client Secret</label
+                  >
+                  <input
+                    id="gateway_access_client_secret"
+                    v-model="config.gateway_access_client_secret"
+                    type="password"
+                    class="classic-input w-full"
+                    placeholder="Service token secret"
+                    autocomplete="new-password"
+                  />
+                </div>
+
+                <div class="flex flex-col gap-1">
+                  <label for="gateway_api_token" class="classic-label px-1"
+                    >Gateway API Token</label
+                  >
+                  <input
+                    id="gateway_api_token"
+                    v-model="config.gateway_api_token"
+                    type="password"
+                    class="classic-input w-full"
+                    placeholder="Bearer token (GATEWAY_API_TOKEN)"
+                    autocomplete="new-password"
+                  />
+                  <p class="text-[10px] text-muted px-1 italic">
+                    Sent as Authorization: Bearer. Required for /v1/*; /health may work with Access
+                    alone.
+                  </p>
+                </div>
+
+                <div class="flex items-center gap-2 pt-1">
+                  <UiButton class="flex-1" :loading="testingGateway" @click="testGatewayConnection">
+                    Test connection
+                  </UiButton>
+                </div>
+                <p
+                  v-if="gatewayTestResult"
+                  class="text-[11px] px-1"
+                  :class="gatewayTestSuccess ? 'text-generation' : 'text-consumption'"
+                >
+                  {{ gatewayTestResult }}
+                </p>
+              </div>
+            </div>
+
             <!-- Home Assistant Section -->
             <div v-if="activeTab === 'ha'" class="flex flex-col gap-4">
               <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
@@ -1112,6 +1209,7 @@ const { t: $t } = useI18n()
 import {
   Archive,
   Check,
+  Cloud,
   Download,
   Eye,
   Home,
@@ -1209,6 +1307,7 @@ let unlistenMqttState: UnlistenFn | null = null
 
 const sections = [
   { id: 'mqtt', label: 'MQTT Broker', icon: Wifi },
+  { id: 'gateway', label: 'Remote Gateway', icon: Cloud },
   { id: 'ha', label: 'Home Assistant', icon: Home },
   { id: 'entities', label: 'UI Controls', icon: Layout },
   { id: 'sections', label: 'Sections', icon: Eye },
