@@ -18,7 +18,9 @@
 
     <div class="flex items-center gap-1.5">
       <div class="status-dot" :class="{ 'status-dot-on': mqttConnected }"></div>
-      <span class="text-main">{{ $t('status.mqtt') }}</span>
+      <span class="text-main">{{
+        dataSource === 'igw' ? $t('status.igw') : $t('status.mqtt')
+      }}</span>
     </div>
 
     <span v-if="haMqttConnected !== null" class="soft-divider"></span>
@@ -45,13 +47,18 @@ import NotificationHistory from './NotificationHistory.vue'
 
 const { t: $t } = useI18n()
 
-defineProps<{
-  haEnabled: boolean
-  haConnected: boolean
-  mqttConnected: boolean
-  haMqttConnected?: boolean | null
-  uptime?: number
-  appVersion: string
-  stateVersion?: string
-}>()
+withDefaults(
+  defineProps<{
+    haEnabled: boolean
+    haConnected: boolean
+    mqttConnected: boolean
+    /** Active live-data transport for the status label. */
+    dataSource?: 'mqtt' | 'igw'
+    haMqttConnected?: boolean | null
+    uptime?: number
+    appVersion: string
+    stateVersion?: string
+  }>(),
+  { dataSource: 'mqtt', haMqttConnected: null }
+)
 </script>
