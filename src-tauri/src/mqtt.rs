@@ -262,7 +262,7 @@ fn coerce_bool(v: &serde_json::Value) -> bool {
 /// Bank % from pack voltage — same paradigm as the HA "Battery %" template
 /// sensor: linear 40-54.4 V, clamped to 0-100, rounded. The shunt's own SoC
 /// counter reads a bogus 100% while charging, so the UI never shows it.
-fn voltage_soc(voltage: f64) -> f64 {
+pub(crate) fn voltage_soc(voltage: f64) -> f64 {
     const V_MIN: f64 = 40.0; // V -> 0%
     const V_MAX: f64 = 54.4; // V -> 100% (absorption)
     (((voltage - V_MIN) / (V_MAX - V_MIN)) * 100.0)
@@ -271,7 +271,7 @@ fn voltage_soc(voltage: f64) -> f64 {
 }
 
 /// Victron VE.Bus /State codes — mirrors inverter-control INVERTER_STATES.
-fn inverter_state_name(code: u32) -> String {
+pub(crate) fn inverter_state_name(code: u32) -> String {
     match code {
         0 => "Off".into(),
         1 => "Low Power".into(),
