@@ -121,20 +121,35 @@ export function useConnection() {
         clearBanner(event.payload.id)
       })
 
-      await invoke('connect_mqtt', {
-        host: config.mqtt_host,
-        port: config.mqtt_port,
-        username: config.mqtt_login || null,
-        password: config.mqtt_password || null,
-        portalId: config.portal_id || null,
-        waterTankInstance: config.water_tank_instance ?? null,
-        waterPumpInstance: config.water_pump_instance ?? null,
-        waterValveInstance: config.water_valve_instance ?? null,
-        evchargerInstance: config.evcharger_instance ?? 40,
-        evInstance: config.ev_instance ?? 22,
-        cameraTopic: null,
-      })
-      notify('MQTT', 'Connected to inverter')
+      if (
+        config.gateway_enabled &&
+        config.gateway_url &&
+        config.gateway_access_client_id &&
+        config.gateway_access_client_secret
+      ) {
+        await invoke('connect_gateway', {
+          url: config.gateway_url,
+          accessClientId: config.gateway_access_client_id,
+          accessClientSecret: config.gateway_access_client_secret,
+          apiToken: config.gateway_api_token || null,
+        })
+        notify('Gateway', 'Connected remotely')
+      } else {
+        await invoke('connect_mqtt', {
+          host: config.mqtt_host,
+          port: config.mqtt_port,
+          username: config.mqtt_login || null,
+          password: config.mqtt_password || null,
+          portalId: config.portal_id || null,
+          waterTankInstance: config.water_tank_instance ?? null,
+          waterPumpInstance: config.water_pump_instance ?? null,
+          waterValveInstance: config.water_valve_instance ?? null,
+          evchargerInstance: config.evcharger_instance ?? 40,
+          evInstance: config.ev_instance ?? 22,
+          cameraTopic: null,
+        })
+        notify('MQTT', 'Connected to inverter')
+      }
 
       if (config.camera_enabled && config.mqtt_ha_host && config.mqtt_ha_port) {
         try {

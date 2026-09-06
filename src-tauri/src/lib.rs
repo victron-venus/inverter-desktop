@@ -1,3 +1,4 @@
+mod gateway;
 mod ha_api;
 pub(crate) mod mqtt;
 #[cfg(target_os = "macos")]
@@ -12,6 +13,7 @@ extern "C" {
 use aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
 use base64::{engine::general_purpose, Engine as _};
+use gateway::GatewayClient;
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
 use rand::RngExt;
@@ -227,6 +229,7 @@ struct DiscoveredEntity {
 
 // Global state for the MQTT clients
 struct MqttState(Arc<Mutex<Option<MqttClient>>>);
+struct GatewayState(Arc<Mutex<Option<GatewayClient>>>);
 struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
 pub(crate) struct HaEntityStates(pub(crate) Arc<Mutex<HashMap<String, ha_api::HaEntityEntry>>>);
 
@@ -387,7 +390,15 @@ impl Default for FullConfig {
 }
 
 #[tauri::command]
-fn get_state(mqtt_client: State<MqttState>) -> Result<InverterState, String> {
+fn get_state(
+    mqtt_client: State<MqttState>,
+    gateway_client: State<GatewayState>,
+) -> Result<InverterState, String> {
+    if let Ok(g) = gateway_client.0.lock() {
+        if let Some(ref client) = *g {
+            return Ok(client.get_state());
+        }
+    }
     let client = mqtt_client
         .0
         .lock()
@@ -902,9 +913,19 @@ async fn connect_mqtt(
     camera_topic: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
 ) -> Result<(), String> {
     // Drop/stop any previous client first so its reconnect loop cannot keep
     // discovering the portal (xN) and racing the new connection.
+    {
+        let mut gw = gateway_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        if let Some(old) = gw.take() {
+            old.stop();
+        }
+    }
     {
         let mut client_guard = mqtt_client
             .0
@@ -937,6 +958,46 @@ async fn connect_mqtt(
         .lock()
         .map_err(|e| format!("Internal error: {}", e))?;
     *client_guard = Some(client);
+    Ok(())
+}
+
+#[tauri::command]
+async fn connect_gateway(
+    url: String,
+    access_client_id: String,
+    access_client_secret: String,
+    api_token: Option<String>,
+    app: tauri::AppHandle,
+    mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
+) -> Result<(), String> {
+    // Stop LAN MQTT so it cannot race remote updates.
+    {
+        let mut client_guard = mqtt_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        if let Some(old) = client_guard.take() {
+            old.stop();
+        }
+    }
+    {
+        let mut gw = gateway_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        if let Some(old) = gw.take() {
+            old.stop();
+        }
+        let client = gateway::start_gateway_client(
+            app,
+            url,
+            access_client_id,
+            access_client_secret,
+            api_token.unwrap_or_default(),
+        )?;
+        *gw = Some(client);
+    }
     Ok(())
 }
 
@@ -1359,6 +1420,7 @@ async fn connect_ha_mqtt(
 pub fn run() {
     let mqtt_state = MqttState(Arc::new(Mutex::new(None)));
     let ha_mqtt_state = HaMqttState(Arc::new(Mutex::new(None)));
+    let gateway_state = GatewayState(Arc::new(Mutex::new(None)));
 
     let ha_entity_states = HaEntityStates(Arc::new(Mutex::new(HashMap::new())));
 
@@ -1379,6 +1441,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(mqtt_state)
         .manage(ha_mqtt_state)
+        .manage(gateway_state)
         .manage(ha_entity_states);
 
     #[cfg(desktop)]
@@ -1389,6 +1452,7 @@ pub fn run() {
             get_state,
             perform_action,
             connect_mqtt,
+            connect_gateway,
             acknowledge_victron_banner,
             connect_ha_mqtt,
             get_config,
@@ -1628,10 +1692,41 @@ pub fn run() {
                 }
             }
 
-            // Attempt to connect MQTT if configured
+            // Attempt to connect MQTT or remote gateway if configured
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(config) = load_config(&app_handle) {
+                    let connect_handle = app_handle.clone();
+                    let mqtt_state = app_handle.state::<MqttState>();
+                    let gateway_state = app_handle.state::<GatewayState>();
+                    let gateway_url = config
+                        .gateway_url
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let access_id = config.gateway_access_client_id.clone().unwrap_or_default();
+                    let access_secret = config
+                        .gateway_access_client_secret
+                        .clone()
+                        .unwrap_or_default();
+                    if config.gateway_enabled
+                        && !gateway_url.is_empty()
+                        && !access_id.trim().is_empty()
+                        && !access_secret.trim().is_empty()
+                    {
+                        let _ = connect_gateway(
+                            gateway_url,
+                            access_id,
+                            access_secret,
+                            config.gateway_api_token.clone(),
+                            connect_handle,
+                            mqtt_state,
+                            gateway_state,
+                        )
+                        .await;
+                        return;
+                    }
                     let host = config.mqtt_host.trim().to_string();
                     if !host.is_empty() {
                         let port = if config.mqtt_port == 0 {
@@ -1648,8 +1743,6 @@ pub fn run() {
                         let evcharger_instance = config.evcharger_instance.or(Some(40));
                         let ev_instance = config.ev_instance.or(Some(22));
                         let camera_topic = config.camera_topic.clone();
-                        let connect_handle = app_handle.clone();
-                        let mqtt_state = app_handle.state::<MqttState>();
                         let _ = connect_mqtt(
                             host,
                             port,
@@ -1664,6 +1757,7 @@ pub fn run() {
                             camera_topic,
                             connect_handle,
                             mqtt_state,
+                            gateway_state,
                         )
                         .await;
                     }
