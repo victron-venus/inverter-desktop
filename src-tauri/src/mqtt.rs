@@ -901,6 +901,10 @@ struct PlatformNotifSlot {
     active: Option<bool>,
     acknowledged: Option<bool>,
     silenced: Option<bool>,
+    /// User tapped X in our UI. Sticky until Active goes false so MQTT
+    /// re-publishes / cell-detail re-emits cannot resurrect the banner when
+    /// Cerbo rejects or never receives the W/ Acknowledged write.
+    user_dismissed: bool,
 }
 
 impl PlatformNotifSlot {
@@ -917,8 +921,8 @@ impl PlatformNotifSlot {
     }
 
     fn should_show(&self) -> bool {
-        // Match GUIv2: hide once acknowledged; need a description to render.
-        if self.acknowledged.unwrap_or(false) {
+        // Hide after user dismiss or Cerbo ack; need a description to render.
+        if self.user_dismissed || self.acknowledged.unwrap_or(false) {
             return false;
         }
         let desc = self.description.as_deref().unwrap_or("").trim();
@@ -2769,9 +2773,22 @@ impl MqttClient {
                 "Description" => entry.description = Self::json_value_string(&json),
                 "DeviceName" => entry.device_name = Self::json_value_string(&json),
                 "Service" => entry.service = Self::json_value_string(&json),
-                "DateTime" => entry.date_time = Self::json_value_i64(&json),
+                "DateTime" => {
+                    let next = Self::json_value_i64(&json);
+                    // New event in a recycled slot — allow the banner again.
+                    if next.is_some() && next != entry.date_time {
+                        entry.user_dismissed = false;
+                    }
+                    entry.date_time = next;
+                }
                 "Type" => entry.notif_type = Self::json_value_i64(&json),
-                "Active" => entry.active = Self::json_value_bool(&json),
+                "Active" => {
+                    entry.active = Self::json_value_bool(&json);
+                    // Condition cleared — next Active=true is a fresh alarm.
+                    if entry.active == Some(false) {
+                        entry.user_dismissed = false;
+                    }
+                }
                 "Acknowledged" => entry.acknowledged = Self::json_value_bool(&json),
                 "Silenced" => entry.silenced = Self::json_value_bool(&json),
                 _ => {}
@@ -3402,47 +3419,73 @@ impl MqttClient {
         bools.get(key).copied()
     }
 
-    /// Acknowledge + silence a Venus-platform notification slot (GUIv2 behaviour).
-    /// Publishes W/<portal>/platform/<inst>/Notifications/<slot>/{Silenced,Acknowledged}.
+    /// Acknowledge + silence Venus-platform notifications on Cerbo (GUIv2 ecosystem).
+    /// Locally sets `user_dismissed` so MQTT re-emits cannot resurrect the banner,
+    /// then publishes per-slot Silenced/Acknowledged plus
+    /// W/<portal>/platform/<inst>/Notifications/AcknowledgeAll (the MQTT write Venus
+    /// actually honours — per-slot W/ alone is often ignored by dbus-flashmq).
     pub fn acknowledge_victron_notification(
         &self,
         platform_instance: u32,
         slot: u32,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let portal = {
-            let guard = self
-                .portal_id
-                .lock()
-                .map_err(|e| format!("Internal error: {e}"))?;
-            guard
-                .clone()
-                .filter(|s| !s.is_empty())
-                .ok_or("Cerbo portal ID not configured")?
-        };
-        let guard = self
-            .client
-            .lock()
-            .map_err(|e| format!("Internal error: {}", e))?;
-        let client = guard.as_ref().ok_or("MQTT client not connected")?;
-        let payload = r#"{"value":1}"#;
-        for field in ["Silenced", "Acknowledged"] {
-            let topic = format!(
-                "W/{}/platform/{}/Notifications/{}/{}",
-                portal, platform_instance, slot, field
-            );
-            client.publish(topic, QoS::AtLeastOnce, false, payload)?;
-        }
-        // Optimistic local clear — Cerbo will also clear via N/ Acknowledged echo.
+        // Local suppress first — UI must stay clear even if MQTT write fails
+        // (disconnected client, Cerbo ignoring W/, gateway-only mode).
         if let Ok(mut map) = self.platform_notifs.lock() {
-            if let Some(entry) = map.get_mut(&slot) {
-                entry.acknowledged = Some(true);
-                entry.silenced = Some(true);
-            }
+            let entry = map.entry(slot).or_insert_with(|| PlatformNotifSlot {
+                platform_instance,
+                slot,
+                ..Default::default()
+            });
+            entry.platform_instance = platform_instance;
+            entry.slot = slot;
+            entry.user_dismissed = true;
+            entry.acknowledged = Some(true);
+            entry.silenced = Some(true);
         }
         if let Some(ref handle) = self.app_handle {
             let id = format!("victron-platform-{}-{}", platform_instance, slot);
             let _ = handle.emit("mqtt-notification-clear", serde_json::json!({ "id": id }));
         }
+
+        let portal = {
+            let guard = self
+                .portal_id
+                .lock()
+                .map_err(|e| format!("Internal error: {e}"))?;
+            guard.clone().filter(|s| !s.is_empty())
+        };
+        let Some(portal) = portal else {
+            return Err("Cerbo portal ID not configured — cannot acknowledge on Venus".into());
+        };
+        let guard = self
+            .client
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        let Some(client) = guard.as_ref() else {
+            return Err("MQTT client not connected — cannot acknowledge on Venus".into());
+        };
+        let payload = r#"{"value":1}"#;
+        // Per-slot Silenced/Acknowledged matches GUIv2 NotificationSlot::acknowledge,
+        // but dbus-flashmq on current Venus often ignores those W/ paths. The path that
+        // reliably updates Cerbo (and GUIv2) is AcknowledgeAll — same as Node-RED /
+        // GUIv2 silence-all (verified live: UnAcknowledgedAlarms → 0).
+        for field in ["Silenced", "Acknowledged"] {
+            let topic = format!(
+                "W/{}/platform/{}/Notifications/{}/{}",
+                portal, platform_instance, slot, field
+            );
+            if let Err(e) = client.publish(&topic, QoS::AtLeastOnce, false, payload) {
+                log::warn!("Cerbo per-slot ack publish {field} failed: {e}");
+            }
+        }
+        let ack_all = format!(
+            "W/{}/platform/{}/Notifications/AcknowledgeAll",
+            portal, platform_instance
+        );
+        client
+            .publish(ack_all, QoS::AtLeastOnce, false, payload)
+            .map_err(|e| format!("Cerbo AcknowledgeAll publish failed: {e}"))?;
         Ok(())
     }
 
@@ -3648,6 +3691,7 @@ mod tests {
             active: Some(true),
             acknowledged: Some(false),
             silenced: Some(false),
+            user_dismissed: false,
         };
         let n = slot.to_notification().expect("show");
         assert_eq!(n.title, "High voltage");
@@ -3672,6 +3716,19 @@ mod tests {
         assert!(slot.to_notification().is_none());
         slot.acknowledged = Some(false);
         assert!(slot.to_notification().is_some());
+    }
+
+    #[test]
+    fn platform_slot_hides_when_user_dismissed_even_if_unacked() {
+        let slot = PlatformNotifSlot {
+            platform_instance: 0,
+            slot: 1,
+            description: Some("High voltage".into()),
+            acknowledged: Some(false),
+            user_dismissed: true,
+            ..Default::default()
+        };
+        assert!(slot.to_notification().is_none());
     }
 
     #[test]
@@ -3739,6 +3796,7 @@ mod tests {
             active: Some(true),
             acknowledged: Some(false),
             silenced: Some(false),
+            user_dismissed: false,
         };
         let n = slot.to_notification().expect("show");
         let n = enrich_platform_notification_body(&slot, n, &d);
