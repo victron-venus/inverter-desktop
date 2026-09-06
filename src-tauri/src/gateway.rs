@@ -7,7 +7,7 @@ use crate::mqtt::{
 };
 use log::{info, warn};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -48,6 +48,10 @@ pub struct GatewayClient {
     state: Arc<Mutex<InverterState>>,
     stop: Arc<AtomicBool>,
     handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    base: String,
+    access_client_id: String,
+    access_client_secret: String,
+    api_token: String,
 }
 
 impl GatewayClient {
@@ -63,6 +67,35 @@ impl GatewayClient {
             }
         }
     }
+
+    pub fn http_auth(&self) -> GatewayHttpAuth {
+        GatewayHttpAuth {
+            base: self.base.clone(),
+            access_client_id: self.access_client_id.clone(),
+            access_client_secret: self.access_client_secret.clone(),
+            api_token: self.api_token.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GatewayHttpAuth {
+    pub base: String,
+    pub access_client_id: String,
+    pub access_client_secret: String,
+    pub api_token: String,
+}
+
+pub async fn acknowledge_all_notifications_http(auth: &GatewayHttpAuth) -> Result<(), String> {
+    post_command(
+        &auth.base,
+        &auth.access_client_id,
+        &auth.access_client_secret,
+        &auth.api_token,
+        "acknowledge_all_notifications",
+        json!({}),
+    )
+    .await
 }
 
 fn num(v: &Value) -> Option<f64> {
@@ -388,6 +421,51 @@ async fn fetch_snapshot(
     serde_json::from_str(&body).map_err(|e| format!("gateway snapshot JSON: {e}"))
 }
 
+async fn post_command(
+    base: &str,
+    access_id: &str,
+    access_secret: &str,
+    api_token: &str,
+    name: &str,
+    body: Value,
+) -> Result<(), String> {
+    let url = format!(
+        "{}/v1/commands/{}",
+        base.trim_end_matches('/'),
+        name.trim_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(25))
+        .build()
+        .map_err(|e| format!("gateway http client: {e}"))?;
+    let mut req = client
+        .post(&url)
+        .header("CF-Access-Client-Id", access_id)
+        .header("CF-Access-Client-Secret", access_secret)
+        .header("User-Agent", "inverter-desktop/gateway")
+        .header("Content-Type", "application/json")
+        .json(&body);
+    if !api_token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {api_token}"));
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("gateway command request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("gateway command body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "gateway command HTTP {status}: {}",
+            text.chars().take(160).collect::<String>()
+        ));
+    }
+    Ok(())
+}
+
 pub fn start_gateway_client(
     app: AppHandle,
     url: String,
@@ -410,6 +488,10 @@ pub fn start_gateway_client(
     let access_id = access_client_id.trim().to_string();
     let access_secret = access_client_secret.trim().to_string();
     let token = api_token.trim().to_string();
+    let access_id_poll = access_id.clone();
+    let access_secret_poll = access_secret.clone();
+    let token_poll = token.clone();
+    let base_poll = base.clone();
 
     let handle = tauri::async_runtime::spawn(async move {
         let client = match reqwest::Client::builder()
@@ -433,7 +515,15 @@ pub fn start_gateway_client(
             if stop_c.load(Ordering::SeqCst) {
                 break;
             }
-            match fetch_snapshot(&client, &base, &access_id, &access_secret, &token).await {
+            match fetch_snapshot(
+                &client,
+                &base_poll,
+                &access_id_poll,
+                &access_secret_poll,
+                &token_poll,
+            )
+            .await
+            {
                 Ok(snap) => {
                     let mapped = snapshot_to_state(&snap);
                     if let Ok(mut g) = state_c.lock() {
@@ -441,7 +531,7 @@ pub fn start_gateway_client(
                     }
                     if !connected_emitted {
                         connected_emitted = true;
-                        info!("gateway remote connected to {base}");
+                        info!("gateway remote connected to {base_poll}");
                         let _ = app.emit("mqtt-connection-status", true);
                     }
                     let _ = app.emit("mqtt-state-update", mapped);
@@ -463,6 +553,10 @@ pub fn start_gateway_client(
         state,
         stop,
         handle: Mutex::new(Some(handle)),
+        base: base.clone(),
+        access_client_id: access_id,
+        access_client_secret: access_secret,
+        api_token: token,
     })
 }
 

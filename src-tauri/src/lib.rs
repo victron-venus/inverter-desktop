@@ -869,7 +869,11 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn acknowledge_victron_banner(id: String, mqtt_client: State<'_, MqttState>) -> Result<(), String> {
+async fn acknowledge_victron_banner(
+    id: String,
+    mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
+) -> Result<(), String> {
     // id: victron-platform-<inst>-<slot>
     let rest = id
         .strip_prefix("victron-platform-")
@@ -885,16 +889,43 @@ fn acknowledge_victron_banner(id: String, mqtt_client: State<'_, MqttState>) -> 
         .ok_or("missing slot")?
         .parse()
         .map_err(|e| format!("bad slot: {e}"))?;
-    let client = mqtt_client
-        .0
-        .lock()
-        .map_err(|e| format!("Internal error: {e}"))?;
-    let client = client
-        .as_ref()
-        .ok_or_else(|| "MQTT client not connected".to_string())?;
-    client
-        .acknowledge_victron_notification(platform_instance, slot)
-        .map_err(|e| e.to_string())
+
+    // Prefer LAN MQTT (sets local user_dismissed + AcknowledgeAll).
+    let mqtt_result = {
+        let guard = mqtt_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {e}"))?;
+        if let Some(client) = guard.as_ref() {
+            Some(
+                client
+                    .acknowledge_victron_notification(platform_instance, slot)
+                    .map_err(|e| e.to_string()),
+            )
+        } else {
+            None
+        }
+    };
+    match mqtt_result {
+        Some(Ok(())) => return Ok(()),
+        Some(Err(e)) => {
+            warn!("LAN MQTT Victron ack failed ({e}); trying gateway");
+        }
+        None => {
+            info!("LAN MQTT not connected; Victron ack via gateway");
+        }
+    }
+
+    let auth = {
+        let guard = gateway_client
+            .0
+            .lock()
+            .map_err(|e| format!("Internal error: {e}"))?;
+        guard.as_ref().map(|c| c.http_auth()).ok_or_else(|| {
+            "Neither LAN MQTT nor gateway connected — cannot acknowledge on Cerbo".to_string()
+        })?
+    };
+    gateway::acknowledge_all_notifications_http(&auth).await
 }
 
 #[tauri::command]
