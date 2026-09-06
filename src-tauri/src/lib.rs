@@ -300,6 +300,18 @@ struct FullConfig {
     auth_username: Option<String>,
     auth_password: Option<String>,
     auth_biometric: Option<bool>,
+
+    /// When true, prefer remote inverter-gateway (Cloudflare Access + bearer) over LAN-only MQTT path (future live data).
+    #[serde(default)]
+    gateway_enabled: bool,
+    /// Public HTTPS base URL, e.g. https://victron.example.com (no trailing slash required).
+    gateway_url: Option<String>,
+    /// Cloudflare Access Service Token Client ID (CF-Access-Client-Id).
+    gateway_access_client_id: Option<String>,
+    /// Cloudflare Access Service Token Client Secret (CF-Access-Client-Secret).
+    gateway_access_client_secret: Option<String>,
+    /// Gateway API bearer (Authorization: Bearer … / GATEWAY_API_TOKEN).
+    gateway_api_token: Option<String>,
 }
 
 fn default_evcharger_instance() -> Option<u32> {
@@ -365,6 +377,11 @@ impl Default for FullConfig {
             auth_username: None,
             auth_password: None,
             auth_biometric: Some(false),
+            gateway_enabled: false,
+            gateway_url: None,
+            gateway_access_client_id: None,
+            gateway_access_client_secret: None,
+            gateway_api_token: None,
         }
     }
 }
@@ -929,6 +946,70 @@ async fn test_ha_connection(url: String, port: Option<u16>, token: String) -> Re
     client.test_connection().await
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct GatewayHealthResult {
+    status: String,
+    mqtt_connected: Option<bool>,
+}
+
+/// Probe remote inverter-gateway `/health` with Cloudflare Access + optional bearer.
+#[tauri::command]
+async fn test_gateway_connection(
+    url: String,
+    access_client_id: String,
+    access_client_secret: String,
+    api_token: Option<String>,
+) -> Result<GatewayHealthResult, String> {
+    let base = url.trim().trim_end_matches('/').to_string();
+    if base.is_empty() {
+        return Err("Gateway URL is required".into());
+    }
+    if access_client_id.trim().is_empty() || access_client_secret.trim().is_empty() {
+        return Err("Cloudflare Access Client ID and Secret are required".into());
+    }
+    let health_url = format!("{}/health", base);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client
+        .get(&health_url)
+        .header("CF-Access-Client-Id", access_client_id.trim())
+        .header("CF-Access-Client-Secret", access_client_secret.trim())
+        .header("User-Agent", "inverter-desktop/gateway-test");
+    if let Some(tok) = api_token {
+        let tok = tok.trim();
+        if !tok.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", tok));
+        }
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Read body failed: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        ));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Invalid JSON: {e}; body={body}"))?;
+    Ok(GatewayHealthResult {
+        status: parsed
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ok")
+            .to_string(),
+        mqtt_connected: parsed.get("mqtt_connected").and_then(|v| v.as_bool()),
+    })
+}
+
 #[tauri::command]
 async fn get_ha_appliance_states(
     url: String,
@@ -1315,6 +1396,7 @@ pub fn run() {
             backup_config,
             restore_config,
             test_ha_connection,
+            test_gateway_connection,
             get_ha_appliance_states,
             get_ha_entity_states,
             discover_ha_entities,

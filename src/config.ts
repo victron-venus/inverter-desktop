@@ -79,6 +79,16 @@ export interface AppConfig {
   auth_username?: string | null
   auth_password?: string | null
   auth_biometric?: boolean
+  /** Prefer remote inverter-gateway (Cloudflare Access) when enabled */
+  gateway_enabled?: boolean
+  /** Public HTTPS base URL (e.g. https://victron.example.com) */
+  gateway_url?: string | null
+  /** CF-Access-Client-Id */
+  gateway_access_client_id?: string | null
+  /** CF-Access-Client-Secret */
+  gateway_access_client_secret?: string | null
+  /** Authorization: Bearer (GATEWAY_API_TOKEN) */
+  gateway_api_token?: string | null
 }
 
 // Single source of truth for section visibility defaults
@@ -128,6 +138,11 @@ const defaultConfig: AppConfig = {
   camera_topic: 'frigate/+/events',
   camera_enabled: false,
 
+  gateway_enabled: false,
+  gateway_url: null,
+  gateway_access_client_id: null,
+  gateway_access_client_secret: null,
+  gateway_api_token: null,
   ...SHOW_DEFAULTS,
 }
 
