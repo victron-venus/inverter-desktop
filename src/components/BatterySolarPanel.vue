@@ -8,7 +8,8 @@
           v-for="(bat, bi) in batteries"
           :key="bat.serial ?? bat.instance ?? `${bi}-${bat.name}`"
           class="classic-inset flex-1 min-w-[130px]"
-          :title="bat.name"
+          @mouseenter="showTip($event, bat.name)"
+          @mouseleave="hideTip"
         >
           <div class="text-[10px] font-semibold text-main tracking-tight truncate">
             {{ bat.name }}
@@ -51,7 +52,8 @@
           v-for="(src, si) in solarSources"
           :key="src.serial ?? src.instance ?? `${si}-${src.name}`"
           class="classic-inset flex-1 min-w-[90px]"
-          :title="src.name"
+          @mouseenter="showTip($event, src.name)"
+          @mouseleave="hideTip"
         >
           <div class="text-[10px] font-semibold text-main tracking-tight truncate">
             {{ src.name }}
@@ -73,9 +75,21 @@
       </div>
     </div>
   </div>
+
+  <!-- WKWebView often ignores native title=; float above overflow:hidden cards -->
+  <Teleport to="body">
+    <div
+      v-if="tip"
+      class="pointer-events-none fixed z-[9999] max-w-[min(320px,90vw)] -translate-x-1/2 -translate-y-full rounded-md px-2 py-1 text-[11px] font-semibold leading-snug text-main shadow-lg border border-black/10 dark:border-white/15 bg-white/95 dark:bg-zinc-900/95"
+      :style="{ left: `${tip.x}px`, top: `${tip.y}px` }"
+    >
+      {{ tip.text }}
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import { BatteryMedium, SunMedium } from '@lucide/vue'
 
 defineProps<{
@@ -101,4 +115,25 @@ defineProps<{
   showBatteries?: boolean
   showSolar?: boolean
 }>()
+
+const tip = ref<{ text: string; x: number; y: number } | null>(null)
+
+function showTip(e: MouseEvent, text: string) {
+  const name = text?.trim()
+  if (!name) {
+    tip.value = null
+    return
+  }
+  const el = e.currentTarget as HTMLElement
+  const r = el.getBoundingClientRect()
+  tip.value = {
+    text: name,
+    x: r.left + r.width / 2,
+    y: r.top - 6,
+  }
+}
+
+function hideTip() {
+  tip.value = null
+}
 </script>
