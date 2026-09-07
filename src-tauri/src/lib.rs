@@ -1678,12 +1678,13 @@ pub fn run() {
                     .build(app)?;
                 info!("Tray icon built successfully.");
 
-                // Background task: update tray icon with live MQTT state
+                // Background task: update tray icon with live inverter state
                 // macOS: renders custom bar-chart icon + tooltip
                 // Other platforms: updates tooltip text only (no system font dependency)
                 // Also monitors for critical alerts: low battery SoC, grid disconnection
                 {
                     let mqtt_for_tray = app.state::<MqttState>().0.clone();
+                    let gateway_for_tray = app.state::<GatewayState>().0.clone();
                     let app_for_tray = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         let mut interval = tokio::time::interval(Duration::from_millis(1500));
@@ -1695,10 +1696,19 @@ pub fn run() {
                         // bad tick can't silently kill the whole tray task.
                         let mut update_tray = || {
                             let state = {
-                                // Poisoned lock is not a broken client: the state is a
-                                // plain snapshot, keep going instead of skipping forever.
-                                let guard = mqtt_for_tray.lock().unwrap_or_else(|p| p.into_inner());
-                                guard.as_ref().map(|c| c.get_state())
+                                // Same preference as get_state: IGW exclusive mode stops
+                                // LAN MQTT, so the menu-bar sparkline must read GatewayState
+                                // or solar/grid bars stay blank while the dashboard is live.
+                                // Poisoned lock is not a broken client: keep going.
+                                let gw = gateway_for_tray.lock().unwrap_or_else(|p| p.into_inner());
+                                if let Some(ref client) = *gw {
+                                    Some(client.get_state())
+                                } else {
+                                    drop(gw);
+                                    let guard =
+                                        mqtt_for_tray.lock().unwrap_or_else(|p| p.into_inner());
+                                    guard.as_ref().map(|c| c.get_state())
+                                }
                             };
                             if let Some(s) = state {
                                 let solar = s.solar_total.unwrap_or(0.0) / 1000.0;
