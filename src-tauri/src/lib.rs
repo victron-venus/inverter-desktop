@@ -315,6 +315,10 @@ struct FullConfig {
     gateway_access_client_secret: Option<String>,
     /// Gateway API bearer (Authorization: Bearer … / GATEWAY_API_TOKEN).
     gateway_api_token: Option<String>,
+
+    /// First-run setup wizard completed. Missing in older configs → migrated in get_config.
+    #[serde(default)]
+    setup_completed: bool,
 }
 
 fn default_evcharger_instance() -> Option<u32> {
@@ -385,6 +389,7 @@ impl Default for FullConfig {
             gateway_access_client_id: None,
             gateway_access_client_secret: None,
             gateway_api_token: None,
+            setup_completed: false,
         }
     }
 }
@@ -698,23 +703,49 @@ fn start_ha_polling(app: tauri::AppHandle) {
     });
 }
 
+/// True when an existing install looks already configured (migrate setup_completed).
+fn config_looks_previously_configured(config: &FullConfig) -> bool {
+    let mqtt_configured = !config.mqtt_host.trim().is_empty();
+    let gateway_configured = config.gateway_enabled
+        && config
+            .gateway_url
+            .as_ref()
+            .is_some_and(|u| !u.trim().is_empty());
+    mqtt_configured || gateway_configured
+}
+
+/// Resolve whether setup is done. Existing persisted configs without the flag migrate to completed.
+fn resolve_setup_completed(config: &FullConfig, had_saved_config: bool) -> bool {
+    if config.setup_completed {
+        return true;
+    }
+    had_saved_config && config_looks_previously_configured(config)
+}
+
+/// True when the first-run wizard should be shown.
+#[cfg_attr(not(test), allow(dead_code))]
+fn needs_setup(config: &FullConfig, had_saved_config: bool) -> bool {
+    !resolve_setup_completed(config, had_saved_config)
+}
+
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
     let mut config = load_config(&app)?;
 
-    // Check if this is first run (config not yet saved)
     let store = app
         .store_builder("config.json")
         .build()
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
-    let is_first_run = store.get("config").is_none();
+    let had_saved_config = store.get("config").is_some();
+    let is_first_run = !had_saved_config;
 
-    let mut changed = false;
+    // Persist only real migrations / backfills for existing installs — never burn first-run.
+    let mut persist = false;
 
     if is_first_run {
         info!("Config: First run detected. Checking environment variables for seeding...");
-        // Auto-fill from env ONLY on first run
+        // Auto-fill from env ONLY on first run (in-memory; wizard must save).
         if let Ok(server) = std::env::var("HA_SERVER") {
             if !server.is_empty() {
                 info!("Config: Found HA_SERVER={}", server);
@@ -753,7 +784,6 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
                     "Config: Seeded ha_url={:?}, mqtt_ha_host={:?}",
                     config.ha_url, config.mqtt_ha_host
                 );
-                changed = true;
             }
         }
 
@@ -761,7 +791,6 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
             if !token.is_empty() {
                 info!("Config: Found HA_TOKEN (length={})", token.len());
                 config.ha_longlived_token = Some(token);
-                changed = true;
             }
         }
 
@@ -769,7 +798,6 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
             if !user.is_empty() {
                 info!("Config: Found HA_MQTT_USER={}", user);
                 config.mqtt_ha_login = Some(user);
-                changed = true;
             }
         }
 
@@ -777,32 +805,43 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
             if !pwd.is_empty() {
                 info!("Config: Found HA_MQTT_PWD");
                 config.mqtt_ha_password = Some(pwd);
-                changed = true;
             }
         }
 
         if config.ha_url.is_some() && config.ha_longlived_token.is_some() {
             info!("Config: Auto-enabling direct HA API");
             config.ha_use_direct_api = true;
-            changed = true;
         }
     }
 
     // Default values if missing (backward compatibility)
     if config.ha_port.is_none() {
         config.ha_port = Some(DEFAULT_HA_PORT);
-        changed = true;
+        if had_saved_config {
+            persist = true;
+        }
     }
     if config.mqtt_port == 0 {
         config.mqtt_port = DEFAULT_MQTT_PORT;
-        changed = true;
+        if had_saved_config {
+            persist = true;
+        }
     }
     if config.mqtt_ha_port.is_none() {
         config.mqtt_ha_port = Some(DEFAULT_MQTT_PORT);
-        changed = true;
+        if had_saved_config {
+            persist = true;
+        }
     }
 
-    if changed {
+    // Migrate existing installs: do not show wizard for users who already have config.
+    if resolve_setup_completed(&config, had_saved_config) && !config.setup_completed {
+        info!("Config: Migrating setup_completed=true for existing install");
+        config.setup_completed = true;
+        persist = true;
+    }
+
+    if persist {
         save_config_encrypted(&app, &config)?;
     }
 
@@ -810,7 +849,9 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 }
 
 #[tauri::command]
-async fn save_config(app: tauri::AppHandle, config: FullConfig) -> Result<(), String> {
+async fn save_config(app: tauri::AppHandle, mut config: FullConfig) -> Result<(), String> {
+    // Any explicit save (wizard or Config UI) completes first-run setup.
+    config.setup_completed = true;
     save_config_encrypted(&app, &config)?;
     // Fixed / newly configured entity IDs should be polled again without app restart.
     ha_api::clear_entity_skip_list();
@@ -1886,5 +1927,69 @@ mod perform_action_tests {
         assert!(is_inverter_control_flag("input_boolean.only_charging"));
         assert!(is_inverter_control_flag("input_boolean.house_support"));
         assert!(!is_inverter_control_flag("input_boolean.garage"));
+    }
+}
+
+#[cfg(test)]
+mod setup_completed_tests {
+    use super::*;
+
+    fn base_config() -> FullConfig {
+        FullConfig::default()
+    }
+
+    #[test]
+    fn first_run_defaults_need_setup() {
+        let config = base_config();
+        assert!(needs_setup(&config, false));
+        assert!(!resolve_setup_completed(&config, false));
+    }
+
+    #[test]
+    fn explicit_setup_completed_skips_wizard() {
+        let mut config = base_config();
+        config.setup_completed = true;
+        assert!(!needs_setup(&config, false));
+        assert!(resolve_setup_completed(&config, true));
+    }
+
+    #[test]
+    fn existing_saved_mqtt_config_migrates() {
+        let mut config = base_config();
+        config.setup_completed = false;
+        config.mqtt_host = "Cerbo".into();
+        assert!(config_looks_previously_configured(&config));
+        assert!(resolve_setup_completed(&config, true));
+        assert!(!needs_setup(&config, true));
+    }
+
+    #[test]
+    fn existing_gateway_config_migrates() {
+        let mut config = base_config();
+        config.setup_completed = false;
+        config.mqtt_host = String::new();
+        config.gateway_enabled = true;
+        config.gateway_url = Some("https://victron.example.com".into());
+        assert!(config_looks_previously_configured(&config));
+        assert!(resolve_setup_completed(&config, true));
+    }
+
+    #[test]
+    fn empty_unsaved_config_needs_setup() {
+        let mut config = base_config();
+        config.mqtt_host = String::new();
+        config.gateway_enabled = false;
+        assert!(!config_looks_previously_configured(&config));
+        assert!(needs_setup(&config, false));
+        // Even if somehow persisted empty, do not migrate
+        assert!(needs_setup(&config, true));
+    }
+
+    #[test]
+    fn serde_default_setup_completed_is_false() {
+        let json = r#"{"mqtt_host":"Cerbo","mqtt_port":1883,"ha_use_direct_api":false,"camera_enabled":false,"gateway_enabled":false}"#;
+        let config: FullConfig = serde_json::from_str(json).expect("deserialize");
+        assert!(!config.setup_completed);
+        assert!(resolve_setup_completed(&config, true));
     }
 }

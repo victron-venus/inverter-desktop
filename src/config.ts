@@ -89,6 +89,8 @@ export interface AppConfig {
   gateway_access_client_secret?: string | null
   /** Authorization: Bearer (GATEWAY_API_TOKEN) */
   gateway_api_token?: string | null
+  /** First-run setup wizard completed (migrated true for existing installs) */
+  setup_completed?: boolean
 }
 
 // Single source of truth for section visibility defaults
@@ -143,6 +145,7 @@ const defaultConfig: AppConfig = {
   gateway_access_client_id: null,
   gateway_access_client_secret: null,
   gateway_api_token: null,
+  setup_completed: false,
   ...SHOW_DEFAULTS,
 }
 
@@ -161,3 +164,8 @@ export async function getAppConfig(): Promise<AppConfig> {
 
 // Export defaultConfig for use in computed properties if needed
 export { defaultConfig }
+
+/** True when the first-run setup wizard should be shown. */
+export function needsSetup(config: AppConfig | null | undefined): boolean {
+  return !(config?.setup_completed ?? false)
+}

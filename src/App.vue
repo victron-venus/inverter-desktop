@@ -161,8 +161,11 @@
         </div>
       </div>
 
+      <!-- First-run setup wizard -->
+      <SetupWizard v-if="showSetupWizard" @complete="handleSetupComplete" />
+
       <!-- Auth Screen Overlay -->
-      <AuthScreen v-if="showAuthScreen" @authenticated="handleAuthenticated" />
+      <AuthScreen v-if="showAuthScreen && !showSetupWizard" @authenticated="handleAuthenticated" />
 
       <!-- Toast Notification -->
       <div
@@ -184,6 +187,7 @@ import { listen } from '@tauri-apps/api/event'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import AuthScreen from './components/AuthScreen.vue'
+import SetupWizard from './components/SetupWizard.vue'
 import BatterySolarPanel from './components/BatterySolarPanel.vue'
 import ChartPanel from './components/ChartPanel.vue'
 import ConsoleLog from './components/ConsoleLog.vue'
@@ -202,7 +206,8 @@ import { useHA } from './composables/useHA'
 import { useMQTTState } from './composables/useMQTTState'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
-import { getAppConfig } from './config'
+import { getAppConfig, needsSetup } from './config'
+import type { AppConfig } from './config'
 import { logger } from './logger'
 
 const {
@@ -268,6 +273,7 @@ const contextMenu = ref({ show: false, x: 0, y: 0 })
 const videoPopup = ref({ show: false, url: '', cameraName: '' })
 const authToken = ref<string | null>(null)
 const showAuthScreen = ref(false)
+const showSetupWizard = ref(false)
 const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
 let unlistenConfig: (() => void) | null = null
@@ -287,6 +293,13 @@ function handleAuthenticated(token: string) {
   showAuthScreen.value = false
   // Store token in session
   sessionStorage.setItem('auth_token', token)
+}
+
+async function handleSetupComplete(cfg: AppConfig) {
+  showSetupWizard.value = false
+  appConfig.value = cfg
+  await connectMqtt()
+  await initHa()
 }
 
 function onContextMenu(e: MouseEvent) {
@@ -498,6 +511,11 @@ onMounted(async () => {
     }
   }
 
+  // First-run setup before connecting
+  if (needsSetup(cfg)) {
+    showSetupWizard.value = true
+  }
+
   // Check if authentication is enabled
   try {
     if (cfg?.auth_enabled) {
@@ -519,8 +537,11 @@ onMounted(async () => {
     logger.warn('Auth check failed:', e)
   }
 
-  await connectMqtt()
-  await initHa()
+  // Defer MQTT/HA until setup wizard completes
+  if (!showSetupWizard.value) {
+    await connectMqtt()
+    await initHa()
+  }
   initSystemNotifications(
     haEntityStates,
     haEntityAttributes,
