@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import About from './About.vue'
 import App from './App.vue'
+import CameraVideo from './CameraVideo.vue'
 import Config from './Config.vue'
 import { i18n } from './i18n'
 
@@ -10,12 +11,15 @@ import './style.css'
 const path = globalThis.location.pathname
 const isConfigWindow = path === '/config'
 const isAboutWindow = path === '/about'
+const isCameraVideoWindow = path === '/camera-video'
 
-let rootComponent: typeof App | typeof Config | typeof About
+let rootComponent: typeof App | typeof Config | typeof About | typeof CameraVideo
 if (isConfigWindow) {
   rootComponent = Config
 } else if (isAboutWindow) {
   rootComponent = About
+} else if (isCameraVideoWindow) {
+  rootComponent = CameraVideo
 } else {
   rootComponent = App
 }

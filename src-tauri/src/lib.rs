@@ -212,6 +212,8 @@ const ABOUT_WINDOW_W: f64 = 380.0;
 const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
+const CAMERA_VIDEO_WINDOW_W: f64 = 960.0;
+const CAMERA_VIDEO_WINDOW_H: f64 = 640.0;
 
 use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_store::StoreExt;
@@ -1269,6 +1271,66 @@ async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn percent_encode_query(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3);
+    for b in input.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+#[tauri::command]
+async fn open_camera_video_window(
+    app: tauri::AppHandle,
+    video_url: String,
+    agent_name: Option<String>,
+) -> Result<(), String> {
+    if video_url.trim().is_empty() {
+        return Err("video_url is empty".into());
+    }
+    let name = agent_name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Camera".to_string());
+    let title = format!("{name} — Camera");
+    let path = format!(
+        "camera-video?url={}&name={}",
+        percent_encode_query(&video_url),
+        percent_encode_query(&name)
+    );
+
+    #[cfg(desktop)]
+    if let Some(window) = app.get_webview_window("camera-video") {
+        let payload = serde_json::json!({
+            "video_url": video_url,
+            "agent_name": name,
+        });
+        let _ = window.emit("camera-clip-update", payload);
+        let _ = window.set_title(&title);
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    #[allow(unused_mut)]
+    let mut builder =
+        tauri::WebviewWindowBuilder::new(&app, "camera-video", tauri::WebviewUrl::App(path.into()))
+            .title(title)
+            .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
+            .resizable(true)
+            .center();
+    #[cfg(desktop)]
+    let builder = builder.focused(true);
+    builder.build().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn close_config_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
@@ -1552,6 +1614,7 @@ pub fn run() {
             discover_ha_entities,
             set_cover_position,
             open_config_window,
+            open_camera_video_window,
             close_config_window,
             set_auto_start,
             get_auto_start,
