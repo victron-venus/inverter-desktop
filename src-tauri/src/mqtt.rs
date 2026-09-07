@@ -2172,7 +2172,7 @@ impl MqttClient {
 
     /// /TimeToGo arrives in seconds (null when idle -> parse_cerbo_value
     /// already yields None). Format like the inverter-control daemon does.
-    fn format_time_to_go(secs: f64) -> Option<String> {
+    pub(crate) fn format_time_to_go(secs: f64) -> Option<String> {
         let s = secs as u64;
         if s == 0 || s >= 86_400 * 14 {
             return None;
