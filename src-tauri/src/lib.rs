@@ -1069,6 +1069,23 @@ async fn connect_gateway(
     Ok(())
 }
 
+/// Probe Cerbo MQTT (TCP + CONNACK) without leaving a permanent client.
+#[tauri::command]
+async fn test_mqtt_connection(
+    host: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<(), String> {
+    let user = username.clone();
+    let pass = password.clone();
+    tokio::task::spawn_blocking(move || {
+        mqtt::test_mqtt_connection(&host, port, user.as_deref(), pass.as_deref())
+    })
+    .await
+    .map_err(|e| format!("MQTT probe join error: {e}"))?
+}
+
 #[tauri::command]
 async fn test_ha_connection(url: String, port: Option<u16>, token: String) -> Result<(), String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
@@ -1528,6 +1545,7 @@ pub fn run() {
             backup_config,
             restore_config,
             test_ha_connection,
+            test_mqtt_connection,
             test_gateway_connection,
             get_ha_appliance_states,
             get_ha_entity_states,

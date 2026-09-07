@@ -1,7 +1,8 @@
 use chrono::{TimeZone, Utc};
-use rumqttc::{Client, MqttOptions, QoS, SubscribeFilter};
+use rumqttc::{Client, ConnectReturnCode, MqttOptions, Packet, QoS, SubscribeFilter};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -25,6 +26,98 @@ const MIN_STATE_EMIT_INTERVAL: Duration = Duration::from_millis(500);
 /// pushing `mqtt-state-update` while Remote Gateway owns the UI (dual-writer comb).
 static MQTT_STATE_EMIT_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// Calm MQTT reconnect delay (seconds): 5 → 10 → 20 → 40 → 60 cap.
+pub fn mqtt_reconnect_delay_secs(attempt: u32) -> u64 {
+    let shift = attempt.min(4);
+    let delay = 5u64.saturating_mul(1u64 << shift);
+    delay.min(60)
+}
+
+/// Short TCP + MQTT CONNACK probe. Does not leave a permanent client.
+/// Used for startup reachability and dual-path MQTT recovery while on IGW.
+pub fn test_mqtt_connection(
+    host: &str,
+    port: u16,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Result<(), String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("MQTT host is required".into());
+    }
+
+    let addr_str = format!("{host}:{port}");
+    let mut addrs = addr_str
+        .to_socket_addrs()
+        .map_err(|e| format!("MQTT resolve {addr_str}: {e}"))?;
+    let sock: SocketAddr = addrs
+        .next()
+        .ok_or_else(|| format!("MQTT resolve {addr_str}: no addresses"))?;
+
+    // TCP reachability first (short timeout).
+    TcpStream::connect_timeout(&sock, Duration::from_secs(3))
+        .map_err(|e| format!("MQTT TCP {addr_str}: {e}"))?;
+
+    // MQTT CONNECT / CONNACK on a helper thread so a stuck broker cannot block
+    // the caller beyond `overall_timeout`.
+    let host_owned = host.to_string();
+    let user_owned = username.map(|s| s.to_string());
+    let pass_owned = password.map(|s| s.to_string());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = probe_mqtt_connack(
+            &host_owned,
+            port,
+            user_owned.as_deref(),
+            pass_owned.as_deref(),
+        );
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(Duration::from_secs(8)) {
+        Ok(r) => r,
+        Err(_) => Err(format!("MQTT probe timed out for {addr_str}")),
+    }
+}
+
+fn probe_mqtt_connack(
+    host: &str,
+    port: u16,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Result<(), String> {
+    let client_id = format!(
+        "inverter-desktop-probe-{:06x}",
+        rand::random::<u32>() & 0xFF_FFFF
+    );
+    let mut opts = MqttOptions::new(&client_id, (host.to_string(), port));
+    opts.set_keep_alive(10u16);
+    if let (Some(u), Some(p)) = (username, password) {
+        if !u.is_empty() && !p.is_empty() {
+            opts.set_credentials(u, p.to_string());
+        }
+    }
+    let (client, mut connection) = Client::builder(opts).capacity(4).build();
+    for event in connection.iter() {
+        match event {
+            Ok(rumqttc::Event::Incoming(Packet::ConnAck(ack))) => {
+                let _ = client.disconnect();
+                return if ack.code == ConnectReturnCode::Success {
+                    Ok(())
+                } else {
+                    Err(format!("MQTT CONNACK refused: {:?}", ack.code))
+                };
+            }
+            Ok(rumqttc::Event::Incoming(_)) | Ok(rumqttc::Event::Outgoing(_)) => {}
+            Err(e) => {
+                let _ = client.disconnect();
+                return Err(format!("MQTT probe error: {e}"));
+            }
+        }
+    }
+    let _ = client.disconnect();
+    Err("MQTT connection closed before ConnAck".into())
+}
 
 /// Coalesce high-frequency MQTT state IPC: emit at most every
 /// `MIN_STATE_EMIT_INTERVAL`, and when updates arrive during the quiet
@@ -1402,6 +1495,7 @@ impl MqttClient {
         let shutdown = self.shutdown.clone();
 
         tauri::async_runtime::spawn(async move {
+            let mut reconnect_attempt: u32 = 0;
             loop {
                 if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
                     log::info!("MQTT client stopped, exiting reconnect loop");
@@ -1409,7 +1503,7 @@ impl MqttClient {
                 }
                 // Log error separately so `result` drops before the await
                 {
-                    let is_err = Self::run_mqtt_loop(
+                    let loop_result = Self::run_mqtt_loop(
                         &host,
                         port,
                         &username,
@@ -1430,16 +1524,20 @@ impl MqttClient {
                         client_slot.clone(),
                         ev_cache.clone(),
                     )
-                    .await
-                    .is_err();
+                    .await;
+                    let is_err = loop_result.is_err();
+                    let ever_connected = loop_result.ok() == Some(true);
                     if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
                         log::info!("MQTT client stopped after disconnect");
                         break;
                     }
+                    if ever_connected {
+                        reconnect_attempt = 0;
+                    }
                     if is_err {
-                        log::error!("MQTT loop ended (err), reconnecting in 5s...");
+                        log::error!("MQTT loop ended (err), will reconnect with backoff...");
                     } else {
-                        log::info!("MQTT disconnected, reconnecting in 5s...");
+                        log::info!("MQTT disconnected, will reconnect with backoff...");
                     }
                     // Connection lost or failed — clear the publish slot so
                     // publish_command reports the disconnect, then wait.
@@ -1450,7 +1548,10 @@ impl MqttClient {
                         let _ = handle.emit(&status_event, false);
                     }
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                let delay = mqtt_reconnect_delay_secs(reconnect_attempt);
+                reconnect_attempt = reconnect_attempt.saturating_add(1);
+                log::info!("MQTT reconnect in {delay}s (attempt backoff)");
+                tokio::time::sleep(Duration::from_secs(delay)).await;
             }
         });
 
@@ -1478,7 +1579,7 @@ impl MqttClient {
         status_event: &str,
         client_slot: Arc<Mutex<Option<Client>>>,
         ev_cache: Arc<Mutex<EvCache>>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
         let queue_cap = MQTT_QUEUE_CAPACITY;
 
@@ -1546,6 +1647,7 @@ impl MqttClient {
         let con_result = tokio::task::spawn_blocking(move || {
             // Portal discovered at runtime via the retained inverter/portal
             // topic (inverter-control publishes it when no ID is configured).
+            let mut ever_connected = false;
             for event in connection.iter() {
                 match event {
                     Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
@@ -1586,6 +1688,7 @@ impl MqttClient {
                         );
                     }
                     Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
+                        ever_connected = true;
                         if let Some(ref handle) = app_c {
                             let _ = handle.emit(&se, true);
                         }
@@ -1602,21 +1705,21 @@ impl MqttClient {
                     _ => {}
                 }
             }
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            Ok::<bool, Box<dyn std::error::Error + Send + Sync>>(ever_connected)
         })
         .await;
 
-        match con_result {
-            Ok(Ok(())) => {}
+        let ever_connected = match con_result {
+            Ok(Ok(v)) => v,
             Ok(Err(e)) => return Err(e),
             Err(e) => return Err(e.into()),
-        }
+        };
 
         // Connection ended cleanly (EOF) — signal reconnect
         if let Some(ref handle) = app_handle {
             let _ = handle.emit(status_event, false);
         }
-        Ok(())
+        Ok(ever_connected)
     }
 
     /// Subscribe the GX portal topics (alarms + dbus-pump water + active loads).
@@ -5591,5 +5694,20 @@ mod tests {
             MqttClient::parse_ev_topic("N/portal/evcharger/40/ProductName"),
             Some(("evcharger", 40, "ProductName"))
         );
+    }
+}
+
+#[cfg(test)]
+mod reconnect_policy_tests {
+    use super::mqtt_reconnect_delay_secs;
+
+    #[test]
+    fn mqtt_reconnect_delay_secs_caps() {
+        assert_eq!(mqtt_reconnect_delay_secs(0), 5);
+        assert_eq!(mqtt_reconnect_delay_secs(1), 10);
+        assert_eq!(mqtt_reconnect_delay_secs(2), 20);
+        assert_eq!(mqtt_reconnect_delay_secs(3), 40);
+        assert_eq!(mqtt_reconnect_delay_secs(4), 60);
+        assert_eq!(mqtt_reconnect_delay_secs(20), 60);
     }
 }
