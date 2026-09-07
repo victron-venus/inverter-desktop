@@ -301,6 +301,13 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
             .map(|s| s.to_string());
         if voltage.is_some() || power.is_some() || current.is_some() || name.is_some() {
             let bat_state = current.map(crate::mqtt::MqttClient::state_from_current);
+            // Cerbo publishes TimeToGo in seconds (null when idle). Same formatter as LAN MQTT.
+            let mut time_to_go = path_num(&snap.battery, &format!("{inst}/TimeToGo"))
+                .and_then(crate::mqtt::MqttClient::format_time_to_go);
+            // Only meaningful while charging/discharging (mirrors apply_cerbo_to_state).
+            if !matches!(bat_state.as_deref(), Some("Charging") | Some("Discharging")) {
+                time_to_go = None;
+            }
             bats.push(Battery {
                 name,
                 serial,
@@ -310,7 +317,7 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
                 current,
                 power,
                 state: bat_state,
-                time_to_go: None,
+                time_to_go,
                 max_cell_voltage: path_num(&snap.battery, &format!("{inst}/System/MaxCellVoltage")),
                 max_voltage_cell_id: snap
                     .battery
@@ -665,6 +672,37 @@ mod tests {
         assert_eq!(st.battery_power, Some(1258.4));
         assert_eq!(st.battery_voltage, Some(53.55));
         assert_eq!(st.batteries.as_ref().map(|b| b.len()), Some(2));
+    }
+
+    #[test]
+    fn maps_battery_time_to_go_while_charging() {
+        let mut snap = GatewaySnapshot::default();
+        snap.battery
+            .insert("289/ProductName".into(), json!("SmartShunt 500A/50mV"));
+        snap.battery.insert("289/Dc/0/Voltage".into(), json!(53.55));
+        snap.battery.insert("289/Dc/0/Current".into(), json!(23.5));
+        snap.battery.insert("289/Dc/0/Power".into(), json!(1258.4));
+        // ~40h 48m = 146880 seconds
+        snap.battery.insert("289/TimeToGo".into(), json!(146880.0));
+
+        let st = snapshot_to_state(&snap);
+        let b = &st.batteries.as_ref().unwrap()[0];
+        assert_eq!(b.state.as_deref(), Some("Charging"));
+        assert_eq!(b.time_to_go.as_deref(), Some("40h 48m"));
+    }
+
+    #[test]
+    fn hides_battery_time_to_go_when_idle() {
+        let mut snap = GatewaySnapshot::default();
+        snap.battery
+            .insert("289/ProductName".into(), json!("SmartShunt 500A/50mV"));
+        snap.battery.insert("289/Dc/0/Current".into(), json!(0.1));
+        snap.battery.insert("289/TimeToGo".into(), json!(146880.0));
+
+        let st = snapshot_to_state(&snap);
+        let b = &st.batteries.as_ref().unwrap()[0];
+        assert_eq!(b.state.as_deref(), Some("Idle"));
+        assert_eq!(b.time_to_go, None);
     }
 
     #[test]
