@@ -61,6 +61,12 @@
         ],
         "frame-ancestors": [
           "'none'"
+        ],
+        "media-src": [
+          "'self'",
+          "blob:",
+          "http://*",
+          "https://*"
         ]
       }
     }

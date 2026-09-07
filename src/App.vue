@@ -127,46 +127,6 @@
         @check-updates="checkForUpdates"
       />
 
-      <!-- Video Popup Overlay -->
-      <div
-        v-if="videoPopup.show"
-        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-md animate-in fade-in duration-200"
-      >
-        <div
-          class="relative w-full max-w-4xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-white/10"
-        >
-          <!-- Camera Name Header -->
-          <div
-            class="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-center"
-          >
-            <div class="flex items-center gap-2">
-              <div class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></div>
-              <span class="text-[11px] font-semibold text-white tracking-tight"
-                >Live · {{ videoPopup.cameraName }}</span
-              >
-            </div>
-            <button
-              type="button"
-              @click="closeVideoPopup"
-              class="p-1.5 rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
-            >
-              <X :size="18" />
-            </button>
-          </div>
-
-          <video
-            autoplay
-            controls
-            class="w-full h-full"
-            :src="videoPopup.url"
-            @ended="closeVideoPopup"
-          >
-            <track kind="captions" />
-            Your browser does not support the video tag.
-          </video>
-        </div>
-      </div>
-
       <!-- First-run setup wizard -->
       <SetupWizard v-if="showSetupWizard" @complete="handleSetupComplete" />
 
@@ -186,7 +146,6 @@
 </template>
 
 <script setup lang="ts">
-import { X } from '@lucide/vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -276,7 +235,6 @@ const isWindowHidden = ref(false)
 
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
-const videoPopup = ref({ show: false, url: '', cameraName: '' })
 const authToken = ref<string | null>(null)
 const showAuthScreen = ref(false)
 const showSetupWizard = ref(false)
@@ -314,30 +272,6 @@ function onContextMenu(e: MouseEvent) {
 
 function closeContextMenu() {
   contextMenu.value.show = false
-}
-
-function closeVideoPopup() {
-  videoPopup.value = { show: false, url: '', cameraName: '' }
-}
-
-function handleShowVideoPopup(e: Event) {
-  const customEvent = e as CustomEvent
-  if (customEvent.detail) {
-    const data = customEvent.detail
-    if (data && typeof data === 'object') {
-      videoPopup.value = {
-        show: true,
-        url: data.video_url,
-        cameraName: data.agent_name || 'Camera',
-      }
-    } else {
-      videoPopup.value = {
-        show: true,
-        url: data,
-        cameraName: 'Camera',
-      }
-    }
-  }
 }
 
 async function openConfig() {
@@ -564,7 +498,6 @@ onMounted(async () => {
   checkForUpdatesSilent().catch((e) => logger.warn('Update check failed:', e))
 
   document.addEventListener('click', onDocumentClick)
-  globalThis.addEventListener('show-video-popup', handleShowVideoPopup)
 
   unlistenConfig = await listen<{ color_scheme?: string }>('config-saved', async (event) => {
     const scheme = event.payload.color_scheme
@@ -598,7 +531,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
-  globalThis.removeEventListener('show-video-popup', handleShowVideoPopup)
   cleanupConnection()
   cleanupHa()
   if (unlistenConfig) unlistenConfig()

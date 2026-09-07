@@ -176,7 +176,12 @@ export function useConnection() {
       unlistenCamera = await listen<{ video_url: string; agent_name?: string }>(
         'camera-event',
         (event) => {
-          globalThis.dispatchEvent(new CustomEvent('show-video-popup', { detail: event.payload }))
+          const payload = event.payload
+          if (!payload?.video_url) return
+          void invoke('open_camera_video_window', {
+            videoUrl: payload.video_url,
+            agentName: payload.agent_name ?? null,
+          }).catch((e) => logger.warn('Failed to open camera video window:', e))
         }
       )
 
