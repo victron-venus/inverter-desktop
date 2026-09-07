@@ -138,24 +138,22 @@ export function applyInverterState(newState: InverterState) {
   if (Array.isArray(merged.batteries) && Array.isArray(prev.batteries)) {
     merged.batteries = merged.batteries.map((bat) => {
       if (bat.time_to_go) return bat
-      if (!matchesChargeState(bat.state)) return bat
+      // Only drop sticky ETA on explicit Idle — Unknown/missing state still
+      // keeps the last Charging/Discharging time_to_go so 2s IGW polls do not blink.
+      if (bat.state === 'Idle') return bat
       const prevBat = prev.batteries!.find(
         (p) =>
           (p.serial && bat.serial && p.serial === bat.serial) ||
           (p.instance != null && bat.instance != null && p.instance === bat.instance) ||
           (p.name && bat.name && p.name === bat.name)
       )
-      if (prevBat?.time_to_go && matchesChargeState(prevBat.state)) {
+      if (prevBat?.time_to_go) {
         return { ...bat, time_to_go: prevBat.time_to_go }
       }
       return bat
     })
   }
   state.value = markRaw(merged)
-}
-
-function matchesChargeState(state?: string | null): boolean {
-  return state === 'Charging' || state === 'Discharging'
 }
 
 export interface NotificationEntry {

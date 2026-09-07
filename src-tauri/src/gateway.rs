@@ -521,6 +521,37 @@ async fn post_command(
     Ok(())
 }
 
+/// Keep last time_to_go when this poll has no TimeToGo leaf (Cerbo often nulls it)
+/// and the battery is not Idle.
+fn preserve_battery_time_to_go(prev: &InverterState, next: &mut InverterState) {
+    let Some(next_bats) = next.batteries.as_mut() else {
+        return;
+    };
+    let Some(prev_bats) = prev.batteries.as_ref() else {
+        return;
+    };
+    for bat in next_bats.iter_mut() {
+        if bat.time_to_go.is_some() {
+            continue;
+        }
+        if bat.state.as_deref() == Some("Idle") {
+            continue;
+        }
+        let prev_bat = prev_bats.iter().find(|p| {
+            (p.serial.is_some() && p.serial == bat.serial)
+                || (p.instance.is_some() && p.instance == bat.instance)
+                || (p.name.is_some()
+                    && !p.name.as_deref().unwrap_or("").is_empty()
+                    && p.name == bat.name)
+        });
+        if let Some(p) = prev_bat {
+            if p.time_to_go.is_some() {
+                bat.time_to_go = p.time_to_go.clone();
+            }
+        }
+    }
+}
+
 pub fn start_gateway_client(
     app: AppHandle,
     url: String,
@@ -580,8 +611,9 @@ pub fn start_gateway_client(
             .await
             {
                 Ok(snap) => {
-                    let mapped = snapshot_to_state(&snap);
+                    let mut mapped = snapshot_to_state(&snap);
                     if let Ok(mut g) = state_c.lock() {
+                        preserve_battery_time_to_go(&g, &mut mapped);
                         *g = mapped.clone();
                     }
                     if !connected_emitted {
