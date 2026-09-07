@@ -2092,18 +2092,27 @@ impl MqttClient {
         } else if let Some(ref cam_t) = camera_topic {
             if match_mqtt_topic(topic, cam_t) {
                 if let Some(ref handle) = app_handle {
-                    if let Ok(cam_event) = serde_json::from_str::<CameraEvent>(payload) {
-                        let _ = handle.emit("camera-event", cam_event);
-                    } else {
-                        let _ = handle.emit(
-                            "camera-event",
-                            CameraEvent {
-                                agent_name: "Unknown Camera".to_string(),
-                                video_url: payload.to_string(),
-                                timestamp: None,
-                            },
-                        );
-                    }
+                    let cam_event = match serde_json::from_str::<CameraEvent>(payload) {
+                        Ok(mut ev) => {
+                            if ev.agent_name.trim().is_empty() {
+                                ev.agent_name = "Camera".to_string();
+                            }
+                            ev
+                        }
+                        Err(_) => CameraEvent {
+                            agent_name: "Camera".to_string(),
+                            video_url: payload.to_string(),
+                            timestamp: None,
+                        },
+                    };
+                    let title = format!("{} camera motion detected", cam_event.agent_name);
+                    let _ = handle
+                        .notification()
+                        .builder()
+                        .title(&title)
+                        .body("Camera motion clip available")
+                        .show();
+                    let _ = handle.emit("camera-event", cam_event);
                 }
             }
         }

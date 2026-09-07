@@ -368,7 +368,7 @@ impl Default for FullConfig {
             water_valve_instance: Some(2),
             evcharger_instance: Some(40),
             ev_instance: Some(22),
-            camera_topic: Some("frigate/+/events".to_string()),
+            camera_topic: Some("kerberos/desktop/events".to_string()),
             camera_enabled: false,
             show_advanced_settings: Some(false),
             show_ha_sensors: Some(true),

@@ -147,14 +147,20 @@
             </div>
             <button
               type="button"
-              @click="videoPopup.show = false"
+              @click="closeVideoPopup"
               class="p-1.5 rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
             >
               <X :size="18" />
             </button>
           </div>
 
-          <video autoplay controls class="w-full h-full" :src="videoPopup.url">
+          <video
+            autoplay
+            controls
+            class="w-full h-full"
+            :src="videoPopup.url"
+            @ended="closeVideoPopup"
+          >
             <track kind="captions" />
             Your browser does not support the video tag.
           </video>
@@ -308,6 +314,10 @@ function onContextMenu(e: MouseEvent) {
 
 function closeContextMenu() {
   contextMenu.value.show = false
+}
+
+function closeVideoPopup() {
+  videoPopup.value = { show: false, url: '', cameraName: '' }
 }
 
 function handleShowVideoPopup(e: Event) {

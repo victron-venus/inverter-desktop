@@ -314,50 +314,92 @@
               </div>
 
               <div class="flex flex-col gap-3 mt-2">
-                <h3 class="classic-subsection-title">MQTT Routing</h3>
+                <h3 class="classic-subsection-title">{{ $t('config.cameraEventsTitle') }}</h3>
+                <p class="text-[10px] text-muted px-1">
+                  {{ $t('config.cameraEventsHelp') }}
+                </p>
                 <div class="grid grid-cols-2 gap-3">
                   <div class="flex flex-col gap-1">
-                    <label for="mqtt_ha_host" class="classic-label px-1">HA MQTT Host</label>
+                    <label for="mqtt_ha_host" class="classic-label px-1">{{
+                      $t('config.haMqttHost')
+                    }}</label>
                     <input
                       id="mqtt_ha_host"
                       v-model="config.mqtt_ha_host"
                       type="text"
                       class="classic-input w-full"
+                      :placeholder="$t('config.haMqttHostPlaceholder')"
                     />
                   </div>
                   <div class="flex flex-col gap-1">
-                    <label for="mqtt_ha_port" class="classic-label px-1">HA MQTT Port</label>
+                    <label for="mqtt_ha_port" class="classic-label px-1">{{
+                      $t('config.haMqttPort')
+                    }}</label>
                     <input
                       id="mqtt_ha_port"
                       v-model.number="config.mqtt_ha_port"
                       type="number"
                       class="classic-input w-full"
+                      placeholder="1883"
                     />
                   </div>
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                   <div class="flex flex-col gap-1">
-                    <label for="mqtt_ha_login" class="classic-label px-1">HA MQTT Username</label>
+                    <label for="mqtt_ha_login" class="classic-label px-1">{{
+                      $t('config.haMqttUsername')
+                    }}</label>
                     <input
                       id="mqtt_ha_login"
                       v-model="config.mqtt_ha_login"
                       type="text"
                       class="classic-input w-full"
-                      placeholder="Optional"
+                      :placeholder="$t('config.optional')"
                     />
                   </div>
                   <div class="flex flex-col gap-1">
-                    <label for="mqtt_ha_password" class="classic-label px-1"
-                      >HA MQTT Password</label
-                    >
+                    <label for="mqtt_ha_password" class="classic-label px-1">{{
+                      $t('config.haMqttPassword')
+                    }}</label>
                     <input
                       id="mqtt_ha_password"
                       v-model="config.mqtt_ha_password"
                       type="password"
                       class="classic-input w-full"
-                      placeholder="Optional"
+                      :placeholder="$t('config.optional')"
                     />
                   </div>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <span class="classic-label px-1">{{ $t('config.cameraMonitoring') }}</span>
+                  <label
+                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      v-model="config.camera_enabled"
+                      class="rounded border-slate-300 text-accent focus:ring-accent"
+                    />
+                    <span class="text-[11px] font-bold text-main">{{
+                      $t('config.cameraEnabled')
+                    }}</span>
+                  </label>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label for="camera_topic" class="classic-label px-1">{{
+                    $t('config.cameraTopic')
+                  }}</label>
+                  <input
+                    id="camera_topic"
+                    v-model="config.camera_topic"
+                    type="text"
+                    :disabled="!config.camera_enabled"
+                    class="classic-input w-full disabled:opacity-50"
+                    :placeholder="$t('config.cameraTopicPlaceholder')"
+                  />
+                  <p class="text-[10px] text-muted px-1 italic">
+                    {{ $t('config.cameraTopicHelp') }}
+                  </p>
                 </div>
                 <label
                   class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
@@ -367,39 +409,10 @@
                     v-model="config.show_advanced_settings"
                     class="rounded border-slate-300 text-accent focus:ring-accent"
                   />
-                  <span class="text-[11px] font-bold text-main">Advanced settings</span>
+                  <span class="text-[11px] font-bold text-main">{{
+                    $t('config.advancedSettings')
+                  }}</span>
                 </label>
-                <div v-if="config.show_advanced_settings" class="flex flex-col gap-1">
-                  <span class="classic-label px-1">Camera Monitoring</span>
-                  <label
-                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      v-model="config.camera_enabled"
-                      class="rounded border-slate-300 text-accent focus:ring-accent"
-                    />
-                    <span class="text-[11px] font-bold text-main"
-                      >Enable camera event detection</span
-                    >
-                  </label>
-                </div>
-                <div v-if="config.show_advanced_settings" class="flex flex-col gap-1">
-                  <label for="camera_topic" class="classic-label px-1"
-                    >Camera Detection Topic</label
-                  >
-                  <input
-                    id="camera_topic"
-                    v-model="config.camera_topic"
-                    type="text"
-                    :disabled="!config.camera_enabled"
-                    class="classic-input w-full disabled:opacity-50"
-                    placeholder="e.g. frigate/+/events"
-                  />
-                  <p class="text-[10px] text-muted px-1 italic">
-                    MQTT topic with wildcard for camera events on HA broker.
-                  </p>
-                </div>
               </div>
 
               <!-- Appliance Entities -->
