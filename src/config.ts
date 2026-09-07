@@ -137,7 +137,7 @@ const defaultConfig: AppConfig = {
   header_toggles_config: undefined,
   color_scheme: 'dark',
   portal_id: null,
-  camera_topic: 'frigate/+/events',
+  camera_topic: 'kerberos/desktop/events',
   camera_enabled: false,
 
   gateway_enabled: false,

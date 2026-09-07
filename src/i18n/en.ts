@@ -10,7 +10,7 @@ export default {
     tipHa: 'Home Assistant REST API connection',
     tipIgw: 'Remote inverter-gateway via Cloudflare Access',
     tipMqtt: 'Cerbo GX LAN MQTT live data',
-    tipHaMqtt: 'Home Assistant MQTT broker connection',
+    tipHaMqtt: 'HA MQTT broker for Kerberos camera motion events',
   },
   sections: {
     ev: 'EV',
@@ -65,6 +65,23 @@ export default {
     connectionSuccess: 'Connection successful',
     connectionFailed: 'Connection failed',
     fetchEntities: 'Fetch Entities',
+    cameraEventsTitle: 'Camera Events (HA MQTT)',
+    cameraEventsHelp:
+      'Separate MQTT connection to Home Assistant for Kerberos camera motion clips. Cerbo MQTT stays on the Inverter tab.',
+    haMqttHost: 'HA MQTT Host',
+    haMqttHostPlaceholder: 'homeassistant.local',
+    haMqttPort: 'HA MQTT Port',
+    haMqttUsername: 'HA MQTT Username',
+    haMqttPassword: 'HA MQTT Password',
+    optional: 'Optional',
+    cameraMonitoring: 'Camera Monitoring',
+    cameraEnabled: 'Enable camera motion events',
+    cameraTopic: 'Camera Event Topic',
+    cameraTopicPlaceholder: 'kerberos/desktop/events',
+    cameraTopicHelp:
+      'MQTT topic for Kerberos desktop events (JSON: agent_name, video_url, timestamp?). Default: kerberos/desktop/events',
+    advancedSettings: 'Advanced settings',
+    cameraMotionDetected: '{agent} camera motion detected',
   },
   notifications: {
     title: 'Notifications',
