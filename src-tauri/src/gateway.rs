@@ -758,4 +758,52 @@ mod tests {
         assert_eq!(st.mppt_chargers.as_ref().map(|c| c.len()), Some(3));
         assert_eq!(st.pv_inverters.as_ref().map(|c| c.len()), Some(2));
     }
+
+    /// Tray sparkline reads `solar_total` + `gt` from the same mapped state.
+    #[test]
+    fn maps_tray_sparkline_metrics_from_live_like_snapshot() {
+        let mut snap = GatewaySnapshot::default();
+        snap.system
+            .insert("0/Ac/Grid/L1/Power".into(), json!(-32.0));
+        snap.system.insert("0/Ac/Grid/L2/Power".into(), json!(17.0));
+        snap.system
+            .insert("0/Ac/Consumption/L1/Power".into(), json!(411.0));
+        snap.system
+            .insert("0/Ac/Consumption/L2/Power".into(), json!(17.0));
+        snap.system
+            .insert("0/Dc/Battery/Voltage".into(), json!(53.21));
+        snap.system
+            .insert("0/Dc/Battery/Current".into(), json!(-9.3));
+        snap.system
+            .insert("0/Dc/Battery/Power".into(), json!(-494.85));
+        snap.vebus
+            .insert("290/Hub4/L1/AcPowerSetpoint".into(), json!(-394));
+        snap.vebus.insert("290/State".into(), json!(3));
+        // Cerbo often publishes null on unused phases — must not break mapping.
+        snap.vebus
+            .insert("290/Ac/ActiveIn/L2/P".into(), json!(null));
+        snap.solarcharger
+            .insert("290/Yield/Power".into(), json!(1250.0));
+        snap.solarcharger
+            .insert("290/ProductName".into(), json!("SmartSolar"));
+        snap.battery
+            .insert("289/ProductName".into(), json!("SmartShunt 500A/50mV"));
+        snap.battery.insert("289/Dc/0/Voltage".into(), json!(53.21));
+        snap.battery.insert("289/Dc/0/Current".into(), json!(-9.3));
+        snap.battery.insert("289/Dc/0/Power".into(), json!(-494.85));
+
+        let st = snapshot_to_state(&snap);
+        assert_eq!(st.gt, Some(-15.0));
+        assert_eq!(st.tt, Some(428.0));
+        assert_eq!(st.solar_total, Some(1250.0));
+        assert_eq!(st.setpoint, Some(-394.0));
+        assert_eq!(st.battery_power, Some(-494.85));
+        // IPC must include these so the menu-bar painter (and UI) see them.
+        let json = serde_json::to_value(&st).unwrap();
+        assert_eq!(json.get("gt").and_then(|v| v.as_f64()), Some(-15.0));
+        assert_eq!(
+            json.get("solar_total").and_then(|v| v.as_f64()),
+            Some(1250.0)
+        );
+    }
 }

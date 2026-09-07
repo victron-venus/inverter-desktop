@@ -268,3 +268,37 @@ pub fn render(solar_total: Option<f64>, grid_power: Option<f64>) -> (Vec<u8>, u3
 
     (pixels, W, H)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_with_metrics_lights_active_segments() {
+        let (pixels, w, h) = render(Some(5_000.0), Some(-2_000.0));
+        assert_eq!((w, h), (W, H));
+        assert_eq!(pixels.len(), (W * H * 4) as usize);
+        // At least some non-zero alpha pixels (labels + active bar segments).
+        let lit = pixels.chunks(4).filter(|px| px[3] > 0).count();
+        assert!(
+            lit > 100,
+            "expected lit pixels for solar/grid sparkline, got {lit}"
+        );
+    }
+
+    #[test]
+    fn render_without_metrics_still_draws_inactive_chrome() {
+        let (pixels, _, _) = render(None, None);
+        let lit = pixels.chunks(4).filter(|px| px[3] > 0).count();
+        // Inactive segments + "--" labels still paint something.
+        assert!(lit > 0);
+    }
+
+    #[test]
+    fn level_scales_solar_and_grid_for_sparkline() {
+        assert_eq!(level(None, MAX_SOLAR), 0);
+        assert_eq!(level(Some(0.0), MAX_SOLAR), 0);
+        assert!(level(Some(5_000.0), MAX_SOLAR) >= 3);
+        assert!(level(Some(-2_500.0), MAX_GRID) >= 3);
+    }
+}
