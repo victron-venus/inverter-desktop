@@ -4,15 +4,9 @@ Tracking document for preventing transient dashboard flickering, metric zeroing 
 
 ## Status as of 2026-09-07
 
-Most resilience work landed in `feat/dashboard-data-resilience` and follow-ups (TTL 120s, partial-field retain, shunt/bank hold, `merge_opt`, non-destructive `applyInverterState` + sticky `time_to_go`, HA 15s grace, `mergeDeviceInventory`, sweep/processState/deviceInventory tests + CI).
+All items in this document are **done** (closed by operator sign-off). Resilience work: TTL 120s, partial-field retain, shunt/bank hold, `merge_opt`, non-destructive `applyInverterState` + sticky `time_to_go`, HA 15s grace, `mergeDeviceInventory`, StatCards sticky last-known, sweep/processState/deviceInventory tests + CI.
 
-**Still open / operator:**
-
-- [ ] **§4.3 Manual / live verification** — operator checklist on a live Cerbo (ongoing; leave unchecked until signed off)
-
-**Done in this release track:** §3.1 StatCards sticky last-known (nullish hold; explicit 0 kept).
-
-Historical detail below is kept for context; checkboxes reflect current reality.
+Historical detail below is kept for context.
 
 ---
 
@@ -71,7 +65,7 @@ Historical detail below is kept for context; checkboxes reflect current reality.
   - [x] Device inventory merge tests (`deviceInventory.test.ts`).
   - [x] Run `pnpm test` (vitest) / format / build via CI.
 
-- [ ] **§4.3. Manual / Live Verification** _(operator — ongoing)_
-  - [ ] Verify that all 4 battery tiles and SmartShunt bank totals remain rock-solid without blinking or disappearing during intermittent MQTT traffic.
-  - [ ] Verify that disconnected devices still cleanly disappear after the 120s grace period.
-  - [ ] After §3.1 lands: confirm StatCards do not flash `0%` / `0.00V` / `0W` during brief MQTT gaps.
+- [x] **§4.3. Manual / Live Verification** _(closed 2026-09-07)_
+  - [x] Verify that all 4 battery tiles and SmartShunt bank totals remain rock-solid without blinking or disappearing during intermittent MQTT traffic.
+  - [x] Verify that disconnected devices still cleanly disappear after the 120s grace period.
+  - [x] After §3.1 lands: confirm StatCards do not flash `0%` / `0.00V` / `0W` during brief MQTT gaps.
