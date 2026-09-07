@@ -4,12 +4,11 @@
     <div v-if="showBatteries !== false" class="classic-card">
       <div class="classic-header"><BatteryMedium :size="10" /> Batteries</div>
       <div class="p-1.5 flex flex-wrap gap-x-2 gap-y-1.5">
-        <div
+        <HoverTip
           v-for="(bat, bi) in batteries"
           :key="bat.serial ?? bat.instance ?? `${bi}-${bat.name}`"
+          :text="bat.name"
           class="classic-inset flex-1 min-w-[130px]"
-          @mouseenter="showTip($event, bat.name)"
-          @mouseleave="hideTip"
         >
           <div class="text-[10px] font-semibold text-main tracking-tight truncate">
             {{ bat.name }}
@@ -40,7 +39,7 @@
               {{ bat.state }}<span v-if="bat.timeToGo"> · {{ bat.timeToGo }}</span>
             </span>
           </div>
-        </div>
+        </HoverTip>
       </div>
     </div>
 
@@ -48,12 +47,11 @@
     <div v-if="showSolar !== false" class="classic-card">
       <div class="classic-header"><SunMedium :size="10" /> Solar Production</div>
       <div class="p-1.5 flex flex-wrap gap-x-2 gap-y-1.5">
-        <div
+        <HoverTip
           v-for="(src, si) in solarSources"
           :key="src.serial ?? src.instance ?? `${si}-${src.name}`"
+          :text="src.name"
           class="classic-inset flex-1 min-w-[90px]"
-          @mouseenter="showTip($event, src.name)"
-          @mouseleave="hideTip"
         >
           <div class="text-[10px] font-semibold text-main tracking-tight truncate">
             {{ src.name }}
@@ -71,26 +69,15 @@
               {{ Math.floor(src.power) }}W
             </div>
           </div>
-        </div>
+        </HoverTip>
       </div>
     </div>
   </div>
-
-  <!-- WKWebView often ignores native title=; float above overflow:hidden cards -->
-  <Teleport to="body">
-    <div
-      v-if="tip"
-      class="pointer-events-none fixed z-[9999] max-w-[min(320px,90vw)] -translate-x-1/2 -translate-y-full rounded-md px-2 py-1 text-[11px] font-semibold leading-snug text-main shadow-lg border border-black/10 dark:border-white/15 bg-white/95 dark:bg-zinc-900/95"
-      :style="{ left: `${tip.x}px`, top: `${tip.y}px` }"
-    >
-      {{ tip.text }}
-    </div>
-  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
 import { BatteryMedium, SunMedium } from '@lucide/vue'
+import HoverTip from './HoverTip.vue'
 
 defineProps<{
   batteries: Array<{
@@ -115,25 +102,4 @@ defineProps<{
   showBatteries?: boolean
   showSolar?: boolean
 }>()
-
-const tip = ref<{ text: string; x: number; y: number } | null>(null)
-
-function showTip(e: MouseEvent, text: string) {
-  const name = text?.trim()
-  if (!name) {
-    tip.value = null
-    return
-  }
-  const el = e.currentTarget as HTMLElement
-  const r = el.getBoundingClientRect()
-  tip.value = {
-    text: name,
-    x: r.left + r.width / 2,
-    y: r.top - 6,
-  }
-}
-
-function hideTip() {
-  tip.value = null
-}
 </script>
