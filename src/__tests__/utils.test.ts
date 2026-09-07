@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   formatPower,
+  holdNumber,
   formatUptime,
   formatDuration,
   formatInverterState,
@@ -186,5 +187,23 @@ describe('formatTimestamp', () => {
     const ts = new Date(Date.now() - 2 * 60 * 1000).toISOString()
     expect(formatTimestamp(ts)).toBe('2m ago')
     expect(formatTimestamp(ts)).not.toBe('30 min ago')
+  })
+})
+
+describe('holdNumber', () => {
+  it('returns incoming when defined, including explicit 0', () => {
+    expect(holdNumber(42, 10)).toBe(42)
+    expect(holdNumber(0, 10)).toBe(0)
+    expect(holdNumber(-1.5, 10)).toBe(-1.5)
+  })
+
+  it('keeps previous when incoming is null or undefined', () => {
+    expect(holdNumber(undefined, 51.2)).toBe(51.2)
+    expect(holdNumber(null, 51.2)).toBe(51.2)
+    expect(holdNumber(undefined, undefined)).toBeUndefined()
+  })
+
+  it('rejects NaN and keeps previous', () => {
+    expect(holdNumber(Number.NaN, 12)).toBe(12)
   })
 })

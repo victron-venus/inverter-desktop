@@ -4,6 +4,18 @@ export function formatPower(w: number | undefined): string {
   return abs >= 1000 ? sign + (abs / 1000).toFixed(1) + 'kW' : sign + abs + 'W'
 }
 
+/** Prefer incoming when defined (including explicit 0); else keep previous.
+ *  Used by StatCards to avoid flashing 0W / 0% / 0.00V on brief nullish gaps. */
+export function holdNumber(
+  incoming: number | null | undefined,
+  previous: number | undefined
+): number | undefined {
+  if (incoming !== null && incoming !== undefined && Number.isFinite(incoming)) {
+    return incoming
+  }
+  return previous
+}
+
 export function formatUptime(s: number): string {
   if (s < 60) return s + 's'
   if (s < 3600) return Math.floor(s / 60) + 'm'
