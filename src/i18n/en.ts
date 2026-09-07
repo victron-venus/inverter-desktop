@@ -7,6 +7,10 @@ export default {
     uptime: 'Uptime',
     desktop: 'Desktop',
     control: 'Control',
+    tipHa: 'Home Assistant REST API connection',
+    tipIgw: 'Remote inverter-gateway via Cloudflare Access',
+    tipMqtt: 'Cerbo GX LAN MQTT live data',
+    tipHaMqtt: 'Home Assistant MQTT broker connection',
   },
   sections: {
     ev: 'EV',
