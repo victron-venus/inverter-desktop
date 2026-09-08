@@ -5,8 +5,11 @@ import {
   chooseStartupSource,
   isIgwConfigured,
   isMqttConfigured,
+  MQTT_CONNECT_WATCHDOG_MS,
+  MQTT_OFFLINE_DELAY_MS,
   MQTT_RECOVERY_PROBE_MS,
   mqttReconnectDelayMs,
+  shouldWatchdogFailoverToIgw,
 } from '../connectionPolicy'
 import { getAppConfig, type AppConfig } from '../config'
 import { logger } from '../logger'
@@ -46,12 +49,12 @@ async function send(action: string, payload: Record<string, unknown> = {}) {
   }
 }
 
-const OFFLINE_DELAY_MS = 10_000
-
 /** Both MQTT + IGW configured → prefer MQTT; recover to MQTT while on IGW. */
 let dualPathPreferMqtt = false
 let mqttRecoveryTimer: ReturnType<typeof setInterval> | null = null
 let mqttOnlyReconnectAttempt = 0
+/** One-shot: dual-path MQTT started but never got status-true → IGW. */
+let mqttConnectWatchdogTimer: ReturnType<typeof setTimeout> | null = null
 
 function mqttConnectArgs(config: AppConfig) {
   return {
@@ -119,19 +122,47 @@ export function useConnection() {
     }
   }
 
+  function clearMqttConnectWatchdog() {
+    if (mqttConnectWatchdogTimer) {
+      clearTimeout(mqttConnectWatchdogTimer)
+      mqttConnectWatchdogTimer = null
+    }
+  }
+
+  function startMqttConnectWatchdog() {
+    clearMqttConnectWatchdog()
+    if (!dualPathPreferMqtt) return
+    mqttConnectWatchdogTimer = setTimeout(() => {
+      mqttConnectWatchdogTimer = null
+      if (
+        shouldWatchdogFailoverToIgw({
+          dualPath: dualPathPreferMqtt,
+          dataSource: dataSource.value,
+          mqttConnected: mqttConnected.value,
+        })
+      ) {
+        logger.log('MQTT connect watchdog — no ConnAck; failing over to IGW')
+        void failoverToIgw()
+      }
+    }, MQTT_CONNECT_WATCHDOG_MS)
+  }
+
   async function startMqtt(config: AppConfig, note?: { title: string; body: string }) {
     await invoke('connect_mqtt', mqttConnectArgs(config))
     dataSource.value = 'mqtt'
-    mqttConnected.value = true
+    // Real connection is confirmed by mqtt-connection-status (ConnAck), not invoke OK.
+    mqttConnected.value = false
     mqttOnlyReconnectAttempt = 0
     stopMqttRecoveryProbe()
     if (note) notify(note.title, note.body)
   }
 
   async function startIgw(config: AppConfig, note?: { title: string; body: string }) {
+    clearMqttConnectWatchdog()
     await invoke('connect_gateway', gatewayConnectArgs(config))
     dataSource.value = 'igw'
-    mqttConnected.value = true
+    // Real connection is confirmed by mqtt-connection-status (first good poll).
+    mqttConnected.value = false
     if (note) notify(note.title, note.body)
   }
 
@@ -157,6 +188,7 @@ export function useConnection() {
             clearTimeout(mqttOfflineTimer)
             mqttOfflineTimer = null
           }
+          clearMqttConnectWatchdog()
           mqttConnected.value = true
           mqttOnlyReconnectAttempt = 0
         } else if (!mqttOfflineTimer) {
@@ -169,7 +201,7 @@ export function useConnection() {
               void failoverToIgw()
             }
             // MQTT-only: Rust client reconnects with calm backoff; no frontend hammer.
-          }, OFFLINE_DELAY_MS)
+          }, MQTT_OFFLINE_DELAY_MS)
         }
       })
 
@@ -220,7 +252,10 @@ export function useConnection() {
 
       if (startup === 'mqtt') {
         try {
-          await startMqtt(config, { title: 'MQTT', body: 'Connected to inverter' })
+          await startMqtt(config, { title: 'MQTT', body: 'Connecting to inverter' })
+          if (dualPathPreferMqtt) {
+            startMqttConnectWatchdog()
+          }
         } catch (e) {
           logger.error('MQTT connect failed:', e)
           if (igwOk) {
@@ -280,7 +315,7 @@ export function useConnection() {
             if (config.camera_enabled && config.mqtt_ha_host) {
               reconnectHaMqttAfterDelay()
             }
-          }, OFFLINE_DELAY_MS)
+          }, MQTT_OFFLINE_DELAY_MS)
         }
       })
 
@@ -317,6 +352,7 @@ export function useConnection() {
   let haMqttReconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   async function failoverToIgw() {
+    clearMqttConnectWatchdog()
     try {
       const config = await getAppConfig()
       if (!isIgwConfigured(config)) {
@@ -358,6 +394,7 @@ export function useConnection() {
       stopMqttRecoveryProbe()
       // connect_mqtt stops gateway (exclusive).
       await startMqtt(config, { title: 'MQTT', body: 'Cerbo MQTT restored' })
+      startMqttConnectWatchdog()
     } catch {
       // still down / connect failed — stay on IGW, probe again next minute
     }
@@ -407,6 +444,7 @@ export function useConnection() {
 
   function cleanup() {
     stopMqttRecoveryProbe()
+    clearMqttConnectWatchdog()
     for (const fn of [
       unlistenStateUpdate,
       unlistenConnectionStatus,
