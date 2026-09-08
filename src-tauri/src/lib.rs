@@ -212,8 +212,10 @@ const ABOUT_WINDOW_W: f64 = 380.0;
 const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
-const CAMERA_VIDEO_WINDOW_W: f64 = 960.0;
-const CAMERA_VIDEO_WINDOW_H: f64 = 540.0;
+const CAMERA_VIDEO_WINDOW_W: f64 = 320.0;
+const CAMERA_VIDEO_WINDOW_H: f64 = 180.0;
+/// Logical-pixel margin from the monitor top/right edges for the camera clip window.
+const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 16.0;
 
 use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_store::StoreExt;
@@ -1359,6 +1361,35 @@ fn percent_encode_query(input: &str) -> String {
     out
 }
 
+/// Place the camera-video window at the top-right of the current (else primary) monitor.
+/// Uses physical pixels; does not focus the window.
+#[cfg(desktop)]
+fn position_camera_video_top_right(window: &tauri::WebviewWindow) {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return;
+    };
+
+    let scale = monitor.scale_factor();
+    let margin = (CAMERA_VIDEO_WINDOW_MARGIN * scale).round() as i32;
+    let screen_pos = *monitor.position();
+    let screen_size = *monitor.size();
+    let window_size = window.outer_size().unwrap_or_else(|_| {
+        tauri::PhysicalSize::new(
+            (CAMERA_VIDEO_WINDOW_W * scale).round() as u32,
+            (CAMERA_VIDEO_WINDOW_H * scale).round() as u32,
+        )
+    });
+
+    let x = screen_pos.x + screen_size.width as i32 - window_size.width as i32 - margin;
+    let y = screen_pos.y + margin;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
 #[tauri::command]
 async fn open_camera_video_window(
     app: tauri::AppHandle,
@@ -1380,6 +1411,7 @@ async fn open_camera_video_window(
         let _ = window.set_title(&title);
         let _ = window.unminimize();
         let _ = window.show();
+        position_camera_video_top_right(&window);
         let loading = serde_json::json!({
             "loading": true,
             "agent_name": name,
@@ -1435,8 +1467,7 @@ async fn open_camera_video_window(
     )
     .title(title)
     .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
-    .resizable(true)
-    .center();
+    .resizable(true);
     // Show without activating so typing focus stays where it is.
     #[cfg(desktop)]
     let builder = builder.focused(false);
@@ -1444,6 +1475,7 @@ async fn open_camera_video_window(
 
     #[cfg(desktop)]
     {
+        position_camera_video_top_right(&window);
         let app_cleanup = app.clone();
         window.on_window_event(move |event| {
             if let WindowEvent::Destroyed = event {
