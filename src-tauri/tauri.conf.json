@@ -66,7 +66,16 @@
           "'self'",
           "blob:",
           "http://*",
-          "https://*"
+          "https://*",
+          "asset:",
+          "http://asset.localhost",
+          "https://asset.localhost"
+        ]
+      },
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$TEMP/inverter-desktop-camera/**"
         ]
       }
     }
