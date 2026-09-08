@@ -304,8 +304,10 @@ const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
 const CAMERA_VIDEO_WINDOW_W: f64 = 320.0;
 const CAMERA_VIDEO_WINDOW_H: f64 = 180.0;
-/// Logical-pixel margin from the monitor top/right edges for the camera clip window.
+/// Logical-pixel margin from monitor edges and between stacked camera clip windows.
 const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 16.0;
+/// Window label prefix for ephemeral camera clip WebviewWindows (`camera-video-<uuid>`).
+const CAMERA_VIDEO_LABEL_PREFIX: &str = "camera-video-";
 
 use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_store::StoreExt;
@@ -1373,23 +1375,18 @@ fn camera_clip_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String>
     Ok(temp.join(CAMERA_CLIP_SUBDIR))
 }
 
-fn cleanup_camera_clip_dir(dir: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            let _ = std::fs::remove_file(&path);
-        }
+#[cfg(desktop)]
+fn remove_camera_clip_file(path: &std::path::Path) {
+    let _ = std::fs::remove_file(path);
+    if let Some(parent) = path.parent() {
+        // Best-effort: drop the temp dir when the last clip file is gone.
+        let _ = std::fs::remove_dir(parent);
     }
 }
 
-fn remove_camera_clip_dir(app: &tauri::AppHandle) {
-    if let Ok(dir) = camera_clip_dir(app) {
-        cleanup_camera_clip_dir(&dir);
-        let _ = std::fs::remove_dir(&dir);
-    }
+#[cfg(desktop)]
+fn is_camera_video_label(label: &str) -> bool {
+    label.starts_with(CAMERA_VIDEO_LABEL_PREFIX) || label == "camera-video"
 }
 
 async fn download_camera_clip(
@@ -1399,8 +1396,7 @@ async fn download_camera_clip(
     let clip_dir = camera_clip_dir(app)?;
     std::fs::create_dir_all(&clip_dir)
         .map_err(|e| format!("Failed to create camera clip temp dir: {e}"))?;
-    // Keep only the newest clip on disk (clips arrive often, a few MB each).
-    cleanup_camera_clip_dir(&clip_dir);
+    // Do not wipe the clip dir — other camera windows may still be playing.
 
     let file_name = format!("clip-{}.mp4", uuid::Uuid::new_v4());
     let dest = clip_dir.join(file_name);
@@ -1451,21 +1447,30 @@ fn percent_encode_query(input: &str) -> String {
     out
 }
 
-/// Force camera-video to the default size, then pin top-right.
-/// Call after create/show so any prior size (or a race with window-state) cannot stick.
+/// Force camera-video to the default size, then stack top-right (see
+/// [`position_camera_video_stacked`]). Call after create so window-state cannot stick.
 #[cfg(desktop)]
-fn apply_camera_video_window_defaults(window: &tauri::WebviewWindow) {
+fn apply_camera_video_window_defaults(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     let _ = window.set_size(tauri::LogicalSize::new(
         CAMERA_VIDEO_WINDOW_W,
         CAMERA_VIDEO_WINDOW_H,
     ));
-    position_camera_video_top_right(window);
+    position_camera_video_stacked(app, window);
 }
 
-/// Place the camera-video window at the top-right of the current (else primary) monitor.
-/// Uses physical pixels; does not focus the window.
+/// Place a camera clip window at the top-right, stacking new ones downward.
+///
+/// Layout (physical pixels, same margin as edge inset = `CAMERA_VIDEO_WINDOW_MARGIN`):
+/// 1. First window: top-right of the current (else primary) monitor.
+/// 2. Each next window: same X as the bottommost window in the rightmost camera
+///    column, Y = that window's Y + outer_height + margin.
+/// 3. If that would go past the monitor bottom (with margin), start a new column
+///    one window-width + margin to the left, back at the top margin. Columns
+///    clamp so the left edge never goes past the monitor's left margin.
+///
+/// Does not focus the window.
 #[cfg(desktop)]
-fn position_camera_video_top_right(window: &tauri::WebviewWindow) {
+fn position_camera_video_stacked(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     let monitor = window
         .current_monitor()
         .ok()
@@ -1485,9 +1490,45 @@ fn position_camera_video_top_right(window: &tauri::WebviewWindow) {
             (CAMERA_VIDEO_WINDOW_H * scale).round() as u32,
         )
     });
+    let win_w = window_size.width as i32;
+    let win_h = window_size.height as i32;
 
-    let x = screen_pos.x + screen_size.width as i32 - window_size.width as i32 - margin;
-    let y = screen_pos.y + margin;
+    let right_x = screen_pos.x + screen_size.width as i32 - win_w - margin;
+    let top_y = screen_pos.y + margin;
+    let bottom_limit = screen_pos.y + screen_size.height as i32 - win_h - margin;
+    let left_limit = screen_pos.x + margin;
+
+    let mut existing: Vec<(i32, i32)> = Vec::new();
+    for (label, other) in app.webview_windows() {
+        if label.as_str() == window.label() || !is_camera_video_label(label.as_str()) {
+            continue;
+        }
+        if let Ok(pos) = other.outer_position() {
+            existing.push((pos.x, pos.y));
+        }
+    }
+
+    let (x, y) = if existing.is_empty() {
+        (right_x, top_y)
+    } else {
+        let max_x = existing.iter().map(|(x, _)| *x).max().unwrap_or(right_x);
+        let col_tolerance = (win_w / 2).max(1);
+        let col_bottom_y = existing
+            .iter()
+            .filter(|(x, _)| (*x - max_x).abs() <= col_tolerance)
+            .map(|(_, y)| *y)
+            .max()
+            .unwrap_or(top_y);
+        let next_y = col_bottom_y + win_h + margin;
+        if next_y <= bottom_limit {
+            (max_x, next_y)
+        } else {
+            // Wrap: new column to the left of the current rightmost column.
+            let next_x = (max_x - win_w - margin).max(left_limit);
+            (next_x, top_y)
+        }
+    };
+
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
@@ -1506,69 +1547,38 @@ async fn open_camera_video_window(
         .unwrap_or_else(|| "Camera".to_string());
     let title = format!("{name} — Camera");
 
-    // Do not steal keyboard focus when a clip arrives (user may be typing elsewhere).
-    #[cfg(desktop)]
-    if let Some(window) = app.get_webview_window("camera-video") {
-        let _ = window.set_title(&title);
-        let _ = window.unminimize();
-        let _ = window.show();
-        apply_camera_video_window_defaults(&window);
-        let loading = serde_json::json!({
-            "loading": true,
-            "agent_name": name,
-        });
-        let _ = window.emit("camera-clip-update", loading);
-
-        match download_camera_clip(&app, &video_url).await {
-            Ok(local_path) => {
-                let local = local_path.to_string_lossy().to_string();
-                let payload = serde_json::json!({
-                    "local_path": local,
-                    "agent_name": name,
-                });
-                let _ = window.emit("camera-clip-update", payload);
-            }
-            Err(err) => {
-                warn!("Camera clip download failed: {err}");
-                let payload = serde_json::json!({
-                    "error": err,
-                    "agent_name": name,
-                });
-                let _ = window.emit("camera-clip-update", payload);
-            }
-        }
-        return Ok(());
-    }
-
-    // Fresh window: download first so the initial URL can point at a local asset path.
-    let route = match download_camera_clip(&app, &video_url).await {
+    // Always open a new window — never reuse/swap an already-playing clip.
+    let (route, clip_path) = match download_camera_clip(&app, &video_url).await {
         Ok(local_path) => {
             let local = local_path.to_string_lossy().to_string();
-            format!(
+            let route = format!(
                 "camera-video?localPath={}&name={}",
                 percent_encode_query(&local),
                 percent_encode_query(&name)
-            )
+            );
+            (route, Some(local_path))
         }
         Err(err) => {
             warn!("Camera clip download failed: {err}");
-            format!(
+            let route = format!(
                 "camera-video?error={}&name={}",
                 percent_encode_query(&err),
                 percent_encode_query(&name)
-            )
+            );
+            (route, None)
         }
     };
 
+    let label = format!("{CAMERA_VIDEO_LABEL_PREFIX}{}", uuid::Uuid::new_v4());
+
     #[allow(unused_mut)]
-    let mut builder = tauri::WebviewWindowBuilder::new(
-        &app,
-        "camera-video",
-        tauri::WebviewUrl::App(route.into()),
-    )
-    .title(title)
-    .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
-    .resizable(true);
+    let mut builder =
+        tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(route.into()))
+            .title(title)
+            .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
+            .resizable(true)
+            // Vue overlay provides the close control; hide the native title bar.
+            .decorations(false);
     // Show without activating so typing focus stays where it is.
     #[cfg(desktop)]
     let builder = builder.focused(false);
@@ -1576,13 +1586,18 @@ async fn open_camera_video_window(
 
     #[cfg(desktop)]
     {
-        apply_camera_video_window_defaults(&window);
-        let app_cleanup = app.clone();
+        apply_camera_video_window_defaults(&app, &window);
         window.on_window_event(move |event| {
             if let WindowEvent::Destroyed = event {
-                remove_camera_clip_dir(&app_cleanup);
+                if let Some(ref path) = clip_path {
+                    remove_camera_clip_file(path);
+                }
             }
         });
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (window, clip_path);
     }
 
     Ok(())
@@ -1849,11 +1864,11 @@ pub fn run() {
         .manage(ha_entity_states);
 
     #[cfg(desktop)]
-    // camera-video is intentionally ephemeral (fixed small size, top-right); do not
-    // persist/restore it or a prior huge size from .window-state.json will stick.
+    // Camera clip windows are ephemeral (fixed small size, stacked top-right); do not
+    // persist/restore them or a prior huge size from .window-state.json will stick.
     let builder = builder.plugin(
         tauri_plugin_window_state::Builder::new()
-            .with_denylist(&["camera-video"])
+            .with_filter(|label| !is_camera_video_label(label))
             .build(),
     );
 
