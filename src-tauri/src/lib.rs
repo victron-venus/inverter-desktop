@@ -29,55 +29,145 @@ use keyring::Entry;
 const KEYRING_SERVICE: &str = "inverter-desktop";
 const KEYRING_USERNAME: &str = "victron";
 
-// Desktop-only: OS keychain for encryption key.
-// Key is cached in memory: keychain reads intermittently fail after sleep/wake
-// (errSecNoSuchKeychain), and load_config runs on every action button press.
+// Desktop: prefer a file-backed AES key under the Tauri app data dir so adhoc
+// reinstalls do not re-prompt macOS Keychain. Keychain is only used once for
+// migration when the file is missing. Cached in memory so concurrent
+// load_config calls do not hammer disk (or the keychain during migration).
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 static ENCRYPTION_KEY_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
+const ENCRYPTION_KEY_FILENAME: &str = "config.key";
+
+/// Path to the encryption key file next to config.json (AppData / identifier).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn encryption_key_file_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    Ok(dir.join(ENCRYPTION_KEY_FILENAME))
+}
+
+/// Read a base64-encoded 32-byte key from `config.key`. `Ok(None)` if missing.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn read_encryption_key_file(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let key = general_purpose::STANDARD
+                .decode(contents.trim())
+                .map_err(|e| format!("Failed to decode encryption key file: {}", e))?;
+            if key.len() != 32 {
+                return Err("Invalid encryption key length in config.key".to_string());
+            }
+            Ok(Some(key))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Failed to read encryption key file: {}", e)),
+    }
+}
+
+/// Persist key as base64 with owner-only permissions (0600 on Unix).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn write_encryption_key_file(path: &std::path::Path, key: &[u8]) -> Result<(), String> {
+    if key.len() != 32 {
+        return Err("Invalid encryption key length".to_string());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create app data dir: {}", e))?;
+    }
+    let key_b64 = general_purpose::STANDARD.encode(key);
+    std::fs::write(path, key_b64.as_bytes())
+        .map_err(|e| format!("Failed to write encryption key file: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("Failed to set encryption key file permissions: {}", e))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn cache_encryption_key(key: &[u8]) {
+    if let Ok(mut cache) = ENCRYPTION_KEY_CACHE.lock() {
+        *cache = Some(key.to_vec());
+    }
+}
+
+/// Decode a base64 keyring / file payload into a 32-byte AES key.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn decode_encryption_key_b64(key_b64: &str) -> Result<Vec<u8>, String> {
+    let key = general_purpose::STANDARD
+        .decode(key_b64.trim())
+        .map_err(|e| format!("Failed to decode encryption key: {}", e))?;
+    if key.len() != 32 {
+        return Err("Invalid encryption key length".to_string());
+    }
+    Ok(key)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
     if let Ok(cache) = ENCRYPTION_KEY_CACHE.lock() {
         if let Some(key) = cache.as_ref() {
             return Ok(key.clone());
         }
     }
 
+    let path = encryption_key_file_path(app)?;
+
+    // Prefer file whenever it exists (avoids Keychain prompts after reinstall).
+    if let Some(key) = read_encryption_key_file(&path)? {
+        cache_encryption_key(&key);
+        return Ok(key);
+    }
+
+    // Migrate from Keychain once, or generate a new file-only key.
     let entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME)
         .map_err(|e| format!("Keyring error: {}", e))?;
 
     let key: Vec<u8> = match entry.get_password() {
         Ok(key_b64) => {
-            let key = general_purpose::STANDARD
-                .decode(key_b64)
-                .map_err(|e| format!("Failed to decode encryption key: {}", e))?;
-            if key.len() != 32 {
-                return Err("Invalid encryption key length".to_string());
+            let key = decode_encryption_key_b64(&key_b64)?;
+            // Best-effort migrate; still use the key even if write fails.
+            if let Err(e) = write_encryption_key_file(&path, &key) {
+                warn!(
+                    "Migrated encryption key from Keychain but failed to write {}: {}",
+                    path.display(),
+                    e
+                );
+            } else {
+                info!(
+                    "Migrated encryption key from Keychain to {}",
+                    path.display()
+                );
             }
             key
         }
         Err(keyring::Error::NoEntry) => {
-            // Generate new encryption key
+            // New install: file-only (do not write Keychain — avoids adhoc prompts).
             let mut key = [0u8; 32];
             rand::rng().fill(&mut key);
-            let key_b64 = general_purpose::STANDARD.encode(key);
-            entry
-                .set_password(&key_b64)
-                .map_err(|e| format!("Failed to save encryption key: {}", e))?;
+            write_encryption_key_file(&path, &key)?;
+            info!("Created new encryption key at {}", path.display());
             key.to_vec()
         }
-        Err(e) => Err(format!("Keyring error: {}", e))?,
+        Err(e) => {
+            // Keychain failed and no file yet — do not mint a new key (would
+            // orphan an existing encrypted config.json). Caller can retry.
+            return Err(format!("Keyring error: {}", e));
+        }
     };
 
-    if let Ok(mut cache) = ENCRYPTION_KEY_CACHE.lock() {
-        *cache = Some(key.clone());
-    }
+    cache_encryption_key(&key);
     Ok(key)
 }
 
 // Mobile fallback: use a fixed derivation (less secure but functional)
 #[cfg(any(target_os = "android", target_os = "ios"))]
-fn get_or_create_encryption_key() -> Result<Vec<u8>, String> {
+fn get_or_create_encryption_key(_app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
     // For mobile, derive key from app identifier (deterministic, no keychain)
     // This is less secure but allows the app to function on mobile
     use std::collections::hash_map::DefaultHasher;
@@ -134,7 +224,7 @@ fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
 }
 
 fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
-    let key = get_or_create_encryption_key()?;
+    let key = get_or_create_encryption_key(app)?;
 
     let store = app
         .store_builder("config.json")
@@ -160,7 +250,7 @@ fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
 }
 
 fn save_config_encrypted(app: &tauri::AppHandle, config: &FullConfig) -> Result<(), String> {
-    let key = get_or_create_encryption_key()?;
+    let key = get_or_create_encryption_key(app)?;
     let encrypted = encrypt_config(config, &key)?;
 
     let store = app
@@ -2238,5 +2328,65 @@ mod setup_completed_tests {
         let config: FullConfig = serde_json::from_str(json).expect("deserialize");
         assert!(!config.setup_completed);
         assert!(resolve_setup_completed(&config, true));
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod encryption_key_file_tests {
+    use super::*;
+
+    #[test]
+    fn write_read_roundtrip_base64_32_bytes() {
+        let dir =
+            std::env::temp_dir().join(format!("inverter-desktop-key-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.key");
+
+        let mut key = [0u8; 32];
+        for (i, b) in key.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        write_encryption_key_file(&path, &key).expect("write");
+        let loaded = read_encryption_key_file(&path)
+            .expect("read")
+            .expect("present");
+        assert_eq!(loaded, key);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "expected 0600 permissions");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_file_returns_none() {
+        let path = std::env::temp_dir().join(format!(
+            "inverter-desktop-key-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        assert!(read_encryption_key_file(&path)
+            .expect("read missing")
+            .is_none());
+    }
+
+    #[test]
+    fn decode_rejects_wrong_length() {
+        let short = general_purpose::STANDARD.encode([1u8, 2, 3]);
+        assert!(decode_encryption_key_b64(&short).is_err());
+    }
+
+    #[test]
+    fn decode_accepts_standard_base64_32_bytes() {
+        // Same encoding historically stored in Keychain — used for file + migration.
+        let mut key = [0u8; 32];
+        key[0] = 0xab;
+        let b64 = general_purpose::STANDARD.encode(key);
+        assert_eq!(decode_encryption_key_b64(&b64).unwrap(), key);
     }
 }
