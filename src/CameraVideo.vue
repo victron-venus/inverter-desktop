@@ -45,32 +45,23 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { X } from '@lucide/vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import { logger } from './logger'
-
-type CameraClipPayload = {
-  local_path?: string
-  agent_name?: string
-  error?: string
-  loading?: boolean
-}
 
 const videoUrl = ref('')
 const cameraName = ref('Camera')
 const errorMessage = ref('')
 const videoEl = ref<HTMLVideoElement | null>(null)
-let unlistenUpdate: UnlistenFn | null = null
 
-function setName(name?: string) {
+function setName(name?: string | null) {
   cameraName.value = (name && name.trim()) || 'Camera'
 }
 
-function loadLocalClip(localPath: string, name?: string) {
+function loadLocalClip(localPath: string, name?: string | null) {
   errorMessage.value = ''
   setName(name)
   // Serve via Tauri asset protocol — raw http:// fails in WKWebView (mixed content).
@@ -86,17 +77,11 @@ function loadLocalClip(localPath: string, name?: string) {
   })
 }
 
-function showError(message: string, name?: string) {
+function showError(message: string, name?: string | null) {
   videoUrl.value = ''
   setName(name)
   errorMessage.value = message
   logger.warn('Camera clip error:', message)
-}
-
-function showLoading(name?: string) {
-  videoUrl.value = ''
-  setName(name)
-  errorMessage.value = 'Downloading camera clip…'
 }
 
 function onVideoError() {
@@ -113,24 +98,9 @@ async function closeWindow() {
   }
 }
 
-function applyPayload(payload: CameraClipPayload | null | undefined) {
-  if (!payload) return
-  if (payload.loading) {
-    showLoading(payload.agent_name)
-    return
-  }
-  if (payload.error) {
-    showError(payload.error, payload.agent_name)
-    return
-  }
-  if (payload.local_path) {
-    loadLocalClip(payload.local_path, payload.agent_name)
-  }
-}
-
-onMounted(async () => {
+onMounted(() => {
   const params = new URLSearchParams(globalThis.location.search)
-  const name = params.get('name') || undefined
+  const name = params.get('name')
   const error = params.get('error')
   const localPath = params.get('localPath')
   if (error) {
@@ -138,19 +108,7 @@ onMounted(async () => {
   } else if (localPath) {
     loadLocalClip(localPath, name)
   } else {
-    showLoading(name)
+    showError('No camera clip provided.', name)
   }
-
-  try {
-    unlistenUpdate = await listen<CameraClipPayload>('camera-clip-update', (event) => {
-      applyPayload(event.payload)
-    })
-  } catch (e) {
-    logger.warn('Failed to listen for camera-clip-update:', e)
-  }
-})
-
-onUnmounted(() => {
-  if (unlistenUpdate) unlistenUpdate()
 })
 </script>
