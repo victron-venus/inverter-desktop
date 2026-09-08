@@ -1137,6 +1137,12 @@ async fn connect_gateway(
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
 ) -> Result<(), String> {
+    let host_for_log = reqwest::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .unwrap_or_else(|| "(invalid-url)".to_string());
+    info!("connect_gateway: starting IGW host={host_for_log}");
+
     // Stop LAN MQTT so it cannot race remote updates.
     {
         let mut client_guard = mqtt_client
@@ -1144,6 +1150,7 @@ async fn connect_gateway(
             .lock()
             .map_err(|e| format!("Internal error: {}", e))?;
         if let Some(old) = client_guard.take() {
+            info!("connect_gateway: stopping prior LAN MQTT");
             old.stop();
         }
     }
@@ -1153,6 +1160,7 @@ async fn connect_gateway(
             .lock()
             .map_err(|e| format!("Internal error: {}", e))?;
         if let Some(old) = gw.take() {
+            info!("connect_gateway: stopping prior gateway client");
             old.stop();
         }
         let client = gateway::start_gateway_client(
@@ -1163,6 +1171,7 @@ async fn connect_gateway(
             api_token.unwrap_or_default(),
         )?;
         *gw = Some(client);
+        info!("connect_gateway: gateway client started host={host_for_log}");
     }
     Ok(())
 }

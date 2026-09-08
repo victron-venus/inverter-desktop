@@ -3,8 +3,11 @@ import {
   chooseStartupSource,
   isIgwConfigured,
   isMqttConfigured,
+  MQTT_CONNECT_WATCHDOG_MS,
+  MQTT_OFFLINE_DELAY_MS,
   MQTT_RECOVERY_PROBE_MS,
   mqttReconnectDelayMs,
+  shouldWatchdogFailoverToIgw,
 } from '../connectionPolicy'
 
 describe('isMqttConfigured', () => {
@@ -87,5 +90,50 @@ describe('mqttReconnectDelayMs', () => {
 describe('MQTT_RECOVERY_PROBE_MS', () => {
   it('is once per minute', () => {
     expect(MQTT_RECOVERY_PROBE_MS).toBe(60_000)
+  })
+})
+
+describe('MQTT_CONNECT_WATCHDOG_MS', () => {
+  it('is about 15 seconds', () => {
+    expect(MQTT_CONNECT_WATCHDOG_MS).toBe(15_000)
+  })
+})
+
+describe('MQTT_OFFLINE_DELAY_MS', () => {
+  it('is 10 seconds', () => {
+    expect(MQTT_OFFLINE_DELAY_MS).toBe(10_000)
+  })
+})
+
+describe('shouldWatchdogFailoverToIgw', () => {
+  it('fires only in dual-path MQTT without a real connection', () => {
+    expect(
+      shouldWatchdogFailoverToIgw({
+        dualPath: true,
+        dataSource: 'mqtt',
+        mqttConnected: false,
+      })
+    ).toBe(true)
+    expect(
+      shouldWatchdogFailoverToIgw({
+        dualPath: true,
+        dataSource: 'mqtt',
+        mqttConnected: true,
+      })
+    ).toBe(false)
+    expect(
+      shouldWatchdogFailoverToIgw({
+        dualPath: true,
+        dataSource: 'igw',
+        mqttConnected: false,
+      })
+    ).toBe(false)
+    expect(
+      shouldWatchdogFailoverToIgw({
+        dualPath: false,
+        dataSource: 'mqtt',
+        mqttConnected: false,
+      })
+    ).toBe(false)
   })
 })
