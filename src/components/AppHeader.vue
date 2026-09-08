@@ -32,6 +32,18 @@
     </div>
 
     <UiButton
+      v-if="showCameraToggle"
+      class="min-w-[22px] !px-1.5 shrink-0"
+      variant="ghost"
+      toggle
+      :active="cameraEnabled"
+      :title="$t('actions.cameraMotion')"
+      @click="$emit('toggle-camera')"
+    >
+      <Camera :size="11" />
+    </UiButton>
+
+    <UiButton
       class="min-w-[22px] !px-1.5 shrink-0"
       variant="ghost"
       :title="isDark ? 'Light mode' : 'Dark mode'"
@@ -44,7 +56,8 @@
 </template>
 
 <script setup lang="ts">
-import { FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
+import { Camera, FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
+import { useI18n } from 'vue-i18n'
 import UiButton from './UiButton.vue'
 import { isHaUnavailableState } from '../utils'
 
@@ -56,12 +69,17 @@ defineProps<{
   toggleStates: Record<string, string> | undefined
   isDark: boolean
   showHeaderToggles?: boolean
+  showCameraToggle?: boolean
+  cameraEnabled?: boolean
 }>()
 
 defineEmits<{
   send: [action: string, payload?: Record<string, unknown>]
   'toggle-theme': []
+  'toggle-camera': []
 }>()
+
+const { t: $t } = useI18n()
 
 function isToggleUnavailable(state: string | undefined): boolean {
   return isHaUnavailableState(state)

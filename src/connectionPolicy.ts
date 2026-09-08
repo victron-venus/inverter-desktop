@@ -80,3 +80,15 @@ export function mqttReconnectDelayMs(attempt: number): number {
   const delay = base * 2 ** Math.min(n, 4)
   return Math.min(delay, 60_000)
 }
+
+/** HA MQTT host configured enough to show the camera-motion header toggle. */
+export function isHaCameraMqttConfigured(
+  config:
+    | {
+        mqtt_ha_host?: string | null
+      }
+    | null
+    | undefined
+): boolean {
+  return Boolean(config?.mqtt_ha_host?.trim())
+}

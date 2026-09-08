@@ -15,8 +15,11 @@
           :toggleStates="headerToggleStates"
           :isDark="isDark"
           :showHeaderToggles="appConfig?.show_header_toggles !== false"
+          :showCameraToggle="showCameraToggle"
+          :cameraEnabled="!!appConfig?.camera_enabled"
           @send="send"
           @toggle-theme="toggleTheme"
+          @toggle-camera="toggleCamera"
         />
       </div>
 
@@ -171,6 +174,7 @@ import { useHA } from './composables/useHA'
 import { useMQTTState } from './composables/useMQTTState'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
+import { isHaCameraMqttConfigured } from './connectionPolicy'
 import { getAppConfig, needsSetup } from './config'
 import type { AppConfig } from './config'
 import { logger } from './logger'
@@ -183,6 +187,7 @@ const {
   appConfig,
   connectMqtt,
   ensureNotificationPermission,
+  toggleCameraMotion,
   cleanup: cleanupConnection,
 } = useConnection()
 const {
@@ -230,6 +235,16 @@ const {
   acloads,
 } = useMQTTState()
 const { isDark, toggleTheme } = useTheme()
+const showCameraToggle = computed(() => isHaCameraMqttConfigured(appConfig.value))
+
+async function toggleCamera() {
+  try {
+    await toggleCameraMotion()
+  } catch (e) {
+    logger.error('Failed to toggle camera motion:', e)
+    showError(`Failed to toggle camera: ${e?.toString() || e}`)
+  }
+}
 const { chartOption, forceUpdateChart, setChartPaused } = useChart(isDark)
 const isWindowHidden = ref(false)
 
