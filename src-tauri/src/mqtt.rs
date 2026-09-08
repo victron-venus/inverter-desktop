@@ -947,6 +947,7 @@ pub struct MqttClient {
     /// services, so the EV tile must populate if just one is configured.
     ev_instances: Option<(Option<u32>, Option<u32>)>,
     camera_topic: Option<String>,
+    frigate_base_url: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     alarms: Arc<Mutex<HashMap<String, u8>>>,
     /// Venus-platform notification slots (GUIv2 Notifications/[0-19]).
@@ -1233,6 +1234,115 @@ fn match_mqtt_topic(topic: &str, pattern: &str) -> bool {
     true
 }
 
+/// Split `camera_topic` on `;`, trim, drop empties.
+/// Supports e.g. `kerberos/desktop/events;frigate/events`.
+fn split_camera_topics(camera_topic: &Option<String>) -> Vec<String> {
+    camera_topic
+        .as_deref()
+        .unwrap_or("")
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn camera_topic_matches(topic: &str, camera_topic: &Option<String>) -> bool {
+    split_camera_topics(camera_topic)
+        .iter()
+        .any(|pattern| match_mqtt_topic(topic, pattern))
+}
+
+fn capitalize_agent_name(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+/// Parse a Frigate MQTT `frigate/events` JSON payload into a [`CameraEvent`].
+///
+/// Only opens a clip on meaningful events: prefer `type == "end"` with
+/// `has_clip`, or `update`/`end` when `has_clip` flips false→true. Returns
+/// `None` when the payload is not Frigate-shaped, should be skipped, or
+/// `frigate_base_url` is missing/empty.
+fn parse_frigate_camera_event(
+    payload: &str,
+    frigate_base_url: Option<&str>,
+) -> Option<CameraEvent> {
+    let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let event_type = v.get("type")?.as_str()?;
+    let after = v.get("after")?;
+    // Require Frigate-shaped fields so Kerberos/raw payloads don't match.
+    let id = after.get("id")?.as_str()?;
+    let camera = after.get("camera")?.as_str()?;
+    if id.is_empty() || camera.is_empty() {
+        return None;
+    }
+    let has_clip = after
+        .get("has_clip")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let before_has_clip = v
+        .get("before")
+        .and_then(|b| b.get("has_clip"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let clip_became_true = has_clip && !before_has_clip;
+    let should_open = match event_type {
+        "end" if has_clip => true,
+        "update" | "end" if clip_became_true => true,
+        _ => false,
+    };
+    if !should_open {
+        return None;
+    }
+    let Some(base_raw) = frigate_base_url.map(str::trim).filter(|s| !s.is_empty()) else {
+        log::warn!(
+            "Frigate camera event skipped: frigate_base_url is not configured (camera={camera}, id={id})"
+        );
+        return None;
+    };
+    let base = base_raw.trim_end_matches('/');
+    Some(CameraEvent {
+        agent_name: capitalize_agent_name(camera),
+        video_url: format!("{base}/api/events/{id}/clip.mp4"),
+        timestamp: None,
+    })
+}
+
+/// Resolve a camera MQTT payload to a [`CameraEvent`].
+/// Kerberos JSON (`agent_name` + `video_url`) unchanged; Frigate next; raw URL last.
+fn parse_camera_mqtt_payload(
+    payload: &str,
+    frigate_base_url: &Option<String>,
+) -> Option<CameraEvent> {
+    if let Ok(mut ev) = serde_json::from_str::<CameraEvent>(payload) {
+        if !ev.video_url.trim().is_empty() {
+            if ev.agent_name.trim().is_empty() {
+                ev.agent_name = "Camera".to_string();
+            }
+            return Some(ev);
+        }
+    }
+    // Peek: Frigate-shaped JSON should not fall through to raw-URL.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+        if v.get("type").is_some() && v.get("after").is_some() {
+            return parse_frigate_camera_event(payload, frigate_base_url.as_deref());
+        }
+    }
+    let trimmed = payload.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(CameraEvent {
+            agent_name: "Camera".to_string(),
+            video_url: trimmed.to_string(),
+            timestamp: None,
+        });
+    }
+    None
+}
+
 use tauri_plugin_notification::NotificationExt;
 
 const THRESHOLD_LOAD_W: f64 = 1500.0;
@@ -1305,6 +1415,7 @@ impl MqttClient {
             water_instances: None,
             ev_instances: None,
             camera_topic: None,
+            frigate_base_url: None,
             notifications: Arc::new(Mutex::new(NotificationState {
                 high_consumption: AlertState::new(),
                 low_water: AlertState::new(),
@@ -1366,6 +1477,10 @@ impl MqttClient {
 
     pub fn set_camera_topic(&mut self, topic: Option<String>) {
         self.camera_topic = topic;
+    }
+
+    pub fn set_frigate_base_url(&mut self, url: Option<String>) {
+        self.frigate_base_url = url;
     }
 
     pub fn set_status_event(&mut self, event: String) {
@@ -1484,6 +1599,7 @@ impl MqttClient {
         let water_instances_owned = self.water_instances;
         let ev_instances_owned = self.ev_instances;
         let cam_topic_owned = self.camera_topic.clone();
+        let frigate_base_owned = self.frigate_base_url.clone();
         let notifications = self.notifications.clone();
         let alarms = self.alarms.clone();
         let platform_notifs = self.platform_notifs.clone();
@@ -1515,6 +1631,7 @@ impl MqttClient {
                         water_instances_owned,
                         ev_instances_owned,
                         cam_topic_owned.clone(),
+                        frigate_base_owned.clone(),
                         notifications.clone(),
                         alarms.clone(),
                         platform_notifs.clone(),
@@ -1571,6 +1688,7 @@ impl MqttClient {
         water_instances: Option<(Option<u32>, Option<u32>, Option<u32>)>,
         ev_instances: Option<(Option<u32>, Option<u32>)>,
         camera_topic: Option<String>,
+        frigate_base_url: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
         alarms: Arc<Mutex<HashMap<String, u8>>>,
         platform_notifs: Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
@@ -1620,10 +1738,9 @@ impl MqttClient {
             }
         }
 
-        if let Some(ref cam_topic) = camera_topic {
-            if !cam_topic.is_empty() {
-                client.subscribe(cam_topic, QoS::AtMostOnce)?;
-            }
+        for cam_topic in split_camera_topics(&camera_topic) {
+            client.subscribe(&cam_topic, QoS::AtMostOnce)?;
+            log::info!("Subscribed to camera topic {cam_topic}");
         }
 
         // NOTE: use tokio net (async) instead of blocking rumqttc sync iter.
@@ -1632,6 +1749,7 @@ impl MqttClient {
         let state_c = state.clone();
         let app_c = app_handle.clone();
         let cam_c = camera_topic.clone();
+        let frigate_c = frigate_base_url.clone();
         let water_c = water_instances;
         let ev_c = ev_instances;
         let notif_c = notifications.clone();
@@ -1676,6 +1794,7 @@ impl MqttClient {
                             &state_c,
                             &app_c,
                             &cam_c,
+                            &frigate_c,
                             &water_c,
                             &ev_c,
                             &notif_c,
@@ -1790,6 +1909,7 @@ impl MqttClient {
         state: &Arc<Mutex<InverterState>>,
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
+        frigate_base_url: &Option<String>,
         water_instances: &Option<(Option<u32>, Option<u32>, Option<u32>)>,
         ev_instances: &Option<(Option<u32>, Option<u32>)>,
         notifications: &Arc<Mutex<NotificationState>>,
@@ -2089,22 +2209,9 @@ impl MqttClient {
                 };
                 Self::emit_state_update(app_handle, &snapshot, false);
             }
-        } else if let Some(ref cam_t) = camera_topic {
-            if match_mqtt_topic(topic, cam_t) {
-                if let Some(ref handle) = app_handle {
-                    let cam_event = match serde_json::from_str::<CameraEvent>(payload) {
-                        Ok(mut ev) => {
-                            if ev.agent_name.trim().is_empty() {
-                                ev.agent_name = "Camera".to_string();
-                            }
-                            ev
-                        }
-                        Err(_) => CameraEvent {
-                            agent_name: "Camera".to_string(),
-                            video_url: payload.to_string(),
-                            timestamp: None,
-                        },
-                    };
+        } else if camera_topic_matches(topic, camera_topic) {
+            if let Some(ref handle) = app_handle {
+                if let Some(cam_event) = parse_camera_mqtt_payload(payload, frigate_base_url) {
                     let title = format!("{} camera motion detected", cam_event.agent_name);
                     let _ = handle
                         .notification()
@@ -5703,6 +5810,96 @@ mod tests {
             MqttClient::parse_ev_topic("N/portal/evcharger/40/ProductName"),
             Some(("evcharger", 40, "ProductName"))
         );
+    }
+}
+
+#[cfg(test)]
+mod camera_topic_tests {
+    use super::*;
+
+    #[test]
+    fn split_camera_topics_semicolon() {
+        let topics = split_camera_topics(&Some(
+            "kerberos/desktop/events; frigate/events ; ;".to_string(),
+        ));
+        assert_eq!(
+            topics,
+            vec![
+                "kerberos/desktop/events".to_string(),
+                "frigate/events".to_string()
+            ]
+        );
+        assert!(split_camera_topics(&None).is_empty());
+        assert!(split_camera_topics(&Some("  ; ;".to_string())).is_empty());
+    }
+
+    #[test]
+    fn camera_topic_matches_any_pattern() {
+        let cfg = Some("kerberos/desktop/events;frigate/events".to_string());
+        assert!(camera_topic_matches("frigate/events", &cfg));
+        assert!(camera_topic_matches("kerberos/desktop/events", &cfg));
+        assert!(!camera_topic_matches("other/topic", &cfg));
+    }
+
+    #[test]
+    fn parse_kerberos_camera_event_unchanged() {
+        let payload = r#"{"agent_name":"Porch","video_url":"http://cam/clip.mp4","timestamp":"t"}"#;
+        let ev = parse_camera_mqtt_payload(payload, &None).expect("kerberos");
+        assert_eq!(ev.agent_name, "Porch");
+        assert_eq!(ev.video_url, "http://cam/clip.mp4");
+    }
+
+    #[test]
+    fn parse_frigate_end_with_clip() {
+        let payload = r#"{
+            "type":"end",
+            "before":{"id":"abc","camera":"front","has_clip":false},
+            "after":{"id":"abc","camera":"front","label":"person","has_clip":true}
+        }"#;
+        let base = Some("http://192.168.151.21:5005".to_string());
+        let ev = parse_camera_mqtt_payload(payload, &base).expect("frigate end");
+        assert_eq!(ev.agent_name, "Front");
+        assert_eq!(
+            ev.video_url,
+            "http://192.168.151.21:5005/api/events/abc/clip.mp4"
+        );
+    }
+
+    #[test]
+    fn parse_frigate_skips_new_without_clip() {
+        let payload = r#"{
+            "type":"new",
+            "before":null,
+            "after":{"id":"abc","camera":"front","has_clip":false}
+        }"#;
+        let base = Some("http://192.168.151.21:5005".to_string());
+        assert!(parse_camera_mqtt_payload(payload, &base).is_none());
+    }
+
+    #[test]
+    fn parse_frigate_update_when_clip_becomes_true() {
+        let payload = r#"{
+            "type":"update",
+            "before":{"id":"xyz","camera":"driveway","has_clip":false},
+            "after":{"id":"xyz","camera":"driveway","has_clip":true}
+        }"#;
+        let base = Some("http://frigate.local:5000/".to_string());
+        let ev = parse_camera_mqtt_payload(payload, &base).expect("clip became true");
+        assert_eq!(ev.agent_name, "Driveway");
+        assert_eq!(
+            ev.video_url,
+            "http://frigate.local:5000/api/events/xyz/clip.mp4"
+        );
+    }
+
+    #[test]
+    fn parse_frigate_skips_without_base_url() {
+        let payload = r#"{
+            "type":"end",
+            "after":{"id":"abc","camera":"front","has_clip":true}
+        }"#;
+        assert!(parse_camera_mqtt_payload(payload, &None).is_none());
+        assert!(parse_camera_mqtt_payload(payload, &Some("".to_string())).is_none());
     }
 }
 

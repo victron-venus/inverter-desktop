@@ -252,6 +252,7 @@ export function useConnection() {
             username: config.mqtt_ha_login || null,
             password: config.mqtt_ha_password || null,
             cameraTopic: config.camera_topic || null,
+            frigateBaseUrl: config.frigate_base_url || null,
           })
           haMqttConnected.value = true
           logger.log('Connected to HA MQTT broker for cameras')
@@ -392,6 +393,7 @@ export function useConnection() {
             username: config.mqtt_ha_login || null,
             password: config.mqtt_ha_password || null,
             cameraTopic: config.camera_topic || null,
+            frigateBaseUrl: config.frigate_base_url || null,
           })
           haMqttConnected.value = true
           logger.log('HA MQTT reconnected')

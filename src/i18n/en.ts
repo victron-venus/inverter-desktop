@@ -67,7 +67,7 @@ export default {
     fetchEntities: 'Fetch Entities',
     cameraEventsTitle: 'Camera Events (HA MQTT)',
     cameraEventsHelp:
-      'Separate MQTT connection to Home Assistant for Kerberos camera motion clips. Cerbo MQTT stays on the Inverter tab.',
+      'Separate MQTT connection to Home Assistant for Kerberos and/or Frigate camera motion clips. Cerbo MQTT stays on the Inverter tab.',
     haMqttHost: 'HA MQTT Host',
     haMqttHostPlaceholder: 'homeassistant.local',
     haMqttPort: 'HA MQTT Port',
@@ -76,10 +76,14 @@ export default {
     optional: 'Optional',
     cameraMonitoring: 'Camera Monitoring',
     cameraEnabled: 'Enable camera motion events',
-    cameraTopic: 'Camera Event Topic',
-    cameraTopicPlaceholder: 'kerberos/desktop/events',
+    cameraTopic: 'Camera Event Topic(s)',
+    cameraTopicPlaceholder: 'kerberos/desktop/events;frigate/events',
     cameraTopicHelp:
-      'MQTT topic for Kerberos desktop events (JSON: agent_name, video_url, timestamp?). Default: kerberos/desktop/events',
+      'Semicolon-separated MQTT topics/patterns. Kerberos: kerberos/desktop/events (JSON agent_name, video_url). Frigate: frigate/events (needs Frigate base URL below).',
+    frigateBaseUrl: 'Frigate Base URL',
+    frigateBaseUrlPlaceholder: 'http://192.168.151.21:5005',
+    frigateBaseUrlHelp:
+      'HTTP base for Frigate clip URLs ({base}/api/events/{id}/clip.mp4). Required when frigate/events is subscribed; leave empty to skip Frigate clips. Example: Synology host :5005→5000.',
     advancedSettings: 'Advanced settings',
     cameraMotionDetected: '{agent} camera motion detected',
   },
