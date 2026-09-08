@@ -1310,7 +1310,7 @@ fn parse_frigate_camera_event(
     };
     let base = base_raw.trim_end_matches('/');
     Some(CameraEvent {
-        agent_name: capitalize_agent_name(camera),
+        agent_name: format!("Frigate {}", capitalize_agent_name(camera)),
         video_url: format!("{base}/api/events/{id}/clip.mp4"),
         timestamp: None,
     })
@@ -5961,7 +5961,7 @@ mod camera_topic_tests {
         }"#;
         let base = Some("http://192.168.151.21:5005".to_string());
         let ev = parse_camera_mqtt_payload(payload, &base).expect("frigate end");
-        assert_eq!(ev.agent_name, "Front");
+        assert_eq!(ev.agent_name, "Frigate Front");
         assert_eq!(
             ev.video_url,
             "http://192.168.151.21:5005/api/events/abc/clip.mp4"
@@ -5988,7 +5988,7 @@ mod camera_topic_tests {
         }"#;
         let base = Some("http://frigate.local:5000/".to_string());
         let ev = parse_camera_mqtt_payload(payload, &base).expect("clip became true");
-        assert_eq!(ev.agent_name, "Driveway");
+        assert_eq!(ev.agent_name, "Frigate Driveway");
         assert_eq!(
             ev.video_url,
             "http://frigate.local:5000/api/events/xyz/clip.mp4"
