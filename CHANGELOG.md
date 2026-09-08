@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Water pump/valve buttons now publish GX MQTT-API `W/<portal>/pump/<n>/Mode`
+  (Cerbo `{"value": mode}`) instead of the unused `inverter/cmd/water_mode_set`
+  topic; Mode read-back updates AUTO chips.
+
 ### Added
 - Manual pump/valve buttons in the Water card, routed through dbus-pump's
   writable `/Mode` (0 auto, 1 always-on, 2 always-off) via the GX MQTT-API

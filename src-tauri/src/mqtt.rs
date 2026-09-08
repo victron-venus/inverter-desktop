@@ -252,6 +252,10 @@ pub struct InverterState {
     pub water_level: Option<f64>,
     pub water_valve: Option<bool>,
     pub pump_switch: Option<bool>,
+    /// dbus-pump /Mode per device (0 auto, 1 always-on, 2 always-off);
+    /// None until the retained Mode topic arrives.
+    pub water_pump_mode: Option<u8>,
+    pub water_valve_mode: Option<u8>,
     pub dishwasher_running: Option<bool>,
     pub dishwasher_duration: Option<u64>,
     pub washer_time: Option<u64>,
@@ -1854,7 +1858,7 @@ impl MqttClient {
             format!("N/{}/+/+/Alarms/#", id),
             // GUIv2 source of truth for alarm text/time/ack
             format!("N/{}/platform/+/Notifications/#", id),
-            // Water + EV: wildcards cover Level/State/Soc/Ac/Power + CustomName/
+            // Water + EV: wildcards cover Level/State/Mode/Soc/Ac/Power + CustomName/
             // ProductName so Config can list every instance the GX publishes.
             format!("N/{}/tank/+/#", id),
             format!("N/{}/pump/+/#", id),
@@ -2041,8 +2045,8 @@ impl MqttClient {
             }
         } else if topic.starts_with("N/") && Self::parse_water_topic(topic).is_some() {
             // dbus-pump on the GX: N/<portal>/tank/<i>/Level|CustomName|ProductName,
-            // N/<portal>/pump/<i>/State|CustomName|ProductName.
-            // Always discover every instance; apply Level/State only for the
+            // N/<portal>/pump/<i>/State|Mode|CustomName|ProductName.
+            // Always discover every instance; apply Level/State/Mode only for the
             // active (preferred-if-still-present, else first-found) selection.
             let Some((kind, inst, path)) = Self::parse_water_topic(topic) else {
                 return;
@@ -2057,7 +2061,7 @@ impl MqttClient {
                 })
                 .unwrap_or(false);
             let mut applied_value = false;
-            if matches!(path, "Level" | "State") {
+            if matches!(path, "Level" | "State" | "Mode") {
                 if let Some(value) = Self::parse_cerbo_value(payload) {
                     let snapshot_prep = {
                         let d = cerbo_devices.lock().ok();
@@ -2103,6 +2107,14 @@ impl MqttClient {
                         }
                         ("pump", "State", i) if Some(i) == active_valve => {
                             guard.water_valve = Some(value >= 0.5);
+                            applied_value = true;
+                        }
+                        ("pump", "Mode", i) if Some(i) == active_pump => {
+                            guard.water_pump_mode = Some(value as u8);
+                            applied_value = true;
+                        }
+                        ("pump", "Mode", i) if Some(i) == active_valve => {
+                            guard.water_valve_mode = Some(value as u8);
                             applied_value = true;
                         }
                         _ => {}
@@ -2227,7 +2239,7 @@ impl MqttClient {
 
     /// Parse a dbus-pump water topic:
     /// N/<portal>/tank/<i>/Level|CustomName|ProductName,
-    /// N/<portal>/pump/<i>/State|CustomName|ProductName
+    /// N/<portal>/pump/<i>/State|Mode|CustomName|ProductName
     /// -> Some((kind, instance, path)).
     fn parse_water_topic(topic: &str) -> Option<(&str, u32, &str)> {
         let rest = topic.strip_prefix("N/")?;
@@ -2241,6 +2253,7 @@ impl MqttClient {
             | ("tank", "CustomName")
             | ("tank", "ProductName")
             | ("pump", "State")
+            | ("pump", "Mode")
             | ("pump", "CustomName")
             | ("pump", "ProductName") => Some((kind, inst, path)),
             _ => None,
@@ -3724,6 +3737,57 @@ impl MqttClient {
         Ok(())
     }
 
+    /// Resolve pump/valve instance for a water Mode write.
+    /// Config defaults: pump=1, valve=2 when instances are unset.
+    fn resolve_water_mode_instance(&self, which: &str) -> Result<u32, String> {
+        if which != "pump" && which != "valve" {
+            return Err(format!("unknown water device '{which}'"));
+        }
+        let (pump_i, valve_i) = match self.water_instances {
+            Some((_, p, v)) => (p.unwrap_or(1), v.unwrap_or(2)),
+            None => (1, 2),
+        };
+        Ok(if which == "valve" { valve_i } else { pump_i })
+    }
+
+    /// Build GX MQTT-API write topic for dbus-pump /Mode.
+    fn water_mode_write_topic(portal: &str, instance: u32) -> String {
+        format!("W/{portal}/pump/{instance}/Mode")
+    }
+
+    /// Manual pump/valve override via GX MQTT-API:
+    /// `W/<portal>/pump/<n>/Mode` with `{"value": <mode>}`
+    /// (0 auto, 1 always-on, 2 always-off). Uses the live rumqttc client slot.
+    pub fn set_water_mode(&self, which: &str, mode: u8) -> Result<(), String> {
+        if mode > 2 {
+            return Err(format!("invalid mode {mode}"));
+        }
+        let instance = self.resolve_water_mode_instance(which)?;
+        let portal = {
+            let guard = self
+                .portal_id
+                .lock()
+                .map_err(|e| format!("Internal error: {e}"))?;
+            guard.clone().filter(|s| !s.is_empty())
+        };
+        let Some(portal) = portal else {
+            return Err("Cerbo portal ID not configured — cannot set water mode".into());
+        };
+        let guard = self
+            .client
+            .lock()
+            .map_err(|e| format!("Internal error: {}", e))?;
+        let Some(client) = guard.as_ref() else {
+            return Err("MQTT client not connected — cannot set water mode".into());
+        };
+        let topic = Self::water_mode_write_topic(&portal, instance);
+        let payload = serde_json::json!({ "value": mode }).to_string();
+        client
+            .publish(topic, QoS::AtLeastOnce, false, payload)
+            .map_err(|e| format!("Cerbo water Mode publish failed: {e}"))?;
+        Ok(())
+    }
+
     pub fn publish_command(
         &self,
         action: &str,
@@ -4210,6 +4274,45 @@ mod tests {
             MqttClient::parse_water_topic("N/abc123/pump/2/State"),
             Some(("pump", 2, "State"))
         );
+    }
+
+    #[test]
+    fn parses_pump_mode_topic() {
+        assert_eq!(
+            MqttClient::parse_water_topic("N/abc123/pump/1/Mode"),
+            Some(("pump", 1, "Mode"))
+        );
+        assert_eq!(
+            MqttClient::parse_water_topic("N/abc123/pump/2/Mode"),
+            Some(("pump", 2, "Mode"))
+        );
+        assert_eq!(
+            MqttClient::parse_water_topic("N/abc123/pump/1/Pressure"),
+            None
+        );
+    }
+
+    #[test]
+    fn water_mode_write_topic_matches_gx_mqtt_api() {
+        assert_eq!(
+            MqttClient::water_mode_write_topic("portal42", 1),
+            "W/portal42/pump/1/Mode"
+        );
+        assert_eq!(
+            MqttClient::water_mode_write_topic("abc", 2),
+            "W/abc/pump/2/Mode"
+        );
+    }
+
+    #[test]
+    fn resolve_water_mode_instance_uses_config_defaults() {
+        let mut client = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
+        assert_eq!(client.resolve_water_mode_instance("pump").unwrap(), 1);
+        assert_eq!(client.resolve_water_mode_instance("valve").unwrap(), 2);
+        client.set_water_instances(Some((Some(21), Some(7), Some(9))));
+        assert_eq!(client.resolve_water_mode_instance("pump").unwrap(), 7);
+        assert_eq!(client.resolve_water_mode_instance("valve").unwrap(), 9);
+        assert!(client.resolve_water_mode_instance("tank").is_err());
     }
 
     #[test]
