@@ -1583,10 +1583,23 @@ async fn open_camera_video_window(
     // decorations()/focused() are desktop-only (missing on iOS/Android builders).
     #[cfg(desktop)]
     let builder = builder.decorations(false).focused(false);
+    // macOS wry defaults to TitleBarStyle::Visible which sets FullSizeContentView;
+    // that can leave traffic lights even with Borderless. Prefer Transparent
+    // (no full-size content view) + hidden title, then re-assert after build.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .hidden_title(true)
+        .title_bar_style(tauri::TitleBarStyle::Transparent);
     let window = builder.build().map_err(|e| e.to_string())?;
 
     #[cfg(desktop)]
     {
+        // Re-assert after create: clears any FullSizeContentView left from defaults.
+        let _ = window.set_decorations(false);
+        #[cfg(target_os = "macos")]
+        {
+            let _ = window.set_title_bar_style(tauri::TitleBarStyle::Transparent);
+        }
         apply_camera_video_window_defaults(&app, &window);
         window.on_window_event(move |event| {
             if let WindowEvent::Destroyed = event {
@@ -1602,6 +1615,11 @@ async fn open_camera_video_window(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn close_camera_video_window(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1894,6 +1912,7 @@ pub fn run() {
             set_cover_position,
             open_config_window,
             open_camera_video_window,
+            close_camera_video_window,
             close_config_window,
             set_auto_start,
             get_auto_start,
