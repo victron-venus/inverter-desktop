@@ -1451,6 +1451,17 @@ fn percent_encode_query(input: &str) -> String {
     out
 }
 
+/// Force camera-video to the default size, then pin top-right.
+/// Call after create/show so any prior size (or a race with window-state) cannot stick.
+#[cfg(desktop)]
+fn apply_camera_video_window_defaults(window: &tauri::WebviewWindow) {
+    let _ = window.set_size(tauri::LogicalSize::new(
+        CAMERA_VIDEO_WINDOW_W,
+        CAMERA_VIDEO_WINDOW_H,
+    ));
+    position_camera_video_top_right(window);
+}
+
 /// Place the camera-video window at the top-right of the current (else primary) monitor.
 /// Uses physical pixels; does not focus the window.
 #[cfg(desktop)]
@@ -1501,7 +1512,7 @@ async fn open_camera_video_window(
         let _ = window.set_title(&title);
         let _ = window.unminimize();
         let _ = window.show();
-        position_camera_video_top_right(&window);
+        apply_camera_video_window_defaults(&window);
         let loading = serde_json::json!({
             "loading": true,
             "agent_name": name,
@@ -1565,7 +1576,7 @@ async fn open_camera_video_window(
 
     #[cfg(desktop)]
     {
-        position_camera_video_top_right(&window);
+        apply_camera_video_window_defaults(&window);
         let app_cleanup = app.clone();
         window.on_window_event(move |event| {
             if let WindowEvent::Destroyed = event {
@@ -1838,7 +1849,13 @@ pub fn run() {
         .manage(ha_entity_states);
 
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_window_state::Builder::new().build());
+    // camera-video is intentionally ephemeral (fixed small size, top-right); do not
+    // persist/restore it or a prior huge size from .window-state.json will stick.
+    let builder = builder.plugin(
+        tauri_plugin_window_state::Builder::new()
+            .with_denylist(&["camera-video"])
+            .build(),
+    );
 
     builder
         .invoke_handler(tauri::generate_handler![
