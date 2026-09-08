@@ -1400,6 +1400,12 @@ fn is_camera_video_label(label: &str) -> bool {
     label.starts_with(CAMERA_VIDEO_LABEL_PREFIX) || label == "camera-video"
 }
 
+/// HTTP statuses that often mean "try again shortly" for Frigate clip URLs
+/// (clip just marked `has_clip`, encoding still finishing, brief overload).
+fn camera_clip_http_status_retryable(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 404 | 408 | 425 | 429) || status.is_server_error()
+}
+
 async fn download_camera_clip(
     app: &tauri::AppHandle,
     video_url: &str,
@@ -1417,32 +1423,83 @@ async fn download_camera_clip(
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    let response = client
-        .get(video_url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to download camera clip: {e}"))?;
+    // Transient Frigate/network failures (connect/send blip, 404 while encoding
+    // finishes, 5xx) — a few short retries usually succeed.
+    const MAX_ATTEMPTS: u32 = 4;
+    const BACKOFF_MS: [u64; 3] = [500, 1000, 2000];
+    let mut last_err = String::new();
 
-    if !response.status().is_success() {
-        return Err(format!(
-            "Failed to download camera clip: HTTP {}",
-            response.status()
-        ));
+    for attempt in 1..=MAX_ATTEMPTS {
+        let response = match client.get(video_url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("Failed to download camera clip: {e}");
+                if attempt < MAX_ATTEMPTS {
+                    let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
+                    warn!(
+                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed (send/connect): {e}; retrying in {delay}ms"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    continue;
+                }
+                return Err(last_err);
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            last_err = format!("Failed to download camera clip: HTTP {status}");
+            if attempt < MAX_ATTEMPTS && camera_clip_http_status_retryable(status) {
+                let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
+                warn!(
+                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got HTTP {status}; retrying in {delay}ms"
+                );
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                continue;
+            }
+            return Err(last_err);
+        }
+
+        let bytes = match response.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                last_err = format!("Failed to read camera clip body: {e}");
+                if attempt < MAX_ATTEMPTS {
+                    let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
+                    warn!(
+                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed reading body: {e}; retrying in {delay}ms"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    continue;
+                }
+                return Err(last_err);
+            }
+        };
+
+        if bytes.is_empty() {
+            last_err = "Downloaded camera clip is empty".into();
+            if attempt < MAX_ATTEMPTS {
+                let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
+                warn!(
+                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got empty body; retrying in {delay}ms"
+                );
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                continue;
+            }
+            return Err(last_err);
+        }
+
+        if attempt > 1 {
+            info!("Camera clip download succeeded on attempt {attempt}/{MAX_ATTEMPTS}");
+        }
+
+        std::fs::write(&dest, &bytes)
+            .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
+
+        return Ok(dest);
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read camera clip body: {e}"))?;
-
-    if bytes.is_empty() {
-        return Err("Downloaded camera clip is empty".into());
-    }
-
-    std::fs::write(&dest, &bytes)
-        .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
-
-    Ok(dest)
+    Err(last_err)
 }
 
 fn percent_encode_query(input: &str) -> String {
