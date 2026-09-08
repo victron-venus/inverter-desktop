@@ -309,7 +309,9 @@ const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 16.0;
 /// Window label prefix for ephemeral camera clip WebviewWindows (`camera-video-<uuid>`).
 const CAMERA_VIDEO_LABEL_PREFIX: &str = "camera-video-";
 
-use tauri::{Emitter, Manager, State, WindowEvent};
+#[cfg(desktop)]
+use tauri::WindowEvent;
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 #[cfg(desktop)]
@@ -1576,12 +1578,11 @@ async fn open_camera_video_window(
         tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(route.into()))
             .title(title)
             .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
-            .resizable(true)
-            // Vue overlay provides the close control; hide the native title bar.
-            .decorations(false);
-    // Show without activating so typing focus stays where it is.
+            .resizable(true);
+    // Vue overlay provides the close control; hide the native title bar.
+    // decorations()/focused() are desktop-only (missing on iOS/Android builders).
     #[cfg(desktop)]
-    let builder = builder.focused(false);
+    let builder = builder.decorations(false).focused(false);
     let window = builder.build().map_err(|e| e.to_string())?;
 
     #[cfg(desktop)]
