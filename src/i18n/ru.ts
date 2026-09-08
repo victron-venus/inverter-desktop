@@ -38,7 +38,7 @@ export default {
     fetchEntities: 'Загрузить сущности',
     cameraEventsTitle: 'События камер (HA MQTT)',
     cameraEventsHelp:
-      'Отдельное MQTT-подключение к Home Assistant для клипов движения Kerberos. Cerbo MQTT остаётся на вкладке Inverter.',
+      'Отдельное MQTT-подключение к Home Assistant для клипов движения Kerberos и/или Frigate. Cerbo MQTT остаётся на вкладке Inverter.',
     haMqttHost: 'Хост HA MQTT',
     haMqttHostPlaceholder: 'homeassistant.local',
     haMqttPort: 'Порт HA MQTT',
@@ -47,10 +47,14 @@ export default {
     optional: 'Необязательно',
     cameraMonitoring: 'Мониторинг камер',
     cameraEnabled: 'Включить события движения камер',
-    cameraTopic: 'Топик событий камеры',
-    cameraTopicPlaceholder: 'kerberos/desktop/events',
+    cameraTopic: 'Топик(и) событий камеры',
+    cameraTopicPlaceholder: 'kerberos/desktop/events;frigate/events',
     cameraTopicHelp:
-      'MQTT-топик событий Kerberos для desktop (JSON: agent_name, video_url, timestamp?). По умолчанию: kerberos/desktop/events',
+      'Топики/шаблоны MQTT через точку с запятой. Kerberos: kerberos/desktop/events (JSON agent_name, video_url). Frigate: frigate/events (нужен базовый URL Frigate ниже).',
+    frigateBaseUrl: 'Базовый URL Frigate',
+    frigateBaseUrlPlaceholder: 'http://192.168.151.21:5005',
+    frigateBaseUrlHelp:
+      'HTTP-база для клипов Frigate ({base}/api/events/{id}/clip.mp4). Обязателен при подписке на frigate/events; пустое значение — клипы Frigate пропускаются. Пример: Synology :5005→5000.',
     advancedSettings: 'Расширенные настройки',
     cameraMotionDetected: '{agent} — обнаружено движение камеры',
   },

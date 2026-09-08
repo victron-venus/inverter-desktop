@@ -54,6 +54,8 @@ export interface AppConfig {
   color_scheme?: string | null
   portal_id?: string | null
   camera_topic?: string | null
+  /** Frigate HTTP base for clip URLs, e.g. http://192.168.151.21:5005 */
+  frigate_base_url?: string | null
   camera_enabled?: boolean
   show_advanced_settings?: boolean
 
@@ -138,6 +140,7 @@ const defaultConfig: AppConfig = {
   color_scheme: 'dark',
   portal_id: null,
   camera_topic: 'kerberos/desktop/events',
+  frigate_base_url: null,
   camera_enabled: false,
 
   gateway_enabled: false,

@@ -387,6 +387,9 @@ struct FullConfig {
     #[serde(default = "default_ev_instance")]
     ev_instance: Option<u32>,
     camera_topic: Option<String>,
+    /// Base URL for Frigate clips, e.g. http://192.168.151.21:5005 (no trailing slash required).
+    #[serde(default)]
+    frigate_base_url: Option<String>,
     camera_enabled: bool,
     show_advanced_settings: Option<bool>,
     show_ha_sensors: Option<bool>,
@@ -468,6 +471,7 @@ impl Default for FullConfig {
             evcharger_instance: Some(40),
             ev_instance: Some(22),
             camera_topic: Some("kerberos/desktop/events".to_string()),
+            frigate_base_url: None,
             camera_enabled: false,
             show_advanced_settings: Some(false),
             show_ha_sensors: Some(true),
@@ -1559,6 +1563,93 @@ fn position_camera_video_stacked(app: &tauri::AppHandle, window: &tauri::Webview
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
+/// Regroup remaining visible camera clip windows into a solid column-major tile
+/// from the top-right (same packing as [`position_camera_video_stacked`]).
+/// Called after a camera window is destroyed so gaps from closed clips close up.
+#[cfg(desktop)]
+fn reflow_camera_video_windows(app: &tauri::AppHandle) {
+    let mut windows: Vec<(tauri::WebviewWindow, i32, i32)> = Vec::new();
+    for (label, win) in app.webview_windows() {
+        if !is_camera_video_label(label.as_str()) {
+            continue;
+        }
+        if !win.is_visible().unwrap_or(false) {
+            continue;
+        }
+        let Ok(pos) = win.outer_position() else {
+            continue;
+        };
+        windows.push((win, pos.x, pos.y));
+    }
+    if windows.is_empty() {
+        return;
+    }
+
+    // Visual stack reading order (column-major from top-right): rightmost, then topmost.
+    windows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+
+    let ref_win = &windows[0].0;
+    let monitor = ref_win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| ref_win.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return;
+    };
+
+    let scale = monitor.scale_factor();
+    let margin = (CAMERA_VIDEO_WINDOW_MARGIN * scale).round() as i32;
+    let screen_pos = *monitor.position();
+    let screen_size = *monitor.size();
+    let window_size = ref_win.outer_size().unwrap_or_else(|_| {
+        tauri::PhysicalSize::new(
+            (CAMERA_VIDEO_WINDOW_W * scale).round() as u32,
+            (CAMERA_VIDEO_WINDOW_H * scale).round() as u32,
+        )
+    });
+    let win_w = window_size.width as i32;
+    let win_h = window_size.height as i32;
+
+    let right_x = screen_pos.x + screen_size.width as i32 - win_w - margin;
+    let top_y = screen_pos.y + margin;
+    let bottom_limit = screen_pos.y + screen_size.height as i32 - win_h - margin;
+    let left_limit = screen_pos.x + margin;
+    let step_x = win_w + margin;
+    let step_y = win_h + margin;
+
+    let mut slots: Vec<(i32, i32)> = Vec::with_capacity(windows.len());
+    let mut col = 0i32;
+    'cols: loop {
+        let sx = right_x - col * step_x;
+        if sx < left_limit {
+            break;
+        }
+        let mut sy = top_y;
+        while sy <= bottom_limit {
+            slots.push((sx, sy));
+            if slots.len() >= windows.len() {
+                break 'cols;
+            }
+            sy += step_y;
+        }
+        col += 1;
+        if col > 64 {
+            break;
+        }
+    }
+
+    for (i, (win, cur_x, cur_y)) in windows.into_iter().enumerate() {
+        let Some(&(x, y)) = slots.get(i) else {
+            break;
+        };
+        if cur_x == x && cur_y == y {
+            continue;
+        }
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+}
+
 #[tauri::command]
 async fn open_camera_video_window(
     app: tauri::AppHandle,
@@ -1626,11 +1717,13 @@ async fn open_camera_video_window(
             let _ = window.set_title_bar_style(tauri::TitleBarStyle::Transparent);
         }
         apply_camera_video_window_defaults(&app, &window);
+        let app_for_reflow = app.clone();
         window.on_window_event(move |event| {
             if let WindowEvent::Destroyed = event {
                 if let Some(ref path) = clip_path {
                     remove_camera_clip_file(path);
                 }
+                reflow_camera_video_windows(&app_for_reflow);
             }
         });
     }
@@ -1840,12 +1933,14 @@ async fn auth_biometric(_app: tauri::AppHandle) -> Result<String, String> {
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn connect_ha_mqtt(
     host: String,
     port: u16,
     username: Option<String>,
     password: Option<String>,
     camera_topic: Option<String>,
+    frigate_base_url: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, HaMqttState>,
 ) -> Result<(), String> {
@@ -1869,6 +1964,7 @@ async fn connect_ha_mqtt(
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app.clone());
     client.set_camera_topic(camera_topic);
+    client.set_frigate_base_url(frigate_base_url);
     client.set_status_event("ha-mqtt-connection-status".to_string());
     client.connect().map_err(|e| e.to_string())?;
     let mut client_guard = mqtt_client

@@ -401,6 +401,21 @@
                     {{ $t('config.cameraTopicHelp') }}
                   </p>
                 </div>
+                <div v-if="config.camera_enabled" class="flex flex-col gap-1">
+                  <label for="frigate_base_url" class="classic-label px-1">{{
+                    $t('config.frigateBaseUrl')
+                  }}</label>
+                  <input
+                    id="frigate_base_url"
+                    v-model="config.frigate_base_url"
+                    type="text"
+                    class="classic-input w-full"
+                    :placeholder="$t('config.frigateBaseUrlPlaceholder')"
+                  />
+                  <p class="text-[10px] text-muted px-1 italic">
+                    {{ $t('config.frigateBaseUrlHelp') }}
+                  </p>
+                </div>
                 <label
                   class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >
