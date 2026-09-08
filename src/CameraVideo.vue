@@ -4,9 +4,17 @@
       <div
         class="flex items-center justify-between px-3 py-2 bg-gradient-to-b from-black/90 to-transparent absolute top-0 left-0 right-0 z-50 pointer-events-auto"
       >
-        <div class="flex items-center gap-2 min-w-0">
-          <div class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0"></div>
-          <span class="text-[11px] font-semibold text-white tracking-tight truncate">
+        <!-- Tauri 2 drag region: title strip only so the close button stays clickable -->
+        <div
+          data-tauri-drag-region
+          class="flex items-center gap-2 min-w-0 flex-1 h-full cursor-default"
+        >
+          <div
+            class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0 pointer-events-none"
+          ></div>
+          <span
+            class="text-[11px] font-semibold text-white tracking-tight truncate pointer-events-none"
+          >
             {{ cameraName }}
           </span>
         </div>
