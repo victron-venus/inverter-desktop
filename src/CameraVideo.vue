@@ -24,7 +24,8 @@
         v-if="videoUrl"
         ref="videoEl"
         autoplay
-        controls
+        muted
+        playsinline
         class="w-full h-full object-contain bg-black"
         :src="videoUrl"
         @ended="closeWindow"
@@ -69,9 +70,11 @@ function loadLocalClip(localPath: string, name?: string | null) {
   requestAnimationFrame(() => {
     const el = videoEl.value
     if (el) {
+      el.muted = true
+      el.volume = 0
       el.load()
       el.play().catch(() => {
-        // Autoplay may be blocked until user interaction; controls remain available.
+        // Autoplay may be blocked until user interaction.
       })
     }
   })
