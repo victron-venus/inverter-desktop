@@ -213,7 +213,7 @@ const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
 const CAMERA_VIDEO_WINDOW_W: f64 = 960.0;
-const CAMERA_VIDEO_WINDOW_H: f64 = 640.0;
+const CAMERA_VIDEO_WINDOW_H: f64 = 540.0;
 
 use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_store::StoreExt;
@@ -1271,6 +1271,81 @@ async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+const CAMERA_CLIP_SUBDIR: &str = "inverter-desktop-camera";
+
+fn camera_clip_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let temp = app
+        .path()
+        .temp_dir()
+        .map_err(|e| format!("Failed to resolve temp dir: {e}"))?;
+    Ok(temp.join(CAMERA_CLIP_SUBDIR))
+}
+
+fn cleanup_camera_clip_dir(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+fn remove_camera_clip_dir(app: &tauri::AppHandle) {
+    if let Ok(dir) = camera_clip_dir(app) {
+        cleanup_camera_clip_dir(&dir);
+        let _ = std::fs::remove_dir(&dir);
+    }
+}
+
+async fn download_camera_clip(
+    app: &tauri::AppHandle,
+    video_url: &str,
+) -> Result<std::path::PathBuf, String> {
+    let clip_dir = camera_clip_dir(app)?;
+    std::fs::create_dir_all(&clip_dir)
+        .map_err(|e| format!("Failed to create camera clip temp dir: {e}"))?;
+    // Keep only the newest clip on disk (clips arrive often, a few MB each).
+    cleanup_camera_clip_dir(&clip_dir);
+
+    let file_name = format!("clip-{}.mp4", uuid::Uuid::new_v4());
+    let dest = clip_dir.join(file_name);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let response = client
+        .get(video_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download camera clip: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to download camera clip: HTTP {}",
+            response.status()
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read camera clip body: {e}"))?;
+
+    if bytes.is_empty() {
+        return Err("Downloaded camera clip is empty".into());
+    }
+
+    std::fs::write(&dest, &bytes)
+        .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
+
+    Ok(dest)
+}
+
 fn percent_encode_query(input: &str) -> String {
     let mut out = String::with_capacity(input.len() * 3);
     for b in input.bytes() {
@@ -1298,36 +1373,85 @@ async fn open_camera_video_window(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Camera".to_string());
     let title = format!("{name} — Camera");
-    let path = format!(
-        "camera-video?url={}&name={}",
-        percent_encode_query(&video_url),
-        percent_encode_query(&name)
-    );
 
+    // Do not steal keyboard focus when a clip arrives (user may be typing elsewhere).
     #[cfg(desktop)]
     if let Some(window) = app.get_webview_window("camera-video") {
-        let payload = serde_json::json!({
-            "video_url": video_url,
-            "agent_name": name,
-        });
-        let _ = window.emit("camera-clip-update", payload);
         let _ = window.set_title(&title);
         let _ = window.unminimize();
         let _ = window.show();
-        let _ = window.set_focus();
+        let loading = serde_json::json!({
+            "loading": true,
+            "agent_name": name,
+        });
+        let _ = window.emit("camera-clip-update", loading);
+
+        match download_camera_clip(&app, &video_url).await {
+            Ok(local_path) => {
+                let local = local_path.to_string_lossy().to_string();
+                let payload = serde_json::json!({
+                    "local_path": local,
+                    "agent_name": name,
+                });
+                let _ = window.emit("camera-clip-update", payload);
+            }
+            Err(err) => {
+                warn!("Camera clip download failed: {err}");
+                let payload = serde_json::json!({
+                    "error": err,
+                    "agent_name": name,
+                });
+                let _ = window.emit("camera-clip-update", payload);
+            }
+        }
         return Ok(());
     }
 
+    // Fresh window: download first so the initial URL can point at a local asset path.
+    let route = match download_camera_clip(&app, &video_url).await {
+        Ok(local_path) => {
+            let local = local_path.to_string_lossy().to_string();
+            format!(
+                "camera-video?localPath={}&name={}",
+                percent_encode_query(&local),
+                percent_encode_query(&name)
+            )
+        }
+        Err(err) => {
+            warn!("Camera clip download failed: {err}");
+            format!(
+                "camera-video?error={}&name={}",
+                percent_encode_query(&err),
+                percent_encode_query(&name)
+            )
+        }
+    };
+
     #[allow(unused_mut)]
-    let mut builder =
-        tauri::WebviewWindowBuilder::new(&app, "camera-video", tauri::WebviewUrl::App(path.into()))
-            .title(title)
-            .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
-            .resizable(true)
-            .center();
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        &app,
+        "camera-video",
+        tauri::WebviewUrl::App(route.into()),
+    )
+    .title(title)
+    .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
+    .resizable(true)
+    .center();
+    // Show without activating so typing focus stays where it is.
     #[cfg(desktop)]
-    let builder = builder.focused(true);
-    builder.build().map_err(|e| e.to_string())?;
+    let builder = builder.focused(false);
+    let window = builder.build().map_err(|e| e.to_string())?;
+
+    #[cfg(desktop)]
+    {
+        let app_cleanup = app.clone();
+        window.on_window_event(move |event| {
+            if let WindowEvent::Destroyed = event {
+                remove_camera_clip_dir(&app_cleanup);
+            }
+        });
+    }
+
     Ok(())
 }
 

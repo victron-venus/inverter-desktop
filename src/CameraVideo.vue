@@ -47,10 +47,18 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { X } from '@lucide/vue'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import { logger } from './logger'
+
+type CameraClipPayload = {
+  local_path?: string
+  agent_name?: string
+  error?: string
+  loading?: boolean
+}
 
 const videoUrl = ref('')
 const cameraName = ref('Camera')
@@ -58,11 +66,15 @@ const errorMessage = ref('')
 const videoEl = ref<HTMLVideoElement | null>(null)
 let unlistenUpdate: UnlistenFn | null = null
 
-function loadClip(url: string, name?: string) {
-  errorMessage.value = ''
+function setName(name?: string) {
   cameraName.value = (name && name.trim()) || 'Camera'
-  videoUrl.value = url
-  // Force reload when the same element gets a new src
+}
+
+function loadLocalClip(localPath: string, name?: string) {
+  errorMessage.value = ''
+  setName(name)
+  // Serve via Tauri asset protocol — raw http:// fails in WKWebView (mixed content).
+  videoUrl.value = convertFileSrc(localPath)
   requestAnimationFrame(() => {
     const el = videoEl.value
     if (el) {
@@ -74,9 +86,23 @@ function loadClip(url: string, name?: string) {
   })
 }
 
+function showError(message: string, name?: string) {
+  videoUrl.value = ''
+  setName(name)
+  errorMessage.value = message
+  logger.warn('Camera clip error:', message)
+}
+
+function showLoading(name?: string) {
+  videoUrl.value = ''
+  setName(name)
+  errorMessage.value = 'Downloading camera clip…'
+}
+
 function onVideoError() {
-  errorMessage.value = 'Failed to play camera clip. Check network / CSP media permissions.'
+  errorMessage.value = 'Failed to play camera clip. Local file may be missing or unsupported.'
   logger.warn('Camera video playback error for', videoUrl.value)
+  videoUrl.value = ''
 }
 
 async function closeWindow() {
@@ -87,23 +113,38 @@ async function closeWindow() {
   }
 }
 
+function applyPayload(payload: CameraClipPayload | null | undefined) {
+  if (!payload) return
+  if (payload.loading) {
+    showLoading(payload.agent_name)
+    return
+  }
+  if (payload.error) {
+    showError(payload.error, payload.agent_name)
+    return
+  }
+  if (payload.local_path) {
+    loadLocalClip(payload.local_path, payload.agent_name)
+  }
+}
+
 onMounted(async () => {
   const params = new URLSearchParams(globalThis.location.search)
-  const url = params.get('url')
   const name = params.get('name') || undefined
-  if (url) {
-    loadClip(url, name)
+  const error = params.get('error')
+  const localPath = params.get('localPath')
+  if (error) {
+    showError(error, name)
+  } else if (localPath) {
+    loadLocalClip(localPath, name)
+  } else {
+    showLoading(name)
   }
 
   try {
-    unlistenUpdate = await listen<{ video_url: string; agent_name?: string }>(
-      'camera-clip-update',
-      (event) => {
-        if (event.payload?.video_url) {
-          loadClip(event.payload.video_url, event.payload.agent_name)
-        }
-      }
-    )
+    unlistenUpdate = await listen<CameraClipPayload>('camera-clip-update', (event) => {
+      applyPayload(event.payload)
+    })
   } catch (e) {
     logger.warn('Failed to listen for camera-clip-update:', e)
   }
