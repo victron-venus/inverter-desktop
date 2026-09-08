@@ -1460,16 +1460,17 @@ fn apply_camera_video_window_defaults(app: &tauri::AppHandle, window: &tauri::We
     position_camera_video_stacked(app, window);
 }
 
-/// Place a camera clip window at the top-right, stacking new ones downward.
+/// Place a camera clip window at the top-right, packing into free slots.
 ///
 /// Layout (physical pixels, same margin as edge inset = `CAMERA_VIDEO_WINDOW_MARGIN`):
-/// 1. First window: top-right of the current (else primary) monitor.
-/// 2. Each next window: same X as the bottommost window in the rightmost camera
-///    column, Y = that window's Y + outer_height + margin.
-/// 3. If that would go past the monitor bottom (with margin), start a new column
-///    one window-width + margin to the left, back at the top margin. Columns
-///    clamp so the left edge never goes past the monitor's left margin.
+/// Column-major from the top-right of the current (else primary) monitor:
+/// right column top→bottom, then the next column to the left, and so on.
+/// Only **visible** peer `camera-video*` windows count as occupied — closed or
+/// closing windows that linger in `webview_windows()` are ignored so stacking
+/// resets to `(right_x, top_y)` when none remain, and a gap left by a closed
+/// middle clip can be filled by the next open.
 ///
+/// Columns clamp so the left edge never goes past the monitor's left margin.
 /// Does not focus the window.
 #[cfg(desktop)]
 fn position_camera_video_stacked(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
@@ -1499,36 +1500,59 @@ fn position_camera_video_stacked(app: &tauri::AppHandle, window: &tauri::Webview
     let top_y = screen_pos.y + margin;
     let bottom_limit = screen_pos.y + screen_size.height as i32 - win_h - margin;
     let left_limit = screen_pos.x + margin;
+    let step_x = win_w + margin;
+    let step_y = win_h + margin;
+    let col_tolerance = (win_w / 2).max(1);
+    let row_tolerance = (win_h / 2).max(1);
 
     let mut existing: Vec<(i32, i32)> = Vec::new();
     for (label, other) in app.webview_windows() {
         if label.as_str() == window.label() || !is_camera_video_label(label.as_str()) {
             continue;
         }
-        if let Ok(pos) = other.outer_position() {
-            existing.push((pos.x, pos.y));
+        // Closed/closing windows can linger in webview_windows() with their last
+        // outer_position; only count still-visible peers so stacking can reset.
+        if !other.is_visible().unwrap_or(false) {
+            continue;
         }
+        let Ok(pos) = other.outer_position() else {
+            continue;
+        };
+        existing.push((pos.x, pos.y));
     }
+
+    let slot_occupied = |sx: i32, sy: i32| -> bool {
+        existing
+            .iter()
+            .any(|(ex, ey)| (*ex - sx).abs() <= col_tolerance && (*ey - sy).abs() <= row_tolerance)
+    };
 
     let (x, y) = if existing.is_empty() {
         (right_x, top_y)
     } else {
-        let max_x = existing.iter().map(|(x, _)| *x).max().unwrap_or(right_x);
-        let col_tolerance = (win_w / 2).max(1);
-        let col_bottom_y = existing
-            .iter()
-            .filter(|(x, _)| (*x - max_x).abs() <= col_tolerance)
-            .map(|(_, y)| *y)
-            .max()
-            .unwrap_or(top_y);
-        let next_y = col_bottom_y + win_h + margin;
-        if next_y <= bottom_limit {
-            (max_x, next_y)
-        } else {
-            // Wrap: new column to the left of the current rightmost column.
-            let next_x = (max_x - win_w - margin).max(left_limit);
-            (next_x, top_y)
+        // Scan free slots column-major: right→left, within each column top→bottom.
+        let mut placed = None;
+        let mut col = 0i32;
+        'cols: loop {
+            let sx = right_x - col * step_x;
+            if sx < left_limit {
+                break;
+            }
+            let mut sy = top_y;
+            while sy <= bottom_limit {
+                if !slot_occupied(sx, sy) {
+                    placed = Some((sx, sy));
+                    break 'cols;
+                }
+                sy += step_y;
+            }
+            col += 1;
+            if col > 64 {
+                // Safety: absurd number of columns — fall back to top-right.
+                break;
+            }
         }
+        placed.unwrap_or((right_x, top_y))
     };
 
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
