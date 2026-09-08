@@ -303,7 +303,7 @@ const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
 const CAMERA_VIDEO_WINDOW_W: f64 = 320.0;
-const CAMERA_VIDEO_WINDOW_H: f64 = 180.0;
+const CAMERA_VIDEO_WINDOW_H: f64 = 207.0;
 /// Logical-pixel margin from monitor edges and between stacked camera clip windows.
 const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 16.0;
 /// Window label prefix for ephemeral camera clip WebviewWindows (`camera-video-<uuid>`).
