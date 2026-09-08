@@ -1267,10 +1267,12 @@ fn capitalize_agent_name(name: &str) -> String {
 
 /// Parse a Frigate MQTT `frigate/events` JSON payload into a [`CameraEvent`].
 ///
-/// Only opens a clip on meaningful events: prefer `type == "end"` with
-/// `has_clip`, or `update`/`end` when `has_clip` flips false→true. Returns
-/// `None` when the payload is not Frigate-shaped, should be skipped, or
-/// `frigate_base_url` is missing/empty.
+/// Only opens a clip when `type == "end"` and `has_clip` is true, so Frigate
+/// has finished the event (and usually encoding) before we fetch. Early
+/// `update` messages where `has_clip` flips false→true are skipped — the clip
+/// URL may still 404 or fail briefly; download retries cover residual races.
+/// Returns `None` when the payload is not Frigate-shaped, should be skipped,
+/// or `frigate_base_url` is missing/empty.
 fn parse_frigate_camera_event(
     payload: &str,
     frigate_base_url: Option<&str>,
@@ -1288,17 +1290,8 @@ fn parse_frigate_camera_event(
         .get("has_clip")
         .and_then(|x| x.as_bool())
         .unwrap_or(false);
-    let before_has_clip = v
-        .get("before")
-        .and_then(|b| b.get("has_clip"))
-        .and_then(|x| x.as_bool())
-        .unwrap_or(false);
-    let clip_became_true = has_clip && !before_has_clip;
-    let should_open = match event_type {
-        "end" if has_clip => true,
-        "update" | "end" if clip_became_true => true,
-        _ => false,
-    };
+    // Wait for event end so the clip is more likely fully available.
+    let should_open = event_type == "end" && has_clip;
     if !should_open {
         return None;
     }
@@ -5980,19 +5973,27 @@ mod camera_topic_tests {
     }
 
     #[test]
-    fn parse_frigate_update_when_clip_becomes_true() {
+    fn parse_frigate_skips_update_when_clip_becomes_true() {
+        // Early update with has_clip flip is intentionally ignored; we wait for
+        // type=="end" so Frigate can finish encoding before download.
         let payload = r#"{
             "type":"update",
             "before":{"id":"xyz","camera":"driveway","has_clip":false},
             "after":{"id":"xyz","camera":"driveway","has_clip":true}
         }"#;
         let base = Some("http://frigate.local:5000/".to_string());
-        let ev = parse_camera_mqtt_payload(payload, &base).expect("clip became true");
-        assert_eq!(ev.agent_name, "Frigate Driveway");
-        assert_eq!(
-            ev.video_url,
-            "http://frigate.local:5000/api/events/xyz/clip.mp4"
-        );
+        assert!(parse_camera_mqtt_payload(payload, &base).is_none());
+    }
+
+    #[test]
+    fn parse_frigate_skips_end_without_clip() {
+        let payload = r#"{
+            "type":"end",
+            "before":{"id":"xyz","camera":"driveway","has_clip":false},
+            "after":{"id":"xyz","camera":"driveway","has_clip":false}
+        }"#;
+        let base = Some("http://frigate.local:5000/".to_string());
+        assert!(parse_camera_mqtt_payload(payload, &base).is_none());
     }
 
     #[test]
