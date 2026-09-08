@@ -40,6 +40,7 @@ export default {
   actions: {
     dry: 'DRY',
     settings: 'Settings...',
+    cameraMotion: 'Camera motion',
   },
   config: {
     title: 'Configuration',

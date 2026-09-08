@@ -1,4 +1,7 @@
 export default {
+  actions: {
+    cameraMotion: 'Движение камер',
+  },
   status: {
     ha: 'HA',
     mqtt: 'MQTT',

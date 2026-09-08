@@ -141,7 +141,7 @@ const defaultConfig: AppConfig = {
   portal_id: null,
   camera_topic: 'kerberos/desktop/events',
   frigate_base_url: null,
-  camera_enabled: false,
+  camera_enabled: true,
 
   gateway_enabled: false,
   gateway_url: null,

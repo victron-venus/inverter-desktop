@@ -208,6 +208,7 @@ export function useConnection() {
       unlistenCamera = await listen<{ video_url: string; agent_name?: string }>(
         'camera-event',
         (event) => {
+          if (!appConfig.value?.camera_enabled) return
           const payload = event.payload
           if (!payload?.video_url) return
           void invoke('open_camera_video_window', {
@@ -279,26 +280,7 @@ export function useConnection() {
         dualPathPreferMqtt = false
       }
 
-      if (config.camera_enabled && config.mqtt_ha_host && config.mqtt_ha_port) {
-        try {
-          await invoke('connect_ha_mqtt', {
-            host: config.mqtt_ha_host,
-            port: config.mqtt_ha_port,
-            username: config.mqtt_ha_login || null,
-            password: config.mqtt_ha_password || null,
-            cameraTopic: config.camera_topic || null,
-            frigateBaseUrl: config.frigate_base_url || null,
-          })
-          haMqttConnected.value = true
-          logger.log('Connected to HA MQTT broker for cameras')
-          notify('Home Assistant', 'Connected to HA MQTT')
-        } catch (e) {
-          haMqttConnected.value = false
-          logger.error('Failed to connect to HA MQTT:', e)
-        }
-      } else {
-        haMqttConnected.value = null // Not configured — hide indicator
-      }
+      await syncHaMqttFromConfig(config)
 
       // Listen for HA MQTT connection status changes
       unlistenHaMqttStatus = await listen<boolean>('ha-mqtt-connection-status', (event) => {
@@ -312,7 +294,7 @@ export function useConnection() {
           haMqttOfflineTimer = setTimeout(() => {
             haMqttOfflineTimer = null
             haMqttConnected.value = false
-            if (config.camera_enabled && config.mqtt_ha_host) {
+            if (appConfig.value?.camera_enabled && appConfig.value?.mqtt_ha_host?.trim()) {
               reconnectHaMqttAfterDelay()
             }
           }, MQTT_OFFLINE_DELAY_MS)
@@ -417,22 +399,69 @@ export function useConnection() {
     }, delay)
   }
 
+  async function connectHaMqtt(config: AppConfig) {
+    await invoke('connect_ha_mqtt', {
+      host: config.mqtt_ha_host,
+      port: config.mqtt_ha_port,
+      username: config.mqtt_ha_login || null,
+      password: config.mqtt_ha_password || null,
+      cameraTopic: config.camera_topic || null,
+      frigateBaseUrl: config.frigate_base_url || null,
+    })
+    haMqttConnected.value = true
+  }
+
+  async function disconnectHaMqtt() {
+    if (haMqttReconnectTimer) {
+      clearTimeout(haMqttReconnectTimer)
+      haMqttReconnectTimer = null
+    }
+    if (haMqttOfflineTimer) {
+      clearTimeout(haMqttOfflineTimer)
+      haMqttOfflineTimer = null
+    }
+    try {
+      await invoke('disconnect_ha_mqtt')
+    } catch (e) {
+      logger.warn('disconnect_ha_mqtt failed:', e)
+    }
+    haMqttConnected.value = null
+  }
+
+  /** Connect or disconnect HA MQTT camera client from current config. */
+  async function syncHaMqttFromConfig(config: AppConfig) {
+    if (config.camera_enabled && config.mqtt_ha_host?.trim() && config.mqtt_ha_port) {
+      try {
+        await connectHaMqtt(config)
+        logger.log('Connected to HA MQTT broker for cameras')
+        notify('Home Assistant', 'Connected to HA MQTT')
+      } catch (e) {
+        haMqttConnected.value = false
+        logger.error('Failed to connect to HA MQTT:', e)
+      }
+    } else {
+      await disconnectHaMqtt()
+    }
+  }
+
+  async function toggleCameraMotion() {
+    const config = await getAppConfig()
+    const next = !config.camera_enabled
+    config.camera_enabled = next
+    await invoke('save_config', { config })
+    appConfig.value = { ...config }
+    await syncHaMqttFromConfig(config)
+    return next
+  }
+
   function reconnectHaMqttAfterDelay(delay = 2000) {
     if (haMqttReconnectTimer) clearTimeout(haMqttReconnectTimer)
     haMqttReconnectTimer = setTimeout(async () => {
       haMqttReconnectTimer = null
       try {
         const config = await getAppConfig()
-        if (config.camera_enabled && config.mqtt_ha_host) {
-          await invoke('connect_ha_mqtt', {
-            host: config.mqtt_ha_host,
-            port: config.mqtt_ha_port,
-            username: config.mqtt_ha_login || null,
-            password: config.mqtt_ha_password || null,
-            cameraTopic: config.camera_topic || null,
-            frigateBaseUrl: config.frigate_base_url || null,
-          })
-          haMqttConnected.value = true
+        if (config.camera_enabled && config.mqtt_ha_host?.trim()) {
+          await connectHaMqtt(config)
           logger.log('HA MQTT reconnected')
         }
       } catch (e) {
@@ -491,6 +520,8 @@ export function useConnection() {
     connectMqtt,
     send,
     ensureNotificationPermission,
+    toggleCameraMotion,
+    syncHaMqttFromConfig,
     cleanup,
   }
 }

@@ -6,6 +6,7 @@ import {
   MQTT_CONNECT_WATCHDOG_MS,
   MQTT_OFFLINE_DELAY_MS,
   MQTT_RECOVERY_PROBE_MS,
+  isHaCameraMqttConfigured,
   mqttReconnectDelayMs,
   shouldWatchdogFailoverToIgw,
 } from '../connectionPolicy'
@@ -135,5 +136,17 @@ describe('shouldWatchdogFailoverToIgw', () => {
         mqttConnected: false,
       })
     ).toBe(false)
+  })
+})
+
+describe('isHaCameraMqttConfigured', () => {
+  it('requires a non-empty mqtt_ha_host', () => {
+    expect(isHaCameraMqttConfigured({ mqtt_ha_host: 'HA' })).toBe(true)
+    expect(isHaCameraMqttConfigured({ mqtt_ha_host: '  homeassistant  ' })).toBe(true)
+    expect(isHaCameraMqttConfigured({ mqtt_ha_host: '  ' })).toBe(false)
+    expect(isHaCameraMqttConfigured({ mqtt_ha_host: '' })).toBe(false)
+    expect(isHaCameraMqttConfigured({})).toBe(false)
+    expect(isHaCameraMqttConfigured(null)).toBe(false)
+    expect(isHaCameraMqttConfigured(undefined)).toBe(false)
   })
 })

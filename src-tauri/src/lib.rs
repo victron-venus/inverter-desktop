@@ -471,7 +471,7 @@ impl Default for FullConfig {
             ev_instance: Some(22),
             camera_topic: Some("kerberos/desktop/events".to_string()),
             frigate_base_url: None,
-            camera_enabled: false,
+            camera_enabled: true,
             show_advanced_settings: Some(false),
             show_ha_sensors: Some(true),
             show_ha_numbers: Some(true),
@@ -1979,6 +1979,18 @@ async fn connect_ha_mqtt(
     Ok(())
 }
 
+#[tauri::command]
+async fn disconnect_ha_mqtt(mqtt_client: State<'_, HaMqttState>) -> Result<(), String> {
+    let mut client_guard = mqtt_client
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
+    if let Some(old) = client_guard.take() {
+        old.stop();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mqtt_state = MqttState(Arc::new(Mutex::new(None)));
@@ -2024,6 +2036,7 @@ pub fn run() {
             connect_gateway,
             acknowledge_victron_banner,
             connect_ha_mqtt,
+            disconnect_ha_mqtt,
             get_config,
             save_config,
             backup_config,
@@ -2497,6 +2510,11 @@ mod setup_completed_tests {
         assert!(needs_setup(&config, false));
         // Even if somehow persisted empty, do not migrate
         assert!(needs_setup(&config, true));
+    }
+
+    #[test]
+    fn default_camera_enabled_is_true() {
+        assert!(FullConfig::default().camera_enabled);
     }
 
     #[test]
