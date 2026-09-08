@@ -2,7 +2,7 @@
   <ErrorBoundary>
     <div class="h-screen w-screen bg-black flex flex-col select-none overflow-hidden">
       <div
-        class="flex items-center justify-between px-3 py-2 bg-gradient-to-b from-black/90 to-transparent absolute top-0 left-0 right-0 z-10"
+        class="flex items-center justify-between px-3 py-2 bg-gradient-to-b from-black/90 to-transparent absolute top-0 left-0 right-0 z-50 pointer-events-auto"
       >
         <div class="flex items-center gap-2 min-w-0">
           <div class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0"></div>
@@ -47,7 +47,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { X } from '@lucide/vue'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import { logger } from './logger'
@@ -93,6 +93,12 @@ function onVideoError() {
 async function closeWindow() {
   try {
     await getCurrentWindow().close()
+    return
+  } catch (e) {
+    logger.warn('getCurrentWindow().close() failed, trying invoke:', e)
+  }
+  try {
+    await invoke('close_camera_video_window')
   } catch (e) {
     logger.warn('Failed to close camera video window:', e)
   }

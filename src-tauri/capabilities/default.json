@@ -4,6 +4,8 @@
   "windows": ["main", "config", "about", "camera-video-*"],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
     "opener:default",
     "notification:default",
     "store:default",
