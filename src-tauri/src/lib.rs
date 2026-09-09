@@ -1400,10 +1400,51 @@ fn is_camera_video_label(label: &str) -> bool {
     label.starts_with(CAMERA_VIDEO_LABEL_PREFIX) || label == "camera-video"
 }
 
-/// HTTP statuses that often mean "try again shortly" for Frigate clip URLs
-/// (clip just marked `has_clip`, encoding still finishing, brief overload).
+/// Truncate an error/response snippet for UI and logs.
+fn short_http_body_snippet(body: &str) -> String {
+    const MAX: usize = 180;
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (i, ch) in trimmed.chars().enumerate() {
+        if i >= MAX {
+            out.push('…');
+            break;
+        }
+        // Keep the message on one line for the camera-video error query.
+        if ch.is_whitespace() {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// HTTP statuses that often mean "try again shortly" for Frigate clip URLs.
+///
+/// Frigate's `/api/events/{id}/clip.mp4` builds the MP4 from recording segments.
+/// `has_clip` only means recording is enabled for the event — segments are written
+/// in ~10s chunks, so a just-ended event commonly returns **400** with
+/// `No recordings found for the specified time range` until the segment lands.
+/// 404 covers "clip not available" / missing event; 408/425/429/5xx are transient.
 fn camera_clip_http_status_retryable(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 404 | 408 | 425 | 429) || status.is_server_error()
+    matches!(status.as_u16(), 400 | 404 | 408 | 425 | 429) || status.is_server_error()
+}
+
+fn format_camera_clip_http_error(
+    status: reqwest::StatusCode,
+    video_url: &str,
+    body: &str,
+) -> String {
+    let snippet = short_http_body_snippet(body);
+    if snippet.is_empty() {
+        format!("Failed to download camera clip: HTTP {status} ({video_url})")
+    } else {
+        format!("Failed to download camera clip: HTTP {status} ({video_url}): {snippet}")
+    }
 }
 
 async fn download_camera_clip(
@@ -1423,21 +1464,21 @@ async fn download_camera_clip(
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    // Transient Frigate/network failures (connect/send blip, 404 while encoding
-    // finishes, 5xx) — a few short retries usually succeed.
-    const MAX_ATTEMPTS: u32 = 4;
-    const BACKOFF_MS: [u64; 3] = [500, 1000, 2000];
+    // Frigate recording segments can take ~10s after `end`+`has_clip`; cover that
+    // window plus brief network blips. Kerberos URLs rarely hit these statuses.
+    const MAX_ATTEMPTS: u32 = 8;
+    const BACKOFF_MS: [u64; 7] = [1000, 2000, 3000, 4000, 5000, 5000, 5000];
     let mut last_err = String::new();
 
     for attempt in 1..=MAX_ATTEMPTS {
         let response = match client.get(video_url).send().await {
             Ok(r) => r,
             Err(e) => {
-                last_err = format!("Failed to download camera clip: {e}");
+                last_err = format!("Failed to download camera clip: {e} ({video_url})");
                 if attempt < MAX_ATTEMPTS {
                     let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
                     warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed (send/connect): {e}; retrying in {delay}ms"
+                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed (send/connect): {e}; retrying in {delay}ms url={video_url}"
                     );
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     continue;
@@ -1448,11 +1489,13 @@ async fn download_camera_clip(
 
         let status = response.status();
         if !status.is_success() {
-            last_err = format!("Failed to download camera clip: HTTP {status}");
+            let body = response.text().await.unwrap_or_default();
+            last_err = format_camera_clip_http_error(status, video_url, &body);
             if attempt < MAX_ATTEMPTS && camera_clip_http_status_retryable(status) {
                 let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
                 warn!(
-                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got HTTP {status}; retrying in {delay}ms"
+                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got HTTP {status}; retrying in {delay}ms url={video_url} body={}",
+                    short_http_body_snippet(&body)
                 );
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 continue;
@@ -1463,11 +1506,11 @@ async fn download_camera_clip(
         let bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                last_err = format!("Failed to read camera clip body: {e}");
+                last_err = format!("Failed to read camera clip body: {e} ({video_url})");
                 if attempt < MAX_ATTEMPTS {
                     let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
                     warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed reading body: {e}; retrying in {delay}ms"
+                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed reading body: {e}; retrying in {delay}ms url={video_url}"
                     );
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     continue;
@@ -1477,11 +1520,11 @@ async fn download_camera_clip(
         };
 
         if bytes.is_empty() {
-            last_err = "Downloaded camera clip is empty".into();
+            last_err = format!("Downloaded camera clip is empty ({video_url})");
             if attempt < MAX_ATTEMPTS {
                 let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
                 warn!(
-                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got empty body; retrying in {delay}ms"
+                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got empty body; retrying in {delay}ms url={video_url}"
                 );
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 continue;
@@ -1490,7 +1533,7 @@ async fn download_camera_clip(
         }
 
         if attempt > 1 {
-            info!("Camera clip download succeeded on attempt {attempt}/{MAX_ATTEMPTS}");
+            info!("Camera clip download succeeded on attempt {attempt}/{MAX_ATTEMPTS} url={video_url}");
         }
 
         std::fs::write(&dest, &bytes)
@@ -2511,6 +2554,47 @@ mod perform_action_tests {
         assert!(is_inverter_control_flag("input_boolean.only_charging"));
         assert!(is_inverter_control_flag("input_boolean.house_support"));
         assert!(!is_inverter_control_flag("input_boolean.garage"));
+    }
+}
+
+#[cfg(test)]
+mod camera_clip_download_tests {
+    use super::*;
+
+    #[test]
+    fn retries_frigate_no_recordings_400() {
+        let status = reqwest::StatusCode::from_u16(400).unwrap();
+        assert!(camera_clip_http_status_retryable(status));
+    }
+
+    #[test]
+    fn retries_404_and_5xx_still() {
+        assert!(camera_clip_http_status_retryable(
+            reqwest::StatusCode::from_u16(404).unwrap()
+        ));
+        assert!(camera_clip_http_status_retryable(
+            reqwest::StatusCode::from_u16(503).unwrap()
+        ));
+    }
+
+    #[test]
+    fn does_not_retry_403() {
+        assert!(!camera_clip_http_status_retryable(
+            reqwest::StatusCode::from_u16(403).unwrap()
+        ));
+    }
+
+    #[test]
+    fn http_error_includes_status_url_and_body_snippet() {
+        let status = reqwest::StatusCode::from_u16(400).unwrap();
+        let msg = format_camera_clip_http_error(
+            status,
+            "http://192.168.167.25:5005/api/events/abc/clip.mp4",
+            r#"{"success":false,"message":"No recordings found for the specified time range"}"#,
+        );
+        assert!(msg.contains("HTTP 400 Bad Request"));
+        assert!(msg.contains("192.168.167.25:5005"));
+        assert!(msg.contains("No recordings found"));
     }
 }
 
