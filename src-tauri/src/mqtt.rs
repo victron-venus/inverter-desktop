@@ -1268,9 +1268,11 @@ fn capitalize_agent_name(name: &str) -> String {
 /// Parse a Frigate MQTT `frigate/events` JSON payload into a [`CameraEvent`].
 ///
 /// Only opens a clip when `type == "end"` and `has_clip` is true, so Frigate
-/// has finished the event (and usually encoding) before we fetch. Early
-/// `update` messages where `has_clip` flips false→true are skipped — the clip
-/// URL may still 404 or fail briefly; download retries cover residual races.
+/// has finished the event before we fetch. Early `update` messages where
+/// `has_clip` flips false→true are skipped. Note: `has_clip` means recording
+/// is expected, not that segments are on disk yet — Frigate often returns
+/// HTTP 400 ("No recordings found…") until the ~10s segment lands; download
+/// retries cover that residual race.
 /// Returns `None` when the payload is not Frigate-shaped, should be skipped,
 /// or `frigate_base_url` is missing/empty.
 fn parse_frigate_camera_event(
