@@ -17,6 +17,14 @@ Desktop and mobile application for monitoring Victron inverter systems via MQTT.
 | Docker / NAS                | [inverter-dashboard](https://github.com/victron-venus/inverter-dashboard) (`alvit/inverter-dashboard`) |
 | Desktop / mobile (this app) | **inverter-desktop**                                                                                   |
 
+## Demo
+
+Live **Inverter Desktop** main window on macOS — real-time grid, solar, battery, EV, water, and home controls over MQTT.
+
+![Inverter Desktop live dashboard](docs/demo.gif)
+
+[Full-length demo (MP4, ~40s, H.264)](docs/demo.mp4)
+
 ---
 
 ## Project Role
