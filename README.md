@@ -23,8 +23,6 @@ Live **Inverter Desktop** main window on macOS — real-time grid, solar, batter
 
 ![Inverter Desktop live dashboard](docs/demo.gif)
 
-[Full-length demo (MP4, ~40s, H.264)](docs/demo.mp4)
-
 ---
 
 ## Project Role
