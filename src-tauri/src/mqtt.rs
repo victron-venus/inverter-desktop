@@ -1328,6 +1328,12 @@ fn frigate_clip_should_open(
     true
 }
 
+/// Serializes tests that mutate the process-global [`FRIGATE_CLIP_DEDUPE`].
+/// Rust's default test harness runs cases in parallel; without this gate,
+/// `reset_frigate_clip_dedupe_for_tests` and successful opens race.
+#[cfg(test)]
+static FRIGATE_DEDUPE_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 fn reset_frigate_clip_dedupe_for_tests() {
     let mut guard = FRIGATE_CLIP_DEDUPE
@@ -6030,6 +6036,9 @@ mod camera_topic_tests {
 
     #[test]
     fn parse_frigate_end_with_clip() {
+        let _serial = FRIGATE_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         reset_frigate_clip_dedupe_for_tests();
         let payload = r#"{
             "type":"end",
@@ -6047,6 +6056,9 @@ mod camera_topic_tests {
 
     #[test]
     fn parse_frigate_dedupes_same_id_and_sibling_camera_events() {
+        let _serial = FRIGATE_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         reset_frigate_clip_dedupe_for_tests();
         let base = Some("http://192.168.151.21:5005".to_string());
         let first = r#"{
