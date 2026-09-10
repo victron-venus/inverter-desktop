@@ -1265,6 +1265,83 @@ fn capitalize_agent_name(name: &str) -> String {
     }
 }
 
+/// TTL for remembering Frigate event ids so the same id is never opened twice.
+const FRIGATE_EVENT_ID_TTL: Duration = Duration::from_secs(10 * 60);
+/// Per-camera quiet period after a successful Frigate clip open. Overlapping
+/// sibling events (different ids, same walk-by) typically end within 1–2s.
+const FRIGATE_CAMERA_COOLDOWN: Duration = Duration::from_secs(45);
+
+/// Process-local Frigate clip open memory (event-id TTL + per-camera cooldown).
+struct FrigateClipDedupeState {
+    seen_ids: HashMap<String, Instant>,
+    camera_last_open: HashMap<String, Instant>,
+}
+
+impl FrigateClipDedupeState {
+    fn new() -> Self {
+        Self {
+            seen_ids: HashMap::new(),
+            camera_last_open: HashMap::new(),
+        }
+    }
+
+    fn prune(&mut self, now: Instant) {
+        self.seen_ids
+            .retain(|_, seen_at| now.duration_since(*seen_at) < FRIGATE_EVENT_ID_TTL);
+        self.camera_last_open
+            .retain(|_, last| now.duration_since(*last) < FRIGATE_CAMERA_COOLDOWN);
+    }
+}
+
+static FRIGATE_CLIP_DEDUPE: std::sync::LazyLock<Mutex<FrigateClipDedupeState>> =
+    std::sync::LazyLock::new(|| Mutex::new(FrigateClipDedupeState::new()));
+
+/// Whether a Frigate `end`+`has_clip` event should open a clip window.
+///
+/// Suppresses (1) the same event `id` within [`FRIGATE_EVENT_ID_TTL`] and
+/// (2) any further opens for the same `camera` within [`FRIGATE_CAMERA_COOLDOWN`]
+/// after a successful open. On `true`, records id + camera open time.
+fn frigate_clip_should_open(
+    state: &mut FrigateClipDedupeState,
+    id: &str,
+    camera: &str,
+    now: Instant,
+) -> bool {
+    state.prune(now);
+
+    if let Some(seen_at) = state.seen_ids.get(id) {
+        if now.duration_since(*seen_at) < FRIGATE_EVENT_ID_TTL {
+            log::info!("Frigate clip skipped: duplicate event id (id={id}, camera={camera})");
+            return false;
+        }
+    }
+
+    if let Some(last) = state.camera_last_open.get(camera) {
+        if now.duration_since(*last) < FRIGATE_CAMERA_COOLDOWN {
+            log::info!("Frigate clip skipped: camera cooldown (camera={camera}, id={id})");
+            return false;
+        }
+    }
+
+    state.seen_ids.insert(id.to_string(), now);
+    state.camera_last_open.insert(camera.to_string(), now);
+    true
+}
+
+/// Serializes tests that mutate the process-global [`FRIGATE_CLIP_DEDUPE`].
+/// Rust's default test harness runs cases in parallel; without this gate,
+/// `reset_frigate_clip_dedupe_for_tests` and successful opens race.
+#[cfg(test)]
+static FRIGATE_DEDUPE_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn reset_frigate_clip_dedupe_for_tests() {
+    let mut guard = FRIGATE_CLIP_DEDUPE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = FrigateClipDedupeState::new();
+}
+
 /// Parse a Frigate MQTT `frigate/events` JSON payload into a [`CameraEvent`].
 ///
 /// Only opens a clip when `type == "end"` and `has_clip` is true, so Frigate
@@ -1303,6 +1380,16 @@ fn parse_frigate_camera_event(
         );
         return None;
     };
+
+    {
+        let mut dedupe = FRIGATE_CLIP_DEDUPE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !frigate_clip_should_open(&mut dedupe, id, camera, Instant::now()) {
+            return None;
+        }
+    }
+
     let base = base_raw.trim_end_matches('/');
     Some(CameraEvent {
         agent_name: format!("Frigate {}", capitalize_agent_name(camera)),
@@ -5949,6 +6036,10 @@ mod camera_topic_tests {
 
     #[test]
     fn parse_frigate_end_with_clip() {
+        let _serial = FRIGATE_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_frigate_clip_dedupe_for_tests();
         let payload = r#"{
             "type":"end",
             "before":{"id":"abc","camera":"front","has_clip":false},
@@ -5960,6 +6051,36 @@ mod camera_topic_tests {
         assert_eq!(
             ev.video_url,
             "http://192.168.151.21:5005/api/events/abc/clip.mp4"
+        );
+    }
+
+    #[test]
+    fn parse_frigate_dedupes_same_id_and_sibling_camera_events() {
+        let _serial = FRIGATE_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_frigate_clip_dedupe_for_tests();
+        let base = Some("http://192.168.151.21:5005".to_string());
+        let first = r#"{
+            "type":"end",
+            "after":{"id":"evt-w7ji4q","camera":"front","has_clip":true}
+        }"#;
+        let same_id = r#"{
+            "type":"end",
+            "after":{"id":"evt-w7ji4q","camera":"front","has_clip":true}
+        }"#;
+        let sibling = r#"{
+            "type":"end",
+            "after":{"id":"evt-adhuwv","camera":"front","has_clip":true}
+        }"#;
+        assert!(parse_camera_mqtt_payload(first, &base).is_some());
+        assert!(
+            parse_camera_mqtt_payload(same_id, &base).is_none(),
+            "same Frigate event id must not open twice"
+        );
+        assert!(
+            parse_camera_mqtt_payload(sibling, &base).is_none(),
+            "overlapping sibling event on same camera must be suppressed"
         );
     }
 
@@ -6006,6 +6127,74 @@ mod camera_topic_tests {
         }"#;
         assert!(parse_camera_mqtt_payload(payload, &None).is_none());
         assert!(parse_camera_mqtt_payload(payload, &Some("".to_string())).is_none());
+    }
+}
+
+#[cfg(test)]
+mod frigate_clip_dedupe_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn allows_first_open_then_blocks_same_id() {
+        let mut state = FrigateClipDedupeState::new();
+        let t0 = Instant::now();
+        assert!(frigate_clip_should_open(&mut state, "id-a", "front", t0));
+        assert!(!frigate_clip_should_open(
+            &mut state,
+            "id-a",
+            "front",
+            t0 + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn blocks_sibling_id_on_same_camera_within_cooldown() {
+        let mut state = FrigateClipDedupeState::new();
+        let t0 = Instant::now();
+        assert!(frigate_clip_should_open(&mut state, "w7ji4q", "front", t0));
+        assert!(!frigate_clip_should_open(
+            &mut state,
+            "adhuwv",
+            "front",
+            t0 + Duration::from_secs(2)
+        ));
+    }
+
+    #[test]
+    fn allows_different_camera_immediately() {
+        let mut state = FrigateClipDedupeState::new();
+        let t0 = Instant::now();
+        assert!(frigate_clip_should_open(&mut state, "id-1", "front", t0));
+        assert!(frigate_clip_should_open(
+            &mut state,
+            "id-2",
+            "back",
+            t0 + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn allows_same_camera_after_cooldown() {
+        let mut state = FrigateClipDedupeState::new();
+        let t0 = Instant::now();
+        assert!(frigate_clip_should_open(&mut state, "id-1", "front", t0));
+        assert!(frigate_clip_should_open(
+            &mut state,
+            "id-2",
+            "front",
+            t0 + FRIGATE_CAMERA_COOLDOWN + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn allows_same_id_after_ttl() {
+        let mut state = FrigateClipDedupeState::new();
+        let t0 = Instant::now();
+        assert!(frigate_clip_should_open(&mut state, "id-a", "front", t0));
+        // Advance past both camera cooldown and id TTL.
+        let later = t0 + FRIGATE_EVENT_ID_TTL + Duration::from_secs(1);
+        assert!(frigate_clip_should_open(&mut state, "id-a", "front", later));
     }
 }
 
