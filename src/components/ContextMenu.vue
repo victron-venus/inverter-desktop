@@ -4,6 +4,10 @@
     class="fixed z-[100] min-w-[168px] apple-card p-1 animate-in fade-in zoom-in duration-100"
     :style="{ left: x + 'px', top: y + 'px' }"
     @click.stop
+    @keydown.enter.stop
+    @keydown.space.stop
+    role="menu"
+    tabindex="0"
   >
     <button
       type="button"

@@ -48,6 +48,10 @@
         class="row-hover px-2.5 py-1.5 border-b border-black/[0.04] dark:border-white/[0.05] last:border-0 cursor-pointer"
         :class="{ 'opacity-50': n.read }"
         @click="markRead(n.id)"
+        @keydown.enter="markRead(n.id)"
+        @keydown.space.prevent="markRead(n.id)"
+        role="button"
+        tabindex="0"
       >
         <div class="flex items-start justify-between gap-2">
           <span class="text-[10px] font-semibold text-main tracking-tight">{{ n.title }}</span>
