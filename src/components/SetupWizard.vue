@@ -373,12 +373,12 @@ async function testGatewayConnection() {
         apiToken: (config.gateway_api_token || '').trim() || null,
       }
     )
-    const mqtt =
-      result.mqtt_connected === true
-        ? 'MQTT connected'
-        : result.mqtt_connected === false
-          ? 'MQTT disconnected'
-          : 'MQTT unknown'
+    let mqtt = 'MQTT unknown'
+    if (result.mqtt_connected === true) {
+      mqtt = 'MQTT connected'
+    } else if (result.mqtt_connected === false) {
+      mqtt = 'MQTT disconnected'
+    }
     gatewayTestResult.value = `OK (${result.status}) — ${mqtt}`
     gatewayTestSuccess.value = true
   } catch (e) {

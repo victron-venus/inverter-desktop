@@ -74,8 +74,7 @@ const acloads = computed(() => {
       // Prefer Cerbo CustomName/ProductName cache; never flash raw instance id
       // once a name is known. Fallback formats legacy daemon keys.
       const cached = nameMap[key]
-      const name =
-        (cached && cached.trim()) || key.replace(/ Power 1S$/i, '').replace(/_/g, ' ') || key
+      const name = cached?.trim() || key.replace(/ Power 1S$/i, '').replace(/_/g, ' ') || key
       items.push({ id: key, name, value: v, isGeneration: v < 0 })
     }
   }

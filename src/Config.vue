@@ -1226,10 +1226,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import type { InverterState } from './composables/useInverterState'
 import { useI18n } from 'vue-i18n'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import UiButton from './components/UiButton.vue'
+import type { InverterState } from './composables/useInverterState'
 import { logger } from './logger'
 
 const { t: $t } = useI18n()
@@ -1390,12 +1390,12 @@ async function testGatewayConnection() {
         apiToken: (config.gateway_api_token || '').trim() || null,
       }
     )
-    const mqtt =
-      result.mqtt_connected === true
-        ? 'MQTT connected'
-        : result.mqtt_connected === false
-          ? 'MQTT disconnected'
-          : 'MQTT unknown'
+    let mqtt = 'MQTT unknown'
+    if (result.mqtt_connected === true) {
+      mqtt = 'MQTT connected'
+    } else if (result.mqtt_connected === false) {
+      mqtt = 'MQTT disconnected'
+    }
     gatewayTestResult.value = `OK (${result.status}) — ${mqtt}`
     gatewayTestSuccess.value = true
   } catch (e) {

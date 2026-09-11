@@ -14,8 +14,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import { Loader2 } from '@lucide/vue'
+import { computed } from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -58,5 +58,9 @@ const btnClass = computed(() => {
   return classes
 })
 
-const iconSize = computed(() => (props.size === 'lg' ? 14 : props.size === 'sm' ? 10 : 12))
+const iconSize = computed(() => {
+  if (props.size === 'lg') return 14
+  if (props.size === 'sm') return 10
+  return 12
+})
 </script>

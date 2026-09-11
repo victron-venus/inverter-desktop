@@ -70,16 +70,14 @@ export function mergeDeviceInventory<T extends InventoryDevice>(
   if (!incoming) return dest
   if (dest.length === 0) return incoming.map((d) => ({ ...d }))
 
-  for (let i = 0; i < incoming.length; i++) {
-    const inc = incoming[i]
+  for (const inc of incoming) {
     let matchIdx = -1
-    for (let j = 0; j < dest.length; j++) {
-      const dst = dest[j]
+    for (const dst of dest) {
       if (
         (dst.serial && inc.serial && dst.serial === inc.serial) ||
         (dst.instance === inc.instance && inc.instance != null && Number.isFinite(inc.instance))
       ) {
-        matchIdx = j
+        matchIdx = dest.indexOf(dst)
         break
       }
     }

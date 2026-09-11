@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
+import { type AppConfig, getAppConfig } from '../config'
 import {
   chooseStartupSource,
   isIgwConfigured,
@@ -11,7 +12,6 @@ import {
   mqttReconnectDelayMs,
   shouldWatchdogFailoverToIgw,
 } from '../connectionPolicy'
-import { getAppConfig, type AppConfig } from '../config'
 import { logger } from '../logger'
 import {
   addNotification,
