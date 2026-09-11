@@ -41,7 +41,7 @@ export default {
     fetchEntities: 'Загрузить сущности',
     cameraEventsTitle: 'События камер (HA MQTT)',
     cameraEventsHelp:
-      'Отдельное MQTT-подключение к Home Assistant для клипов движения Kerberos и/или Frigate. Cerbo MQTT остаётся на вкладке Inverter.',
+      'Отдельное MQTT-подключение к Home Assistant для движения Kerberos, Frigate и/или Ring-MQTT. Cerbo MQTT остаётся на вкладке Inverter.',
     haMqttHost: 'Хост HA MQTT',
     haMqttHostPlaceholder: 'homeassistant.local',
     haMqttPort: 'Порт HA MQTT',
@@ -51,13 +51,19 @@ export default {
     cameraMonitoring: 'Мониторинг камер',
     cameraEnabled: 'Включить события движения камер',
     cameraTopic: 'Топик(и) событий камеры',
-    cameraTopicPlaceholder: 'kerberos/desktop/events;frigate/events',
+    cameraTopicPlaceholder:
+      'kerberos/desktop/events;frigate/events;ring/+/camera/+/motion/state;ring/+/camera/+/ding/state',
     cameraTopicHelp:
-      'Топики/шаблоны MQTT через точку с запятой. Kerberos: kerberos/desktop/events (JSON agent_name, video_url). Frigate: frigate/events (нужен базовый URL Frigate ниже).',
+      'Топики/шаблоны MQTT через точку с запятой. Kerberos: kerberos/desktop/events (JSON agent_name, video_url). Frigate: frigate/events (нужен базовый URL Frigate ниже). Ring-MQTT: ring/+/camera/+/motion/state и ring/+/camera/+/ding/state (нужен шаблон snapshot ниже; RTSP в окне не воспроизводится).',
     frigateBaseUrl: 'Базовый URL Frigate',
     frigateBaseUrlPlaceholder: 'https://192.168.151.21:5005',
     frigateBaseUrlHelp:
       'HTTP-база для клипов Frigate ({base}/api/events/{id}/clip.mp4). Обязателен при подписке на frigate/events; пустое значение — клипы Frigate пропускаются. Пример: Synology :5005→5000.',
+    ringSnapshotUrlTemplate: 'Шаблон URL снимка Ring',
+    ringSnapshotUrlTemplatePlaceholder:
+      'http://ha:8123/api/camera_proxy/camera.front_door_snapshot',
+    ringSnapshotUrlTemplateHelp:
+      'HTTP(S) URL при Ring motion/ding ON. Плейсхолдеры: {device_id}, {location_id}, {event}. Удобно camera_proxy HA (токен из настроек HA). Пусто — только уведомление. RTSP окном не поддерживается — см. docs/ring-mqtt.md.',
     advancedSettings: 'Расширенные настройки',
     cameraMotionDetected: '{agent} — обнаружено движение камеры',
   },

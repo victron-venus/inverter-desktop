@@ -389,6 +389,11 @@ struct FullConfig {
     /// Base URL for Frigate clips, e.g. http://192.168.151.21:5005 (no trailing slash required).
     #[serde(default)]
     frigate_base_url: Option<String>,
+    /// HTTP(S) snapshot URL template for Ring-MQTT motion/ding events.
+    /// Placeholders: `{device_id}`, `{location_id}`, `{event}`.
+    /// Example: `http://ha:8123/api/camera_proxy/camera.front_door_snapshot`
+    #[serde(default)]
+    ring_snapshot_url_template: Option<String>,
     camera_enabled: bool,
     show_advanced_settings: Option<bool>,
     show_ha_sensors: Option<bool>,
@@ -471,6 +476,7 @@ impl Default for FullConfig {
             ev_instance: Some(22),
             camera_topic: Some("kerberos/desktop/events".to_string()),
             frigate_base_url: None,
+            ring_snapshot_url_template: None,
             camera_enabled: true,
             show_advanced_settings: Some(false),
             show_ha_sensors: Some(true),
@@ -1447,22 +1453,87 @@ fn format_camera_clip_http_error(
     }
 }
 
+fn camera_download_bearer_token(app: &tauri::AppHandle, video_url: &str) -> Option<String> {
+    let Ok(cfg) = load_config(app) else {
+        return None;
+    };
+    let token = cfg.ha_longlived_token.as_deref()?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let ha_host = cfg.ha_url.as_deref()?.trim().trim_end_matches('/');
+    if ha_host.is_empty() {
+        return None;
+    }
+    // Match http://ha or http://ha:8123 against the snapshot URL host.
+    let url_l = video_url.to_ascii_lowercase();
+    let host_l = ha_host.to_ascii_lowercase();
+    let host_no_scheme = host_l
+        .strip_prefix("https://")
+        .or_else(|| host_l.strip_prefix("http://"))
+        .unwrap_or(host_l.as_str());
+    if url_l.contains(host_no_scheme) || url_l.contains(&host_l) {
+        return Some(format!("Bearer {token}"));
+    }
+    None
+}
+
+fn camera_media_extension(content_type: Option<&str>, video_url: &str) -> &'static str {
+    let ct = content_type.unwrap_or("").to_ascii_lowercase();
+    if ct.contains("image/jpeg") || ct.contains("image/jpg") {
+        return "jpg";
+    }
+    if ct.contains("image/png") {
+        return "png";
+    }
+    if ct.contains("image/webp") {
+        return "webp";
+    }
+    if ct.contains("image/") {
+        return "img";
+    }
+    let path = video_url
+        .split('?')
+        .next()
+        .unwrap_or(video_url)
+        .to_ascii_lowercase();
+    if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        return "jpg";
+    }
+    if path.ends_with(".png") {
+        return "png";
+    }
+    if path.ends_with(".webp") {
+        return "webp";
+    }
+    "mp4"
+}
+
 async fn download_camera_clip(
     app: &tauri::AppHandle,
     video_url: &str,
 ) -> Result<std::path::PathBuf, String> {
+    let url_trim = video_url.trim();
+    if url_trim.to_ascii_lowercase().starts_with("rtsp://") {
+        return Err(
+            "RTSP is not supported by the camera window (HTTP/HTTPS clips or snapshots only). \
+Expose ring-mqtt on the LAN and set ring_snapshot_url_template to an HTTP snapshot/HLS URL \
+(see docs/ring-mqtt.md)."
+                .into(),
+        );
+    }
+
     let clip_dir = camera_clip_dir(app)?;
     std::fs::create_dir_all(&clip_dir)
         .map_err(|e| format!("Failed to create camera clip temp dir: {e}"))?;
     // Do not wipe the clip dir — other camera windows may still be playing.
 
-    let file_name = format!("clip-{}.mp4", uuid::Uuid::new_v4());
-    let dest = clip_dir.join(file_name);
-
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let auth = camera_download_bearer_token(app, url_trim);
 
     // Frigate recording segments can take ~10s after `end`+`has_clip`; cover that
     // window plus brief network blips. Kerberos URLs rarely hit these statuses.
@@ -1471,7 +1542,11 @@ async fn download_camera_clip(
     let mut last_err = String::new();
 
     for attempt in 1..=MAX_ATTEMPTS {
-        let response = match client.get(video_url).send().await {
+        let mut req = client.get(url_trim);
+        if let Some(ref bearer) = auth {
+            req = req.header(reqwest::header::AUTHORIZATION, bearer);
+        }
+        let response = match req.send().await {
             Ok(r) => r,
             Err(e) => {
                 last_err = format!("Failed to download camera clip: {e} ({video_url})");
@@ -1503,6 +1578,13 @@ async fn download_camera_clip(
             return Err(last_err);
         }
 
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let ext = camera_media_extension(content_type.as_deref(), url_trim);
+
         let bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
@@ -1533,9 +1615,13 @@ async fn download_camera_clip(
         }
 
         if attempt > 1 {
-            info!("Camera clip download succeeded on attempt {attempt}/{MAX_ATTEMPTS} url={video_url}");
+            info!(
+                "Camera clip download succeeded on attempt {attempt}/{MAX_ATTEMPTS} url={video_url}"
+            );
         }
 
+        let file_name = format!("clip-{}.{ext}", uuid::Uuid::new_v4());
+        let dest = clip_dir.join(file_name);
         std::fs::write(&dest, &bytes)
             .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
 
@@ -1773,10 +1859,22 @@ async fn open_camera_video_window(
     let (route, clip_path) = match download_camera_clip(&app, &video_url).await {
         Ok(local_path) => {
             let local = local_path.to_string_lossy().to_string();
+            let is_image = local_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| {
+                    matches!(
+                        e.to_ascii_lowercase().as_str(),
+                        "jpg" | "jpeg" | "png" | "webp" | "img"
+                    )
+                })
+                .unwrap_or(false);
+            let media = if is_image { "image" } else { "video" };
             let route = format!(
-                "camera-video?localPath={}&name={}",
+                "camera-video?localPath={}&name={}&media={}",
                 percent_encode_query(&local),
-                percent_encode_query(&name)
+                percent_encode_query(&name),
+                media
             );
             (route, Some(local_path))
         }
@@ -2045,6 +2143,7 @@ async fn connect_ha_mqtt(
     password: Option<String>,
     camera_topic: Option<String>,
     frigate_base_url: Option<String>,
+    ring_snapshot_url_template: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, HaMqttState>,
 ) -> Result<(), String> {
@@ -2069,6 +2168,7 @@ async fn connect_ha_mqtt(
     client.set_app_handle(app.clone());
     client.set_camera_topic(camera_topic);
     client.set_frigate_base_url(frigate_base_url);
+    client.set_ring_snapshot_url_template(ring_snapshot_url_template);
     client.set_status_event("ha-mqtt-connection-status".to_string());
     client.connect().map_err(|e| e.to_string())?;
     let mut client_guard = mqtt_client

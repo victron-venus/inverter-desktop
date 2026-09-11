@@ -407,6 +407,7 @@ export function useConnection() {
       password: config.mqtt_ha_password || null,
       cameraTopic: config.camera_topic || null,
       frigateBaseUrl: config.frigate_base_url || null,
+      ringSnapshotUrlTemplate: config.ring_snapshot_url_template || null,
     })
     haMqttConnected.value = true
   }

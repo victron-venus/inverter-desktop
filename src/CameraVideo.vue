@@ -29,7 +29,7 @@
       </div>
 
       <video
-        v-if="videoUrl"
+        v-if="videoUrl && mediaKind === 'video'"
         ref="videoEl"
         autoplay
         muted
@@ -43,6 +43,14 @@
         Your browser does not support the video tag.
       </video>
 
+      <img
+        v-else-if="videoUrl && mediaKind === 'image'"
+        class="w-full h-full object-contain bg-black"
+        :src="videoUrl"
+        alt="Camera snapshot"
+        @error="onVideoError"
+      />
+
       <div
         v-else
         class="flex-1 flex items-center justify-center text-white/70 text-[13px] px-4 text-center"
@@ -54,7 +62,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { X } from '@lucide/vue'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -64,17 +72,35 @@ import { logger } from './logger'
 const videoUrl = ref('')
 const cameraName = ref('Camera')
 const errorMessage = ref('')
+const mediaKind = ref<'video' | 'image'>('video')
 const videoEl = ref<HTMLVideoElement | null>(null)
+let imageCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 function setName(name?: string | null) {
   cameraName.value = (name && name.trim()) || 'Camera'
 }
 
-function loadLocalClip(localPath: string, name?: string | null) {
+function clearImageCloseTimer() {
+  if (imageCloseTimer) {
+    clearTimeout(imageCloseTimer)
+    imageCloseTimer = null
+  }
+}
+
+function loadLocalClip(localPath: string, name?: string | null, media?: string | null) {
   errorMessage.value = ''
   setName(name)
+  mediaKind.value = media === 'image' ? 'image' : 'video'
   // Serve via Tauri asset protocol — raw http:// fails in WKWebView (mixed content).
   videoUrl.value = convertFileSrc(localPath)
+  if (mediaKind.value === 'image') {
+    clearImageCloseTimer()
+    // Stills have no @ended — auto-close after a short view.
+    imageCloseTimer = setTimeout(() => {
+      void closeWindow()
+    }, 12000)
+    return
+  }
   requestAnimationFrame(() => {
     const el = videoEl.value
     if (el) {
@@ -102,6 +128,7 @@ function onVideoError() {
 }
 
 async function closeWindow() {
+  clearImageCloseTimer()
   try {
     await getCurrentWindow().close()
     return
@@ -120,12 +147,17 @@ onMounted(() => {
   const name = params.get('name')
   const error = params.get('error')
   const localPath = params.get('localPath')
+  const media = params.get('media')
   if (error) {
     showError(error, name)
   } else if (localPath) {
-    loadLocalClip(localPath, name)
+    loadLocalClip(localPath, name, media)
   } else {
     showError('No camera clip provided.', name)
   }
+})
+
+onUnmounted(() => {
+  clearImageCloseTimer()
 })
 </script>

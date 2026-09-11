@@ -56,6 +56,12 @@ export interface AppConfig {
   camera_topic?: string | null
   /** Frigate HTTP base for clip URLs, e.g. http://192.168.151.21:5005 */
   frigate_base_url?: string | null
+  /**
+   * HTTP(S) snapshot URL template for Ring-MQTT motion/ding.
+   * Placeholders: {device_id}, {location_id}, {event}.
+   * Example: http://ha:8123/api/camera_proxy/camera.front_door_snapshot
+   */
+  ring_snapshot_url_template?: string | null
   camera_enabled?: boolean
   show_advanced_settings?: boolean
 
@@ -141,6 +147,7 @@ const defaultConfig: AppConfig = {
   portal_id: null,
   camera_topic: 'kerberos/desktop/events',
   frigate_base_url: null,
+  ring_snapshot_url_template: null,
   camera_enabled: true,
 
   gateway_enabled: false,
