@@ -55,7 +55,7 @@ export default {
     cameraTopicHelp:
       'Топики/шаблоны MQTT через точку с запятой. Kerberos: kerberos/desktop/events (JSON agent_name, video_url). Frigate: frigate/events (нужен базовый URL Frigate ниже).',
     frigateBaseUrl: 'Базовый URL Frigate',
-    frigateBaseUrlPlaceholder: 'http://192.168.151.21:5005',
+    frigateBaseUrlPlaceholder: 'https://192.168.151.21:5005',
     frigateBaseUrlHelp:
       'HTTP-база для клипов Frigate ({base}/api/events/{id}/clip.mp4). Обязателен при подписке на frigate/events; пустое значение — клипы Frigate пропускаются. Пример: Synology :5005→5000.',
     advancedSettings: 'Расширенные настройки',

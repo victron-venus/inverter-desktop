@@ -64,7 +64,7 @@ export const MQTT_OFFLINE_DELAY_MS = 10_000
  */
 export function shouldWatchdogFailoverToIgw(opts: {
   dualPath: boolean
-  dataSource: DataSource | string
+  dataSource: DataSource
   mqttConnected: boolean
 }): boolean {
   return opts.dualPath && opts.dataSource === 'mqtt' && !opts.mqttConnected

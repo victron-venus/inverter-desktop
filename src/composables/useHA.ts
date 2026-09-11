@@ -493,9 +493,7 @@ export function useHA() {
       if (!Number.isNaN(v) && Math.abs(v) > 2) {
         items.push({
           key,
-          name:
-            (state.value.load_names?.[key] && state.value.load_names[key].trim()) ||
-            getFormattedLoadName(key),
+          name: state.value.load_names?.[key]?.trim() || getFormattedLoadName(key),
         })
       }
     }

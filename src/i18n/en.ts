@@ -82,7 +82,7 @@ export default {
     cameraTopicHelp:
       'Semicolon-separated MQTT topics/patterns. Kerberos: kerberos/desktop/events (JSON agent_name, video_url). Frigate: frigate/events (needs Frigate base URL below).',
     frigateBaseUrl: 'Frigate Base URL',
-    frigateBaseUrlPlaceholder: 'http://192.168.151.21:5005',
+    frigateBaseUrlPlaceholder: 'https://192.168.151.21:5005',
     frigateBaseUrlHelp:
       'HTTP base for Frigate clip URLs ({base}/api/events/{id}/clip.mp4). Required when frigate/events is subscribed; leave empty to skip Frigate clips. Example: Synology host :5005→5000.',
     advancedSettings: 'Advanced settings',

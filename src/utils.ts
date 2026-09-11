@@ -44,7 +44,7 @@ export function formatDuration(s: number | undefined): string {
 export function formatTimestamp(tsString: string | undefined): string {
   if (!tsString) return ''
   const timestamp = new Date(tsString)
-  if (isNaN(timestamp.getTime())) return ''
+  if (Number.isNaN(timestamp.getTime())) return ''
   const diffMs = Date.now() - timestamp.getTime()
   if (diffMs < 0) return 'just now'
   const diffSec = Math.floor(diffMs / 1000)
