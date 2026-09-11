@@ -97,7 +97,6 @@ export function useChart(isDarkRef: Ref<boolean>) {
           })
           let result = `${timeStr}<br/>`
           params.forEach((p: TooltipParam) => {
-            if (p.seriesName === 'Setpoint') return
             const val = Math.floor(p.value[1])
             const valStr = val >= 1000 ? `${(val / 1000).toFixed(1)}kW` : `${val}W`
             result += `<span style="display:inline-block;margin-right:5px;border-radius:10px;width:10px;height:10px;background-color:${p.color};"></span>`
