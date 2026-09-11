@@ -472,6 +472,7 @@ npm run tauri build
 ```bash
 ./build-ios-local.sh            # Unsigned build (for AltStore)
 ./build-ios-local.sh --sign     # Signed build (requires Apple Developer)
+./build-ios-simulator.sh        # Build & launch in iPhone Simulator (no signing)
 ```
 
 ---
