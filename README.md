@@ -22,7 +22,7 @@ Desktop and mobile application for monitoring Victron inverter systems via MQTT.
 Live **Inverter Desktop** main window on macOS — real-time grid, solar, battery, EV, water, and home controls over MQTT.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Inverter Desktop live dashboard" />
+  <img src="docs/demo.gif" alt="Inverter Desktop live dashboard" width="800" />
 </p>
 
 ---
