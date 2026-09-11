@@ -1,2 +1,5 @@
 [files]
 extend-exclude = ["src-tauri/gen/"]
+
+[default.extend-words]
+Mosquitto = "Mosquitto"

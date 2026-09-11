@@ -964,6 +964,10 @@ pub struct MqttClient {
     ev_instances: Option<(Option<u32>, Option<u32>)>,
     camera_topic: Option<String>,
     frigate_base_url: Option<String>,
+    /// HTTP(S) URL template for Ring-MQTT motion/ding snapshots.
+    /// Placeholders: `{device_id}`, `{location_id}`, `{event}` (motion|ding).
+    /// Example: `http://ha:8123/api/camera_proxy/camera.front_door_snapshot`
+    ring_snapshot_url_template: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     alarms: Arc<Mutex<HashMap<String, u8>>>,
     /// Venus-platform notification slots (GUIv2 Notifications/[0-19]).
@@ -1384,6 +1388,7 @@ fn reset_frigate_clip_dedupe_for_tests() {
 ///
 /// - `type == "new"`: start-of-motion OS notification (no clip window).
 /// - `type == "end"` and `has_clip`: open clip after Frigate finishes the event.
+///
 /// Early `update` messages (including `has_clip` false→true) are skipped.
 /// Note: `has_clip` means recording is expected, not that segments are on disk
 /// yet — Frigate often returns HTTP 400 ("No recordings found…") until the
@@ -1451,12 +1456,189 @@ fn parse_frigate_camera_event(
     }))
 }
 
+/// Parse `ring/<location_id>/camera/<device_id>/(motion|ding)/state`.
+fn parse_ring_camera_topic(topic: &str) -> Option<(&str, &str, &str)> {
+    let parts: Vec<&str> = topic.split('/').collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    if parts[0] != "ring" || parts[2] != "camera" || parts[5] != "state" {
+        return None;
+    }
+    let event = match parts[4] {
+        "motion" | "ding" => parts[4],
+        _ => return None,
+    };
+    let location_id = parts[1];
+    let device_id = parts[3];
+    if location_id.is_empty() || device_id.is_empty() {
+        return None;
+    }
+    Some((location_id, device_id, event))
+}
+
+fn ring_payload_is_on(payload: &str) -> bool {
+    matches!(
+        payload.trim().to_ascii_uppercase().as_str(),
+        "ON" | "TRUE" | "1"
+    )
+}
+
+/// Prefer a single Ring binary_sensor friendly name from HA; otherwise label by event + device id.
+fn ring_agent_name(
+    device_id: &str,
+    event: &str,
+    ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
+) -> String {
+    let kind_label = if event == "ding" { "Ding" } else { "Motion" };
+    if let Some(states) = ha_entity_states {
+        if let Ok(guard) = states.lock() {
+            let suffix = if event == "ding" { "ding" } else { "motion" };
+            let mut matches: Vec<String> = Vec::new();
+            for (id, entry) in guard.iter() {
+                if !id.starts_with("binary_sensor.") || !id.ends_with(suffix) {
+                    continue;
+                }
+                let is_ring = entry
+                    .attributes
+                    .as_ref()
+                    .and_then(|a| a.get("attribution"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_ascii_lowercase().contains("ring"))
+                    .unwrap_or(false);
+                if !is_ring {
+                    continue;
+                }
+                if let Some(name) = entity_friendly_name(entry) {
+                    matches.push(name);
+                }
+            }
+            if matches.len() == 1 {
+                let name = &matches[0];
+                let base = name
+                    .trim_end_matches(" Motion")
+                    .trim_end_matches(" Ding")
+                    .trim_end_matches(" motion")
+                    .trim_end_matches(" ding");
+                return format!("Ring {base}");
+            }
+        }
+    }
+    format!("Ring {kind_label} ({device_id})")
+}
+
+const RING_CAMERA_COOLDOWN: Duration = Duration::from_secs(20);
+
+struct RingDedupeState {
+    camera_last_open: HashMap<String, Instant>,
+}
+
+impl RingDedupeState {
+    fn new() -> Self {
+        Self {
+            camera_last_open: HashMap::new(),
+        }
+    }
+
+    fn prune(&mut self, now: Instant) {
+        self.camera_last_open
+            .retain(|_, last| now.duration_since(*last) < RING_CAMERA_COOLDOWN);
+    }
+}
+
+static RING_DEDUPE: std::sync::LazyLock<Mutex<RingDedupeState>> =
+    std::sync::LazyLock::new(|| Mutex::new(RingDedupeState::new()));
+
+#[cfg(test)]
+static RING_DEDUPE_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn reset_ring_dedupe_for_tests() {
+    let mut guard = RING_DEDUPE.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = RingDedupeState::new();
+}
+
+fn ring_should_admit(device_id: &str, event: &str, now: Instant) -> bool {
+    let mut state = RING_DEDUPE.lock().unwrap_or_else(|e| e.into_inner());
+    state.prune(now);
+    let key = format!("{device_id}:{event}");
+    if let Some(last) = state.camera_last_open.get(&key) {
+        if now.duration_since(*last) < RING_CAMERA_COOLDOWN {
+            log::info!("Ring {event} skipped: camera cooldown (device={device_id})");
+            return false;
+        }
+    }
+    state.camera_last_open.insert(key, now);
+    true
+}
+
+fn resolve_ring_snapshot_url(
+    template: &str,
+    location_id: &str,
+    device_id: &str,
+    event: &str,
+) -> String {
+    template
+        .replace("{location_id}", location_id)
+        .replace("{device_id}", device_id)
+        .replace("{event}", event)
+}
+
+/// Parse Ring-MQTT motion/ding state payloads (ON/OFF).
+///
+/// Opens a snapshot window when `ring_snapshot_url_template` is set (HTTP/HTTPS
+/// only — the camera Webview cannot play RTSP). Otherwise notifies only.
+fn parse_ring_camera_event(
+    topic: &str,
+    payload: &str,
+    ring_snapshot_url_template: Option<&str>,
+    ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
+) -> Option<CameraMqttAction> {
+    let (location_id, device_id, event) = parse_ring_camera_topic(topic)?;
+    if !ring_payload_is_on(payload) {
+        return None;
+    }
+    if !ring_should_admit(device_id, event, Instant::now()) {
+        return None;
+    }
+    let agent_name = ring_agent_name(device_id, event, ha_entity_states);
+    let Some(template_raw) = ring_snapshot_url_template
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        log::info!("Ring {event} notify-only (no ring_snapshot_url_template; device={device_id})");
+        return Some(CameraMqttAction::StartNotify { agent_name });
+    };
+    let video_url = resolve_ring_snapshot_url(template_raw, location_id, device_id, event);
+    if video_url.trim().is_empty() {
+        return Some(CameraMqttAction::StartNotify { agent_name });
+    }
+    log::info!("Ring {event} open snapshot (device={device_id}, url={video_url})");
+    Some(CameraMqttAction::OpenClip(CameraEvent {
+        agent_name,
+        video_url,
+        timestamp: None,
+    }))
+}
+
 /// Resolve a camera MQTT payload to a [`CameraMqttAction`].
-/// Kerberos JSON (`agent_name` + `video_url`) unchanged; Frigate next; raw URL last.
+/// Ring-MQTT state topics first; Kerberos JSON (`agent_name` + `video_url`);
+/// Frigate next; raw HTTP(S) URL last.
 fn parse_camera_mqtt_payload(
+    topic: &str,
     payload: &str,
     frigate_base_url: &Option<String>,
+    ring_snapshot_url_template: &Option<String>,
+    ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
 ) -> Option<CameraMqttAction> {
+    if parse_ring_camera_topic(topic).is_some() {
+        return parse_ring_camera_event(
+            topic,
+            payload,
+            ring_snapshot_url_template.as_deref(),
+            ha_entity_states,
+        );
+    }
     if let Ok(mut ev) = serde_json::from_str::<CameraEvent>(payload) {
         if !ev.video_url.trim().is_empty() {
             if ev.agent_name.trim().is_empty() {
@@ -1555,6 +1737,7 @@ impl MqttClient {
             ev_instances: None,
             camera_topic: None,
             frigate_base_url: None,
+            ring_snapshot_url_template: None,
             notifications: Arc::new(Mutex::new(NotificationState {
                 high_consumption: AlertState::new(),
                 low_water: AlertState::new(),
@@ -1620,6 +1803,10 @@ impl MqttClient {
 
     pub fn set_frigate_base_url(&mut self, url: Option<String>) {
         self.frigate_base_url = url;
+    }
+
+    pub fn set_ring_snapshot_url_template(&mut self, url: Option<String>) {
+        self.ring_snapshot_url_template = url;
     }
 
     pub fn set_status_event(&mut self, event: String) {
@@ -1739,6 +1926,7 @@ impl MqttClient {
         let ev_instances_owned = self.ev_instances;
         let cam_topic_owned = self.camera_topic.clone();
         let frigate_base_owned = self.frigate_base_url.clone();
+        let ring_snapshot_owned = self.ring_snapshot_url_template.clone();
         let notifications = self.notifications.clone();
         let alarms = self.alarms.clone();
         let platform_notifs = self.platform_notifs.clone();
@@ -1771,6 +1959,7 @@ impl MqttClient {
                         ev_instances_owned,
                         cam_topic_owned.clone(),
                         frigate_base_owned.clone(),
+                        ring_snapshot_owned.clone(),
                         notifications.clone(),
                         alarms.clone(),
                         platform_notifs.clone(),
@@ -1828,6 +2017,7 @@ impl MqttClient {
         ev_instances: Option<(Option<u32>, Option<u32>)>,
         camera_topic: Option<String>,
         frigate_base_url: Option<String>,
+        ring_snapshot_url_template: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
         alarms: Arc<Mutex<HashMap<String, u8>>>,
         platform_notifs: Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
@@ -1889,6 +2079,7 @@ impl MqttClient {
         let app_c = app_handle.clone();
         let cam_c = camera_topic.clone();
         let frigate_c = frigate_base_url.clone();
+        let ring_c = ring_snapshot_url_template.clone();
         let water_c = water_instances;
         let ev_c = ev_instances;
         let notif_c = notifications.clone();
@@ -1934,6 +2125,7 @@ impl MqttClient {
                             &app_c,
                             &cam_c,
                             &frigate_c,
+                            &ring_c,
                             &water_c,
                             &ev_c,
                             &notif_c,
@@ -2049,6 +2241,7 @@ impl MqttClient {
         app_handle: &Option<tauri::AppHandle>,
         camera_topic: &Option<String>,
         frigate_base_url: &Option<String>,
+        ring_snapshot_url_template: &Option<String>,
         water_instances: &Option<(Option<u32>, Option<u32>, Option<u32>)>,
         ev_instances: &Option<(Option<u32>, Option<u32>)>,
         notifications: &Arc<Mutex<NotificationState>>,
@@ -2358,7 +2551,13 @@ impl MqttClient {
             }
         } else if camera_topic_matches(topic, camera_topic) {
             if let Some(ref handle) = app_handle {
-                match parse_camera_mqtt_payload(payload, frigate_base_url) {
+                match parse_camera_mqtt_payload(
+                    topic,
+                    payload,
+                    frigate_base_url,
+                    ring_snapshot_url_template,
+                    ha_entity_states,
+                ) {
                     Some(CameraMqttAction::StartNotify { agent_name }) => {
                         let title = format!("{agent_name} camera motion detected");
                         let _ = handle
@@ -6108,7 +6307,13 @@ mod camera_topic_tests {
     #[test]
     fn parse_kerberos_camera_event_unchanged() {
         let payload = r#"{"agent_name":"Porch","video_url":"http://cam/clip.mp4","timestamp":"t"}"#;
-        let ev = expect_open_clip(parse_camera_mqtt_payload(payload, &None));
+        let ev = expect_open_clip(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            payload,
+            &None,
+            &None,
+            &None,
+        ));
         assert_eq!(ev.agent_name, "Porch");
         assert_eq!(ev.video_url, "http://cam/clip.mp4");
     }
@@ -6125,7 +6330,13 @@ mod camera_topic_tests {
             "after":{"id":"abc","camera":"front","label":"person","has_clip":true}
         }"#;
         let base = Some("http://192.168.151.21:5005".to_string());
-        let ev = expect_open_clip(parse_camera_mqtt_payload(payload, &base));
+        let ev = expect_open_clip(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            payload,
+            &base,
+            &None,
+            &None,
+        ));
         assert_eq!(ev.agent_name, "Frigate Front");
         assert_eq!(
             ev.video_url,
@@ -6145,7 +6356,13 @@ mod camera_topic_tests {
             "after":{"id":"abc","camera":"front","label":"person","has_clip":false}
         }"#;
         let base = Some("http://192.168.151.21:5005".to_string());
-        let agent = expect_start_notify(parse_camera_mqtt_payload(payload, &base));
+        let agent = expect_start_notify(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            payload,
+            &base,
+            &None,
+            &None,
+        ));
         assert_eq!(agent, "Frigate Front");
     }
 
@@ -6159,7 +6376,13 @@ mod camera_topic_tests {
             "type":"new",
             "after":{"id":"abc","camera":"front","has_clip":false}
         }"#;
-        let agent = expect_start_notify(parse_camera_mqtt_payload(payload, &None));
+        let agent = expect_start_notify(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            payload,
+            &None,
+            &None,
+            &None,
+        ));
         assert_eq!(agent, "Frigate Front");
     }
 
@@ -6174,11 +6397,12 @@ mod camera_topic_tests {
             "after":{"id":"abc","camera":"front","has_clip":false}
         }"#;
         assert!(matches!(
-            parse_camera_mqtt_payload(payload, &None),
+            parse_camera_mqtt_payload("kerberos/desktop/events", payload, &None, &None, &None),
             Some(CameraMqttAction::StartNotify { .. })
         ));
         assert!(
-            parse_camera_mqtt_payload(payload, &None).is_none(),
+            parse_camera_mqtt_payload("kerberos/desktop/events", payload, &None, &None, &None)
+                .is_none(),
             "same Frigate event id must not start-notify twice"
         );
     }
@@ -6198,8 +6422,20 @@ mod camera_topic_tests {
             "type":"end",
             "after":{"id":"abc","camera":"front","has_clip":true}
         }"#;
-        expect_start_notify(parse_camera_mqtt_payload(new_payload, &base));
-        let ev = expect_open_clip(parse_camera_mqtt_payload(end_payload, &base));
+        expect_start_notify(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            new_payload,
+            &base,
+            &None,
+            &None,
+        ));
+        let ev = expect_open_clip(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            end_payload,
+            &base,
+            &None,
+            &None,
+        ));
         assert_eq!(
             ev.video_url,
             "http://192.168.151.21:5005/api/events/abc/clip.mp4"
@@ -6226,15 +6462,17 @@ mod camera_topic_tests {
             "after":{"id":"evt-adhuwv","camera":"front","has_clip":true}
         }"#;
         assert!(matches!(
-            parse_camera_mqtt_payload(first, &base),
+            parse_camera_mqtt_payload("kerberos/desktop/events", first, &base, &None, &None),
             Some(CameraMqttAction::OpenClip(_))
         ));
         assert!(
-            parse_camera_mqtt_payload(same_id, &base).is_none(),
+            parse_camera_mqtt_payload("kerberos/desktop/events", same_id, &base, &None, &None)
+                .is_none(),
             "same Frigate event id must not open twice"
         );
         assert!(
-            parse_camera_mqtt_payload(sibling, &base).is_none(),
+            parse_camera_mqtt_payload("kerberos/desktop/events", sibling, &base, &None, &None)
+                .is_none(),
             "overlapping sibling event on same camera must be suppressed"
         );
     }
@@ -6253,7 +6491,7 @@ mod camera_topic_tests {
         let base = Some("http://192.168.151.21:5005".to_string());
         assert!(
             !matches!(
-                parse_camera_mqtt_payload(payload, &base),
+                parse_camera_mqtt_payload("kerberos/desktop/events", payload, &base, &None, &None),
                 Some(CameraMqttAction::OpenClip(_))
             ),
             "Frigate type=new must not open a clip"
@@ -6270,7 +6508,10 @@ mod camera_topic_tests {
             "after":{"id":"xyz","camera":"driveway","has_clip":true}
         }"#;
         let base = Some("http://frigate.local:5000/".to_string());
-        assert!(parse_camera_mqtt_payload(payload, &base).is_none());
+        assert!(
+            parse_camera_mqtt_payload("kerberos/desktop/events", payload, &base, &None, &None)
+                .is_none()
+        );
     }
 
     #[test]
@@ -6281,7 +6522,10 @@ mod camera_topic_tests {
             "after":{"id":"xyz","camera":"driveway","has_clip":false}
         }"#;
         let base = Some("http://frigate.local:5000/".to_string());
-        assert!(parse_camera_mqtt_payload(payload, &base).is_none());
+        assert!(
+            parse_camera_mqtt_payload("kerberos/desktop/events", payload, &base, &None, &None)
+                .is_none()
+        );
     }
 
     #[test]
@@ -6290,8 +6534,107 @@ mod camera_topic_tests {
             "type":"end",
             "after":{"id":"abc","camera":"front","has_clip":true}
         }"#;
-        assert!(parse_camera_mqtt_payload(payload, &None).is_none());
-        assert!(parse_camera_mqtt_payload(payload, &Some("".to_string())).is_none());
+        assert!(
+            parse_camera_mqtt_payload("kerberos/desktop/events", payload, &None, &None, &None)
+                .is_none()
+        );
+        assert!(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            payload,
+            &Some("".to_string()),
+            &None,
+            &None
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn parse_ring_motion_on_with_template_opens_snapshot() {
+        let _serial = RING_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_ring_dedupe_for_tests();
+        let topic = "ring/18d65208-6816-4bbe-bf09-310b7a201feb/camera/54e019cac69d/motion/state";
+        let template =
+            Some("http://ha:8123/api/camera_proxy/camera.front_door_snapshot".to_string());
+        let ev = expect_open_clip(parse_camera_mqtt_payload(
+            topic, "ON", &None, &template, &None,
+        ));
+        assert_eq!(ev.agent_name, "Ring Motion (54e019cac69d)");
+        assert_eq!(
+            ev.video_url,
+            "http://ha:8123/api/camera_proxy/camera.front_door_snapshot"
+        );
+    }
+
+    #[test]
+    fn parse_ring_motion_off_ignored() {
+        let _serial = RING_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_ring_dedupe_for_tests();
+        let topic = "ring/18d65208-6816-4bbe-bf09-310b7a201feb/camera/54e019cac69d/motion/state";
+        assert!(parse_camera_mqtt_payload(topic, "OFF", &None, &None, &None).is_none());
+    }
+
+    #[test]
+    fn parse_ring_ding_without_template_is_start_notify() {
+        let _serial = RING_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_ring_dedupe_for_tests();
+        let topic = "ring/18d65208-6816-4bbe-bf09-310b7a201feb/camera/54e019cac69d/ding/state";
+        let agent =
+            expect_start_notify(parse_camera_mqtt_payload(topic, "ON", &None, &None, &None));
+        assert_eq!(agent, "Ring Ding (54e019cac69d)");
+    }
+
+    #[test]
+    fn parse_ring_template_placeholders() {
+        let _serial = RING_DEDUPE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_ring_dedupe_for_tests();
+        let topic = "ring/loc-1/camera/dev-2/motion/state";
+        let template = Some("http://media/{location_id}/{device_id}/{event}.jpg".to_string());
+        let ev = expect_open_clip(parse_camera_mqtt_payload(
+            topic, "on", &None, &template, &None,
+        ));
+        assert_eq!(ev.video_url, "http://media/loc-1/dev-2/motion.jpg");
+    }
+
+    #[test]
+    fn camera_topic_matches_ring_wildcard() {
+        let cfg = Some(
+            "kerberos/desktop/events;ring/+/camera/+/motion/state;ring/+/camera/+/ding/state"
+                .to_string(),
+        );
+        assert!(camera_topic_matches(
+            "ring/18d65208-6816-4bbe-bf09-310b7a201feb/camera/54e019cac69d/motion/state",
+            &cfg
+        ));
+        assert!(camera_topic_matches(
+            "ring/18d65208-6816-4bbe-bf09-310b7a201feb/camera/54e019cac69d/ding/state",
+            &cfg
+        ));
+        assert!(!camera_topic_matches(
+            "ring/18d65208-6816-4bbe-bf09-310b7a201feb/camera/54e019cac69d/snapshot/image",
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn parse_ring_does_not_break_kerberos() {
+        let payload = r#"{"agent_name":"Porch","video_url":"http://cam/clip.mp4"}"#;
+        let ev = expect_open_clip(parse_camera_mqtt_payload(
+            "kerberos/desktop/events",
+            payload,
+            &None,
+            &Some("http://ha/ignored".to_string()),
+            &None,
+        ));
+        assert_eq!(ev.agent_name, "Porch");
+        assert_eq!(ev.video_url, "http://cam/clip.mp4");
     }
 }
 

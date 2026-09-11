@@ -416,6 +416,21 @@
                     {{ $t('config.frigateBaseUrlHelp') }}
                   </p>
                 </div>
+                <div v-if="config.camera_enabled" class="flex flex-col gap-1">
+                  <label for="ring_snapshot_url_template" class="classic-label px-1">{{
+                    $t('config.ringSnapshotUrlTemplate')
+                  }}</label>
+                  <input
+                    id="ring_snapshot_url_template"
+                    v-model="config.ring_snapshot_url_template"
+                    type="text"
+                    class="classic-input w-full"
+                    :placeholder="$t('config.ringSnapshotUrlTemplatePlaceholder')"
+                  />
+                  <p class="text-[10px] text-muted px-1 italic">
+                    {{ $t('config.ringSnapshotUrlTemplateHelp') }}
+                  </p>
+                </div>
                 <label
                   class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
                 >

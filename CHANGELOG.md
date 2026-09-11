@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Ring-MQTT camera motion/ding handling via HA MQTT `camera_topic` wildcards and optional
+  `ring_snapshot_url_template` (HTTP snapshot / HA camera_proxy). See `docs/ring-mqtt.md`.
+
 ## [2.5.31] - 2026-09-08
 
 ### Fixed
