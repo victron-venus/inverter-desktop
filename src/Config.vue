@@ -1134,6 +1134,10 @@
                 v-for="e in filteredDiscoveredEntities"
                 :key="e.entity_id"
                 @click="toggleSelection(e.entity_id)"
+                @keydown.enter="toggleSelection(e.entity_id)"
+                @keydown.space.prevent="toggleSelection(e.entity_id)"
+                role="button"
+                tabindex="0"
                 class="p-2 rounded border border-transparent cursor-pointer transition-all flex items-center justify-between group"
                 :class="
                   selectedDiscovery.includes(e.entity_id)

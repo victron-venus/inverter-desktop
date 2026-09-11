@@ -153,6 +153,10 @@
       <div
         class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="sensorsExpanded = !sensorsExpanded"
+        @keydown.enter="sensorsExpanded = !sensorsExpanded"
+        @keydown.space.prevent="sensorsExpanded = !sensorsExpanded"
+        role="button"
+        tabindex="0"
       >
         <Gauge :size="10" /> {{ $t('sections.sensors') }} ({{ haSensors.length }})
         <span class="ml-auto text-[10px]">{{ sensorsExpanded ? '▾' : '▸' }}</span>
@@ -178,6 +182,10 @@
       <div
         class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="numbersExpanded = !numbersExpanded"
+        @keydown.enter="numbersExpanded = !numbersExpanded"
+        @keydown.space.prevent="numbersExpanded = !numbersExpanded"
+        role="button"
+        tabindex="0"
       >
         <Sliders :size="10" /> {{ $t('sections.numbers') }} ({{ haNumbers.length }})
         <span class="ml-auto text-[10px]">{{ numbersExpanded ? '▾' : '▸' }}</span>
@@ -217,6 +225,10 @@
       <div
         class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="coversExpanded = !coversExpanded"
+        @keydown.enter="coversExpanded = !coversExpanded"
+        @keydown.space.prevent="coversExpanded = !coversExpanded"
+        role="button"
+        tabindex="0"
       >
         <Blinds :size="10" /> {{ $t('sections.covers') }} ({{ haCovers.length }})
         <span class="ml-auto text-[10px]">{{ coversExpanded ? '▾' : '▸' }}</span>
@@ -269,6 +281,10 @@
       <div
         class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="mediaExpanded = !mediaExpanded"
+        @keydown.enter="mediaExpanded = !mediaExpanded"
+        @keydown.space.prevent="mediaExpanded = !mediaExpanded"
+        role="button"
+        tabindex="0"
       >
         <Play :size="10" /> {{ $t('sections.media') }} ({{ haMediaPlayers.length }})
         <span class="ml-auto text-[10px]">{{ mediaExpanded ? '▾' : '▸' }}</span>
@@ -412,6 +428,10 @@
       <div
         class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="scenesExpanded = !scenesExpanded"
+        @keydown.enter="scenesExpanded = !scenesExpanded"
+        @keydown.space.prevent="scenesExpanded = !scenesExpanded"
+        role="button"
+        tabindex="0"
       >
         <Sparkles :size="10" /> {{ $t('sections.scenes') }} ({{ haScenes.length }})
         <span class="ml-auto text-[10px]">{{ scenesExpanded ? '▾' : '▸' }}</span>
