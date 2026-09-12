@@ -648,9 +648,31 @@ pub fn start_gateway_client(
 }
 
 #[cfg(test)]
+pub(crate) fn idle_test_client() -> GatewayClient {
+    GatewayClient {
+        state: Arc::new(Mutex::new(InverterState::default())),
+        stop: Arc::new(AtomicBool::new(false)),
+        handle: Mutex::new(None),
+        base: String::new(),
+        access_client_id: String::new(),
+        access_client_secret: String::new(),
+        api_token: String::new(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn stopping_idle_client_sets_shutdown_and_is_idempotent() {
+        let client = idle_test_client();
+        client.stop();
+        client.stop();
+        assert!(client.stop.load(Ordering::SeqCst));
+        assert!(client.handle.lock().unwrap().is_none());
+    }
 
     #[test]
     fn maps_core_tiles() {
