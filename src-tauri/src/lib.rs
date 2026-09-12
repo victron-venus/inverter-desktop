@@ -328,6 +328,8 @@ struct DiscoveredEntity {
 // Global state for the MQTT clients
 struct MqttState(Arc<Mutex<Option<MqttClient>>>);
 struct GatewayState(Arc<Mutex<Option<GatewayClient>>>);
+#[derive(Default)]
+struct InverterLifecycle(Mutex<()>);
 struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
 pub(crate) struct HaEntityStates(pub(crate) Arc<Mutex<HashMap<String, ha_api::HaEntityEntry>>>);
 
@@ -500,6 +502,42 @@ impl Default for FullConfig {
             setup_completed: false,
         }
     }
+}
+
+// Clear both owned inverter slots. The HA camera client has an independent lifetime.
+fn stop_inverter_clients(
+    mqtt: &MqttState,
+    gateway: &GatewayState,
+    lifecycle: &InverterLifecycle,
+) -> Result<(), String> {
+    let _lifecycle = lifecycle
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
+    let mut gateway_guard = gateway
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
+    let mut mqtt_guard = mqtt
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
+    if let Some(client) = gateway_guard.take() {
+        client.stop();
+    }
+    if let Some(client) = mqtt_guard.take() {
+        client.stop();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn disconnect_inverter(
+    mqtt_client: State<MqttState>,
+    gateway_client: State<GatewayState>,
+    lifecycle: State<InverterLifecycle>,
+) -> Result<(), String> {
+    stop_inverter_clients(&mqtt_client, &gateway_client, &lifecycle)
 }
 
 #[tauri::command]
@@ -1086,7 +1124,13 @@ async fn connect_mqtt(
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
+    lifecycle: State<'_, InverterLifecycle>,
 ) -> Result<(), String> {
+    // Serialize shutdown, startup and slot installation across Tauri command threads.
+    let _lifecycle = lifecycle
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     // Drop/stop any previous client first so its reconnect loop cannot keep
     // discovering the portal (xN) and racing the new connection.
     {
@@ -1143,6 +1187,12 @@ async fn connect_gateway(
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
 ) -> Result<(), String> {
+    let lifecycle = app.state::<InverterLifecycle>();
+    // Serialize shutdown, startup and slot installation across Tauri command threads.
+    let _lifecycle = lifecycle
+        .0
+        .lock()
+        .map_err(|e| format!("Internal error: {}", e))?;
     let host_for_log = reqwest::Url::parse(&url)
         .ok()
         .and_then(|u| u.host_str().map(|h| h.to_string()))
@@ -1170,7 +1220,7 @@ async fn connect_gateway(
             old.stop();
         }
         let client = gateway::start_gateway_client(
-            app,
+            app.clone(),
             url,
             access_client_id,
             access_client_secret,
@@ -2217,6 +2267,7 @@ pub fn run() {
         .manage(mqtt_state)
         .manage(ha_mqtt_state)
         .manage(gateway_state)
+        .manage(InverterLifecycle::default())
         .manage(ha_entity_states);
 
     #[cfg(desktop)]
@@ -2231,6 +2282,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             get_state,
+            disconnect_inverter,
             perform_action,
             connect_mqtt,
             connect_gateway,
@@ -2824,5 +2876,62 @@ mod encryption_key_file_tests {
         key[0] = 0xab;
         let b64 = general_purpose::STANDARD.encode(key);
         assert_eq!(decode_encryption_key_b64(&b64).unwrap(), key);
+    }
+}
+
+#[cfg(test)]
+mod inverter_disconnect_tests {
+    use super::*;
+
+    #[test]
+    fn disconnect_waits_for_in_flight_startup_then_removes_its_client() {
+        let mqtt = MqttState(Arc::new(Mutex::new(None)));
+        let gateway = GatewayState(Arc::new(Mutex::new(None)));
+        let lifecycle = InverterLifecycle::default();
+        std::thread::scope(|scope| {
+            let startup_guard = lifecycle.0.lock().unwrap();
+            let (attempting, attempted) = std::sync::mpsc::channel();
+            let (finished, done) = std::sync::mpsc::channel();
+            let mqtt_ref = &mqtt;
+            let gateway_ref = &gateway;
+            let lifecycle_ref = &lifecycle;
+            scope.spawn(move || {
+                attempting.send(()).unwrap();
+                stop_inverter_clients(mqtt_ref, gateway_ref, lifecycle_ref).unwrap();
+                finished.send(()).unwrap();
+            });
+            attempted.recv().unwrap();
+            assert!(done.try_recv().is_err());
+            // The earlier startup owns the lifecycle lock until its client is installed.
+            *mqtt.0.lock().unwrap() = Some(MqttClient::new(
+                "localhost".into(),
+                1883,
+                None,
+                None,
+                "pending-start-test".into(),
+            ));
+            drop(startup_guard);
+            done.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        });
+        assert!(mqtt.0.lock().unwrap().is_none());
+        assert!(gateway.0.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn disconnect_removes_both_owned_clients_and_can_repeat() {
+        // Construct actual clients without starting a broker connection or HTTP task.
+        let mqtt = MqttState(Arc::new(Mutex::new(Some(MqttClient::new(
+            "localhost".into(),
+            1883,
+            None,
+            None,
+            "disconnect-test".into(),
+        )))));
+        let gateway = GatewayState(Arc::new(Mutex::new(Some(gateway::idle_test_client()))));
+        stop_inverter_clients(&mqtt, &gateway, &InverterLifecycle::default()).unwrap();
+        assert!(mqtt.0.lock().unwrap().is_none());
+        assert!(gateway.0.lock().unwrap().is_none());
+        stop_inverter_clients(&mqtt, &gateway, &InverterLifecycle::default()).unwrap();
     }
 }
