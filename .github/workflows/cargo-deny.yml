@@ -1,6 +1,7 @@
 name: Cargo Security Audit
 
 on:
+  workflow_call: {}
   push:
     branches: [main]
   pull_request:
@@ -11,8 +12,6 @@ on:
 permissions:
   contents: read
   security-events: write
-  issues: write
-  pull-requests: write
 
 jobs:
   cargo-deny:
@@ -66,16 +65,3 @@ jobs:
         with:
           sarif_file: src-tauri/target/deny/cargo-deny.sarif
           category: cargo-deny
-
-      - name: Comment PR with results
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '⚠️ **cargo-deny found issues!** Please review the security/license scan results in the Actions tab.'
-            })

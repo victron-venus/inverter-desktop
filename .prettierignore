@@ -15,3 +15,9 @@ pnpm-lock.yaml
 # Generated / binary assets
 public/
 src/assets/
+
+# Policy-generated files: install_release.py --check verifies their exact output.
+/.github/workflows/quality-gate.yml
+/.github/workflows/release-pipeline.yml
+/docs/release-workflow.md
+/RELEASING.md
