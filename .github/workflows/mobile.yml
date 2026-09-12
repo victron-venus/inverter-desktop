@@ -36,7 +36,7 @@ jobs:
           targets: aarch64-apple-ios
       - name: Get version
         id: version
-        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Init iOS project
         env:
@@ -73,7 +73,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-          git config --global --add safe.directory $PWD
+          git config --global --add safe.directory "$PWD"
 
       - name: Pre-build Rust library for iOS
         env:
@@ -153,18 +153,26 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: gradle
+          cache-jdk: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          cache-dependency-path: |
+            src-tauri/gen/android/**/*.gradle*
+            src-tauri/gen/android/**/*.properties
+            src-tauri/gen/android/**/gradle.lockfile
+            pnpm-lock.yaml
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - name: Install required Android SDK components (compileSdk 36, build-tools 34.0.0)
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" \
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
             "platforms;android-36" \
             "build-tools;34.0.0" \
             "platform-tools" 2>&1 | tail -5
           echo "✓ Android SDK components installed"
       - name: Get version
         id: version
-        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install system deps
         run: |
@@ -172,6 +180,20 @@ jobs:
           sudo apt-get install -y libssl-dev
       - name: Init Android project
         run: pnpm tauri android init --ci
+      - name: Fingerprint Android NDK installations
+        id: ndk-cache
+        shell: bash
+        run: |
+          # Tauri selects an installed NDK; invalidate native dependencies if any version changes.
+          fingerprint=$(sha256sum "$ANDROID_HOME"/ndk/*/source.properties | sha256sum | cut -d' ' -f1)
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+      - name: Cache Android Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          key: android-ndk-${{ steps.ndk-cache.outputs.fingerprint }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST ANDROID NDK
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build Android
         run: pnpm tauri android build --ci
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
