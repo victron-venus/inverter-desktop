@@ -133,6 +133,10 @@ sudo rpm -i inverter-dashboard_*.rpm
 
 ---
 
+### Google Play preparation
+
+Maintainers can build a separately upload-key-signed Android App Bundle with the manual [Google Play workflow](docs/google-play.md). Existing GitHub APK signing remains unchanged; Play enrollment must preserve the existing app signing certificate for cross-store upgrades.
+
 ### iOS Installation
 
 Starting with 2.5.40, the iOS app and build versions match the release; earlier IPAs could report 1.0.0. The IPA remains unsigned for sideloading.
