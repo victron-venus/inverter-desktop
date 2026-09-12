@@ -208,6 +208,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build Android
         run: pnpm tauri android build --ci
+      - name: Verify 64-bit Android load and RELRO alignment
+        run: python3 scripts/android/check_native_alignment.py src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: inverter-dashboard-android-v${{ steps.version.outputs.version }}

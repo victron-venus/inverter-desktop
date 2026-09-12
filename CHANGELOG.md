@@ -8,6 +8,17 @@ All notable changes to this project will be documented in this file.
 - Ring-MQTT camera motion/ding handling via HA MQTT `camera_topic` wildcards and optional
   `ring_snapshot_url_template` (HTTP snapshot / HA camera_proxy). See `docs/ring-mqtt.md`.
 
+## [2.5.41] - 2026-09-12
+
+### Fixed
+- Android ARM64 and x86_64 builds align both load segments and RELRO boundaries
+  for 16 KB memory pages, preventing failures caused by the earlier ARM64 boundary.
+
+### Added
+- A manual Google Play upload-bundle workflow with a separate upload key, complete
+  signature verification, and native alignment checks. Existing GitHub APK signing
+  identity is preserved; the workflow does not submit the app to Google Play.
+
 ## [2.5.40] - 2026-09-12
 
 ### Fixed

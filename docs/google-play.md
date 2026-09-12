@@ -9,6 +9,8 @@ Run the workflow manually on `main` after configuring these repository secrets:
 - `PLAY_UPLOAD_KEY_ALIAS`: the exact upload key alias.
 - `PLAY_UPLOAD_KEY_PASSWORD`: the private key password.
 
+The signing CLI requires both input and output paths inside its current working directory (resolved symlink targets included), with `.aab` extensions. The upload alias must start with a letter or digit and contain only letters, digits, dots, underscores, or hyphens. It only invokes the three fixed JDK tools without a shell.
+
 Create and back up this upload key through your own secure key-management process. Never commit the keystore, passwords, or base64 value. The workflow decodes the key into a private temporary directory only during signing, removes it afterward, and uploads only the verified AAB and checksum. Register the upload certificate in Play Console before submitting its first bundle. No service-account credentials are required because submission remains manual.
 
 ## Preserve existing installations
@@ -26,9 +28,9 @@ These identify the actual published signer, not a verified company affiliation. 
 
 ## Package and compatibility checks
 
-The existing application ID is `com.alvit.inverter_dashboard`, with target/compile SDK 36. Tauri supplies release versions from the application metadata; the published 2.5.40 AAB has version code `2005040`. Before each Play upload, increase the application version through the normal release process and check the generated version code against all previously uploaded Play bundles. Rebuilding the same version does not produce a new version code, and the workflow cannot inspect Play's upload history.
+The existing application ID is `com.alvit.inverter_dashboard`, with target/compile SDK 36. Tauri supplies release versions from the application metadata; the published 2.5.40 AAB has version code `2005040`. Version 2.5.41 advances that code to `2005041` for the native alignment correction. Before each Play upload, increase the application version through the normal release process and check the generated version code against all previously uploaded Play bundles. Rebuilding the same version does not produce a new version code, and the workflow cannot inspect Play's upload history.
 
-The Play workflow uses AGP 8.11.0 and explicitly selects NDK r28. It verifies 16 KB ELF load-segment alignment for every packaged arm64/x86_64 library before signing. The current 2.5.40 AAB passes that check. This static check does not replace running the application on a 16 KB Android device/emulator, checking generated APK ZIP alignment with bundletool, or Play Console validation. It also does not certify store listing, privacy declarations, account eligibility, or policy acceptance.
+The Play workflow uses AGP 8.11.0 and explicitly selects NDK r28. Target-specific Cargo flags set both the maximum and common linker page size to 16384 for ARM64 and x86_64 Android builds, preserving Tauri's generated flags. These settings also apply to future GitHub APK builds without changing their signing key. It verifies 16 KB ELF load-segment alignment and the GNU_RELRO end boundary for every packaged arm64/x86_64 library before signing, and rejects missing RELRO protection. The published 2.5.40 AAB passes the LOAD check but fails the ARM64 RELRO boundary check; it is not a verified 16 KB candidate. This static check does not replace running the application on a 16 KB Android device/emulator, checking generated APK ZIP alignment with bundletool, or Play Console validation. It also does not certify store listing, privacy declarations, account eligibility, or policy acceptance.
 
 Run the hardware-free signing contracts with a JDK and Python:
 

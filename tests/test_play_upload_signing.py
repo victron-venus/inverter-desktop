@@ -94,6 +94,7 @@ class UploadSigningTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, str(SIGN), str(source), str(output)],
             env=dict(cls.environment, **changes),
+            cwd=cls.directory,
             capture_output=True,
             check=False,
         )
@@ -156,6 +157,28 @@ class UploadSigningTests(unittest.TestCase):
                     self.environment["PLAY_UPLOAD_STORE_PASSWORD"].encode(),
                     result.stdout + result.stderr,
                 )
+
+    def test_paths_cannot_escape_workspace(self):
+        """Reject parent paths and symlink escapes without writing outside the workspace."""
+        with tempfile.TemporaryDirectory() as outside:
+            external = Path(outside) / "external.aab"
+            external.write_bytes(self.source.read_bytes())
+            self.assertNotEqual(self.invoke(external, self.directory / "blocked.aab").returncode, 0)
+            destination = Path(outside) / "must-not-exist.aab"
+            self.assertNotEqual(self.invoke(self.source, destination).returncode, 0)
+            self.assertFalse(destination.exists())
+            link = self.directory / "escaped.aab"
+            link.symlink_to(external)
+            self.assertNotEqual(self.invoke(link, self.directory / "blocked.aab").returncode, 0)
+            self.assertFalse((self.directory / "blocked.aab").exists())
+
+    def test_option_like_alias_is_rejected(self):
+        """Reject alias text that could be interpreted as a jarsigner option."""
+        output = self.directory / "option.aab"
+        result = self.invoke(self.source, output, PLAY_UPLOAD_KEY_ALIAS="-J-version")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"Upload alias", result.stderr)
+        self.assertFalse(output.exists())
 
     def test_existing_output_and_signed_input_are_preserved(self):
         """Do not overwrite an artifact or reuse a previously signed bundle."""

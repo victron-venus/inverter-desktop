@@ -6,6 +6,39 @@ import struct
 import zipfile
 
 
+def check_load_segment(data, header, name):
+    """Validate the load alignment and file/virtual address congruence."""
+    file_offset, address = struct.unpack_from("<QQ", data, header + 8)
+    alignment = struct.unpack_from("<Q", data, header + 48)[0]
+    if alignment < 16384 or alignment & (alignment - 1) or (address - file_offset) % 16384:
+        raise ValueError(f"ELF load segment is not 16 KB compatible: {name}")
+
+
+def check_elf(data, name):
+    """Check load segments and RELRO end boundaries in a packaged 64-bit ELF."""
+    if data[:6] != b"\x7fELF\x02\x01":
+        raise ValueError(f"Expected a 64-bit little-endian ELF: {name}")
+    offset = struct.unpack_from("<Q", data, 32)[0]
+    size, count = struct.unpack_from("<HH", data, 54)
+    if size < 56:
+        raise ValueError(f"Invalid ELF program header size: {name}")
+    loads = relro = 0
+    for index in range(count):
+        header = offset + size * index
+        kind = struct.unpack_from("<I", data, header)[0]
+        if kind == 1:
+            check_load_segment(data, header, name)
+            loads += 1
+        elif kind == 0x6474E552:
+            address = struct.unpack_from("<Q", data, header + 16)[0]
+            memory_size = struct.unpack_from("<Q", data, header + 40)[0]
+            if (address + memory_size) % 16384:
+                raise ValueError(f"ELF RELRO end is not 16 KB aligned: {name}")
+            relro += 1
+    if not loads or not relro:
+        raise ValueError(f"Missing ELF load segments or RELRO protection: {name}")
+
+
 def check_bundle(path):
     """Inspect actual packaged ELF headers, without executing native code."""
     checked = []
@@ -16,28 +49,7 @@ def check_bundle(path):
             ):
                 continue
             data = bundle.read(name)
-            if data[:6] != b"\x7fELF\x02\x01":
-                raise ValueError(f"Expected a 64-bit little-endian ELF: {name}")
-            offset = struct.unpack_from("<Q", data, 32)[0]
-            size, count = struct.unpack_from("<HH", data, 54)
-            if size < 56:
-                raise ValueError(f"Invalid ELF program header size: {name}")
-            loads = 0
-            for index in range(count):
-                header = offset + size * index
-                if struct.unpack_from("<I", data, header)[0] != 1:
-                    continue
-                file_offset, address = struct.unpack_from("<QQ", data, header + 8)
-                alignment = struct.unpack_from("<Q", data, header + 48)[0]
-                if (
-                    alignment < 16384
-                    or alignment & (alignment - 1)
-                    or (address - file_offset) % 16384
-                ):
-                    raise ValueError(f"ELF load segment is not 16 KB compatible: {name}")
-                loads += 1
-            if not loads:
-                raise ValueError(f"Missing ELF load segments: {name}")
+            check_elf(data, name)
             checked.append(name)
     if not checked:
         raise ValueError("No 64-bit Android native libraries found")

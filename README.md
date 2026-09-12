@@ -135,7 +135,7 @@ sudo rpm -i inverter-dashboard_*.rpm
 
 ### Google Play preparation
 
-Maintainers can build a separately upload-key-signed Android App Bundle with the manual [Google Play workflow](docs/google-play.md). Existing GitHub APK signing remains unchanged; Play enrollment must preserve the existing app signing certificate for cross-store upgrades.
+Maintainers can build a separately upload-key-signed Android App Bundle with the manual [Google Play workflow](docs/google-play.md). Existing GitHub APK signing remains unchanged; Play enrollment must preserve the existing app signing certificate for cross-store upgrades. Android 64-bit builds now align both load segments and RELRO boundaries for 16 KB pages; the Play workflow checks the actual bundle before signing.
 
 ### iOS Installation
 

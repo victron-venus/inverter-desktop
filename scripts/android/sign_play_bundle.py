@@ -3,9 +3,9 @@
 
 import argparse
 import base64
-import binascii
 import hashlib
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -19,8 +19,10 @@ SECRETS = (
 )
 
 
-def run(command, **kwargs):
+def run(command):
     """Keep tool diagnostics private: keystore paths/aliases are not CI output."""
+    if command[0] not in {"keytool", "jarsigner", "java"}:
+        raise ValueError("Unsupported signing executable")
     child_env = dict(os.environ)
     child_env.pop("PLAY_UPLOAD_KEYSTORE_BASE64", None)
     result = subprocess.run(
@@ -29,7 +31,7 @@ def run(command, **kwargs):
         stderr=subprocess.PIPE,
         env=child_env,
         check=False,
-        **kwargs,
+        shell=False,
     )
     if result.returncode:
         raise ValueError(f"{Path(command[0]).name} failed; check the upload key and bundle")
@@ -40,6 +42,15 @@ def sign(source: Path, destination: Path):
     """Sign only a fresh output and verify its complete payload before publishing."""
     if any(not os.environ.get(name) for name in SECRETS):
         raise ValueError("All four PLAY_UPLOAD signing secrets must be configured")
+    workspace = Path.cwd().resolve()
+    source = source.resolve(strict=True)
+    destination = destination.resolve()
+    if not source.is_relative_to(workspace) or not destination.is_relative_to(workspace):
+        raise ValueError("Bundle paths must remain inside the current workspace")
+    if source.suffix != ".aab" or destination.suffix != ".aab" or not source.is_file():
+        raise ValueError("Expected regular .aab input and .aab output paths")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", os.environ["PLAY_UPLOAD_KEY_ALIAS"]):
+        raise ValueError("Upload alias must use letters, digits, dots, underscores or hyphens")
     if destination.exists():
         raise ValueError("Output already exists; refusing to replace it")
     with zipfile.ZipFile(source) as bundle:
@@ -56,7 +67,7 @@ def sign(source: Path, destination: Path):
             raise ValueError("Input must be unsigned; do not reuse the direct APK signing key")
     try:
         keystore = base64.b64decode(os.environ[SECRETS[0]], validate=True)
-    except (ValueError, binascii.Error) as error:
+    except ValueError as error:
         raise ValueError("Upload keystore is not valid base64") from error
     if not keystore:
         raise ValueError("Upload keystore is empty")

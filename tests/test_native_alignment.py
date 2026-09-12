@@ -27,13 +27,15 @@ class AlignmentTests(unittest.TestCase):
                 (16384, 4096, False),
             ):
                 with self.subTest(alignment=alignment, address=address):
-                    data = bytearray(120)
+                    data = bytearray(176)
                     data[:6] = b"\x7fELF\x02\x01"
                     struct.pack_into("<Q", data, 32, 64)
-                    struct.pack_into("<HH", data, 54, 56, 1)
+                    struct.pack_into("<HH", data, 54, 56, 2)
                     struct.pack_into("<I", data, 64, 1)
                     struct.pack_into("<Q", data, 80, address)
                     struct.pack_into("<Q", data, 112, alignment)
+                    struct.pack_into("<I", data, 120, 0x6474E552)
+                    struct.pack_into("<Q", data, 160, 16384)
                     with zipfile.ZipFile(path, "w") as bundle:
                         bundle.writestr("base/lib/arm64-v8a/libapp.so", data)
                     if accepted:
@@ -45,6 +47,24 @@ class AlignmentTests(unittest.TestCase):
                 pass
             with self.assertRaises(ValueError):
                 ALIGNMENT.check_bundle(path)
+
+    def test_relro_end_and_missing_protection(self):
+        """Reject 4/8 KB RELRO ends even when all LOAD headers are 16 KB aligned."""
+        for memory_size, present in ((16384, True), (4096, True), (8192, True), (16384, False)):
+            with self.subTest(memory_size=memory_size, present=present):
+                data = bytearray(176)
+                data[:6] = b"\x7fELF\x02\x01"
+                struct.pack_into("<Q", data, 32, 64)
+                struct.pack_into("<HH", data, 54, 56, 2)
+                struct.pack_into("<I", data, 64, 1)
+                struct.pack_into("<Q", data, 112, 16384)
+                struct.pack_into("<I", data, 120, 0x6474E552 if present else 0)
+                struct.pack_into("<Q", data, 160, memory_size)
+                if memory_size == 16384 and present:
+                    ALIGNMENT.check_elf(data, "fixture.so")
+                else:
+                    with self.assertRaises(ValueError):
+                        ALIGNMENT.check_elf(data, "fixture.so")
 
 
 if __name__ == "__main__":
