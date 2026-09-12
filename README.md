@@ -135,6 +135,8 @@ sudo rpm -i inverter-dashboard_*.rpm
 
 ### iOS Installation
 
+Starting with 2.5.40, the iOS app and build versions match the release; earlier IPAs could report 1.0.0. The IPA remains unsigned for sideloading.
+
 iOS requires sideloading since the app is not on the App Store. Two options:
 
 #### Option 1: AltStore (Recommended for personal use)
@@ -143,7 +145,7 @@ AltStore allows sideloading apps with a free Apple ID (no paid developer account
 
 **Prerequisites:**
 
-- iPhone/iPad running iOS 14 or later
+- iPhone/iPad running iOS 26 or later
 - A free [Apple ID](https://appleid.apple.com/) account
 - AltServer installed on your Mac or PC
 
