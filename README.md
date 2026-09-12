@@ -305,6 +305,8 @@ adb install inverter-dashboard-android.apk
 
 ## Configuration
 
+To disconnect inverter telemetry, clear the MQTT host and disable IGW (or remove its required connection settings), then save. This stops both inverter transports, clears their displayed telemetry, and cancels pending reconnect attempts. Home Assistant camera MQTT remains independently controlled by its own settings. Reconfigure either inverter transport to reconnect.
+
 Edit `src-tauri/capabilities/default.json` and `src/config.ts` for MQTT settings:
 
 ```typescript
