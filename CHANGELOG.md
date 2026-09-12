@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
 - Ring-MQTT camera motion/ding handling via HA MQTT `camera_topic` wildcards and optional
   `ring_snapshot_url_template` (HTTP snapshot / HA camera_proxy). See `docs/ring-mqtt.md`.
 
+## [2.5.39] - 2026-09-12
+
+### Fixed
+- Clearing the MQTT host with IGW disabled now stops both inverter transports and
+  clears their displayed telemetry. Home Assistant camera MQTT remains independent.
+- Pending startup, reconnect and configuration operations cannot revive a removed
+  inverter connection; callbacks from the previous session cannot overwrite new data.
+
 ## [2.5.31] - 2026-09-08
 
 ### Fixed
