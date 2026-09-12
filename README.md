@@ -540,3 +540,7 @@ For issues specific to:
 - **iOS installation**: Check AltStore/AltServer status and device trust settings
 - **Android installation**: Verify ADB connection and USB debugging enabled
 - **This project**: Open an issue in this repository
+
+## Privacy
+
+Read the [privacy policy](docs/privacy-policy.md) for information about local settings, configured services and your choices. Privacy and support contact: [alvit.work@gmail.com](mailto:alvit.work@gmail.com).
