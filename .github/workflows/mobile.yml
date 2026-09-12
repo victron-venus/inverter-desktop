@@ -38,6 +38,9 @@ jobs:
         id: version
         run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Test iOS package version validation
+        run: python3 -m unittest discover -s scripts -p test_ios_version.py
+
       - name: Init iOS project
         env:
           SERVER_ADDR_FILE: ''
@@ -102,6 +105,8 @@ jobs:
         env:
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          python3 scripts/ios_version.py sync \
+            src-tauri/gen/apple/inverter-dashboard_iOS/Info.plist --version "$TAURI_APP_VERSION"
           # Clean + custom DerivedData to avoid stale debug caches
           rm -rf "src-tauri/gen/apple/build/DerivedData"
           xcodebuild clean archive \
@@ -115,6 +120,8 @@ jobs:
             ARCHS=arm64
 
       - name: Package .ipa
+        env:
+          TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           XCA="src-tauri/gen/apple/build/InverterDesktop.xcarchive"
           APP_DIR="$XCA/Products/Applications"
@@ -122,6 +129,7 @@ jobs:
           cp -R "$APP_DIR/"*.app Payload/
           zip -qr "inverter-dashboard-ios.ipa" Payload
           rm -rf Payload
+          python3 scripts/ios_version.py verify inverter-dashboard-ios.ipa --version "$TAURI_APP_VERSION"
           echo "Created inverter-dashboard-ios.ipa"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

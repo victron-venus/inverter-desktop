@@ -29,19 +29,19 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "new_version=$version" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "new_version=$version" >> "$GITHUB_OUTPUT"
           elif git diff --name-only HEAD^ HEAD | grep -q "src-tauri/Cargo.toml"; then
             version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "new_version=$version" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "new_version=$version" >> "$GITHUB_OUTPUT"
           else
-            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
           fi
           if [[ "$version" =~ -(alpha|beta|rc)\.[0-9]+ || "$version" =~ - ]]; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
   release:
@@ -156,6 +156,10 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       # --------- iOS specific ---------
+      - name: Test iOS package version validation
+        if: matrix.type == 'ios'
+        run: python3 -m unittest discover -s scripts -p test_ios_version.py
+
       - name: iOS – init project
         if: matrix.type == 'ios'
         env:
@@ -219,6 +223,8 @@ jobs:
         env:
           TAURI_APP_VERSION: ${{ needs.check-version-change.outputs.new_version }}
         run: |
+          python3 scripts/ios_version.py sync \
+            src-tauri/gen/apple/inverter-dashboard_iOS/Info.plist --version "$TAURI_APP_VERSION"
           # Clean + custom DerivedData to avoid stale debug caches
           rm -rf "src-tauri/gen/apple/build/DerivedData"
           xcodebuild clean archive \
@@ -243,6 +249,7 @@ jobs:
           # .ipa is a zip archive with Payload/ at the root
           zip -qr "${{ github.workspace }}/inverter-dashboard-ios.ipa" Payload
           rm -rf Payload
+          python3 scripts/ios_version.py verify inverter-dashboard-ios.ipa --version "$TAURI_APP_VERSION"
           echo "Created inverter-dashboard-ios.ipa"
 
       - name: iOS – upload artifact to release
@@ -271,7 +278,7 @@ jobs:
       - name: Android – install required SDK components (compileSdk 36, build-tools 34.0.0)
         if: matrix.type == 'android'
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" \
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
             "platforms;android-36" \
             "build-tools;34.0.0" \
             "platform-tools" 2>&1 | tail -5
