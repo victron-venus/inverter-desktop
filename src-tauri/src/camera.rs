@@ -1,4 +1,6 @@
-use super::{load_config, FullConfig, CAMERA_VIDEO_LABEL_PREFIX};
+#[cfg(desktop)]
+use super::CAMERA_VIDEO_LABEL_PREFIX;
+use super::{load_config, FullConfig};
 use log::{info, warn};
 use std::time::Duration;
 use tauri::Manager;
