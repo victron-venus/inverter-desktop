@@ -1,7 +1,8 @@
 <template>
   <ErrorBoundary>
-    <div
+    <section
       id="app"
+      aria-label="Inverter dashboard"
       class="app-shell h-screen flex flex-col p-1.5 gap-1 select-none overflow-hidden"
       @contextmenu.prevent="onContextMenu"
     >
@@ -77,6 +78,7 @@
               :dishwasherRemainingTime="dishwasherRemainingTime"
               :homeButtons="homeButtons"
               :buttonStates="buttonStates"
+              :haConnected="haConnected"
               :haSensors="haSensors"
               :haNumbers="haNumbers"
               :haCovers="haCovers"
@@ -133,9 +135,6 @@
       <!-- First-run setup wizard -->
       <SetupWizard v-if="showSetupWizard" @complete="handleSetupComplete" />
 
-      <!-- Auth Screen Overlay -->
-      <AuthScreen v-if="showAuthScreen && !showSetupWizard" @authenticated="handleAuthenticated" />
-
       <!-- Toast Notification -->
       <div
         v-if="message"
@@ -144,7 +143,7 @@
       >
         {{ message }}
       </div>
-    </div>
+    </section>
   </ErrorBoundary>
 </template>
 
@@ -154,7 +153,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
-import AuthScreen from './components/AuthScreen.vue'
 import SetupWizard from './components/SetupWizard.vue'
 import BatterySolarPanel from './components/BatterySolarPanel.vue'
 import ChartPanel from './components/ChartPanel.vue'
@@ -167,7 +165,7 @@ import NotificationBanner from './components/NotificationBanner.vue'
 import SidePanel from './components/SidePanel.vue'
 import StatCards from './components/StatCards.vue'
 import StatusBar from './components/StatusBar.vue'
-import { checkForUpdates, checkForUpdatesSilent } from './composables/useAutoUpdate'
+import { checkForUpdates } from './composables/useAutoUpdate'
 import { addHistoryPoint, useChart } from './composables/useChart'
 import { notify, useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
@@ -250,8 +248,6 @@ const isWindowHidden = ref(false)
 
 const appVersion = ref('')
 const contextMenu = ref({ show: false, x: 0, y: 0 })
-const authToken = ref<string | null>(null)
-const showAuthScreen = ref(false)
 const showSetupWizard = ref(false)
 const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
@@ -267,13 +263,6 @@ function showError(msg: string) {
   messageType.value = 'error'
   setTimeout(clearMessage, 3000)
 }
-function handleAuthenticated(token: string) {
-  authToken.value = token
-  showAuthScreen.value = false
-  // Store token in session
-  sessionStorage.setItem('auth_token', token)
-}
-
 async function handleSetupComplete(cfg: AppConfig) {
   showSetupWizard.value = false
   appConfig.value = cfg
@@ -475,27 +464,6 @@ onMounted(async () => {
     showSetupWizard.value = true
   }
 
-  // Check if authentication is enabled
-  try {
-    if (cfg?.auth_enabled) {
-      // Check for existing session
-      const storedToken = sessionStorage.getItem('auth_token')
-      if (storedToken) {
-        const valid = await invoke<boolean>('auth_check', { token: storedToken })
-        if (valid) {
-          authToken.value = storedToken
-        } else {
-          sessionStorage.removeItem('auth_token')
-          showAuthScreen.value = true
-        }
-      } else {
-        showAuthScreen.value = true
-      }
-    }
-  } catch (e) {
-    logger.warn('Auth check failed:', e)
-  }
-
   // Defer MQTT/HA until setup wizard completes
   if (!showSetupWizard.value) {
     await connectMqtt()
@@ -509,9 +477,6 @@ onMounted(async () => {
     pumpSwitchState
   )
 
-  // Check for updates on startup (silent check)
-  checkForUpdatesSilent().catch((e) => logger.warn('Update check failed:', e))
-
   document.addEventListener('click', onDocumentClick)
 
   unlistenConfig = await listen<{ color_scheme?: string }>('config-saved', async (event) => {
@@ -522,8 +487,6 @@ onMounted(async () => {
       localStorage.setItem('theme', scheme)
     }
     await connectMqtt()
-    haEntityStates.value = {}
-    haEntityAttributes.value = {}
   })
 
   // Pause updates and charts when window is minimized/closed to tray

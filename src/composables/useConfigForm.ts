@@ -6,10 +6,12 @@ import { defaultConfig } from '../config'
 export function useConfigForm() {
   const config = reactive<AppConfig>({ ...defaultConfig })
   const saving = ref(false)
+  const configLoaded = ref(false)
   const message = ref('')
   const messageType = ref<'success' | 'error' | 'info'>('info')
 
   async function loadConfig() {
+    configLoaded.value = false
     try {
       const loaded = await invoke<AppConfig>('get_config')
       Object.assign(config, loaded)
@@ -33,9 +35,11 @@ export function useConfigForm() {
         }
       }
       message.value = ''
+      configLoaded.value = true
     } catch (e) {
       message.value = `Failed to load config: ${e}`
       messageType.value = 'error'
+      throw e
     }
     return config
   }
@@ -49,7 +53,8 @@ export function useConfigForm() {
       enabled: boolean
     }>,
     headerTogglesList: Array<{ id: string; label: string; entity: string }>
-  ) {
+  ): Promise<boolean> {
+    if (!configLoaded.value) return false
     haEntitiesList.forEach((e) => {
       if (!e.id && e.entity) e.id = e.entity.replace(/\./g, '_')
     })
@@ -64,9 +69,11 @@ export function useConfigForm() {
       await invoke('save_config', { config })
       message.value = 'Configuration saved successfully'
       messageType.value = 'success'
+      return true
     } catch (e) {
       message.value = `Failed to save config: ${e}`
       messageType.value = 'error'
+      return false
     } finally {
       saving.value = false
     }
@@ -85,6 +92,7 @@ export function useConfigForm() {
   return {
     config,
     defaultConfig,
+    configLoaded,
     saving,
     message,
     messageType,

@@ -63,16 +63,18 @@ export function useHA() {
   const haEntityStates = ref<Record<string, string>>({})
   const haEntityAttributes = ref<Record<string, Record<string, unknown>>>({})
   const haWsConnected = ref(false)
-  let unlistenHaUpdate: (() => void) | null = null
-  let unlistenHaConn: (() => void) | null = null
-  let unlistenHaFiltered: (() => void) | null = null
-
-  // Grace period: retain previous entity states for 15 seconds during
-  // transient WebSocket reconnects to prevent UI flicker / entity blinking.
+  let session = 0
+  let requestEpoch = 0
+  let connectionRevision = 0
+  let filteredRevision = 0
+  let entityRevision = 0
+  const entityRevisions = new Map<string, number>()
+  let listeners: Array<() => void> = []
+  let stopConfigWatch: (() => void) | null = null
+  let windowHidden = false
   const HA_GRACE_PERIOD_MS = 15_000
   let haGraceTimer: ReturnType<typeof setTimeout> | null = null
 
-  // Pre-filtered HA entity data from Rust (replaces 6 computed properties)
   const haSensors = ref<HaSensorDisplay[]>([])
   const haNumbers = ref<HaNumberDisplay[]>([])
   const haCovers = ref<HaCoverDisplay[]>([])
@@ -84,222 +86,236 @@ export function useHA() {
     const cfg = appConfig.value
     return !!(cfg?.ha_use_direct_api && cfg.ha_url && cfg.ha_longlived_token)
   })
+  const haConnected = computed(() =>
+    haEnabled.value ? haWsConnected.value : !!state.value.ha_connected
+  )
 
-  /** Entity IDs tracked for dashboard sections (appliances, water, EV, loads clamps) */
-  async function checkHaConnection() {
-    const cfg = appConfig.value
-    if (!cfg?.ha_url || !cfg?.ha_longlived_token) {
-      haWsConnected.value = false
-      return
-    }
-    try {
-      await invoke('test_ha_connection', {
-        url: cfg.ha_url,
-        port: cfg.ha_port || 8123,
-        token: cfg.ha_longlived_token,
-      })
-      haWsConnected.value = true
-    } catch {
-      haWsConnected.value = false
+  function clearHaState() {
+    haEntityStates.value = {}
+    haEntityAttributes.value = {}
+    entityRevisions.clear()
+    haSensors.value = []
+    haNumbers.value = []
+    haCovers.value = []
+    haMediaPlayers.value = []
+    haScenes.value = []
+    haWeather.value = null
+  }
+
+  function cancelGracePeriod() {
+    if (haGraceTimer) clearTimeout(haGraceTimer)
+    haGraceTimer = null
+  }
+
+  function applyConnectionStatus(connected: boolean) {
+    haWsConnected.value = connected
+    if (connected) {
+      cancelGracePeriod()
+    } else if (!haGraceTimer) {
+      // In-flight REST results from the old connection must not revive stale controls.
+      requestEpoch += 1
+      haGraceTimer = setTimeout(() => {
+        haGraceTimer = null
+        clearHaState()
+      }, HA_GRACE_PERIOD_MS)
     }
   }
 
-  const haConnected = computed(() => {
-    const cfg = appConfig.value
-    if (cfg?.ha_use_direct_api && cfg.ha_url && cfg.ha_longlived_token) {
-      return haWsConnected.value
-    }
-    return !!state.value.ha_connected
-  })
+  function applyFilteredData(data: HaFilteredData, snapshot = false) {
+    // Rust batches live sensor changes; markRaw avoids proxying the house inventory.
+    if (snapshot || data.refresh_sensors) haSensors.value = markRaw(data.sensors)
+    haNumbers.value = markRaw(data.numbers)
+    haCovers.value = markRaw(data.covers)
+    haMediaPlayers.value = markRaw(data.media_players)
+    haScenes.value = markRaw(data.scenes)
+    haWeather.value = data.weather ? markRaw(data.weather) : null
+  }
 
-  function storeEntityStates(
-    states: Array<{ entity_id: string; state: string; attributes?: Record<string, unknown> }>
-  ) {
-    for (const s of states) {
-      haEntityStates.value = { ...haEntityStates.value, [s.entity_id]: s.state }
-      if (s.attributes) {
-        haEntityAttributes.value = { ...haEntityAttributes.value, [s.entity_id]: s.attributes }
+  function trackedEntityIds() {
+    const ids = new Set(configuredSectionEntities(appConfig))
+    const toggles =
+      appConfig.value?.header_toggles_config || state.value.ui_config?.header_toggles || []
+    for (const toggle of toggles) {
+      if (
+        toggle.entity &&
+        !isInverterControlFlag(toggle.entity) &&
+        !isInverterControlFlag(toggle.id)
+      ) {
+        ids.add(toggle.entity)
       }
     }
+    const buttons =
+      appConfig.value?.ha_entities
+        ?.filter((entity) => entity.enabled)
+        .map((entity) => entity.entity) ||
+      state.value.ui_config?.home_buttons?.map((button) => button.entity) ||
+      []
+    for (const entity of buttons) {
+      if (entity && !isInverterControlFlag(entity)) ids.add(entity)
+    }
+    return [...ids]
   }
 
-  async function fetchHaStates() {
+  function storeEntityStates(
+    states: Array<{ entity_id: string; state: string; attributes?: Record<string, unknown> }>,
+    startedAtRevision: number
+  ) {
+    const nextStates = { ...haEntityStates.value }
+    const nextAttributes = { ...haEntityAttributes.value }
+    for (const entry of states) {
+      // A late HTTP snapshot must not overwrite a newer WebSocket value.
+      if ((entityRevisions.get(entry.entity_id) ?? 0) > startedAtRevision) continue
+      nextStates[entry.entity_id] = entry.state
+      if (entry.attributes) nextAttributes[entry.entity_id] = entry.attributes
+    }
+    haEntityStates.value = nextStates
+    haEntityAttributes.value = nextAttributes
+  }
+
+  async function fetchHaStates(entityIds?: string[]) {
     const cfg = appConfig.value
-    if (!cfg?.ha_url || !cfg?.ha_longlived_token) return
+    if (!haEnabled.value || !cfg || (entityIds && entityIds.length === 0)) return
+    const current = session
+    const epoch = requestEpoch
+    const revision = entityRevision
     try {
       const states = await invoke<
-        Array<{
-          entity_id: string
-          state: string
-          attributes?: Record<string, unknown>
-        }>
-      >('get_ha_appliance_states', {
+        Array<{ entity_id: string; state: string; attributes?: Record<string, unknown> }>
+      >(entityIds ? 'get_ha_entity_states' : 'get_ha_appliance_states', {
         url: cfg.ha_url,
         port: cfg.ha_port || 8123,
         token: cfg.ha_longlived_token,
+        ...(entityIds ? { entityIds } : {}),
       })
-      storeEntityStates(states)
-    } catch (e) {
-      logger.warn('Failed to fetch HA states:', e)
+      if (current === session && epoch === requestEpoch && haEnabled.value) {
+        storeEntityStates(states, revision)
+      }
+    } catch (error) {
+      logger.warn('Failed to fetch HA states:', error)
     }
   }
 
-  /** Fetch current state for specific entity IDs (used for buttons/switches) */
-  async function fetchHaEntityStates(entityIds: string[]) {
-    const cfg = appConfig.value
-    if (!cfg?.ha_url || !cfg?.ha_longlived_token || entityIds.length === 0) return
+  async function fetchFilteredSnapshot() {
+    if (!haEnabled.value || windowHidden) return
+    const current = session
+    const epoch = requestEpoch
+    const revision = filteredRevision
     try {
-      const states = await invoke<
-        Array<{
-          entity_id: string
-          state: string
-          attributes?: Record<string, unknown>
-        }>
-      >('get_ha_entity_states', {
-        url: cfg.ha_url,
-        port: cfg.ha_port || 8123,
-        token: cfg.ha_longlived_token,
-        entityIds,
-      })
-      storeEntityStates(states)
-    } catch (e) {
-      logger.warn('Failed to fetch HA entity states:', e)
+      const filtered = await invoke<HaFilteredData>('get_ha_filtered_data')
+      if (
+        current === session &&
+        epoch === requestEpoch &&
+        revision === filteredRevision &&
+        haEnabled.value
+      ) {
+        applyFilteredData(filtered, true)
+      }
+    } catch (error) {
+      logger.warn('Failed to refresh HA filtered snapshot:', error)
     }
   }
 
-  let windowHidden = false
+  async function checkHaConnection() {
+    if (!haEnabled.value) return
+    const current = session
+    const epoch = requestEpoch
+    const revision = connectionRevision
+    try {
+      const connected = await invoke<boolean>('get_ha_connection_status')
+      if (current === session && epoch === requestEpoch && revision === connectionRevision) {
+        applyConnectionStatus(connected)
+      }
+    } catch (error) {
+      if (current === session && epoch === requestEpoch && revision === connectionRevision) {
+        applyConnectionStatus(false)
+      }
+      logger.warn('Failed to get HA WebSocket status:', error)
+    }
+  }
+
+  async function refreshHa() {
+    await Promise.all([fetchHaStates(), fetchHaStates(trackedEntityIds()), fetchFilteredSnapshot()])
+  }
 
   async function setWindowHidden(hidden: boolean) {
     windowHidden = hidden
+    const current = session
     try {
       await invoke('set_window_hidden', { hidden })
-      if (!hidden) {
-        fetchHaStates()
-        const applianceEntities = configuredSectionEntities(appConfig)
-        if (applianceEntities.length > 0) fetchHaEntityStates(applianceEntities)
-        // Merge — never assign get_state raw (serde nulls would wipe tiles).
+      if (!hidden && current === session) {
+        await refreshHa()
+        if (current !== session) return
         const initial = await invoke<InverterState>('get_state')
-        if (initial) {
-          applyInverterState(initial)
-        }
-        // Sensors are not live-ticked (WebKit freeze); refresh snapshot on show.
-        try {
-          const filtered = await invoke<HaFilteredData>('get_ha_filtered_data')
-          haSensors.value = markRaw(filtered.sensors)
-          haNumbers.value = markRaw(filtered.numbers)
-          haCovers.value = markRaw(filtered.covers)
-          haMediaPlayers.value = markRaw(filtered.media_players)
-          haScenes.value = markRaw(filtered.scenes)
-          haWeather.value = filtered.weather ? markRaw(filtered.weather) : null
-        } catch (e) {
-          logger.warn('Failed to refresh HA filtered snapshot:', e)
-        }
+        if (initial && current === session) applyInverterState(initial, { snapshot: true })
+        if (current === session) await checkHaConnection()
       }
-    } catch (e) {
-      logger.error('Failed to sync window state:', e)
+    } catch (error) {
+      logger.error('Failed to sync window state:', error)
     }
   }
 
   async function initHa() {
-    unlistenHaUpdate = await listen<{
-      entity_id: string
-      state: string
-      attributes?: Record<string, unknown>
-    }>('ha-state-update', (event) => {
-      if (windowHidden) return
-      const { entity_id, state: st, attributes } = event.payload
-      haEntityStates.value = { ...haEntityStates.value, [entity_id]: st }
-      if (attributes) {
-        haEntityAttributes.value = { ...haEntityAttributes.value, [entity_id]: attributes }
-      }
-    })
-
-    // Pre-filtered HA entity data from Rust (replaces 6 frontend computed properties)
-    unlistenHaFiltered = await listen<HaFilteredData>('ha-filtered-update', (event) => {
-      if (windowHidden) return
-      const data = event.payload
-      // markRaw: opaque display snapshots from Rust — avoid deep proxies.
-      // Sensors only refresh on connect/force (refresh_sensors); live ticks
-      // omit them so SidePanel does not re-render the whole house inventory.
-      if (data.refresh_sensors) {
-        haSensors.value = markRaw(data.sensors)
-      }
-      haNumbers.value = markRaw(data.numbers)
-      haCovers.value = markRaw(data.covers)
-      haMediaPlayers.value = markRaw(data.media_players)
-      haScenes.value = markRaw(data.scenes)
-      haWeather.value = data.weather ? markRaw(data.weather) : null
-    })
-
-    unlistenHaConn = await listen<boolean>('ha-connection-status', (event) => {
-      if (event.payload) {
-        // Reconnected — cancel any pending grace timer and keep states
-        if (haGraceTimer) {
-          clearTimeout(haGraceTimer)
-          haGraceTimer = null
-        }
-        haWsConnected.value = true
-        // On connect, fetch full state so buttons show correct state
-        fetchHaStates()
-      } else {
-        // Disconnected — start grace period before clearing states
-        haWsConnected.value = false
-        if (!haGraceTimer) {
-          haGraceTimer = setTimeout(() => {
-            haGraceTimer = null
-            haEntityStates.value = {}
-            haEntityAttributes.value = {}
-          }, HA_GRACE_PERIOD_MS)
-        }
-      }
-    })
-
-    // Fetch initial state on mount
-    await fetchHaStates()
-
-    // Inverter-control flags (only_charging, …) live on Cerbo MQTT
-    // inverter/state.booleans — do not fetch them from HA REST.
-
-    // Fetch dashboard section entities (washer/dryer/dishwasher/water/EV/clamps) immediately
-    const applianceEntities = configuredSectionEntities(appConfig)
-    if (applianceEntities.length > 0) {
-      await fetchHaEntityStates(applianceEntities)
+    cleanupHa()
+    const current = session
+    async function subscribe<T>(name: string, handler: (payload: T) => void) {
+      if (current !== session) return
+      const unlisten = await listen<T>(name, (event) => {
+        if (current === session && haEnabled.value) handler(event.payload)
+      })
+      if (current === session) listeners.push(unlisten)
+      else unlisten()
     }
-
-    // Check HA connection status via HTTP
-    await checkHaConnection()
-
-    // Watch for config/state changes to fetch dynamic entity IDs (home buttons, header toggles)
-    watch(
-      [appConfig, () => state.value.ui_config],
-      () => {
-        if (!haEnabled.value) return
-        const ids = new Set<string>()
-        // Dashboard section entities (washer/dryer/dishwasher/water/EV/clamps)
-        for (const entity of configuredSectionEntities(appConfig)) ids.add(entity)
-        // Header toggles from config or ui_config
-        const toggles =
-          appConfig.value?.header_toggles_config || state.value.ui_config?.header_toggles || []
-        for (const t of toggles) {
-          // Control flags are MQTT-only; skip HA REST fetches for them.
-          if (t.entity && !isInverterControlFlag(t.entity) && !isInverterControlFlag(t.id)) {
-            ids.add(t.entity)
+    await subscribe<{ entity_id: string; state: string; attributes?: Record<string, unknown> }>(
+      'ha-state-update',
+      (entry) => {
+        if (windowHidden || !entry.entity_id || typeof entry.state !== 'string') return
+        entityRevisions.set(entry.entity_id, ++entityRevision)
+        haEntityStates.value = { ...haEntityStates.value, [entry.entity_id]: entry.state }
+        if (entry.attributes) {
+          haEntityAttributes.value = {
+            ...haEntityAttributes.value,
+            [entry.entity_id]: entry.attributes,
           }
         }
-        // Home buttons from config or ui_config
-        const buttons =
-          appConfig.value?.ha_entities?.filter((e) => e.enabled).map((e) => e.entity) ||
-          state.value.ui_config?.home_buttons?.map((b) => b.entity) ||
-          []
-        for (const b of buttons) {
-          if (b && !isInverterControlFlag(b)) ids.add(b)
-        }
-        if (ids.size > 0) {
-          fetchHaEntityStates([...ids])
+      }
+    )
+    await subscribe<HaFilteredData>('ha-filtered-update', (data) => {
+      if (windowHidden) return
+      filteredRevision += 1
+      applyFilteredData(data)
+    })
+    await subscribe<boolean>('ha-connection-status', (connected) => {
+      connectionRevision += 1
+      applyConnectionStatus(connected)
+      if (connected) void refreshHa()
+    })
+    if (current !== session) return
+    stopConfigWatch = watch(
+      () =>
+        JSON.stringify([
+          appConfig.value?.ha_use_direct_api,
+          appConfig.value?.ha_url,
+          appConfig.value?.ha_port,
+          appConfig.value?.ha_longlived_token,
+          trackedEntityIds(),
+        ]),
+      () => {
+        requestEpoch += 1
+        cancelGracePeriod()
+        clearHaState()
+        haWsConnected.value = false
+        if (haEnabled.value) {
+          const epoch = requestEpoch
+          void refreshHa().then(() => {
+            if (current === session && epoch === requestEpoch) return checkHaConnection()
+          })
         }
       },
-      { deep: true, immediate: false }
+      { flush: 'sync' }
     )
+    // Subscribe first, then pull the cached snapshot: startup events may precede Vue mounting.
+    await refreshHa()
+    if (current === session) await checkHaConnection()
   }
 
   // Water / EV / active loads live in useMQTTState (Cerbo MQTT only).
@@ -473,13 +489,13 @@ export function useHA() {
   }
 
   function cleanupHa() {
-    if (unlistenHaUpdate) unlistenHaUpdate()
-    if (unlistenHaConn) unlistenHaConn()
-    if (unlistenHaFiltered) unlistenHaFiltered()
-    if (haGraceTimer) {
-      clearTimeout(haGraceTimer)
-      haGraceTimer = null
-    }
+    session += 1
+    requestEpoch += 1
+    for (const unlisten of listeners) unlisten()
+    listeners = []
+    stopConfigWatch?.()
+    stopConfigWatch = null
+    cancelGracePeriod()
   }
 
   const haLoadsForConfig = computed(() => {

@@ -45,8 +45,8 @@ describe('coerceBooleans (inline, matches useConnection.ts logic)', () => {
     }
     coerceBooleans(state)
     expect(state.dry_run).toBe(true)
-    expect(state.booleans!.x).toBe(true)
-    expect(state.booleans!.y).toBe(false)
+    expect(state.booleans?.x).toBe(true)
+    expect(state.booleans?.y).toBe(false)
   })
 
   it('handles missing booleans map', () => {

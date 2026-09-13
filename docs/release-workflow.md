@@ -116,3 +116,9 @@ projects receive the local client, whose contracts run in the toolkit. Update th
 References: [GitHub schedules](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
 [protected environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
 [artifact provenance](https://docs.github.com/en/rest/actions/artifacts).
+
+### Validation consistency
+
+Frontend checks and every native package use `pnpm install --frozen-lockfile --ignore-scripts` and the root `pnpm-lock.yaml`. `pnpm run build` runs `vue-tsc --noEmit` before Vite, checking Vue scripts and templates as well as TypeScript files. Run `pnpm run typecheck` for a fast type-only check.
+
+Mobile validation starts from the Quality gate for pull requests and the Release pipeline for main; `Mobile` remains manually runnable. Its job names and the required `CI gate` are preserved. Release packages are rebuilt separately for signing and artifact provenance.

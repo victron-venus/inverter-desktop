@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultConfig } from '../config'
 import { useConnection } from './useConnection'
-import { dataSource, mqttConnected, state } from './useInverterState'
+import {
+  dataSource,
+  mqttConnected,
+  state,
+  telemetry,
+  resetInverterState,
+  TELEMETRY_STALE_AFTER_MS,
+} from './useInverterState'
 
 const boundary = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), getConfig: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: boundary.invoke }))
@@ -46,11 +53,12 @@ beforeEach(() => {
   boundary.getConfig.mockReset().mockResolvedValue(configured())
   events = new Map()
   boundary.listen.mockReset().mockImplementation(async (name: string, callback: Callback) => {
-    if (!events.has(name)) events.set(name, new Set())
-    events.get(name)!.add(callback)
-    return () => events.get(name)!.delete(callback)
+    const callbacks = events.get(name) ?? new Set<Callback>()
+    events.set(name, callbacks)
+    callbacks.add(callback)
+    return () => callbacks.delete(callback)
   })
-  state.value = { booleans: {}, features: {}, ui_config: {} }
+  resetInverterState()
   mqttConnected.value = false
   connection = useConnection()
 })
@@ -161,5 +169,40 @@ describe('inverter transport configuration lifecycle', () => {
     expect(mqttConnected.value).toBe(true)
     for (const callback of oldStateCallbacks) callback({ payload: { gt: 999 } })
     expect(state.value.gt).toBe(456)
+  })
+})
+
+describe('inverter observation lifecycle', () => {
+  it('does not overwrite a ConnAck received before the connect IPC resolves', async () => {
+    boundary.invoke.mockImplementation(async (command: string) => {
+      if (command === 'connect_mqtt') emit('mqtt-connection-status', true)
+      if (command === 'get_state') return { gt: 123 }
+    })
+    await connection.connectMqtt()
+    expect(mqttConnected.value).toBe(true)
+    expect(telemetry.value.observed_at).toBeNull()
+  })
+
+  it('expires a silent live feed and recovers quality on the next observed update', async () => {
+    await connection.connectMqtt()
+    emit('mqtt-connection-status', true)
+    emit('mqtt-state-update', { gt: 10 })
+    expect(telemetry.value.quality).toBe('live')
+    await vi.advanceTimersByTimeAsync(TELEMETRY_STALE_AFTER_MS + 1001)
+    expect(mqttConnected.value).toBe(true)
+    expect(telemetry.value.quality).toBe('stale')
+    emit('mqtt-state-update', { gt: 0 })
+    expect(telemetry.value.quality).toBe('live')
+    expect(state.value.gt).toBe(0)
+  })
+
+  it('clears old installation values when endpoint or portal configuration changes', async () => {
+    await connection.connectMqtt()
+    emit('mqtt-state-update', { car_soc: 75, pump_switch: true })
+    boundary.getConfig.mockResolvedValue({ ...configured(), mqtt_host: 'other-cerbo' })
+    await connection.connectMqtt()
+    expect(state.value.car_soc).toBeUndefined()
+    expect(state.value.pump_switch).toBeUndefined()
+    expect(telemetry.value.observed_at).toBeNull()
   })
 })

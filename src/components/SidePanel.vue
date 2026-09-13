@@ -14,7 +14,7 @@
             {{ $t('sections.charging') }}
           </div>
         </div>
-        <div v-if="evChargingPower !== null">
+        <div v-if="evChargingPower != null">
           <div class="text-[15px] font-bold text-muted leading-none tabular tracking-tight">
             {{ (evChargingPower / 1000).toFixed(1) }}kW
           </div>
@@ -85,6 +85,22 @@
       </div>
     </div>
 
+    <div
+      v-if="
+        haConnected === false &&
+        (homeButtons.length ||
+          haSensors.length ||
+          haNumbers.length ||
+          haCovers.length ||
+          haMediaPlayers.length ||
+          haWeather)
+      "
+      class="text-[10px] text-consumption px-1"
+      role="status"
+    >
+      {{ $t('status.haStale') }}
+    </div>
+
     <!-- Home Controls -->
     <div
       v-if="features?.ha !== false && showHomeSection !== false && homeButtons.length > 0"
@@ -102,6 +118,11 @@
           toggle
           :active="buttonStates[btn.id] === 'on'"
           :unavailable="isBtnUnavailable(buttonStates[btn.id])"
+          :disabled="
+            haConnected === false &&
+            !isInverterControlFlag(btn.entity) &&
+            !isInverterControlFlag(btn.id)
+          "
           @click="$emit('send', 'toggle', { entity: btn.entity })"
         >
           <component
@@ -150,17 +171,14 @@
 
     <!-- HA Sensors (collapsed by default) -->
     <div v-if="haSensors.length > 0 && appConfig?.show_ha_sensors !== false" class="classic-card">
-      <div
-        class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+      <button
+        type="button"
+        class="w-full text-left classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="sensorsExpanded = !sensorsExpanded"
-        @keydown.enter="sensorsExpanded = !sensorsExpanded"
-        @keydown.space.prevent="sensorsExpanded = !sensorsExpanded"
-        role="button"
-        tabindex="0"
       >
         <Gauge :size="10" /> {{ $t('sections.sensors') }} ({{ haSensors.length }})
         <span class="ml-auto text-[10px]">{{ sensorsExpanded ? '▾' : '▸' }}</span>
-      </div>
+      </button>
       <div v-if="sensorsExpanded" class="p-1 flex flex-col gap-0.5">
         <div
           v-for="sensor in haSensors"
@@ -179,17 +197,14 @@
 
     <!-- HA Numbers (collapsed by default) -->
     <div v-if="haNumbers.length > 0 && appConfig?.show_ha_numbers !== false" class="classic-card">
-      <div
-        class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+      <button
+        type="button"
+        class="w-full text-left classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="numbersExpanded = !numbersExpanded"
-        @keydown.enter="numbersExpanded = !numbersExpanded"
-        @keydown.space.prevent="numbersExpanded = !numbersExpanded"
-        role="button"
-        tabindex="0"
       >
         <Sliders :size="10" /> {{ $t('sections.numbers') }} ({{ haNumbers.length }})
         <span class="ml-auto text-[10px]">{{ numbersExpanded ? '▾' : '▸' }}</span>
-      </div>
+      </button>
       <div v-if="numbersExpanded" class="p-1 flex flex-col gap-1">
         <div v-for="num in haNumbers" :key="num.entity_id" class="flex flex-col gap-0.5">
           <div class="flex justify-between items-center px-1">
@@ -211,6 +226,7 @@
             :max="num.max"
             :step="num.step"
             :value="num.value"
+            :disabled="haConnected === false"
             class="w-full h-1 accent-accent cursor-pointer"
             @change="
               $emit('number-set', num.entity_id, Number(($event.target as HTMLInputElement).value))
@@ -222,17 +238,14 @@
 
     <!-- HA Covers (collapsed by default) -->
     <div v-if="haCovers.length > 0 && appConfig?.show_ha_covers !== false" class="classic-card">
-      <div
-        class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+      <button
+        type="button"
+        class="w-full text-left classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="coversExpanded = !coversExpanded"
-        @keydown.enter="coversExpanded = !coversExpanded"
-        @keydown.space.prevent="coversExpanded = !coversExpanded"
-        role="button"
-        tabindex="0"
       >
         <Blinds :size="10" /> {{ $t('sections.covers') }} ({{ haCovers.length }})
         <span class="ml-auto text-[10px]">{{ coversExpanded ? '▾' : '▸' }}</span>
-      </div>
+      </button>
       <div v-if="coversExpanded" class="p-1 flex flex-col gap-1">
         <div
           v-for="cover in haCovers"
@@ -259,7 +272,7 @@
             min="0"
             max="100"
             :value="cover.position"
-            :disabled="isCoverUnavailable(cover)"
+            :disabled="haConnected === false || isCoverUnavailable(cover)"
             class="w-full h-1 accent-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             @change="
               $emit(
@@ -278,17 +291,14 @@
       v-if="haMediaPlayers.length > 0 && appConfig?.show_ha_media !== false"
       class="classic-card"
     >
-      <div
-        class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+      <button
+        type="button"
+        class="w-full text-left classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="mediaExpanded = !mediaExpanded"
-        @keydown.enter="mediaExpanded = !mediaExpanded"
-        @keydown.space.prevent="mediaExpanded = !mediaExpanded"
-        role="button"
-        tabindex="0"
       >
         <Play :size="10" /> {{ $t('sections.media') }} ({{ haMediaPlayers.length }})
         <span class="ml-auto text-[10px]">{{ mediaExpanded ? '▾' : '▸' }}</span>
-      </div>
+      </button>
       <div v-if="mediaExpanded" class="p-1 flex flex-col gap-0.5">
         <div
           v-for="mp in haMediaPlayers"
@@ -303,6 +313,7 @@
             <UiButton
               size="sm"
               class="!px-1.5"
+              :disabled="haConnected === false"
               @click="$emit('media-control', mp.entity_id, 'play')"
             >
               ▶
@@ -310,6 +321,7 @@
             <UiButton
               size="sm"
               class="!px-1.5"
+              :disabled="haConnected === false"
               @click="$emit('media-control', mp.entity_id, 'pause')"
             >
               ⏸
@@ -317,6 +329,7 @@
             <UiButton
               size="sm"
               class="!px-1.5"
+              :disabled="haConnected === false"
               @click="$emit('media-control', mp.entity_id, 'stop')"
             >
               ⏹
@@ -367,6 +380,7 @@
               v-if="washerStartEntity"
               size="sm"
               variant="primary"
+              :disabled="haConnected === false"
               @click="$emit('send', 'press', { entity: washerStartEntity })"
             >
               {{ $t('sections.start') }}
@@ -374,6 +388,7 @@
             <UiButton
               v-if="washerPauseEntity"
               size="sm"
+              :disabled="haConnected === false"
               @click="$emit('send', 'press', { entity: washerPauseEntity })"
             >
               {{ $t('sections.pause') }}
@@ -401,6 +416,7 @@
               v-if="dryerStartEntity"
               size="sm"
               variant="primary"
+              :disabled="haConnected === false"
               @click="$emit('send', 'press', { entity: dryerStartEntity })"
             >
               {{ $t('sections.start') }}
@@ -408,6 +424,7 @@
             <UiButton
               v-if="dryerPauseEntity"
               size="sm"
+              :disabled="haConnected === false"
               @click="$emit('send', 'press', { entity: dryerPauseEntity })"
             >
               {{ $t('sections.pause') }}
@@ -425,22 +442,20 @@
 
     <!-- HA Scenes (collapsed by default) -->
     <div v-if="haScenes.length > 0 && appConfig?.show_ha_scenes !== false" class="classic-card">
-      <div
-        class="classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+      <button
+        type="button"
+        class="w-full text-left classic-header flex items-center gap-1.5 cursor-pointer hover:opacity-80"
         @click="scenesExpanded = !scenesExpanded"
-        @keydown.enter="scenesExpanded = !scenesExpanded"
-        @keydown.space.prevent="scenesExpanded = !scenesExpanded"
-        role="button"
-        tabindex="0"
       >
         <Sparkles :size="10" /> {{ $t('sections.scenes') }} ({{ haScenes.length }})
         <span class="ml-auto text-[10px]">{{ scenesExpanded ? '▾' : '▸' }}</span>
-      </div>
+      </button>
       <div v-if="scenesExpanded" class="p-1 flex flex-wrap gap-0.5">
         <UiButton
           v-for="scene in haScenes"
           :key="scene.entity_id"
           class="!flex-1 !min-w-[50px] !text-[10px]"
+          :disabled="haConnected === false"
           @click="$emit('scene-activate', scene.entity_id)"
         >
           {{ scene.name }}
@@ -469,7 +484,7 @@ import {
 import { ref } from 'vue'
 import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
-import { isHaUnavailableState } from '../utils'
+import { isHaUnavailableState, isInverterControlFlag } from '../utils'
 import type {
   HaCoverDisplay,
   HaMediaPlayerDisplay,
@@ -480,6 +495,7 @@ import type {
 } from '../types/ha'
 
 const props = defineProps<{
+  haConnected?: boolean
   features?: Record<string, boolean>
   showEv?: boolean
   evSectionVisible?: boolean

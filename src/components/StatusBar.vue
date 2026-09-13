@@ -26,6 +26,16 @@
       }}</span>
     </HoverTip>
 
+    <span class="soft-divider"></span>
+    <span
+      data-testid="telemetry-quality"
+      role="status"
+      :title="telemetryTitle"
+      :class="telemetry.quality === 'live' ? 'text-muted' : 'text-consumption'"
+    >
+      {{ $t(`status.telemetry${telemetry.quality}`) }}
+    </span>
+
     <span v-if="haMqttConnected !== null" class="soft-divider"></span>
 
     <HoverTip
@@ -49,11 +59,18 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import { computed } from 'vue'
+import { telemetry } from '../composables/useInverterState'
 import { formatUptime } from '../utils'
 import HoverTip from './HoverTip.vue'
 import NotificationHistory from './NotificationHistory.vue'
 
 const { t: $t } = useI18n()
+const telemetryTitle = computed(() => {
+  const observed = telemetry.value.observed_at
+  if (observed === null) return $t('status.telemetryunknown')
+  return `${telemetry.value.source?.toUpperCase()} · ${$t('status.receivedAt')}: ${new Date(observed).toLocaleString()}`
+})
 
 withDefaults(
   defineProps<{

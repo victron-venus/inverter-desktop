@@ -122,10 +122,60 @@ export const dataSource = ref<'mqtt' | 'igw'>('mqtt')
 export const haMqttConnected = ref<boolean | null>(null)
 export const appConfig = ref<AppConfig | null>(null)
 
+export type TelemetryQuality = 'live' | 'stale' | 'unknown'
+export const TELEMETRY_STALE_AFTER_MS = 30_000
+export interface TelemetryMetadata {
+  /** Time this desktop observed a live transport update, not the device measurement time. */
+  observed_at: number | null
+  source: 'mqtt' | 'igw' | null
+  quality: TelemetryQuality
+  fields: Record<string, { observed_at: number; source: 'mqtt' | 'igw' }>
+  stale_fields: string[]
+}
+export const telemetry = shallowRef<TelemetryMetadata>({
+  observed_at: null,
+  source: null,
+  quality: 'unknown',
+  fields: {},
+  stale_fields: [],
+})
+
+export function refreshTelemetryQuality(now = Date.now()) {
+  const previous = telemetry.value
+  const staleFields = Object.keys(previous.fields).filter(
+    (field) => now - previous.fields[field].observed_at > TELEMETRY_STALE_AFTER_MS
+  )
+  const quality: TelemetryQuality =
+    previous.observed_at === null
+      ? 'unknown'
+      : !mqttConnected.value ||
+          now - previous.observed_at > TELEMETRY_STALE_AFTER_MS ||
+          staleFields.length > 0
+        ? 'stale'
+        : 'live'
+  if (quality !== previous.quality || staleFields.join() !== previous.stale_fields.join()) {
+    telemetry.value = { ...previous, quality, stale_fields: staleFields }
+  }
+}
+
+export function resetInverterState() {
+  state.value = { booleans: {}, features: {}, ui_config: {} }
+  telemetry.value = {
+    observed_at: null,
+    source: null,
+    quality: 'unknown',
+    fields: {},
+    stale_fields: [],
+  }
+}
+
 /** Non-destructive merge into dashboard state. Skips null/undefined so partial
  *  MQTT snapshots and serde nulls cannot wipe live telemetry. Always assigns a
  *  new markRaw object so shallowRef watchers/tiles re-render. */
-export function applyInverterState(newState: InverterState) {
+export function applyInverterState(
+  newState: InverterState,
+  observation: { snapshot?: boolean; observedAt?: number; source?: 'mqtt' | 'igw' } = {}
+) {
   const prev = state.value
   const merged: InverterState = { ...prev }
   for (const [key, val] of Object.entries(newState)) {
@@ -141,7 +191,7 @@ export function applyInverterState(newState: InverterState) {
       // Only drop sticky ETA on explicit Idle — Unknown/missing state still
       // keeps the last Charging/Discharging time_to_go so 2s IGW polls do not blink.
       if (bat.state === 'Idle') return bat
-      const prevBat = prev.batteries!.find(
+      const prevBat = prev.batteries?.find(
         (p) =>
           (p.serial && bat.serial && p.serial === bat.serial) ||
           (p.instance != null && bat.instance != null && p.instance === bat.instance) ||
@@ -154,6 +204,37 @@ export function applyInverterState(newState: InverterState) {
     })
   }
   state.value = markRaw(merged)
+  // get_state is a cached snapshot: showing the window must not make old data fresh.
+  if (!observation.snapshot) {
+    const observedAt = observation.observedAt ?? Date.now()
+    const source = observation.source ?? dataSource.value
+    const fields = { ...telemetry.value.fields }
+    let observed = false
+    for (const [key, value] of Object.entries(newState)) {
+      if (value === null || value === undefined) continue
+      // Discovery/config metadata has no periodic measurement cadence.
+      if (
+        [
+          'ui_config',
+          'features',
+          'version',
+          'latest_version',
+          'load_names',
+          'discovered_water_ev',
+          'ev_present',
+          'evcharger_present',
+          'console',
+        ].includes(key)
+      )
+        continue
+      fields[key] = { observed_at: observedAt, source }
+      observed = true
+    }
+    if (observed) {
+      telemetry.value = { ...telemetry.value, observed_at: observedAt, source, fields }
+      refreshTelemetryQuality(observedAt)
+    }
+  }
 }
 
 export interface NotificationEntry {

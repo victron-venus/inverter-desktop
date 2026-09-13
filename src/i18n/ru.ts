@@ -3,6 +3,12 @@ export default {
     cameraMotion: 'Движение камер',
   },
   status: {
+    haStale: 'Home Assistant недоступен — последние известные значения',
+    telemetrylive: 'Данные актуальны',
+    telemetrystale: 'Данные устарели',
+    telemetryunknown: 'Ожидание данных',
+    receivedAt: 'Получено',
+
     ha: 'HA',
     mqtt: 'MQTT',
     igw: 'IGW',
@@ -10,7 +16,7 @@ export default {
     uptime: 'Аптайм',
     desktop: 'Desktop',
     control: 'Control',
-    tipHa: 'Подключение к Home Assistant REST API',
+    tipHa: 'Подключение к Home Assistant WebSocket',
     tipIgw: 'Удалённый inverter-gateway через Cloudflare Access',
     tipMqtt: 'Живые данные Cerbo GX по MQTT в локальной сети',
     tipHaMqtt: 'MQTT-брокер HA для событий движения камер Kerberos',

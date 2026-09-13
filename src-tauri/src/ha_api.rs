@@ -7,39 +7,48 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 // Import config loading functions from lib
 use crate::load_config;
+mod lifecycle;
+pub use lifecycle::{
+    config_changes, connection_status, notify_config_changed, set_connection_status,
+};
 
 pub static WINDOW_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Coalesce high-frequency `ha-filtered-update` IPC: HA may emit dozens of
-/// `state_changed` events per second (every power sensor in the house). Emitting
-/// a full filtered snapshot on each event saturates WebKit IPC and freezes the
-/// dashboard even though MQTT/`ha-state-update` data is arriving.
+/// Interactive entities refresh quickly; the larger sensor inventory has a
+/// separate bounded cadence so a busy HA installation does not saturate WebKit.
 const MIN_HA_FILTERED_EMIT_INTERVAL: Duration = Duration::from_millis(500);
+const MIN_HA_SENSOR_EMIT_INTERVAL: Duration = Duration::from_secs(2);
 
+#[derive(Default)]
 struct HaFilteredEmitCoalesce {
     last_emit: Option<Instant>,
     flush_scheduled: bool,
+    revision: u64,
+    ticket: u64,
 }
-
+impl HaFilteredEmitCoalesce {
+    fn reset(&mut self, now: Instant, revision: u64) {
+        self.last_emit = Some(now);
+        self.flush_scheduled = false;
+        self.revision = revision;
+        self.ticket = self.ticket.wrapping_add(1);
+    }
+}
 static HA_FILTERED_COALESCE: std::sync::LazyLock<Mutex<HaFilteredEmitCoalesce>> =
-    std::sync::LazyLock::new(|| {
-        Mutex::new(HaFilteredEmitCoalesce {
-            last_emit: None,
-            flush_scheduled: false,
-        })
-    });
+    std::sync::LazyLock::new(|| Mutex::new(HaFilteredEmitCoalesce::default()));
+static HA_SENSOR_COALESCE: std::sync::LazyLock<Mutex<HaFilteredEmitCoalesce>> =
+    std::sync::LazyLock::new(|| Mutex::new(HaFilteredEmitCoalesce::default()));
 
-/// Domains that are safe to live-push via `ha-filtered-update`.
-///
-/// `sensor` / `binary_sensor` are intentionally excluded: a typical HA install
-/// has hundreds of them (power clamps alone can tick 50-100/s). Rebuilding and
-/// IPC-emitting the full sensor list — even coalesced to 2 Hz — saturates
-/// WebKit and freezes MQTT-driven main tiles. Sensors are snapshotted on WS
-/// connect (force emit) and via `get_ha_filtered_data`; they are not live-ticked.
+fn sensor_domain(entity_id: &str) -> bool {
+    matches!(
+        entity_id.split('.').next().unwrap_or(""),
+        "sensor" | "binary_sensor"
+    )
+}
 fn domain_triggers_live_filtered(entity_id: &str) -> bool {
     matches!(
         entity_id.split('.').next().unwrap_or(""),
-        "number" | "cover" | "media_player" | "scene" | "weather"
+        "sensor" | "binary_sensor" | "number" | "cover" | "media_player" | "scene" | "weather"
     )
 }
 
@@ -47,18 +56,20 @@ fn emit_ha_filtered_now(
     app: &tauri::AppHandle,
     entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
     include_sensors: bool,
+    revision: u64,
 ) {
     if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    let mut filtered = {
-        let Ok(guard) = entity_states.lock() else {
-            return;
-        };
-        compute_filtered_data(&guard)
+    // Hold the entity-map lock through emit so supervisor clear + its empty
+    // snapshot always follow any in-flight delivery from the old connection.
+    let Ok(guard) = entity_states.lock() else {
+        return;
     };
-    // Live ticks omit the bulky sensors array so Vue does not re-render hundreds
-    // of SidePanel rows on every coalesce flush. Connect/force sets refresh_sensors.
+    if revision != lifecycle::current_revision() {
+        return;
+    }
+    let mut filtered = compute_filtered_data(&guard);
     if !include_sensors {
         filtered.sensors.clear();
     }
@@ -66,82 +77,94 @@ fn emit_ha_filtered_now(
     let _ = app.emit("ha-filtered-update", &filtered);
 }
 
-/// Force a full filtered snapshot (including sensors) — used on WS connect and
-/// when the window becomes visible again.
+/// Force a full snapshot on connect, clear or visibility restoration.
 pub fn force_emit_ha_filtered(
     app: &tauri::AppHandle,
-    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
 ) {
-    emit_ha_filtered_coalesced(app, entity_states, true);
+    emit_ha_filtered_coalesced(app, states, true);
 }
 
-/// Emit filtered HA entity arrays to the frontend, coalesced to at most one
-/// update per `MIN_HA_FILTERED_EMIT_INTERVAL` with a trailing flush of the
-/// latest map snapshot so the SidePanel never freezes on dropped ticks.
 fn emit_ha_filtered_coalesced(
     app: &tauri::AppHandle,
-    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
     force: bool,
 ) {
-    if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-
+    let revision = lifecycle::current_revision();
     if force {
-        if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
-            c.last_emit = Some(Instant::now());
-            c.flush_scheduled = false;
-        }
-        emit_ha_filtered_now(app, entity_states, true);
-        return;
-    }
-
-    let mut schedule_delay: Option<Duration> = None;
-    let mut emit_now = false;
-
-    if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
-        let now = Instant::now();
-        let since_last = c.last_emit.map(|prev| now.duration_since(prev));
-        let within_interval = since_last
-            .map(|d| d < MIN_HA_FILTERED_EMIT_INTERVAL)
-            .unwrap_or(false);
-
-        if within_interval {
-            if !c.flush_scheduled {
-                c.flush_scheduled = true;
-                let elapsed = since_last.unwrap_or(Duration::ZERO);
-                schedule_delay = Some(MIN_HA_FILTERED_EMIT_INTERVAL.saturating_sub(elapsed));
+        for coalesce in [&*HA_FILTERED_COALESCE, &*HA_SENSOR_COALESCE] {
+            if let Ok(mut pending) = coalesce.lock() {
+                pending.reset(Instant::now(), revision);
             }
-        } else {
-            c.last_emit = Some(now);
-            emit_now = true;
         }
+        emit_ha_filtered_now(app, states, true, revision);
     } else {
-        emit_now = true;
+        schedule_filtered_emit(app, states, false, revision);
     }
+}
 
-    if emit_now {
-        // Live path: never ship the full sensors inventory.
-        emit_ha_filtered_now(app, entity_states, false);
+fn schedule_filtered_emit(
+    app: &tauri::AppHandle,
+    states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    sensors: bool,
+    revision: u64,
+) {
+    if WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed)
+        || revision != lifecycle::current_revision()
+    {
         return;
     }
-
-    if let Some(delay) = schedule_delay {
+    let (coalesce, interval): (&'static Mutex<HaFilteredEmitCoalesce>, Duration) = if sensors {
+        (&HA_SENSOR_COALESCE, MIN_HA_SENSOR_EMIT_INTERVAL)
+    } else {
+        (&HA_FILTERED_COALESCE, MIN_HA_FILTERED_EMIT_INTERVAL)
+    };
+    let mut delay = None;
+    let emit_now = {
+        let mut pending = coalesce.lock().unwrap_or_else(|error| error.into_inner());
+        let now = Instant::now();
+        let elapsed = if pending.revision == revision {
+            pending.last_emit.map(|last| now.duration_since(last))
+        } else {
+            None
+        };
+        if elapsed.is_some_and(|elapsed| elapsed < interval) {
+            if !pending.flush_scheduled {
+                pending.flush_scheduled = true;
+                pending.ticket = pending.ticket.wrapping_add(1);
+                delay = Some((
+                    interval.saturating_sub(elapsed.unwrap_or_default()),
+                    pending.ticket,
+                ));
+            }
+            false
+        } else {
+            pending.reset(now, revision);
+            true
+        }
+    };
+    if emit_now {
+        emit_ha_filtered_now(app, states, sensors, revision);
+    }
+    if let Some((delay, ticket)) = delay {
         let app = app.clone();
-        let entity_states = Arc::clone(entity_states);
+        let states = states.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(delay).await;
+            if revision != lifecycle::current_revision() {
+                return;
+            }
             let should_emit = {
-                if let Ok(mut c) = HA_FILTERED_COALESCE.lock() {
-                    c.flush_scheduled = false;
-                    c.last_emit = Some(Instant::now());
-                    true
-                } else {
+                let mut pending = coalesce.lock().unwrap_or_else(|error| error.into_inner());
+                if pending.ticket != ticket || pending.revision != revision {
                     false
+                } else {
+                    pending.reset(Instant::now(), revision);
+                    true
                 }
             };
             if should_emit {
-                emit_ha_filtered_now(&app, &entity_states, false);
+                emit_ha_filtered_now(&app, &states, sensors, revision);
             }
         });
     }
@@ -228,8 +251,7 @@ pub struct HaFilteredData {
     pub media_players: Vec<HaMediaPlayerDisplay>,
     pub scenes: Vec<HaSceneDisplay>,
     pub weather: Option<HaWeatherDisplay>,
-    /// When true, frontend should replace `haSensors`. Live ticks set this false
-    /// so the bulky sensor list is not re-rendered continuously.
+    /// Full snapshots, including coalesced live updates, replace `haSensors`.
     #[serde(default)]
     pub refresh_sensors: bool,
 }
@@ -687,12 +709,47 @@ impl HaApiClient {
     }
 }
 
+/// Apply an HA state_changed payload, including HA's null new_state deletion.
+fn apply_state_change(
+    entity_states: &Arc<Mutex<HashMap<String, HaEntityEntry>>>,
+    data: &serde_json::Value,
+    revision: Option<u64>,
+) -> Option<(String, Option<HaEntityEntry>)> {
+    let new_state = data.get("new_state")?;
+    let eid = data
+        .get("entity_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| new_state.get("entity_id").and_then(|v| v.as_str()))?
+        .to_string();
+    let entry = if new_state.is_null() {
+        None
+    } else {
+        Some(HaEntityEntry {
+            state: new_state.get("state")?.as_str()?.to_string(),
+            attributes: new_state.get("attributes").cloned(),
+        })
+    };
+    let mut states = entity_states.lock().ok()?;
+    if revision.is_some_and(|revision| revision != lifecycle::current_revision()) {
+        return None;
+    }
+    if let Some(entry) = &entry {
+        states.insert(eid.clone(), entry.clone());
+    } else {
+        states.remove(&eid);
+    }
+    Some((eid, entry))
+}
+
 /// HA WebSocket client — subscribes to all state_changed events and emits to frontend.
 pub struct HaWebSocketClient {
-    rx: Option<tokio::sync::oneshot::Receiver<()>>,
-    /// Whitelist of entity IDs that should trigger frontend updates.
-    #[allow(dead_code)]
-    whitelist: HashSet<String>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for HaWebSocketClient {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 impl HaWebSocketClient {
@@ -704,6 +761,8 @@ impl HaWebSocketClient {
             std::sync::Mutex<std::collections::HashMap<String, HaEntityEntry>>,
         >,
     ) -> Result<Self, String> {
+        let mut revisions = config_changes();
+        let connection_revision = *revisions.borrow_and_update();
         let (ws_stream, _) = tokio_tungstenite::connect_async(url)
             .await
             .map_err(|e| format!("WS connect failed: {}", e))?;
@@ -783,6 +842,9 @@ impl HaWebSocketClient {
         // Clear stale entity data from a previous connection/config before repopulating,
         // so entities removed or renamed in HA don't linger in the shared map forever.
         if let Ok(mut states_guard) = entity_states.lock() {
+            if connection_revision != lifecycle::current_revision() {
+                return Err("HA configuration changed during connection".into());
+            }
             states_guard.clear();
         }
         // === Fetch initial state to prevent empty entity map on first events ===
@@ -803,6 +865,9 @@ impl HaWebSocketClient {
             if response.status().is_success() {
                 if let Ok(states) = response.json::<Vec<serde_json::Value>>().await {
                     if let Ok(mut states_guard) = entity_states.lock() {
+                        if connection_revision != lifecycle::current_revision() {
+                            return Err("HA configuration changed during initial snapshot".into());
+                        }
                         for state in states {
                             if let (Some(eid), Some(state_val)) =
                                 (state.get("entity_id"), state.get("state"))
@@ -899,68 +964,44 @@ impl HaWebSocketClient {
         // This ensures frontend has full data on WS connect
         emit_ha_filtered_coalesced(&app, &entity_states, true);
 
-        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel::<()>();
-
         // Spawn read loop with timeout
         let app_clone = app.clone();
         let whitelist_clone = whitelist.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             const READ_TIMEOUT_SECS: u64 = 60;
             loop {
                 tokio::select! {
+                    biased;
+                    _ = revisions.changed() => break,
                     msg = read.next() => {
                         match msg {
                             Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
                                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
                                     if val.get("type").and_then(|v| v.as_str()) == Some("event") {
-                                        if let Some(event) = val.get("event") {
-                                            if let Some(new_state) = event.get("data").and_then(|d| d.get("new_state")) {
-                                                if let (Some(entity_id), Some(state)) = (
-                                                    new_state.get("entity_id").and_then(|v| v.as_str()),
-                                                    new_state.get("state").and_then(|v| v.as_str()),
-                                                ) {
-                                                    let eid = entity_id.to_string();
-                                                    let attrs = new_state.get("attributes").cloned();
-
-                                                    // Update state map
-                                                    if let Ok(mut states_guard) = entity_states.lock() {
-                                                        states_guard.insert(eid.clone(), HaEntityEntry {
-                                                            state: state.to_string(),
-                                                            attributes: attrs.clone(),
-                                                        });
+                                        if let Some(data) = val.get("event").and_then(|event| event.get("data")) {
+                                            if let Some((eid, entry)) = apply_state_change(&entity_states, data, Some(connection_revision)) {
+                                                if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+                                                    if whitelist_clone.contains(&eid) {
+                                                        let _states_guard = entity_states.lock();
+                                                        if connection_revision != lifecycle::current_revision() { continue; }
+                                                        let _ = app_clone.emit("ha-state-update", serde_json::json!({
+                                                            "entity_id": eid,
+                                                            "state": entry.as_ref().map(|entry| entry.state.as_str()).unwrap_or("unavailable"),
+                                                            "attributes": entry.as_ref().and_then(|entry| entry.attributes.as_ref()),
+                                                        }));
                                                     }
-
-                                                    // Skip expensive processing and emits when window is hidden
-                                                    if !WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
-                                                        // Emit individual update (backward compat for buttonStates, etc.) only for whitelisted entities
-                                                        if whitelist_clone.contains(&eid) {
-                                                            let _ = app_clone.emit(
-                                                                "ha-state-update",
-                                                                serde_json::json!({
-                                                                    "entity_id": eid,
-                                                                    "state": state,
-                                                                    "attributes": attrs.unwrap_or(serde_json::Value::Null),
-                                                                }),
-                                                            );
-                                                        }
-
-                                                        // Full filtered snapshot is expensive and was previously
-                                                        // emitted on EVERY house-wide state_changed (power sensors
-                                                        // alone can be 50–100/s), freezing WebKit. Only schedule
-                                                        // when the entity can appear in filtered arrays, and
-                                                        // coalesce to ~2 Hz with a trailing flush.
-                                                        if domain_triggers_live_filtered(&eid) {
-                                                            emit_ha_filtered_coalesced(
-                                                                &app_clone,
-                                                                &entity_states,
-                                                                false,
-                                                            );
-                                                        }
+                                                    if domain_triggers_live_filtered(&eid) {
+                                                        schedule_filtered_emit(&app_clone, &entity_states, sensor_domain(&eid), connection_revision);
                                                     }
                                                 }
                                             }
                                         }
                                     }
+                                }
+                            }
+                            Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload))) => {
+                                if write.send(tokio_tungstenite::tungstenite::Message::Pong(payload)).await.is_err() {
+                                    break;
                                 }
                             }
                             Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) => break,
@@ -981,20 +1022,14 @@ impl HaWebSocketClient {
                     }
                 }
             }
-            let _ = completion_tx.send(());
         });
 
-        Ok(Self {
-            rx: Some(completion_rx),
-            whitelist,
-        })
+        Ok(Self { task })
     }
 
     /// Wait for the read loop to finish (blocks until connection drops or shutdown signal).
     pub async fn run(&mut self) {
-        if let Some(rx) = self.rx.take() {
-            let _ = rx.await;
-        }
+        let _ = (&mut self.task).await;
     }
 }
 
@@ -1084,5 +1119,85 @@ mod entity_skip_tests {
         assert!(!is_entity_skipped("sensor.partial"));
 
         clear_entity_skip_list();
+    }
+}
+
+#[cfg(test)]
+mod subscription_regression_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sensor_events_refresh_values_and_null_state_removes_deleted_entities() {
+        let states = Arc::new(Mutex::new(HashMap::new()));
+        for value in ["100", "250"] {
+            let (eid, _) = apply_state_change(
+                &states,
+                &json!({
+                    "entity_id": "sensor.power",
+                    "new_state": {"entity_id": "sensor.power", "state": value,
+                        "attributes": {"unit_of_measurement": "W"}}
+                }),
+                None,
+            )
+            .unwrap();
+            assert!(domain_triggers_live_filtered(&eid));
+            let snapshot = compute_filtered_data(&states.lock().unwrap());
+            assert!(snapshot.refresh_sensors);
+            assert_eq!(snapshot.sensors[0].state, value);
+        }
+        assert!(domain_triggers_live_filtered("binary_sensor.door"));
+        apply_state_change(
+            &states,
+            &json!({"entity_id": "sensor.power", "new_state": null}),
+            None,
+        )
+        .unwrap();
+        assert!(compute_filtered_data(&states.lock().unwrap())
+            .sensors
+            .is_empty());
+    }
+
+    #[test]
+    fn old_subscription_cannot_repopulate_map_after_config_revision() {
+        let states = Arc::new(Mutex::new(HashMap::new()));
+        let stale_revision = lifecycle::current_revision().wrapping_sub(1);
+        let result = apply_state_change(
+            &states,
+            &json!({
+                "entity_id": "sensor.old_server",
+                "new_state": {"state": "99", "attributes": {}}
+            }),
+            Some(stale_revision),
+        );
+        assert!(result.is_none());
+        assert!(states.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelling_run_then_dropping_client_aborts_its_subscription() {
+        struct SignalOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for SignalOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (stopped, finished) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _guard = SignalOnDrop(Some(stopped));
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        let mut client = HaWebSocketClient { task };
+        tokio::select! {
+            _ = ready => {},
+            _ = client.run() => panic!("subscription unexpectedly completed"),
+        }
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(1), finished)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

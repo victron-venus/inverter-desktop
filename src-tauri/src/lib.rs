@@ -1,3 +1,13 @@
+mod auth;
+mod camera;
+mod config_backup;
+mod config_store;
+mod ha_session;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod mobile_credentials;
+#[cfg(desktop)]
+use camera::remove_camera_clip_file;
+use camera::{download_camera_clip, is_camera_video_label};
 mod gateway;
 mod ha_api;
 pub(crate) mod mqtt;
@@ -10,260 +20,14 @@ extern "C" {
     fn biometric_authenticate(reason: *const std::os::raw::c_char) -> bool;
 }
 
-use aead::{Aead, KeyInit};
-use aes_gcm::Aes256Gcm;
-use base64::{engine::general_purpose, Engine as _};
 use gateway::GatewayClient;
 use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
-use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-// Desktop-only imports
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use keyring::Entry;
-
-const KEYRING_SERVICE: &str = "inverter-desktop";
-const KEYRING_USERNAME: &str = "victron";
-
-// Desktop: prefer a file-backed AES key under the Tauri app data dir so adhoc
-// reinstalls do not re-prompt macOS Keychain. Keychain is only used once for
-// migration when the file is missing. Cached in memory so concurrent
-// load_config calls do not hammer disk (or the keychain during migration).
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-static ENCRYPTION_KEY_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-const ENCRYPTION_KEY_FILENAME: &str = "config.key";
-
-/// Path to the encryption key file next to config.json (AppData / identifier).
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn encryption_key_file_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
-    Ok(dir.join(ENCRYPTION_KEY_FILENAME))
-}
-
-/// Read a base64-encoded 32-byte key from `config.key`. `Ok(None)` if missing.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn read_encryption_key_file(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => {
-            let key = general_purpose::STANDARD
-                .decode(contents.trim())
-                .map_err(|e| format!("Failed to decode encryption key file: {}", e))?;
-            if key.len() != 32 {
-                return Err("Invalid encryption key length in config.key".to_string());
-            }
-            Ok(Some(key))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("Failed to read encryption key file: {}", e)),
-    }
-}
-
-/// Persist key as base64 with owner-only permissions (0600 on Unix).
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn write_encryption_key_file(path: &std::path::Path, key: &[u8]) -> Result<(), String> {
-    if key.len() != 32 {
-        return Err("Invalid encryption key length".to_string());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create app data dir: {}", e))?;
-    }
-    let key_b64 = general_purpose::STANDARD.encode(key);
-    std::fs::write(path, key_b64.as_bytes())
-        .map_err(|e| format!("Failed to write encryption key file: {}", e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("Failed to set encryption key file permissions: {}", e))?;
-    }
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn cache_encryption_key(key: &[u8]) {
-    if let Ok(mut cache) = ENCRYPTION_KEY_CACHE.lock() {
-        *cache = Some(key.to_vec());
-    }
-}
-
-/// Decode a base64 keyring / file payload into a 32-byte AES key.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn decode_encryption_key_b64(key_b64: &str) -> Result<Vec<u8>, String> {
-    let key = general_purpose::STANDARD
-        .decode(key_b64.trim())
-        .map_err(|e| format!("Failed to decode encryption key: {}", e))?;
-    if key.len() != 32 {
-        return Err("Invalid encryption key length".to_string());
-    }
-    Ok(key)
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn get_or_create_encryption_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
-    if let Ok(cache) = ENCRYPTION_KEY_CACHE.lock() {
-        if let Some(key) = cache.as_ref() {
-            return Ok(key.clone());
-        }
-    }
-
-    let path = encryption_key_file_path(app)?;
-
-    // Prefer file whenever it exists (avoids Keychain prompts after reinstall).
-    if let Some(key) = read_encryption_key_file(&path)? {
-        cache_encryption_key(&key);
-        return Ok(key);
-    }
-
-    // Migrate from Keychain once, or generate a new file-only key.
-    let entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME)
-        .map_err(|e| format!("Keyring error: {}", e))?;
-
-    let key: Vec<u8> = match entry.get_password() {
-        Ok(key_b64) => {
-            let key = decode_encryption_key_b64(&key_b64)?;
-            // Best-effort migrate; still use the key even if write fails.
-            if let Err(e) = write_encryption_key_file(&path, &key) {
-                warn!(
-                    "Migrated encryption key from Keychain but failed to write {}: {}",
-                    path.display(),
-                    e
-                );
-            } else {
-                info!(
-                    "Migrated encryption key from Keychain to {}",
-                    path.display()
-                );
-            }
-            key
-        }
-        Err(keyring::Error::NoEntry) => {
-            // New install: file-only (do not write Keychain — avoids adhoc prompts).
-            let mut key = [0u8; 32];
-            rand::rng().fill(&mut key);
-            write_encryption_key_file(&path, &key)?;
-            info!("Created new encryption key at {}", path.display());
-            key.to_vec()
-        }
-        Err(e) => {
-            // Keychain failed and no file yet — do not mint a new key (would
-            // orphan an existing encrypted config.json). Caller can retry.
-            return Err(format!("Keyring error: {}", e));
-        }
-    };
-
-    cache_encryption_key(&key);
-    Ok(key)
-}
-
-// Mobile fallback: use a fixed derivation (less secure but functional)
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn get_or_create_encryption_key(_app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
-    // For mobile, derive key from app identifier (deterministic, no keychain)
-    // This is less secure but allows the app to function on mobile
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    "inverter-desktop-victron-encryption-key".hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let mut key = [0u8; 32];
-    for (i, b) in hash.to_le_bytes().iter().cycle().take(32).enumerate() {
-        key[i] = *b;
-    }
-    Ok(key.to_vec())
-}
-
-fn encrypt_config(config: &FullConfig, key: &[u8]) -> Result<String, String> {
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
-    let plaintext = serde_json::to_vec(config).map_err(|e| e.to_string())?;
-
-    let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill(&mut nonce_bytes);
-    let nonce = <aes_gcm::Nonce<aead::consts::U12>>::try_from(nonce_bytes.as_slice())
-        .map_err(|e| format!("Nonce error: {}", e))?;
-
-    let ciphertext = cipher
-        .encrypt(&nonce, plaintext.as_ref())
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-
-    let mut result = nonce_bytes.to_vec();
-    result.extend_from_slice(&ciphertext);
-    Ok(general_purpose::STANDARD.encode(&result))
-}
-
-fn decrypt_config(encrypted: &str, key: &[u8]) -> Result<FullConfig, String> {
-    let data = general_purpose::STANDARD
-        .decode(encrypted)
-        .map_err(|e| format!("Base64 decode failed: {}", e))?;
-
-    if data.len() < 12 {
-        return Err("Invalid encrypted data: too short".to_string());
-    }
-
-    let (nonce_bytes, ciphertext) = data.split_at(12);
-    let nonce = <aes_gcm::Nonce<aead::consts::U12>>::try_from(nonce_bytes)
-        .map_err(|e| format!("Nonce error: {}", e))?;
-
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid key: {}", e))?;
-    let plaintext = cipher
-        .decrypt(&nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-
-    serde_json::from_slice(&plaintext).map_err(|e| format!("JSON parse failed: {}", e))
-}
-
-fn load_config(app: &tauri::AppHandle) -> Result<FullConfig, String> {
-    let key = get_or_create_encryption_key(app)?;
-
-    let store = app
-        .store_builder("config.json")
-        .build()
-        .map_err(|e| format!("Failed to build store: {}", e))?;
-
-    match store.get("config") {
-        Some(v) => {
-            if let Some(encrypted_str) = v.as_str() {
-                decrypt_config(encrypted_str, &key)
-            } else {
-                // Legacy unencrypted config - migrate
-                let config: FullConfig = serde_json::from_value(v).unwrap_or_default();
-                if let Ok(encrypted) = encrypt_config(&config, &key) {
-                    store.set("config", serde_json::json!(encrypted));
-                    let _ = store.save();
-                }
-                Ok(config)
-            }
-        }
-        None => Ok(FullConfig::default()),
-    }
-}
-
-fn save_config_encrypted(app: &tauri::AppHandle, config: &FullConfig) -> Result<(), String> {
-    let key = get_or_create_encryption_key(app)?;
-    let encrypted = encrypt_config(config, &key)?;
-
-    let store = app
-        .store_builder("config.json")
-        .build()
-        .map_err(|e| format!("Failed to build store: {}", e))?;
-
-    store.set("config", serde_json::json!(encrypted));
-    store
-        .save()
-        .map_err(|e| format!("Failed to save config: {}", e))?;
-
-    Ok(())
-}
+use config_store::{load_config, save_config_encrypted};
 
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
 const DEFAULT_MQTT_PORT: u16 = 1883;
@@ -398,6 +162,16 @@ struct FullConfig {
     ring_snapshot_url_template: Option<String>,
     camera_enabled: bool,
     show_advanced_settings: Option<bool>,
+    show_batteries: Option<bool>,
+    show_solar_production: Option<bool>,
+    show_active_loads: Option<bool>,
+    show_daily_stats: Option<bool>,
+    show_ev: Option<bool>,
+    show_washer: Option<bool>,
+    show_dryer: Option<bool>,
+    show_dishwasher: Option<bool>,
+    show_home_section: Option<bool>,
+    show_header_toggles: Option<bool>,
     show_ha_sensors: Option<bool>,
     show_ha_numbers: Option<bool>,
     show_ha_covers: Option<bool>,
@@ -481,6 +255,16 @@ impl Default for FullConfig {
             ring_snapshot_url_template: None,
             camera_enabled: true,
             show_advanced_settings: Some(false),
+            show_batteries: Some(true),
+            show_solar_production: Some(true),
+            show_active_loads: Some(true),
+            show_daily_stats: Some(true),
+            show_ev: Some(true),
+            show_washer: Some(true),
+            show_dryer: Some(true),
+            show_dishwasher: Some(true),
+            show_home_section: Some(true),
+            show_header_toggles: Some(true),
             show_ha_sensors: Some(true),
             show_ha_numbers: Some(true),
             show_ha_covers: Some(true),
@@ -789,62 +573,6 @@ fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
     format!("{}{}{}/api/websocket", prefix, host_part, port)
 }
 
-fn start_ha_polling(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        loop {
-            let config = match load_config(&app) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!("Failed to load config for HA polling: {}", e);
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
-
-            if !config.ha_use_direct_api
-                || config.ha_url.is_none()
-                || config.ha_longlived_token.is_none()
-            {
-                if let Ok(mut states_guard) = app.state::<HaEntityStates>().0.lock() {
-                    states_guard.clear();
-                }
-                let _ = app.emit("ha-connection-status", false);
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-
-            let base = config.ha_url.clone().unwrap();
-            let token = config.ha_longlived_token.clone().unwrap();
-            let ws_url = build_ws_url(&base, config.ha_port);
-
-            let entity_states = app.state::<HaEntityStates>().0.clone();
-
-            info!("HA WS connecting to {}", ws_url);
-            match ha_api::HaWebSocketClient::connect(&ws_url, &token, app.clone(), entity_states)
-                .await
-            {
-                Ok(mut ws_client) => {
-                    // Retry previously-404 entities after a successful reconnect
-                    // (HA may have added them; avoids re-spam during failed reconnect loops).
-                    ha_api::clear_entity_skip_list();
-                    info!("HA WebSocket connected");
-                    let _ = app.emit("ha-connection-status", true);
-                    let _ = app.emit("ha-state-update", serde_json::json!({ "connected": true }));
-                    ws_client.run().await;
-                    info!("HA WebSocket disconnected, reconnecting...");
-                    let _ = app.emit("ha-connection-status", false);
-                }
-                Err(e) => {
-                    warn!("HA WebSocket connect failed: {}, retrying in 5s", e);
-                    let _ = app.emit("ha-connection-status", false);
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
-    });
-}
-
 /// True when an existing install looks already configured (migrate setup_completed).
 fn config_looks_previously_configured(config: &FullConfig) -> bool {
     let mqtt_configured = !config.mqtt_host.trim().is_empty();
@@ -992,11 +720,15 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 
 #[tauri::command]
 async fn save_config(app: tauri::AppHandle, mut config: FullConfig) -> Result<(), String> {
+    let previous = load_config(&app)?;
+    auth::validate_policy(&config)?;
     // Any explicit save (wizard or Config UI) completes first-run setup.
     config.setup_completed = true;
     save_config_encrypted(&app, &config)?;
     // Fixed / newly configured entity IDs should be polled again without app restart.
     ha_api::clear_entity_skip_list();
+    ha_api::notify_config_changed();
+    auth::revoke_if_policy_changed(&app, &previous, &config)?;
     Ok(())
 }
 
@@ -1017,7 +749,7 @@ async fn backup_config(app: tauri::AppHandle) -> Result<bool, String> {
         _ => return Ok(false),
     };
 
-    let config = load_config(&app)?;
+    let config = config_backup::redacted(&load_config(&app)?)?;
     let json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     std::fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
@@ -1043,10 +775,11 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
 
     let content =
         std::fs::read_to_string(&path).map_err(|e| format!("Failed to read backup file: {}", e))?;
-    let config: FullConfig =
-        serde_json::from_str(&content).map_err(|e| format!("Invalid backup file: {}", e))?;
+    let previous = load_config(&app)?;
+    let config = config_backup::restore(&content, &previous)?;
     save_config_encrypted(&app, &config)?;
     ha_api::clear_entity_skip_list();
+    ha_api::notify_config_changed();
     info!("Config restored from {}", path.display());
     Ok(true)
 }
@@ -1411,6 +1144,14 @@ async fn set_cover_position(
 
 #[tauri::command]
 async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Err(error) = auth::require_session(&app) {
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+        let _ = app.emit("auth-state-changed", ());
+        return Err(error);
+    }
     // Already open? Bring it to front instead of failing on duplicate label.
     // (unminimize/focused are desktop-only APIs)
     #[cfg(desktop)]
@@ -1430,255 +1171,6 @@ async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
     let builder = builder.focused(true);
     builder.build().map_err(|e| e.to_string())?;
     Ok(())
-}
-
-const CAMERA_CLIP_SUBDIR: &str = "inverter-desktop-camera";
-
-fn camera_clip_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let temp = app
-        .path()
-        .temp_dir()
-        .map_err(|e| format!("Failed to resolve temp dir: {e}"))?;
-    Ok(temp.join(CAMERA_CLIP_SUBDIR))
-}
-
-#[cfg(desktop)]
-fn remove_camera_clip_file(path: &std::path::Path) {
-    let _ = std::fs::remove_file(path);
-    if let Some(parent) = path.parent() {
-        // Best-effort: drop the temp dir when the last clip file is gone.
-        let _ = std::fs::remove_dir(parent);
-    }
-}
-
-#[cfg(desktop)]
-fn is_camera_video_label(label: &str) -> bool {
-    label.starts_with(CAMERA_VIDEO_LABEL_PREFIX) || label == "camera-video"
-}
-
-/// Truncate an error/response snippet for UI and logs.
-fn short_http_body_snippet(body: &str) -> String {
-    const MAX: usize = 180;
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    for (i, ch) in trimmed.chars().enumerate() {
-        if i >= MAX {
-            out.push('…');
-            break;
-        }
-        // Keep the message on one line for the camera-video error query.
-        if ch.is_whitespace() {
-            out.push(' ');
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
-/// HTTP statuses that often mean "try again shortly" for Frigate clip URLs.
-///
-/// Frigate's `/api/events/{id}/clip.mp4` builds the MP4 from recording segments.
-/// `has_clip` only means recording is enabled for the event — segments are written
-/// in ~10s chunks, so a just-ended event commonly returns **400** with
-/// `No recordings found for the specified time range` until the segment lands.
-/// 404 covers "clip not available" / missing event; 408/425/429/5xx are transient.
-fn camera_clip_http_status_retryable(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 400 | 404 | 408 | 425 | 429) || status.is_server_error()
-}
-
-fn format_camera_clip_http_error(
-    status: reqwest::StatusCode,
-    video_url: &str,
-    body: &str,
-) -> String {
-    let snippet = short_http_body_snippet(body);
-    if snippet.is_empty() {
-        format!("Failed to download camera clip: HTTP {status} ({video_url})")
-    } else {
-        format!("Failed to download camera clip: HTTP {status} ({video_url}): {snippet}")
-    }
-}
-
-fn camera_download_bearer_token(app: &tauri::AppHandle, video_url: &str) -> Option<String> {
-    let Ok(cfg) = load_config(app) else {
-        return None;
-    };
-    let token = cfg.ha_longlived_token.as_deref()?.trim();
-    if token.is_empty() {
-        return None;
-    }
-    let ha_host = cfg.ha_url.as_deref()?.trim().trim_end_matches('/');
-    if ha_host.is_empty() {
-        return None;
-    }
-    // Match http://ha or http://ha:8123 against the snapshot URL host.
-    let url_l = video_url.to_ascii_lowercase();
-    let host_l = ha_host.to_ascii_lowercase();
-    let host_no_scheme = host_l
-        .strip_prefix("https://")
-        .or_else(|| host_l.strip_prefix("http://"))
-        .unwrap_or(host_l.as_str());
-    if url_l.contains(host_no_scheme) || url_l.contains(&host_l) {
-        return Some(format!("Bearer {token}"));
-    }
-    None
-}
-
-fn camera_media_extension(content_type: Option<&str>, video_url: &str) -> &'static str {
-    let ct = content_type.unwrap_or("").to_ascii_lowercase();
-    if ct.contains("image/jpeg") || ct.contains("image/jpg") {
-        return "jpg";
-    }
-    if ct.contains("image/png") {
-        return "png";
-    }
-    if ct.contains("image/webp") {
-        return "webp";
-    }
-    if ct.contains("image/") {
-        return "img";
-    }
-    let path = video_url
-        .split('?')
-        .next()
-        .unwrap_or(video_url)
-        .to_ascii_lowercase();
-    if path.ends_with(".jpg") || path.ends_with(".jpeg") {
-        return "jpg";
-    }
-    if path.ends_with(".png") {
-        return "png";
-    }
-    if path.ends_with(".webp") {
-        return "webp";
-    }
-    "mp4"
-}
-
-async fn download_camera_clip(
-    app: &tauri::AppHandle,
-    video_url: &str,
-) -> Result<std::path::PathBuf, String> {
-    let url_trim = video_url.trim();
-    if url_trim.to_ascii_lowercase().starts_with("rtsp://") {
-        return Err(
-            "RTSP is not supported by the camera window (HTTP/HTTPS clips or snapshots only). \
-Expose ring-mqtt on the LAN and set ring_snapshot_url_template to an HTTP snapshot/HLS URL \
-(see docs/ring-mqtt.md)."
-                .into(),
-        );
-    }
-
-    let clip_dir = camera_clip_dir(app)?;
-    std::fs::create_dir_all(&clip_dir)
-        .map_err(|e| format!("Failed to create camera clip temp dir: {e}"))?;
-    // Do not wipe the clip dir — other camera windows may still be playing.
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
-    let auth = camera_download_bearer_token(app, url_trim);
-
-    // Frigate recording segments can take ~10s after `end`+`has_clip`; cover that
-    // window plus brief network blips. Kerberos URLs rarely hit these statuses.
-    const MAX_ATTEMPTS: u32 = 8;
-    const BACKOFF_MS: [u64; 7] = [1000, 2000, 3000, 4000, 5000, 5000, 5000];
-    let mut last_err = String::new();
-
-    for attempt in 1..=MAX_ATTEMPTS {
-        let mut req = client.get(url_trim);
-        if let Some(ref bearer) = auth {
-            req = req.header(reqwest::header::AUTHORIZATION, bearer);
-        }
-        let response = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                last_err = format!("Failed to download camera clip: {e} ({video_url})");
-                if attempt < MAX_ATTEMPTS {
-                    let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                    warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed (send/connect): {e}; retrying in {delay}ms url={video_url}"
-                    );
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    continue;
-                }
-                return Err(last_err);
-            }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            last_err = format_camera_clip_http_error(status, video_url, &body);
-            if attempt < MAX_ATTEMPTS && camera_clip_http_status_retryable(status) {
-                let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                warn!(
-                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got HTTP {status}; retrying in {delay}ms url={video_url} body={}",
-                    short_http_body_snippet(&body)
-                );
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-                continue;
-            }
-            return Err(last_err);
-        }
-
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let ext = camera_media_extension(content_type.as_deref(), url_trim);
-
-        let bytes = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                last_err = format!("Failed to read camera clip body: {e} ({video_url})");
-                if attempt < MAX_ATTEMPTS {
-                    let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                    warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed reading body: {e}; retrying in {delay}ms url={video_url}"
-                    );
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    continue;
-                }
-                return Err(last_err);
-            }
-        };
-
-        if bytes.is_empty() {
-            last_err = format!("Downloaded camera clip is empty ({video_url})");
-            if attempt < MAX_ATTEMPTS {
-                let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                warn!(
-                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got empty body; retrying in {delay}ms url={video_url}"
-                );
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-                continue;
-            }
-            return Err(last_err);
-        }
-
-        if attempt > 1 {
-            info!(
-                "Camera clip download succeeded on attempt {attempt}/{MAX_ATTEMPTS} url={video_url}"
-            );
-        }
-
-        let file_name = format!("clip-{}.{ext}", uuid::Uuid::new_v4());
-        let dest = clip_dir.join(file_name);
-        std::fs::write(&dest, &bytes)
-            .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
-
-        return Ok(dest);
-    }
-
-    Err(last_err)
 }
 
 fn percent_encode_query(input: &str) -> String {
@@ -2046,54 +1538,7 @@ async fn get_auto_start() -> Result<bool, String> {
     Ok(false)
 }
 
-// === Authentication ===
-
 use std::collections::HashMap;
-use std::sync::{LazyLock, RwLock};
-
-static AUTH_SESSIONS: LazyLock<RwLock<HashMap<String, AuthSession>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
-struct AuthSession {
-    #[allow(dead_code)]
-    username: String,
-    #[allow(dead_code)]
-    created_at: std::time::Instant,
-}
-
-#[tauri::command]
-async fn auth_login(
-    username: String,
-    password: String,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    let config = load_config(&app)?;
-    if !config.auth_enabled.unwrap_or(false) {
-        return Ok("disabled".to_string());
-    }
-    let expected_user = config.auth_username.as_deref().unwrap_or("");
-    let expected_pass = config.auth_password.as_deref().unwrap_or("");
-    if username == expected_user && password == expected_pass {
-        let token = format!("sess_{}", uuid::Uuid::new_v4());
-        let mut sessions = AUTH_SESSIONS.write().map_err(|e| e.to_string())?;
-        sessions.insert(
-            token.clone(),
-            AuthSession {
-                username,
-                created_at: std::time::Instant::now(),
-            },
-        );
-        Ok(token)
-    } else {
-        Err("Invalid credentials".to_string())
-    }
-}
-
-#[tauri::command]
-async fn auth_check(token: String) -> Result<bool, String> {
-    let sessions = AUTH_SESSIONS.read().map_err(|e| e.to_string())?;
-    Ok(sessions.contains_key(&token))
-}
 
 #[tauri::command]
 async fn send_notification(
@@ -2122,8 +1567,7 @@ fn set_window_hidden(
     if !hidden {
         if let Ok(guard) = mqtt_client.0.lock() {
             if let Some(ref client) = *guard {
-                let state = client.get_state();
-                crate::mqtt::MqttClient::emit_state_update(&Some(app.clone()), &state, true);
+                client.emit_current_state(true);
             }
         }
         // Sensors are omitted from live ha-filtered ticks; force a full snapshot
@@ -2142,43 +1586,8 @@ fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_a
 }
 
 #[tauri::command]
-async fn auth_biometric_available() -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(unsafe { biometric_available() })
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(false)
-    }
-}
-
-#[tauri::command]
-async fn auth_biometric(_app: tauri::AppHandle) -> Result<String, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let reason = std::ffi::CString::new("Authenticate to access Inverter Desktop")
-            .map_err(|e| format!("CString error: {}", e))?;
-        let ok = unsafe { biometric_authenticate(reason.as_ptr()) };
-        if ok {
-            let token = format!("sess_{}", uuid::Uuid::new_v4());
-            let mut sessions = AUTH_SESSIONS.write().map_err(|e| e.to_string())?;
-            sessions.insert(
-                token.clone(),
-                AuthSession {
-                    username: "biometric".to_string(),
-                    created_at: std::time::Instant::now(),
-                },
-            );
-            Ok(token)
-        } else {
-            Err("Biometric authentication failed or was cancelled".to_string())
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Err("Biometric authentication is only supported on macOS".to_string())
-    }
+fn get_ha_connection_status() -> bool {
+    ha_api::connection_status()
 }
 
 #[cfg(desktop)]
@@ -2263,12 +1672,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(mqtt_state)
         .manage(ha_mqtt_state)
         .manage(gateway_state)
         .manage(InverterLifecycle::default())
         .manage(ha_entity_states);
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let builder = builder.plugin(mobile_credentials::init());
 
     #[cfg(desktop)]
     // Camera clip windows are ephemeral (fixed small size, stacked top-right); do not
@@ -2280,43 +1691,65 @@ pub fn run() {
     );
 
     builder
-        .invoke_handler(tauri::generate_handler![
-            get_state,
-            disconnect_inverter,
-            perform_action,
-            connect_mqtt,
-            connect_gateway,
-            acknowledge_victron_banner,
-            connect_ha_mqtt,
-            disconnect_ha_mqtt,
-            get_config,
-            save_config,
-            backup_config,
-            restore_config,
-            test_ha_connection,
-            test_mqtt_connection,
-            test_gateway_connection,
-            get_ha_appliance_states,
-            get_ha_entity_states,
-            discover_ha_entities,
-            set_cover_position,
-            open_config_window,
-            open_camera_video_window,
-            close_camera_video_window,
-            close_config_window,
-            set_auto_start,
-            get_auto_start,
-            auth_login,
-            auth_check,
-            auth_biometric_available,
-            auth_biometric,
-            send_notification,
-            set_window_hidden,
-            get_ha_filtered_data
-        ])
+        .invoke_handler(|invoke| {
+            tauri::async_runtime::spawn_blocking(move || {
+                let app = invoke.message.webview().app_handle().clone();
+                if !auth::public_command(invoke.message.command()) {
+                    if let Err(error) = auth::require_session(&app) {
+                        let _ = app.emit("auth-state-changed", ());
+                        invoke.resolver.reject(error);
+                        return true;
+                    }
+                }
+                let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                    get_state,
+                    disconnect_inverter,
+                    perform_action,
+                    connect_mqtt,
+                    connect_gateway,
+                    acknowledge_victron_banner,
+                    connect_ha_mqtt,
+                    disconnect_ha_mqtt,
+                    get_config,
+                    save_config,
+                    backup_config,
+                    restore_config,
+                    test_ha_connection,
+                    test_mqtt_connection,
+                    test_gateway_connection,
+                    get_ha_appliance_states,
+                    get_ha_entity_states,
+                    discover_ha_entities,
+                    set_cover_position,
+                    open_config_window,
+                    open_camera_video_window,
+                    close_camera_video_window,
+                    close_config_window,
+                    set_auto_start,
+                    get_auto_start,
+                    auth::auth_status,
+                    auth::auth_logout,
+                    auth::auth_login,
+                    auth::auth_check,
+                    auth::auth_biometric_available,
+                    auth::auth_biometric,
+                    send_notification,
+                    set_window_hidden,
+                    get_ha_filtered_data,
+                    get_ha_connection_status
+                ];
+                let resolver = invoke.resolver.clone();
+                let handled = handler(invoke);
+                if !handled {
+                    resolver.reject("Unknown command");
+                }
+                handled
+            });
+            true
+        })
         .setup(|app| {
             // Start background HA polling
-            start_ha_polling(app.handle().clone());
+            ha_session::start(app.handle().clone());
 
             #[cfg(desktop)]
             {
@@ -2710,47 +2143,6 @@ mod perform_action_tests {
 }
 
 #[cfg(test)]
-mod camera_clip_download_tests {
-    use super::*;
-
-    #[test]
-    fn retries_frigate_no_recordings_400() {
-        let status = reqwest::StatusCode::from_u16(400).unwrap();
-        assert!(camera_clip_http_status_retryable(status));
-    }
-
-    #[test]
-    fn retries_404_and_5xx_still() {
-        assert!(camera_clip_http_status_retryable(
-            reqwest::StatusCode::from_u16(404).unwrap()
-        ));
-        assert!(camera_clip_http_status_retryable(
-            reqwest::StatusCode::from_u16(503).unwrap()
-        ));
-    }
-
-    #[test]
-    fn does_not_retry_403() {
-        assert!(!camera_clip_http_status_retryable(
-            reqwest::StatusCode::from_u16(403).unwrap()
-        ));
-    }
-
-    #[test]
-    fn http_error_includes_status_url_and_body_snippet() {
-        let status = reqwest::StatusCode::from_u16(400).unwrap();
-        let msg = format_camera_clip_http_error(
-            status,
-            "http://192.168.167.25:5005/api/events/abc/clip.mp4",
-            r#"{"success":false,"message":"No recordings found for the specified time range"}"#,
-        );
-        assert!(msg.contains("HTTP 400 Bad Request"));
-        assert!(msg.contains("192.168.167.25:5005"));
-        assert!(msg.contains("No recordings found"));
-    }
-}
-
-#[cfg(test)]
 mod setup_completed_tests {
     use super::*;
 
@@ -2816,66 +2208,6 @@ mod setup_completed_tests {
         let config: FullConfig = serde_json::from_str(json).expect("deserialize");
         assert!(!config.setup_completed);
         assert!(resolve_setup_completed(&config, true));
-    }
-}
-
-#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
-mod encryption_key_file_tests {
-    use super::*;
-
-    #[test]
-    fn write_read_roundtrip_base64_32_bytes() {
-        let dir =
-            std::env::temp_dir().join(format!("inverter-desktop-key-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.key");
-
-        let mut key = [0u8; 32];
-        for (i, b) in key.iter_mut().enumerate() {
-            *b = i as u8;
-        }
-        write_encryption_key_file(&path, &key).expect("write");
-        let loaded = read_encryption_key_file(&path)
-            .expect("read")
-            .expect("present");
-        assert_eq!(loaded, key);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "expected 0600 permissions");
-        }
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn missing_file_returns_none() {
-        let path = std::env::temp_dir().join(format!(
-            "inverter-desktop-key-missing-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        assert!(read_encryption_key_file(&path)
-            .expect("read missing")
-            .is_none());
-    }
-
-    #[test]
-    fn decode_rejects_wrong_length() {
-        let short = general_purpose::STANDARD.encode([1u8, 2, 3]);
-        assert!(decode_encryption_key_b64(&short).is_err());
-    }
-
-    #[test]
-    fn decode_accepts_standard_base64_32_bytes() {
-        // Same encoding historically stored in Keychain — used for file + migration.
-        let mut key = [0u8; 32];
-        key[0] = 0xab;
-        let b64 = general_purpose::STANDARD.encode(key);
-        assert_eq!(decode_encryption_key_b64(&b64).unwrap(), key);
     }
 }
 

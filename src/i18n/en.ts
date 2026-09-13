@@ -1,5 +1,11 @@
 export default {
   status: {
+    haStale: 'Home Assistant offline — last known values',
+    telemetrylive: 'Live data',
+    telemetrystale: 'Stale data',
+    telemetryunknown: 'Waiting for data',
+    receivedAt: 'Received',
+
     ha: 'HA',
     mqtt: 'MQTT',
     igw: 'IGW',
@@ -7,7 +13,7 @@ export default {
     uptime: 'Uptime',
     desktop: 'Desktop',
     control: 'Control',
-    tipHa: 'Home Assistant REST API connection',
+    tipHa: 'Home Assistant WebSocket connection',
     tipIgw: 'Remote inverter-gateway via Cloudflare Access',
     tipMqtt: 'Cerbo GX LAN MQTT live data',
     tipHaMqtt: 'HA MQTT broker for Kerberos camera motion events',
