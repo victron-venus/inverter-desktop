@@ -132,6 +132,10 @@ sudo rpm -i inverter-dashboard_*.rpm
 
 ---
 
+### Google Play preparation
+
+Maintainers can build a separately upload-key-signed Android App Bundle with the manual [Google Play workflow](docs/google-play.md). Existing GitHub APK signing remains unchanged; Play enrollment must preserve the existing app signing certificate for cross-store upgrades. Android 64-bit builds now align both load segments and RELRO boundaries for 16 KB pages; the Play workflow checks the actual bundle before signing.
+
 ### iOS Installation
 
 Starting with 2.5.40, the iOS app and build versions match the release; earlier IPAs could report 1.0.0. The IPA remains unsigned for sideloading.
@@ -535,3 +539,7 @@ For issues specific to:
 - **iOS installation**: Check AltStore/AltServer status and device trust settings
 - **Android installation**: Verify ADB connection and USB debugging enabled
 - **This project**: Open an issue in this repository
+
+## Privacy
+
+Read the [privacy policy](docs/privacy-policy.md) for information about local settings, configured services and your choices. Privacy and support contact: [alvit.work@gmail.com](mailto:alvit.work@gmail.com).
