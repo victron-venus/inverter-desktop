@@ -33,7 +33,19 @@ export default {
     mediaPlayers: 'Медиаплееры',
     scenes: 'Сцены',
     homeButtons: 'Кнопки Home',
-    headerToggles: 'Переключатели в шапке (ONLY CHARGING и т.п.)',
+    headerToggles: 'Управление в шапке',
+    headerControlsTitle: 'Управление в шапке',
+    addHeaderControl: 'Добавить кнопку',
+    headerControlTarget: 'Флаг инвертора / сущность HA',
+    inverterControlPresets: 'Добавить управление инвертором',
+    headerControlsHelp:
+      'Управление инвертором предоставляет inverter-control через Cerbo MQTT. Home Assistant для него не нужен. Можно также добавить свои сущности Home Assistant.',
+    noHeaderControls:
+      'Свои кнопки не настроены. Используются кнопки, полученные по MQTT, или встроенный набор управления инвертором.',
+    invalidHeaderControlTarget:
+      'Укажите флаг инвертора или сущность Home Assistant (domain.entity).',
+    haControlsHelp:
+      'Home Assistant подключается по желанию и управляет домашними устройствами. Управление инвертором предоставляет inverter-control через Cerbo MQTT; Home Assistant может представить его как переключатели в своей экосистеме.',
     save: 'Сохранить настройки',
     saved: 'Настройки успешно сохранены',
     reset: 'Сбросить по умолчанию',

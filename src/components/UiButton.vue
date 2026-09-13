@@ -25,7 +25,7 @@ const props = withDefaults(
     active?: boolean
     /** When true, exposes aria-pressed from active */
     toggle?: boolean
-    /** Entity exists but HA state is unavailable/unknown — visual only, still clickable */
+    /** Control state is unavailable/unknown — visual only, still clickable */
     unavailable?: boolean
     disabled?: boolean
     loading?: boolean

@@ -243,8 +243,7 @@
               <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">Home Assistant</h2>
                 <p class="text-[10px] text-muted mt-1">
-                  HA API is for home devices (garage, laundry, EV, covers). Inverter control flags
-                  always go to Cerbo MQTT, even when API is enabled.
+                  {{ $t('config.haControlsHelp') }}
                 </p>
               </header>
 
@@ -1061,14 +1060,13 @@
                 <h2 class="classic-section-title">UI Controls</h2>
               </header>
 
-              <HaEntitiesEditor
-                :haEntitiesList="haEntitiesList"
+              <HeaderTogglesEditor
+                :headerTogglesList="headerTogglesList"
                 :discoveredEntities="discoveredEntities"
-                :entityRules="entityRules"
-                @add="addHaEntity"
-                @remove="removeHaEntity"
-                @move-up="moveEntityUp"
-                @move-down="moveEntityDown"
+                @add="addHeaderToggle"
+                @remove="removeHeaderToggle"
+                @move-up="moveToggleUp"
+                @move-down="moveToggleDown"
                 @focus-entity="
                   ensureEntitiesFetched(
                     config.ha_url || '',
@@ -1080,14 +1078,14 @@
 
               <div class="h-px bg-slate-100 dark:bg-slate-800"></div>
 
-              <HeaderTogglesEditor
-                :headerTogglesList="headerTogglesList"
+              <HaEntitiesEditor
+                :haEntitiesList="haEntitiesList"
                 :discoveredEntities="discoveredEntities"
                 :entityRules="entityRules"
-                @add="addHeaderToggle"
-                @remove="removeHeaderToggle"
-                @move-up="moveToggleUp"
-                @move-down="moveToggleDown"
+                @add="addHaEntity"
+                @remove="removeHaEntity"
+                @move-up="moveEntityUp"
+                @move-down="moveEntityDown"
                 @focus-entity="
                   ensureEntitiesFetched(
                     config.ha_url || '',
@@ -1204,7 +1202,7 @@
                     : 'text-slate-500 opacity-50 dark:text-slate-400'
                 "
               >
-                Header Toggles
+                {{ $t('config.headerControlsTitle') }}
               </button>
             </div>
             <div class="flex gap-2">
@@ -1270,7 +1268,7 @@ import {
 import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
 import HeaderTogglesEditor from './components/HeaderTogglesEditor.vue'
 import { useConfigForm } from './composables/useConfigForm'
-import { useHAEntityManager } from './composables/useHAEntityManager'
+import { useDashboardControlsConfig } from './composables/useDashboardControlsConfig'
 
 const {
   config,
@@ -1305,7 +1303,7 @@ const {
   moveToggleUp,
   moveToggleDown,
   ensureEntitiesFetched,
-} = useHAEntityManager()
+} = useDashboardControlsConfig()
 
 const activeTab = ref('mqtt')
 

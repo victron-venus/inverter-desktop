@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { reactive, ref } from 'vue'
 import type { AppConfig } from '../config'
 import { defaultConfig } from '../config'
+import type { DashboardControl } from '../inverterControl'
+import { isDashboardControlTarget } from './useDashboardControlsConfig'
 
 export function useConfigForm() {
   const config = reactive<AppConfig>({ ...defaultConfig })
@@ -52,9 +54,17 @@ export function useConfigForm() {
       domain: string
       enabled: boolean
     }>,
-    headerTogglesList: Array<{ id: string; label: string; entity: string }>
+    headerTogglesList: DashboardControl[]
   ): Promise<boolean> {
     if (!configLoaded.value) return false
+    const invalidControl = headerTogglesList.find(
+      (control) => !isDashboardControlTarget(control.entity)
+    )
+    if (invalidControl) {
+      message.value = `Invalid header control target: ${invalidControl.entity || '(empty)'}. Use an inverter flag or a Home Assistant entity (domain.entity).`
+      messageType.value = 'error'
+      return false
+    }
     haEntitiesList.forEach((e) => {
       if (!e.id && e.entity) e.id = e.entity.replace(/\./g, '_')
     })

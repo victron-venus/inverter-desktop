@@ -111,7 +111,7 @@ impl StateEmitter {
         snapshot: &InverterState,
         force: bool,
     ) {
-        if crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+        if crate::app_visibility::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
             self.0.lock().unwrap_or_else(|e| e.into_inner()).pending = None;
             return;
         }
@@ -131,7 +131,9 @@ impl StateEmitter {
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(delay).await;
                 if let Some(snapshot) = emitter.take_pending() {
-                    if !crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+                    if !crate::app_visibility::WINDOW_HIDDEN
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         emitter.dispatch(|| {
                             let _ = app.emit("mqtt-state-update", snapshot);
                             note_state_emit("flush");
