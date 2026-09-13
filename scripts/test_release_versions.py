@@ -1,14 +1,18 @@
 """Exercise this application's version projections and packaged metadata checks."""
 
 import importlib.util
+import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import chdir
 from unittest.mock import patch
 import zipfile
 
@@ -113,6 +117,140 @@ class ReleaseVersionTests(unittest.TestCase):
             verifier.verify_apple(ipa, self.plan("rc", 1, self.build + 1))
         with self.assertRaises(ValueError):
             verifier.verify_embedded_identity(b"old binary", plan)
+
+    def test_native_cli_rejects_escape_and_symlink_before_inspection(self):
+        """Constrain caller-selected packages to regular paths in this checkout."""
+        verifier = script("verify-native-release")
+        plan_path = self.root / ".release-plan.json"
+        plan_path.write_text(json.dumps(self.plan()))
+        artifact = self.root / "package.deb"
+        artifact.write_bytes(b"fixture")
+        alias = self.root / "alias.deb"
+        alias.symlink_to(artifact)
+        with tempfile.TemporaryDirectory() as temp:
+            outside = Path(temp) / "outside.deb"
+            outside.write_bytes(b"outside checkout")
+            for path in (outside, alias, self.root / "nested/../package.deb"):
+                with (
+                    self.subTest(path=path),
+                    patch.object(verifier, "CHECKOUT", self.root),
+                    patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "verify-native-release",
+                            "linux",
+                            str(path),
+                            "--plan",
+                            str(plan_path),
+                        ],
+                    ),
+                    patch.object(verifier, "verify_linux") as inspect,
+                    self.assertRaises(ValueError),
+                ):
+                    verifier.main()
+                inspect.assert_not_called()
+
+    def test_native_cli_resolves_option_like_filenames_before_inspection(self):
+        """An option-shaped filename must reach tools as an absolute file path."""
+        verifier = script("verify-native-release")
+        plan_path = self.root / ".release-plan.json"
+        plan_path.write_text(json.dumps(self.plan()))
+        artifact = self.root / "--queryformat=.deb"
+        artifact.write_bytes(b"fixture")
+        with (
+            chdir(self.root),
+            patch.object(verifier, "CHECKOUT", self.root),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "verify-native-release",
+                    "linux",
+                    "--plan",
+                    str(plan_path),
+                    "--",
+                    artifact.name,
+                ],
+            ),
+            patch.object(verifier, "verify_linux") as inspect,
+        ):
+            verifier.main()
+        self.assertEqual(inspect.call_args.args[0], artifact.resolve())
+
+    def test_apk_inspector_only_runs_the_expected_sdk_binary(self):
+        """Reject arbitrary executables before inspecting genuine APK ZIP metadata."""
+        verifier = script("verify-native-release")
+        plan = self.plan()
+        apk = self.root / "package.apk"
+        with zipfile.ZipFile(apk, "w") as archive:
+            archive.writestr(
+                "lib/arm64-v8a/libinverter_dashboard_lib.so",
+                json.dumps(plan, separators=(",", ":")),
+            )
+        sdk = self.root / "sdk"
+        aapt = sdk / "build-tools/34.0.0/aapt"
+        aapt.parent.mkdir(parents=True)
+        aapt.write_bytes(b"fixture inspector")
+        other = sdk / "other-aapt"
+        other.write_bytes(b"caller-selected executable")
+        output = (
+            "package: name='com.alvit.inverter_dashboard' "
+            f"versionCode='{plan['build_number']}' versionName='{plan['version']}'"
+        )
+        with (
+            patch.dict(os.environ, {"ANDROID_HOME": str(sdk)}),
+            patch.object(
+                verifier.subprocess, "check_output", return_value=output
+            ) as execute,
+        ):
+            with self.assertRaisesRegex(ValueError, "Inspector must be"):
+                verifier.verify_apk(apk, plan, other)
+            execute.assert_not_called()
+            verifier.verify_apk(apk, plan, aapt)
+        self.assertEqual(execute.call_args.args[0][0], str(aapt.resolve()))
+        self.assertEqual(execute.call_args.args[0][-1], str(apk.resolve()))
+
+    def test_aab_inspector_requires_fixed_path_and_matching_checksum(self):
+        """Validate the selected bundletool bytes before any Java invocation."""
+        verifier = script("verify-native-release")
+        plan = self.plan()
+        aab = self.root / "package.aab"
+        with zipfile.ZipFile(aab, "w") as archive:
+            archive.writestr(
+                "base/lib/arm64-v8a/libinverter_dashboard_lib.so",
+                json.dumps(plan, separators=(",", ":")),
+            )
+        runner = self.root / "runner"
+        runner.mkdir()
+        bundletool = runner / "bundletool.jar"
+        original = b"trusted fixture inspector"
+        bundletool.write_bytes(original)
+        other = runner / "other.jar"
+        other.write_bytes(original)
+        manifest = (
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+            f'package="com.alvit.inverter_dashboard" android:versionName="{plan["version"]}" '
+            f'android:versionCode="{plan["build_number"]}" />'
+        )
+        with (
+            patch.dict(os.environ, {"RUNNER_TEMP": str(runner)}),
+            patch.object(
+                verifier, "BUNDLETOOL_SHA256", hashlib.sha256(original).hexdigest()
+            ),
+            patch.object(
+                verifier.subprocess, "check_output", return_value=manifest
+            ) as execute,
+        ):
+            with self.assertRaisesRegex(ValueError, "Inspector must be"):
+                verifier.verify_aab(aab, plan, other)
+            bundletool.write_bytes(b"modified inspector")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                verifier.verify_aab(aab, plan, bundletool)
+            execute.assert_not_called()
+            bundletool.write_bytes(original)
+            verifier.verify_aab(aab, plan, bundletool)
+        self.assertEqual(execute.call_args.args[0][2], str(bundletool.resolve()))
 
     @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is not installed")
     def test_real_debian_archive_rejects_stale_package_metadata(self):

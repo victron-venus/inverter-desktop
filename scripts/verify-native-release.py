@@ -5,6 +5,7 @@
 # pylint: disable=invalid-name
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -19,6 +20,23 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from version_plan import projected_value, validate_plan
+from version_receipt import confined_cli_path
+
+CHECKOUT = Path(__file__).resolve().parents[1]
+BUNDLETOOL_SHA256 = "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29"
+
+
+def expected_inspector(root_variable, relative, requested):
+    """Select the fixed installed inspector, never a caller-chosen executable."""
+    configured = os.environ.get(root_variable)
+    if not configured:
+        raise ValueError(f"Inspector requires {root_variable}")
+    root = Path(configured).resolve(strict=True)
+    expected = confined_cli_path(root, root / relative, "file")
+    selected = confined_cli_path(root, requested, "file")
+    if selected != expected:
+        raise ValueError(f"Inspector must be {root_variable}/{relative}")
+    return expected
 
 
 def verify_plist(info, plan):
@@ -75,6 +93,8 @@ def verify_apple(path, plan):
 
 def verify_apk(path, plan, aapt):
     """Check Android package metadata and every bundled application library."""
+    path = path.resolve(strict=True)
+    aapt = expected_inspector("ANDROID_HOME", "build-tools/34.0.0/aapt", aapt)
     output = subprocess.check_output(
         [str(aapt), "dump", "badging", str(path)], text=True
     )
@@ -106,6 +126,12 @@ def verify_apk(path, plan, aapt):
 
 def verify_aab(path, plan, bundletool):
     """Inspect the base bundle manifest and its compiled application libraries."""
+    path = path.resolve(strict=True)
+    bundletool = expected_inspector("RUNNER_TEMP", "bundletool.jar", bundletool)
+    if hashlib.sha256(bundletool.read_bytes()).hexdigest() != BUNDLETOOL_SHA256:
+        raise ValueError(
+            "Bundle metadata inspector checksum differs from pinned bundletool"
+        )
     output = subprocess.check_output(
         [
             "java",
@@ -144,6 +170,7 @@ def verify_aab(path, plan, bundletool):
 
 def verify_linux(path, plan):
     """Check the native Linux package version and embedded application identity."""
+    path = path.resolve(strict=True)
     if path.suffix == ".deb":
         version = subprocess.check_output(
             ["dpkg-deb", "-f", str(path), "Version"], text=True
@@ -244,23 +271,28 @@ def main():
     parser.add_argument("--aapt", type=Path)
     parser.add_argument("--bundletool", type=Path)
     args = parser.parse_args()
-    plan = validate_plan(json.loads(args.plan.read_bytes()))
+    plan_path = confined_cli_path(CHECKOUT, args.plan, "metadata")
+    artifact_kind = (
+        "directory" if args.kind == "apple" and args.path.suffix == ".app" else "file"
+    )
+    artifact = confined_cli_path(CHECKOUT, args.path, artifact_kind)
+    plan = validate_plan(json.loads(plan_path.read_bytes()))
     if args.kind == "apple":
-        verify_apple(args.path, plan)
+        verify_apple(artifact, plan)
     elif args.kind == "android":
         if not args.aapt:
             parser.error("Android verification requires --aapt")
-        verify_apk(args.path, plan, args.aapt)
+        verify_apk(artifact, plan, args.aapt)
     elif args.kind == "aab":
         if not args.bundletool:
             parser.error("AAB verification requires --bundletool")
-        verify_aab(args.path, plan, args.bundletool)
+        verify_aab(artifact, plan, args.bundletool)
     elif args.kind == "linux":
-        verify_linux(args.path, plan)
+        verify_linux(artifact, plan)
     else:
-        verify_windows(args.path, plan)
+        verify_windows(artifact, plan)
     print(
-        f"Verified packaged {plan['version']} build {plan['build_number']}: {args.path}"
+        f"Verified packaged {plan['version']} build {plan['build_number']}: {artifact}"
     )
 
 
