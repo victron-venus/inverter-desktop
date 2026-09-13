@@ -2215,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "inverter-dashboard"
-version = "2.5.41"
+version = "2.5.42"
 dependencies = [
  "ab_glyph",
  "aead",
