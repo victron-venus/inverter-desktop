@@ -169,18 +169,7 @@ jobs:
           "
       - name: iOS – pre-build Rust library
         if: matrix.type == 'ios'
-        run: |
-          # Raw cargo does not run Tauri's beforeBuildCommand or enable the
-          # production asset protocol; both are required before archiving.
-          pnpm run build
-          test -s dist/index.html
-          cargo build --locked --target aarch64-apple-ios --release \
-            --features tauri/custom-protocol \
-            --package inverter-dashboard --lib \
-            --manifest-path src-tauri/Cargo.toml
-          mkdir -p src-tauri/gen/apple/Externals/arm64/release
-          cp src-tauri/target/aarch64-apple-ios/release/libinverter_dashboard_lib.a \
-            src-tauri/gen/apple/Externals/arm64/release/libapp.a
+        run: bash scripts/ci-build-ios-library.sh
       - name: iOS – patch build phase to skip xcode-script
         if: matrix.type == 'ios'
         run: python3 scripts/patch_pbxproj.py
@@ -260,6 +249,9 @@ jobs:
         env:
           TAURI_APP_VERSION: ${{ inputs.version }}
         run: pnpm tauri android build --ci
+      - name: Android – verify release bundle native alignment
+        if: matrix.type == 'android'
+        run: python3 scripts/android/check_native_alignment.py src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
       - name: Android – sign artifacts
         if: matrix.type == 'android' && github.repository_owner == 'victron-venus'
         env:
