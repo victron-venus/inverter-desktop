@@ -11,7 +11,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 version, channel = sys.argv[1:]
 if not re.fullmatch(
-    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version
+    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", version, re.ASCII
 ):
     raise SystemExit("Release version must be a base X.Y.Z version")
 if channel not in {"nightly", "beta", "rc"}:
