@@ -11,7 +11,7 @@ sdkmanager --sdk_root="$ANDROID_HOME" \
   "platform-tools" </dev/null
 
 # A skipped package (for example an unaccepted license) is not a successful install.
-test -s "$ANDROID_HOME/platforms/android-36/android.jar"
-test -x "$ANDROID_HOME/build-tools/34.0.0/aapt2"
-test -x "$ANDROID_HOME/platform-tools/adb"
+[[ -s "$ANDROID_HOME/platforms/android-36/android.jar" ]]
+[[ -x "$ANDROID_HOME/build-tools/34.0.0/aapt2" ]]
+[[ -x "$ANDROID_HOME/platform-tools/adb" ]]
 echo "Android SDK components installed"
