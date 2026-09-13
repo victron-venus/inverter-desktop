@@ -66,20 +66,19 @@ Live **Inverter Desktop** on macOS and iOS Simulator — real-time grid, solar, 
 
 ---
 
-## Release Channels & CI/CD
+<!-- ci-release-process:start -->
 
-This repository follows a multi-channel release strategy managed by GitHub Actions:
+## Release process
 
-- **Stable Releases**: Tagged as `vX.Y.Z` (e.g., `v1.0.0`). Includes signed/unsigned installers for macOS, Windows, Linux, Android, and iOS.
-- **Pre-releases**: Tagged with release candidate or beta suffixes like `vX.Y.Z-rc.1` or `vX.Y.Z-beta.1`. Flagged automatically as Pre-release on GitHub Releases to isolate test builds.
-- **Nightly Builds**: Built daily at 02:00 UTC from the `main` branch. Artifacts are published to the rolling **[Nightly Build Release](https://github.com/victron-venus/inverter-desktop/releases/tag/nightly)**.
+See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and stable promotion rules, and the [operator runbook](docs/release-workflow.md) for local commands.
+<!-- ci-release-process:end -->
 
 ---
 
 ## Completed Features
 
-- ✅ **CI/CD Releases & Nightly Builds**: Pre-release tag detection and nightly builds configured
-- ✅ **Tauri v2 Auto-Updater**: Integrated `@tauri-apps/plugin-updater` connected to GitHub Releases API for automated update checks on macOS, Windows, and Linux (commit cdd80f2)
+- ✅ **Release packaging**: Candidate artifacts and checksums; see the [release strategy](RELEASING.md).
+- **Tauri v2 updater integration**: The plugin is present, but the committed updater key is a placeholder. Use manual installers until update signing and metadata are configured and verified.
 - ✅ **Encrypted Storage**: Integrated `@tauri-apps/plugin-store` for encrypted local persistence of MQTT credentials, HA access tokens, and custom layout preferences (PR: feat/encrypted-storage)
 - ✅ **Native Mobile Notifications**: Implemented `@tauri-apps/plugin-notification` for OS-level push alerts when Battery SoC drops below 20% or grid connection is lost (PR: feat/native-notifications)
 - ✅ **Cargo Security Audit**: Added `cargo-deny` configuration to enforce dependency security and license compliance checks in CI (PR: feat/cargo-security-audit)

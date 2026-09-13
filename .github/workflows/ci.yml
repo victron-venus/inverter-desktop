@@ -1,24 +1,23 @@
 name: CI
 
 on:
+  workflow_call: {}
   pull_request:
     branches: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
-      - '**.json'
   push:
     branches: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
-      - '**.json'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

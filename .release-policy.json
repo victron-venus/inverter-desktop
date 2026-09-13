@@ -1,0 +1,33 @@
+{
+  "version_file": "src-tauri/Cargo.toml",
+  "validation_workflows": [
+    "ci.yml",
+    "unit-tests.yml",
+    "mobile.yml",
+    "codeql.yml",
+    "cargo-audit.yml",
+    "cargo-deny.yml"
+  ],
+  "artifact_pattern": "release-assets*",
+  "local_checks": [
+    "pnpm install --frozen-lockfile --ignore-scripts",
+    "pnpm run format:check",
+    "pnpm run build",
+    "pnpm test",
+    "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
+    "python3 -m unittest discover -s scripts -p test_ios_version.py"
+  ],
+  "notes": [
+    "Native source versions must all match the requested base version; channel is release metadata, not a binary version rewrite.",
+    "Retains macOS ARM/Intel, Linux, Windows, iOS unsigned and Android signed builds; configured Android signing secrets are required.",
+    "Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.",
+    "Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; automatic updating is not configured with the committed placeholder updater key."
+  ],
+  "version_companions": ["package.json", "src-tauri/tauri.conf.json"],
+  "repository": "victron-venus/inverter-desktop",
+  "mode": "release",
+  "default_branch": "main",
+  "visibility": "public"
+}
