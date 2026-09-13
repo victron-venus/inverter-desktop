@@ -83,13 +83,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cargo build --target aarch64-apple-ios --release \
-            --package inverter-dashboard --lib \
-            --manifest-path src-tauri/Cargo.toml
-          mkdir -p src-tauri/gen/apple/Externals/arm64/release
-          cp src-tauri/target/aarch64-apple-ios/release/libinverter_dashboard_lib.a \
-            src-tauri/gen/apple/Externals/arm64/release/libapp.a
+        run: bash scripts/ci-build-ios-library.sh
 
       - name: Patch Xcode build phase to skip xcode-script if lib exists
         run: python3 scripts/patch_pbxproj.py
