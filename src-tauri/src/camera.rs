@@ -76,6 +76,23 @@ fn format_camera_clip_http_error(
     }
 }
 
+/// Reqwest labels any failed body transfer as a decode error. Include the source
+/// chain so a timeout or truncated HTTP response is distinguishable from it.
+fn format_camera_transfer_error(stage: &str, error: reqwest::Error, video_url: &str) -> String {
+    use std::error::Error;
+
+    // Reqwest already appends the URL to Display; add it only once below.
+    let error = error.without_url();
+    let mut detail = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        detail.push_str(": ");
+        detail.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    format!("{stage}: {detail} ({video_url})")
+}
+
 /// Resolve the same HA origin used by the REST client. Credentials must never
 /// be selected by searching the complete camera URL for a hostname.
 fn camera_bearer_for_config(config: &FullConfig, video_url: &str) -> Option<String> {
@@ -193,11 +210,12 @@ Expose ring-mqtt on the LAN and set ring_snapshot_url_template to an HTTP snapsh
         let response = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                last_err = format!("Failed to download camera clip: {e} ({video_url})");
+                last_err =
+                    format_camera_transfer_error("Failed to download camera clip", e, video_url);
                 if attempt < MAX_ATTEMPTS {
                     let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
                     warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed (send/connect): {e}; retrying in {delay}ms url={video_url}"
+                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed (send/connect); retrying in {delay}ms: {last_err}"
                     );
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     continue;
@@ -228,15 +246,21 @@ Expose ring-mqtt on the LAN and set ring_snapshot_url_template to an HTTP snapsh
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
         let ext = camera_media_extension(content_type.as_deref(), url_trim);
+        let version = response.version();
+        let content_length = response.content_length();
 
         let bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                last_err = format!("Failed to read camera clip body: {e} ({video_url})");
+                last_err =
+                    format_camera_transfer_error("Failed to read camera clip body", e, video_url);
+                warn!(
+                    "Camera clip body transfer failed on attempt {attempt}/{MAX_ATTEMPTS} (status={status}, protocol={version:?}, content_length={content_length:?}, content_type={content_type:?}): {last_err}"
+                );
                 if attempt < MAX_ATTEMPTS {
                     let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
                     warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed reading body: {e}; retrying in {delay}ms url={video_url}"
+                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed reading body; retrying in {delay}ms url={video_url}"
                     );
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     continue;
@@ -278,6 +302,45 @@ Expose ring-mqtt on the LAN and set ring_snapshot_url_template to an HTTP snapsh
 #[cfg(test)]
 mod camera_clip_download_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn truncated_http_body_reports_cause_and_url_once() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\npartial")
+                .unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let response = client.get(&url).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let error = response.bytes().await.unwrap_err();
+        assert!(error.is_decode());
+        let message = format_camera_transfer_error("Failed to read camera clip body", error, &url);
+        assert!(
+            message.contains("end of file before message length reached"),
+            "{message}"
+        );
+        assert_eq!(message.matches(&url).count(), 1, "{message}");
+        server.join().unwrap();
+    }
 
     #[test]
     fn camera_token_is_limited_to_exact_ha_origin() {
