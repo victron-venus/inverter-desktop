@@ -5,9 +5,9 @@ mod config_store;
 mod ha_session;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_credentials;
+use camera::download_camera_clip;
 #[cfg(desktop)]
-use camera::remove_camera_clip_file;
-use camera::{download_camera_clip, is_camera_video_label};
+use camera::{is_camera_video_label, remove_camera_clip_file};
 mod gateway;
 mod ha_api;
 pub(crate) mod mqtt;
@@ -25,6 +25,7 @@ use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+#[cfg(desktop)]
 use std::time::Duration;
 
 use config_store::{load_config, save_config_encrypted};
@@ -61,7 +62,9 @@ const INVERTER_CONTROL_FLAGS: &[&str] = &[
     "set_limit_to_ev_charger",
     "minimize_charging",
 ];
+#[cfg(desktop)]
 const ABOUT_WINDOW_W: f64 = 380.0;
+#[cfg(desktop)]
 const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
@@ -69,6 +72,7 @@ const CAMERA_VIDEO_WINDOW_W: f64 = 330.0;
 /// Exact 16:9 of W so object-contain fills without letterbox (round(330*9/16)=186).
 const CAMERA_VIDEO_WINDOW_H: f64 = 186.0;
 /// Logical-pixel gap between stacked camera clip windows (0 = flush/seam). Also used as edge inset.
+#[cfg(desktop)]
 const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 0.0;
 /// Window label prefix for ephemeral camera clip WebviewWindows (`camera-video-<uuid>`).
 const CAMERA_VIDEO_LABEL_PREFIX: &str = "camera-video-";
