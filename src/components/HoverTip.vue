@@ -1,7 +1,7 @@
 <template>
-  <div v-bind="$attrs" @mouseenter="onEnter" @mouseleave="onLeave">
+  <section :aria-label="text" v-bind="$attrs" @mouseenter="onEnter" @mouseleave="onLeave">
     <slot />
-  </div>
+  </section>
   <!-- WKWebView often ignores native title=; float above overflow:hidden parents -->
   <Teleport to="body">
     <div

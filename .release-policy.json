@@ -12,6 +12,8 @@
   "local_checks": [
     "pnpm install --frozen-lockfile --ignore-scripts",
     "pnpm run format:check",
+    "pnpm run lint",
+    "pnpm run typecheck",
     "pnpm run build",
     "pnpm test",
     "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
@@ -23,7 +25,7 @@
     "Native source versions must all match the requested base version; channel is release metadata, not a binary version rewrite.",
     "Retains macOS ARM/Intel, Linux, Windows, iOS unsigned and Android signed builds; configured Android signing secrets are required.",
     "Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.",
-    "Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; automatic updating is not configured with the committed placeholder updater key."
+    "Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; updates are installed manually using the Download updates menu."
   ],
   "version_companions": ["package.json", "src-tauri/tauri.conf.json"],
   "repository": "victron-venus/inverter-desktop",

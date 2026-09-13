@@ -235,3 +235,45 @@ describe('SidePanel', () => {
     expect(wrapper.text()).not.toContain('Home Weather')
   })
 })
+
+describe('HA offline controls', () => {
+  it('disables HA actions during grace while retaining the last visible values', async () => {
+    const wrapper = mount(SidePanel, {
+      props: {
+        ...baseProps,
+        haConnected: false,
+        showHomeSection: true,
+        homeButtons: [
+          { id: 'lamp', label: 'Lamp', entity: 'switch.lamp' },
+          { id: 'only_charging', label: 'Only charging', entity: 'input_boolean.only_charging' },
+        ],
+        buttonStates: { lamp: 'on', only_charging: 'off' },
+        haCovers: [{ entity_id: 'cover.blind', name: 'Blind', position: 50, state: 'open' }],
+        haMediaPlayers: [{ entity_id: 'media_player.tv', name: 'TV', state: 'playing' }],
+        haScenes: [{ entity_id: 'scene.evening', name: 'Evening' }],
+      },
+    })
+    for (const key of ['numbers', 'covers', 'media', 'scenes']) {
+      const header = wrapper
+        .findAll('.classic-header')
+        .find((entry) => entry.text().includes(`sections.${key}`))
+      await header?.trigger('click')
+    }
+    expect(wrapper.text()).toContain('status.haStale')
+    expect(wrapper.text()).toContain('50%')
+    for (const slider of wrapper.findAll('input[type="range"]')) {
+      expect(slider.attributes('disabled')).toBeDefined()
+    }
+    const homeButtons = wrapper.findAll('button.classic-btn-tile')
+    expect(homeButtons[0].attributes('disabled')).toBeDefined()
+    expect(homeButtons[1].attributes('disabled')).toBeUndefined()
+    const play = wrapper.findAll('button').find((button) => button.text() === '▶')
+    if (!play) throw new Error('Play control was not rendered')
+    expect(play.attributes('disabled')).toBeDefined()
+    await play.trigger('click')
+    expect(wrapper.emitted('media-control')).toBeUndefined()
+    await wrapper.setProps({ haConnected: true })
+    expect(play.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+})

@@ -23,6 +23,8 @@ import {
   haMqttConnected,
   type InverterState,
   mqttConnected,
+  refreshTelemetryQuality,
+  resetInverterState,
   state,
   upsertBanner,
 } from './useInverterState'
@@ -98,6 +100,8 @@ async function probeMqttReachable(config: AppConfig): Promise<boolean> {
 export function useConnection() {
   let session = 0
   let inverterEnabled = false
+  let connectionKey: string | null = null
+  let freshnessTimer: ReturnType<typeof setInterval> | null = null
   let listeners: Array<() => void> = []
   let transportOperations: Promise<unknown> = Promise.resolve()
 
@@ -118,8 +122,8 @@ export function useConnection() {
   let processStateCount = 0
   let processStateLastLogMs = 0
 
-  function processState(newState: InverterState) {
-    applyInverterState(newState)
+  function processState(newState: InverterState, snapshot = false) {
+    applyInverterState(newState, { snapshot })
     processStateCount += 1
     const now = Date.now()
     if (now - processStateLastLogMs >= 5000) {
@@ -159,11 +163,12 @@ export function useConnection() {
   async function startMqtt(config: AppConfig, note?: { title: string; body: string }) {
     if (!inverterEnabled) return
     const current = session
+    dataSource.value = 'mqtt'
+    // Set pending before invoking: ConnAck can arrive before invoke resolves.
+    mqttConnected.value = false
+    refreshTelemetryQuality()
     await invokeTransport('connect_mqtt', mqttConnectArgs(config))
     if (current !== session || !inverterEnabled) return
-    dataSource.value = 'mqtt'
-    // Real connection is confirmed by mqtt-connection-status (ConnAck), not invoke OK.
-    mqttConnected.value = false
     mqttOnlyReconnectAttempt = 0
     stopMqttRecoveryProbe()
     if (note) notify(note.title, note.body)
@@ -173,11 +178,11 @@ export function useConnection() {
     if (!inverterEnabled) return
     clearMqttConnectWatchdog()
     const current = session
+    dataSource.value = 'igw'
+    mqttConnected.value = false
+    refreshTelemetryQuality()
     await invokeTransport('connect_gateway', gatewayConnectArgs(config))
     if (current !== session || !inverterEnabled) return
-    dataSource.value = 'igw'
-    // Real connection is confirmed by mqtt-connection-status (first good poll).
-    mqttConnected.value = false
     if (note) notify(note.title, note.body)
   }
 
@@ -196,6 +201,20 @@ export function useConnection() {
       const config = await getAppConfig()
       if (current !== session) return
       inverterEnabled = isMqttConfigured(config) || isIgwConfigured(config)
+      const nextKey = JSON.stringify([
+        config.mqtt_host,
+        config.mqtt_port,
+        config.portal_id,
+        config.gateway_url,
+        config.water_tank_instance,
+        config.water_pump_instance,
+        config.water_valve_instance,
+        config.evcharger_instance,
+        config.ev_instance,
+      ])
+      if (connectionKey !== null && connectionKey !== nextKey) resetInverterState()
+      connectionKey = nextKey
+      if (inverterEnabled) freshnessTimer = setInterval(refreshTelemetryQuality, 1000)
       appConfig.value = config
       if (config.color_scheme) {
         const isDark = config.color_scheme !== 'light'
@@ -216,11 +235,13 @@ export function useConnection() {
           }
           clearMqttConnectWatchdog()
           mqttConnected.value = true
+          refreshTelemetryQuality()
           mqttOnlyReconnectAttempt = 0
         } else if (!mqttOfflineTimer) {
           mqttOfflineTimer = setTimeout(() => {
             mqttOfflineTimer = null
             mqttConnected.value = false
+            refreshTelemetryQuality()
             // MQTT lost while dual-path preferred MQTT → exclusive failover to IGW.
             if (dualPathPreferMqtt && dataSource.value === 'mqtt') {
               logger.log('Cerbo MQTT offline — failing over to IGW')
@@ -309,7 +330,7 @@ export function useConnection() {
         dualPathPreferMqtt = false
         mqttConnected.value = false
         dataSource.value = 'mqtt'
-        state.value = { booleans: {}, features: {}, ui_config: {} }
+        resetInverterState()
         await invokeTransport('disconnect_inverter')
       }
 
@@ -356,7 +377,7 @@ export function useConnection() {
       try {
         if (!inverterEnabled) return
         const initial = await invoke<InverterState>('get_state')
-        if (current === session && inverterEnabled) processState(initial)
+        if (current === session && inverterEnabled) processState(initial, true)
       } catch (e) {
         logger.error('Failed to get initial state:', e)
       }
@@ -516,6 +537,8 @@ export function useConnection() {
   }
 
   function cleanup() {
+    if (freshnessTimer) clearInterval(freshnessTimer)
+    freshnessTimer = null
     session += 1
     inverterEnabled = false
     stopMqttRecoveryProbe()

@@ -78,7 +78,7 @@ See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and s
 ## Completed Features
 
 - ✅ **Release packaging**: Candidate artifacts and checksums; see the [release strategy](RELEASING.md).
-- **Tauri v2 updater integration**: The plugin is present, but the committed updater key is a placeholder. Use manual installers until update signing and metadata are configured and verified.
+- **Manual updates**: Choose **Download updates…** in the dashboard menu to open the latest release and install the package for your platform. The app does not download or install updates automatically.
 - ✅ **Encrypted Storage**: Integrated `@tauri-apps/plugin-store` for encrypted local persistence of MQTT credentials, HA access tokens, and custom layout preferences (PR: feat/encrypted-storage)
 - ✅ **Native Mobile Notifications**: Implemented `@tauri-apps/plugin-notification` for OS-level push alerts when Battery SoC drops below 20% or grid connection is lost (PR: feat/native-notifications)
 - ✅ **Cargo Security Audit**: Added `cargo-deny` configuration to enforce dependency security and license compliance checks in CI (PR: feat/cargo-security-audit)
@@ -462,15 +462,18 @@ This project includes comprehensive security measures:
 
 ## Development
 
+See [session, transport and credential-storage contracts](docs/desktop-hardening.md)
+for migration behaviour, validation commands and hardware acceptance boundaries.
+
 ```bash
 # Install dependencies
-npm install
+pnpm install --frozen-lockfile
 
 # Run dev server
-npm run tauri dev
+pnpm tauri dev
 
 # Build for production
-npm run tauri build
+pnpm tauri build
 ```
 
 ### Building for Mobile

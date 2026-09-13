@@ -77,7 +77,7 @@ const videoEl = ref<HTMLVideoElement | null>(null)
 let imageCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 function setName(name?: string | null) {
-  cameraName.value = (name && name.trim()) || 'Camera'
+  cameraName.value = name?.trim() || 'Camera'
 }
 
 function clearImageCloseTimer() {

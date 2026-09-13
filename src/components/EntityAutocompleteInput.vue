@@ -15,17 +15,19 @@
       v-if="showSuggestions && filteredEntities.length > 0"
       class="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto apple-card !rounded-lg"
     >
-      <div
+      <button
+        type="button"
         v-for="entity in filteredEntities"
         :key="entity.entity_id"
-        @mousedown.prevent="selectEntity(entity.entity_id)"
-        class="row-hover px-2.5 py-1.5 cursor-pointer border-b border-black/[0.04] dark:border-white/[0.05] last:border-0"
+        @mousedown.prevent
+        @click="selectEntity(entity.entity_id)"
+        class="w-full text-left row-hover px-2.5 py-1.5 cursor-pointer border-b border-black/[0.04] dark:border-white/[0.05] last:border-0"
       >
-        <div class="text-[10px] font-semibold text-main truncate">
+        <span class="block text-[10px] font-semibold text-main truncate">
           {{ entity.friendly_name }}
-        </div>
-        <div class="text-[8px] text-muted font-mono truncate">{{ entity.entity_id }}</div>
-      </div>
+        </span>
+        <span class="block text-[8px] text-muted font-mono truncate">{{ entity.entity_id }}</span>
+      </button>
     </div>
   </div>
 </template>

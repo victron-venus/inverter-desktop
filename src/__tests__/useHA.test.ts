@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import { applyInverterState, mqttConnected, state } from '../composables/useInverterState'
 import { useMQTTState } from '../composables/useMQTTState'
-import type { HaCoverDisplay, HaSensorDisplay, HaWeatherDisplay } from '../types/ha'
 import { resolveHeaderToggleState } from '../utils'
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -18,58 +17,6 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 
-const SENSOR_DOMAINS = ['sensor', 'binary_sensor'] as const
-
-function filterSensors(
-  entityStates: Record<string, string>,
-  entityAttributes: Record<string, Record<string, unknown>>
-): HaSensorDisplay[] {
-  const result: HaSensorDisplay[] = []
-  for (const [entityId, state] of Object.entries(entityStates)) {
-    const domain = entityId.split('.')[0]
-    if (!(SENSOR_DOMAINS as readonly string[]).includes(domain)) continue
-    if (state === 'unavailable' || state === 'unknown') continue
-    const attrs = entityAttributes[entityId] || {}
-    const name = (attrs.friendly_name as string) || entityId
-    const unit = (attrs.unit_of_measurement as string) || ''
-    result.push({ entity_id: entityId, name, state, unit })
-  }
-  return result
-}
-
-function filterCovers(
-  entityStates: Record<string, string>,
-  entityAttributes: Record<string, Record<string, unknown>>
-): HaCoverDisplay[] {
-  const result: HaCoverDisplay[] = []
-  for (const [entityId, attrs] of Object.entries(entityAttributes)) {
-    if (!entityId.startsWith('cover.')) continue
-    const state = entityStates[entityId] || 'unknown'
-    const name = (attrs.friendly_name as string) || entityId
-    const unavailable = state === 'unavailable' || state === 'unknown'
-    const position = unavailable ? 0 : ((attrs.current_position as number) ?? 0)
-    result.push({ entity_id: entityId, name, position, state })
-  }
-  return result
-}
-
-function filterWeather(
-  entityStates: Record<string, string>,
-  entityAttributes: Record<string, Record<string, unknown>>
-): HaWeatherDisplay | null {
-  for (const [entityId, attrs] of Object.entries(entityAttributes)) {
-    if (!entityId.startsWith('weather.')) continue
-    const state = entityStates[entityId]
-    if (state === 'unavailable' || state === 'unknown') continue
-    const name = (attrs.friendly_name as string) || 'Weather'
-    const temperature = (attrs.temperature as number) ?? null
-    const unit = (attrs.temperature_unit as string) || '°C'
-    const forecast = (attrs.forecast as Array<Record<string, unknown>>) ?? []
-    return { entity_id: entityId, name, state, temperature, unit, forecast }
-  }
-  return null
-}
-
 function computeToggleStates(
   headerToggles: Array<{ id: string; entity: string }>,
   haEntityStates: Record<string, string>,
@@ -82,104 +29,6 @@ function computeToggleStates(
   }
   return states
 }
-
-const mockStates: Record<string, string> = {
-  'sensor.temp': '23.5',
-  'sensor.humidity': '65',
-  'binary_sensor.motion': 'on',
-  'sensor.unavailable': 'unavailable',
-  'switch.light': 'on',
-  'cover.blind': 'open',
-  'weather.home': 'sunny',
-}
-
-const mockAttrs: Record<string, Record<string, unknown>> = {
-  'sensor.temp': { friendly_name: 'Temperature', unit_of_measurement: '°C' },
-  'sensor.humidity': { friendly_name: 'Humidity', unit_of_measurement: '%' },
-  'binary_sensor.motion': { friendly_name: 'Motion' },
-  'cover.blind': { friendly_name: 'Living Room Blind', current_position: 75 },
-  'weather.home': {
-    friendly_name: 'Home Weather',
-    temperature: 22,
-    temperature_unit: '°C',
-    forecast: [{ datetime: '2024-01-02', temperature: 24, condition: 'cloudy' }],
-  },
-}
-
-describe('filterSensors', () => {
-  it('returns sensors and binary_sensors', () => {
-    const result = filterSensors(mockStates, mockAttrs)
-    expect(result).toHaveLength(3)
-  })
-
-  it('excludes unavailable sensors', () => {
-    const result = filterSensors(mockStates, mockAttrs)
-    const ids = result.map((s) => s.entity_id)
-    expect(ids).not.toContain('sensor.unavailable')
-  })
-
-  it('excludes non-sensor domains', () => {
-    const result = filterSensors(mockStates, mockAttrs)
-    const ids = result.map((s) => s.entity_id)
-    expect(ids).not.toContain('switch.light')
-  })
-
-  it('uses friendly_name from attributes', () => {
-    const result = filterSensors(mockStates, mockAttrs)
-    const temp = result.find((s) => s.entity_id === 'sensor.temp')
-    expect(temp?.name).toBe('Temperature')
-    expect(temp?.unit).toBe('°C')
-  })
-})
-
-describe('filterCovers', () => {
-  it('returns only cover entities', () => {
-    const result = filterCovers(mockStates, mockAttrs)
-    expect(result).toHaveLength(1)
-    expect(result[0].entity_id).toBe('cover.blind')
-    expect(result[0].state).toBe('open')
-  })
-
-  it('extracts position from attributes', () => {
-    const result = filterCovers(mockStates, mockAttrs)
-    expect(result[0].position).toBe(75)
-  })
-
-  it('defaults position to 0 if missing', () => {
-    const attrs = { 'cover.test': { friendly_name: 'Test' } }
-    const states = { 'cover.test': 'open' }
-    const result = filterCovers(states, attrs)
-    expect(result[0].position).toBe(0)
-  })
-
-  it('keeps unavailable covers with state for UI styling', () => {
-    const attrs = { 'cover.dead': { friendly_name: 'Dead Blind' } }
-    const states = { 'cover.dead': 'unavailable' }
-    const result = filterCovers(states, attrs)
-    expect(result).toHaveLength(1)
-    expect(result[0].state).toBe('unavailable')
-    expect(result[0].position).toBe(0)
-  })
-})
-
-describe('filterWeather', () => {
-  it('returns weather entity', () => {
-    const result = filterWeather(mockStates, mockAttrs)
-    expect(result).not.toBeNull()
-    expect(result?.entity_id).toBe('weather.home')
-  })
-
-  it('extracts temperature and unit', () => {
-    const result = filterWeather(mockStates, mockAttrs)
-    expect(result?.temperature).toBe(22)
-    expect(result?.unit).toBe('°C')
-  })
-
-  it('returns null if no weather entity', () => {
-    const result = filterWeather({}, {})
-    expect(result).toBeNull()
-  })
-})
 
 describe('computeToggleStates', () => {
   const toggles = [

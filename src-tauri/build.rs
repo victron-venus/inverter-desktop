@@ -14,5 +14,14 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=LocalAuthentication");
     }
 
+    if target.contains("apple-ios") {
+        cc::Build::new()
+            .file("src/mobile_credentials.m")
+            .compile("mobile_credentials");
+        println!("cargo:rustc-link-lib=framework=Security");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rerun-if-changed=src/mobile_credentials.m");
+    }
+
     tauri_build::build()
 }
