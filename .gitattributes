@@ -1,0 +1,4 @@
+# Tauri and Cargo rewrite these manifests with LF on every build platform.
+# Keep checkout bytes stable before release input hashes are recorded.
+src-tauri/Cargo.toml text eol=lf
+src-tauri/Cargo.lock text eol=lf
