@@ -1,4 +1,8 @@
 export default {
+  plugins: {
+    unavailable: 'Временно недоступно',
+    actionFailed: 'Не удалось выполнить действие. Попробуйте ещё раз.',
+  },
   actions: {
     cameraMotion: 'Движение камер',
   },

@@ -16,6 +16,9 @@ charts, and core notifications. Home Assistant, cameras, and the planned install
 plugin ecosystem are desktop-only. Implementation progress is tracked in
 [TODO.md](TODO.md), with the current build boundary documented in
 [desktop features and mobile core](docs/desktop-features-and-mobile-core.md).
+The desktop [worker host](docs/plugin-worker-protocol.md) supports versioned
+process communication and declarative dashboard contributions. Its initial
+registry is empty; package installation and HA/camera migration remain in progress.
 
 | Surface                     | Recommended project                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ |
