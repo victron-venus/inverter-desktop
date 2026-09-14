@@ -13,8 +13,10 @@ exclusion. Desktop still bundles its existing HA/camera implementations. It does
 not yet offer independently installable packages. A desktop worker host now supplies
 versioned process communication, session-aware supervision, and generic dashboard
 contributions; see the [worker protocol](plugin-worker-protocol.md). The shipped
-host starts empty. Package installation, HA/camera migration, and the remaining
-contribution surfaces are tracked in [TODO](../TODO.md).
+host starts empty. The [native package pipeline](plugin-packages.md) supplies
+signed archive verification and lifecycle APIs; application/UI integration,
+production publisher keys, HA/camera migration, and the remaining contribution
+surfaces are tracked in [TODO](../TODO.md).
 
 ## Frontend composition
 
@@ -45,7 +47,9 @@ Legacy field names are passive compatibility data, not a mobile integration.
 Rust compiles HA sessions, REST/WS clients, camera adapters/downloads/windows,
 managed feature state, command registrations, and authorization entries only
 under `cfg(desktop)`. Camera MQTT parsing is separated into
-`src-tauri/src/mqtt/camera_events.rs`. WebSocket dependencies are target-scoped.
+`src-tauri/src/mqtt/camera_events.rs`. WebSocket and package verification/storage
+dependencies are target-scoped. The embedded publisher policy and all package
+source files are excluded from mobile compilation.
 Shared HTTP, MQTT, authentication, and notification dependencies remain in core.
 
 Mobile registers the core commands and rejects non-core control targets. The
@@ -92,3 +96,5 @@ defaults. The verifier never executes or installs the inspected artifact.
 Frontend graph checks, native compilation/payload checks, and device behavior are
 separate evidence. Local tests and CI do not verify the user's HA installation,
 issue physical inverter commands, or prove usability on every mobile device.
+Desktop package tests additionally run on Windows in the reusable Rust CI workflow,
+covering file replacement, leases, and actual worker cleanup on that platform.

@@ -122,6 +122,57 @@ async fn separate_executable_handshakes_contributes_and_serves_multiple_windows(
 }
 
 #[tokio::test]
+async fn package_start_cannot_cross_logout_and_relogin() {
+    let host = PluginHost::default();
+    let original_epoch = host.authority_epoch();
+    host.revoke();
+    host.resume();
+    assert!(!host.is_authorized_epoch(original_epoch));
+    let committed = AtomicBool::new(false);
+    assert!(host
+        .commit_in_epoch(original_epoch, || {
+            committed.store(true, Ordering::Release);
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed.load(Ordering::Acquire));
+    assert_eq!(
+        host.start_in_epoch(spec("normal"), original_epoch)
+            .await
+            .unwrap_err(),
+        PluginError::Unavailable
+    );
+    assert!(host.snapshots().is_empty());
+    let current_epoch = host.authority_epoch();
+    assert!(host.is_authorized_epoch(current_epoch));
+    host.start_in_epoch(spec("normal"), current_epoch)
+        .await
+        .unwrap();
+    ready(&host).await;
+    host.shutdown().await;
+    assert!(!host.is_authorized_epoch(current_epoch));
+}
+
+#[tokio::test]
+async fn uninstall_reaps_workers_and_releases_registry_capacity() {
+    let host = PluginHost::default();
+    for index in 0..=MAX_WORKERS {
+        let mut worker = spec("normal");
+        worker.plugin_id = format!("test.package{index}");
+        let id = worker.plugin_id.clone();
+        host.start(worker).await.unwrap();
+        ready(&host).await;
+        let entry = host.entry(&id).unwrap();
+        host.remove(&id).await.unwrap();
+        assert!(entry.reaped.load(Ordering::Acquire));
+        assert!(*entry.done.borrow());
+        assert!(entry.task.lock().unwrap().is_none());
+        assert!(host.snapshots().is_empty());
+    }
+    host.shutdown().await;
+}
+
+#[tokio::test]
 async fn deadlines_and_dropped_callers_cancel_and_ignore_late_results() {
     let host = PluginHost::default();
     host.start(spec("normal")).await.unwrap();

@@ -1,7 +1,7 @@
 //! App-wide, desktop-only supervision for explicitly trusted worker executables.
 //!
 //! This is a process boundary, not an OS sandbox. Package discovery and executable
-//! authorization belong to the future signed installer; the webview cannot start
+//! authorization belong to the signed package layer; the webview cannot start
 //! an executable. Workers receive no inherited environment or core service handles.
 
 use super::protocol::{
@@ -182,6 +182,27 @@ impl PluginHost {
             .epoch
     }
 
+    /// Check the authority captured before an asynchronous package operation.
+    pub fn is_authorized_epoch(&self, epoch: u64) -> bool {
+        let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        !self.0.stopped.load(Ordering::Acquire) && authority.enabled && authority.epoch == epoch
+    }
+
+    /// Linearize a small synchronous package-state commit with session revocation.
+    /// The callback must not call the host or wait for asynchronous work.
+    pub(crate) fn commit_in_epoch<T>(
+        &self,
+        epoch: u64,
+        commit: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        if self.0.stopped.load(Ordering::Acquire) || !authority.enabled || authority.epoch != epoch
+        {
+            return Err("Plugin operation authorization changed".into());
+        }
+        commit()
+    }
+
     pub fn snapshots(&self) -> Vec<PluginSnapshot> {
         let mut snapshots: Vec<_> = self
             .0
@@ -198,6 +219,24 @@ impl PluginHost {
     /// Register a worker exactly once and begin its bounded startup/restart lifecycle.
     /// The returned snapshot is `starting`; readiness is signalled through snapshots.
     pub async fn start(&self, spec: WorkerSpec) -> Result<PluginSnapshot, PluginError> {
+        self.register(spec, None)
+    }
+
+    /// Register only in the session that authorized a package operation.
+    /// The epoch check and registration share the same authority lock.
+    pub async fn start_in_epoch(
+        &self,
+        spec: WorkerSpec,
+        epoch: u64,
+    ) -> Result<PluginSnapshot, PluginError> {
+        self.register(spec, Some(epoch))
+    }
+
+    fn register(
+        &self,
+        spec: WorkerSpec,
+        expected_epoch: Option<u64>,
+    ) -> Result<PluginSnapshot, PluginError> {
         if self.0.stopped.load(Ordering::Acquire) {
             return Err(PluginError::HostStopped);
         }
@@ -205,7 +244,7 @@ impl PluginHost {
             return Err(PluginError::InvalidWorker);
         }
         let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
-        if !authority.enabled {
+        if !authority.enabled || expected_epoch.is_some_and(|epoch| epoch != authority.epoch) {
             return Err(PluginError::Unavailable);
         }
         let (commands, receiver) = mpsc::channel(CONTROL_QUEUE_CAPACITY);
@@ -346,6 +385,29 @@ impl PluginHost {
         if !entry.reaped.load(Ordering::Acquire) {
             return Err(PluginError::WorkerError);
         }
+        Ok(())
+    }
+
+    /// Stop and reap before releasing a plugin's registry slot and contributions.
+    /// A concurrent replacement must never be removed on behalf of an old entry.
+    pub async fn remove(&self, plugin_id: &str) -> Result<(), PluginError> {
+        let entry = self.entry(plugin_id)?;
+        let _ = entry.stop.send(true);
+        wait_stopped(&entry).await;
+        if !entry.reaped.load(Ordering::Acquire) {
+            return Err(PluginError::WorkerError);
+        }
+        {
+            let mut entries = self.0.entries.lock().unwrap_or_else(|e| e.into_inner());
+            match entries.get(plugin_id) {
+                Some(current) if Arc::ptr_eq(current, &entry) => {
+                    entries.remove(plugin_id);
+                }
+                Some(_) => return Err(PluginError::AlreadyRegistered),
+                None => return Ok(()),
+            }
+        }
+        (self.0.changed)();
         Ok(())
     }
 

@@ -50,7 +50,9 @@ FORBIDDEN_COMMANDS = (
 FORBIDDEN_PROTOCOLS = (
     "ha-filtered-update", "camera-event", "frigate/events", "plugin-host-update"
 )
-FORBIDDEN_CRATES = {"tokio-tungstenite", "tungstenite"}
+FORBIDDEN_CRATES = {
+    "tokio-tungstenite", "tungstenite", "ed25519-dalek", "curve25519-dalek", "zip"
+}
 REQUIRED_CORE_COMMANDS = (
     "perform_action",
     "connect_mqtt",

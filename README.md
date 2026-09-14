@@ -19,6 +19,9 @@ plugin ecosystem are desktop-only. Implementation progress is tracked in
 The desktop [worker host](docs/plugin-worker-protocol.md) supports versioned
 process communication and declarative dashboard contributions. Its initial
 registry is empty; package installation and HA/camera migration remain in progress.
+The native [package pipeline](docs/plugin-packages.md) adds signed archive creation,
+verification, and transactional lifecycle APIs. Desktop installation UI and
+production publisher provisioning remain separate roadmap items.
 
 | Surface                     | Recommended project                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ |
