@@ -125,7 +125,7 @@ fn manifest_is_first_payloads_are_sorted_and_actual_file_hashes_are_signed() {
     }
     let signature = parsed.signature.as_ref().unwrap().signature.as_bytes();
     let mut decoded = [0_u8; 64];
-    for (slot, pair) in decoded.iter_mut().zip(signature.chunks_exact(2)) {
+    for (slot, pair) in decoded.iter_mut().zip(signature.as_chunks::<2>().0) {
         *slot = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
     }
     key()

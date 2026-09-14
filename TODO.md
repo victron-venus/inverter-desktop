@@ -355,6 +355,10 @@ requires application/UI integration, production trust, and migrated packages.
   dependency and embedded publisher-policy rejection checks.
 - Mobile compilation: iOS simulator and Android aarch64
   `cargo check --locked --all-features` passed; both frontend profile builds passed.
+- Hosted CI follow-up: update signature decoding for the newer Clippy rule and
+  embed Tauri's existing Common Controls v6 dependency in Windows test/example
+  executables as well as the application. The initial Windows run compiled but
+  its loader exited before tests; successful compilation alone is not acceptance.
 
 ## Reference constraints
 

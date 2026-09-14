@@ -853,12 +853,14 @@ fn check_directory(path: &Path, private: bool) -> Result<(), String> {
 }
 
 fn create_private_directory(path: &Path) -> Result<(), String> {
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
         builder.mode(0o700);
-    }
+        builder
+    };
     builder.create(path).map_err(io_error)?;
     sync_directory(path.parent().ok_or("invalid directory parent")?)
 }

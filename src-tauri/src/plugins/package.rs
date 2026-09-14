@@ -176,7 +176,7 @@ fn decode_signature(value: &str) -> Result<Signature, String> {
     if value.len() != bytes.len() * 2 {
         return Err("invalid publisher signature".into());
     }
-    for (byte, pair) in bytes.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+    for (byte, pair) in bytes.iter_mut().zip(value.as_bytes().as_chunks::<2>().0) {
         let digit = |value: u8| match value {
             b'0'..=b'9' => Ok(value - b'0'),
             b'a'..=b'f' => Ok(value - b'a' + 10),

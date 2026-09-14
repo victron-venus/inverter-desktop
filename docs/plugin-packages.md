@@ -72,6 +72,11 @@ the producer fixes timestamps to 1980-01-01 and archive permissions to 0644 for
 data and 0755 for the entrypoint. It only creates an archive and never launches
 the worker. Native executable signing/notarization remains a release requirement.
 
+Windows MSVC builds embed the same Common Controls v6 manifest in application,
+test, and example executables. Tauri's default resource handling only covers
+application binaries; the other executables also need this dependency to load
+the linked dialog/tray APIs before their own code can run.
+
 ## Publisher trust
 
 `src-tauri/src/plugins/publishers.json` is a release-owned policy embedded only in
