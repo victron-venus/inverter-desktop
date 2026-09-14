@@ -12,6 +12,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "paths": {
+      "@features": ["./src/features/desktop.ts"],
+      "@feature-messages": ["./src/features/messages.desktop.ts"]
+    },
 
     /* Linting */
     "strict": true,

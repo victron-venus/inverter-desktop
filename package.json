@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm run typecheck && vite build",
+    "build": "node scripts/build-frontend.mjs",
+    "build:mobile": "node scripts/build-frontend.mjs mobile",
+    "test:build-profiles": "node --test scripts/frontend-profile.test.mjs",
+    "test:mobile": "vitest run --config vitest.mobile.config.ts",
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",

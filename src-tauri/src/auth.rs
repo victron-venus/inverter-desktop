@@ -21,6 +21,12 @@ impl Session {
 }
 
 pub(super) fn public_command(command: &str) -> bool {
+    // Logout revokes the session before the desktop feature host unmounts.
+    // Permit teardown only; it cannot connect, read state, or send commands.
+    #[cfg(desktop)]
+    if matches!(command, "close_camera_video_window" | "disconnect_ha_mqtt") {
+        return true;
+    }
     matches!(
         command,
         "auth_status"
@@ -31,7 +37,6 @@ pub(super) fn public_command(command: &str) -> bool {
             | "auth_biometric_available"
             | "auth_biometric"
             | "close_config_window"
-            | "close_camera_video_window"
     )
 }
 
@@ -208,6 +213,10 @@ mod tests {
             "set_cover_position",
             "connect_mqtt",
             "connect_gateway",
+            "connect_ha_mqtt",
+            "test_ha_connection",
+            "get_ha_entity_states",
+            "open_camera_video_window",
             "open_config_window",
             "auth_fake",
         ] {
@@ -215,6 +224,12 @@ mod tests {
         }
         assert!(public_command("auth_status"));
         assert!(public_command("auth_login"));
+    }
+    #[test]
+    fn camera_teardown_is_public_only_when_desktop_commands_exist() {
+        for command in ["close_camera_video_window", "disconnect_ha_mqtt"] {
+            assert_eq!(public_command(command), cfg!(desktop));
+        }
     }
     #[test]
     fn session_expires_at_deadline() {

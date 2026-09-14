@@ -1,3 +1,4 @@
+import { featureDefaultConfig } from '@features'
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from './logger'
 import type { DashboardControl } from './inverterControl'
@@ -110,17 +111,8 @@ const SHOW_DEFAULTS = {
   show_active_loads: true,
   show_daily_stats: true,
   show_ev: true,
-  show_washer: true,
-  show_dryer: true,
-  show_dishwasher: true,
   show_home_section: true,
   show_header_toggles: true,
-  show_ha_sensors: true,
-  show_ha_numbers: true,
-  show_ha_covers: true,
-  show_ha_media: true,
-  show_ha_scenes: true,
-  show_ha_weather: true,
   show_console: true,
   show_advanced_settings: false,
   auto_start: false,
@@ -135,22 +127,9 @@ const defaultConfig: AppConfig = {
   mqtt_port: 1883,
   mqtt_login: null,
   mqtt_password: null,
-  mqtt_ha_host: 'HA',
-  mqtt_ha_port: 1883,
-  mqtt_ha_login: null,
-  mqtt_ha_password: null,
-  ha_longlived_token: null,
-  ha_url: null,
-  ha_port: null,
-  ha_use_direct_api: false,
-  ha_entities: undefined,
   header_toggles_config: undefined,
   color_scheme: 'dark',
   portal_id: null,
-  camera_topic: 'kerberos/desktop/events',
-  frigate_base_url: null,
-  ring_snapshot_url_template: null,
-  camera_enabled: true,
 
   gateway_enabled: false,
   gateway_url: null,
@@ -159,6 +138,7 @@ const defaultConfig: AppConfig = {
   gateway_api_token: null,
   setup_completed: false,
   ...SHOW_DEFAULTS,
+  ...featureDefaultConfig,
 }
 
 let config: AppConfig = defaultConfig

@@ -1,0 +1,90 @@
+import path from 'node:path'
+import { realpathSync } from 'node:fs'
+
+const profiles = new Set(['desktop', 'mobile'])
+const mobilePlatforms = new Set(['android', 'androideabi', 'ios'])
+const desktopPlatforms = new Set(['darwin', 'macos', 'linux', 'windows', 'freebsd'])
+
+/** Resolve the target, not the OS running Vite (mobile builds are cross-builds). */
+export function resolveFrontendProfile(env = process.env) {
+  const requested = env.INVERTER_BUILD_PROFILE?.trim()
+  if (requested && !profiles.has(requested)) {
+    throw new Error(`Unsupported INVERTER_BUILD_PROFILE: ${requested}`)
+  }
+  const platform = env.TAURI_ENV_PLATFORM?.trim()
+  let nativeProfile
+  if (platform) {
+    if (mobilePlatforms.has(platform)) nativeProfile = 'mobile'
+    else if (desktopPlatforms.has(platform)) nativeProfile = 'desktop'
+    else throw new Error(`Unsupported Tauri platform: ${platform}`)
+  }
+  const target = env.TAURI_ENV_TARGET_TRIPLE || env.CARGO_BUILD_TARGET
+  if (target) {
+    const targetProfile = /-(?:apple-ios|linux-android)/.test(target) ? 'mobile' : 'desktop'
+    if (nativeProfile && nativeProfile !== targetProfile) {
+      throw new Error('Tauri platform and compilation target disagree')
+    }
+    nativeProfile = targetProfile
+  }
+  if (requested && nativeProfile && requested !== nativeProfile) {
+    throw new Error(`Cannot build ${requested} frontend for a ${nativeProfile} native target`)
+  }
+  return nativeProfile || requested || 'desktop'
+}
+
+export function featureAliases(root, profile) {
+  if (!profiles.has(profile)) throw new Error(`Unsupported frontend profile: ${profile}`)
+  return {
+    '@features': path.resolve(root, `src/features/${profile}.ts`),
+    '@feature-messages': path.resolve(root, `src/features/messages.${profile}.ts`),
+  }
+}
+
+// Include the legacy entry points until their implementations have all moved.
+// A direct import added to a shared screen must fail the mobile build, even when
+// the UI would be hidden by a runtime setting or the module is tree-shaken later.
+export const desktopModulePatterns = [
+  /^src\/features\/desktop(?:\/|\.)/,
+  /^src\/features\/messages\.desktop\./,
+  /^src\/plugins\//,
+  /^src\/CameraVideo\.vue$/,
+  /^src\/composables\/useHA\.ts$/,
+  /^src\/composables\/useDashboardControlsConfig\.ts$/,
+  /^src\/components\/(?:HaEntitiesEditor|EntityAutocompleteInput)\.vue$/,
+]
+
+export function assertMobileModuleGraph(modules) {
+  const forbidden = modules.filter((id) =>
+    desktopModulePatterns.some((pattern) => pattern.test(id))
+  )
+  if (forbidden.length) {
+    throw new Error(`Desktop feature modules in mobile build:\n${forbidden.join('\n')}`)
+  }
+}
+
+/** Vite/Rolldown plugin: inspect actual loaded modules and ship an audit receipt. */
+export function frontendProfileAudit(root, profile) {
+  const prefix = realpathSync(root).replaceAll('\\', '/') + '/'
+  return {
+    name: 'inverter-frontend-profile',
+    generateBundle() {
+      const modules = [
+        ...new Set(
+          [...this.getModuleIds()]
+            .map((id) => {
+              const clean = id.replaceAll('\\', '/').split('?')[0]
+              return clean.startsWith(prefix) ? clean.slice(prefix.length) : ''
+            })
+            .filter((id) => id.startsWith('src/'))
+        ),
+      ].sort()
+      if (!modules.includes('src/main.ts')) throw new Error('Frontend module graph is empty')
+      if (profile === 'mobile') assertMobileModuleGraph(modules)
+      this.emitFile({
+        type: 'asset',
+        fileName: 'build-profile.json',
+        source: JSON.stringify({ schema_version: 1, profile, modules }, null, 2) + '\n',
+      })
+    },
+  }
+}

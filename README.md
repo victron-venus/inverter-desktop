@@ -11,6 +11,12 @@
 
 Desktop and mobile application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
+Android and iOS contain the inverter core: telemetry, MQTT controls, Cerbo EV/water,
+charts, and core notifications. Home Assistant, cameras, and the planned installable
+plugin ecosystem are desktop-only. Implementation progress is tracked in
+[TODO.md](TODO.md), with the current build boundary documented in
+[desktop features and mobile core](docs/desktop-features-and-mobile-core.md).
+
 | Surface                     | Recommended project                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Cerbo GX (web)              | [inverter-dashboard-go](https://github.com/victron-venus/inverter-dashboard-go)                        |
@@ -19,7 +25,9 @@ Desktop and mobile application for monitoring Victron inverter systems via MQTT.
 
 ## Demo
 
-Live **Inverter Desktop** on macOS and iOS Simulator — real-time grid, solar, battery, EV, water, and home controls over MQTT.
+Earlier **Inverter Desktop** recordings on macOS and iOS Simulator show real-time
+grid, solar, battery, EV, water, and controls over MQTT. The iOS recording predates
+the core-only mobile feature boundary described above.
 
 **macOS**
 
@@ -51,7 +59,7 @@ Live **Inverter Desktop** on macOS and iOS Simulator — real-time grid, solar, 
 - Live power charts with ECharts
 - EV charging status
 - Water system monitoring (dbus-pump via Cerbo MQTT)
-- Home automation controls
+- Home automation controls and cameras on desktop
 - Native application for all major platforms
 
 ## Supported Platforms
@@ -310,7 +318,7 @@ adb install inverter-dashboard-android.apk
 
 ## Configuration
 
-To disconnect inverter telemetry, clear the MQTT host and disable IGW (or remove its required connection settings), then save. This stops both inverter transports, clears their displayed telemetry, and cancels pending reconnect attempts. Home Assistant camera MQTT remains independently controlled by its own settings. Reconfigure either inverter transport to reconnect.
+To disconnect inverter telemetry, clear the MQTT host and disable IGW (or remove its required connection settings), then save. This stops both inverter transports, clears their displayed telemetry, and cancels pending reconnect attempts. On desktop, the separate camera MQTT connection remains controlled by its own settings. Reconfigure either inverter transport to reconnect.
 
 Edit `src-tauri/capabilities/default.json` and `src/config.ts` for MQTT settings:
 
@@ -497,20 +505,28 @@ pnpm tauri build
 
 ### Building for Mobile
 
+Mobile builds exclude the desktop feature implementations. `pnpm build` selects
+the frontend from Tauri's compilation target; a standalone mobile frontend can be
+built and checked with `pnpm build:mobile` and `pnpm test:mobile`. Direct release
+Cargo builds for mobile require a mobile `dist/build-profile.json` receipt.
+
 **Android:**
 
 ```bash
-./build-android-local.sh        # Release build
-./build-android-local.sh --dev  # Debug build
+pnpm tauri android init
+pnpm tauri android build --ci
 ```
 
 **iOS:**
 
 ```bash
-./build-ios-local.sh            # Unsigned build (for AltStore)
-./build-ios-local.sh --sign     # Signed build (requires Apple Developer)
-./build-ios-simulator.sh        # Build & launch in iPhone Simulator (no signing)
+pnpm tauri ios init
+pnpm tauri ios dev             # Run with the configured Xcode target
+pnpm tauri ios build --ci      # Requires the target's signing configuration
 ```
+
+The hosted iOS workflow uses `scripts/ci-build-ios-library.sh` before its Xcode
+packaging steps; that helper builds the mobile frontend before invoking Cargo.
 
 ---
 
