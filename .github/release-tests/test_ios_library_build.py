@@ -26,7 +26,7 @@ class IosLibraryBuildTests(unittest.TestCase):
                 f"#!{sys.executable}\n"
                 "import os, sys\n"
                 "from pathlib import Path\n"
-                "assert sys.argv[1:] == ['run', 'build']\n"
+                "assert sys.argv[1:] == ['run', 'build:mobile']\n"
                 "status = int(os.environ['IOS_TEST_FRONTEND_STATUS'])\n"
                 "if status: sys.exit(status)\n"
                 "if os.environ['IOS_TEST_SKIP_FRONTEND'] != '1':\n"

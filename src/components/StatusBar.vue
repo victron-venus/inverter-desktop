@@ -2,13 +2,7 @@
   <div
     class="flex items-center justify-center gap-2 text-[10px] font-medium text-muted mt-1 pb-0.5"
   >
-    <HoverTip v-if="haEnabled" :text="$t('status.tipHa')" class="flex items-center gap-1.5">
-      <div class="status-dot" :class="{ 'status-dot-on': haConnected }"></div>
-      <span>{{ $t('status.ha') }}</span>
-    </HoverTip>
-
-    <span v-if="haEnabled" class="soft-divider"></span>
-
+    <slot name="leading" />
     <div class="flex items-center gap-1">
       <span>{{ $t('status.uptime') }}:</span>
       <span class="text-main tabular">{{ formatUptime(uptime || 0) }}</span>
@@ -36,16 +30,7 @@
       {{ $t(`status.telemetry${telemetry.quality}`) }}
     </span>
 
-    <span v-if="haMqttConnected !== null" class="soft-divider"></span>
-
-    <HoverTip
-      v-if="haMqttConnected !== null"
-      :text="$t('status.tipHaMqtt')"
-      class="flex items-center gap-1.5"
-    >
-      <div class="status-dot" :class="{ 'status-dot-on': haMqttConnected }"></div>
-      <span class="text-main">{{ $t('status.haMqtt') }}</span>
-    </HoverTip>
+    <slot name="connections" />
 
     <span class="soft-divider"></span>
     <span> {{ $t('status.desktop') }} {{ appVersion }} </span>
@@ -74,16 +59,13 @@ const telemetryTitle = computed(() => {
 
 withDefaults(
   defineProps<{
-    haEnabled: boolean
-    haConnected: boolean
     mqttConnected: boolean
     /** Active live-data transport for the status label. */
     dataSource?: 'mqtt' | 'igw'
-    haMqttConnected?: boolean | null
     uptime?: number
     appVersion: string
     stateVersion?: string
   }>(),
-  { dataSource: 'mqtt', haMqttConnected: null }
+  { dataSource: 'mqtt' }
 )
 </script>

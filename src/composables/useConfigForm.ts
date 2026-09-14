@@ -3,7 +3,7 @@ import { reactive, ref } from 'vue'
 import type { AppConfig } from '../config'
 import { defaultConfig } from '../config'
 import type { DashboardControl } from '../inverterControl'
-import { isDashboardControlTarget } from './useDashboardControlsConfig'
+import { isDashboardControlTarget } from '../dashboardControlTarget'
 
 export function useConfigForm() {
   const config = reactive<AppConfig>({ ...defaultConfig })
@@ -20,12 +20,6 @@ export function useConfigForm() {
       if (!config.color_scheme) config.color_scheme = 'dark'
       // Ensure new boolean fields have defaults if missing from store
       const boolDefaults: Record<string, boolean> = {
-        show_ha_sensors: true,
-        show_ha_numbers: true,
-        show_ha_covers: true,
-        show_ha_media: true,
-        show_ha_scenes: true,
-        show_ha_weather: true,
         show_console: true,
         show_advanced_settings: false,
         gateway_enabled: false,
@@ -54,23 +48,32 @@ export function useConfigForm() {
       domain: string
       enabled: boolean
     }>,
-    headerTogglesList: DashboardControl[]
+    headerTogglesList: DashboardControl[],
+    editableHeaderControls = headerTogglesList
   ): Promise<boolean> {
     if (!configLoaded.value) return false
-    const invalidControl = headerTogglesList.find(
+    const invalidControl = editableHeaderControls.find(
       (control) => !isDashboardControlTarget(control.entity)
     )
     if (invalidControl) {
-      message.value = `Invalid header control target: ${invalidControl.entity || '(empty)'}. Use an inverter flag or a Home Assistant entity (domain.entity).`
+      message.value = `Invalid header control target: ${invalidControl.entity || '(empty)'}. Choose a supported control target.`
       messageType.value = 'error'
       return false
     }
-    haEntitiesList.forEach((e) => {
-      if (!e.id && e.entity) e.id = e.entity.replace(/\./g, '_')
-    })
-    headerTogglesList.forEach((t) => {
-      if (!t.id && t.entity) t.id = t.entity.replace(/\./g, '_')
-    })
+    function assignMissingIds(entries: Array<{ id: string; entity: string }>) {
+      const used = new Set(entries.map((entry) => entry.id).filter(Boolean))
+      for (const entry of entries) {
+        if (entry.id || !entry.entity) continue
+        const base = entry.entity.replace(/\./g, '_')
+        let id = base
+        let suffix = 2
+        while (used.has(id)) id = `${base}_${suffix++}`
+        entry.id = id
+        used.add(id)
+      }
+    }
+    assignMissingIds(haEntitiesList)
+    assignMissingIds(headerTogglesList)
     config.ha_entities = haEntitiesList
     config.header_toggles_config = headerTogglesList
 

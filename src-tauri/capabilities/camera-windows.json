@@ -1,0 +1,21 @@
+{
+  "identifier": "camera-windows",
+  "description": "Desktop camera clip windows",
+  "platforms": [
+    "linux",
+    "macOS",
+    "windows"
+  ],
+  "windows": [
+    "camera-video-*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-destroy",
+    "opener:default",
+    "notification:default",
+    "log:default"
+  ]
+}

@@ -46,6 +46,9 @@ Legacy saved targets `input_boolean.<flag>` are accepted and normalized to bare
 keys before publication. A real HA entity such as `switch.no_feed` is not an
 inverter flag just because its suffix or local UI id matches one. Custom home
 entities and custom HA header controls continue to use the optional HA adapter.
+That adapter is desktop-only. Mobile builds show core inverter controls and
+preserve unavailable HA definitions in saved settings; they contain no HA or
+camera implementation. See [the platform build boundary](desktop-features-and-mobile-core.md).
 
 ## Code boundaries
 
@@ -54,7 +57,9 @@ entities and custom HA header controls continue to use the optional HA adapter.
 - `src/composables/useDashboardControls.ts`: presentation composition, optional
   home-state adapter and core action dispatch. It works without `useHA`.
 - `src/composables/useDashboardControlsConfig.ts`: settings for mixed dashboard
-  controls; MQTT flag presets do not require HA discovery.
+  controls in the desktop composition; MQTT flag presets do not require HA discovery.
+- `src/features/coreControlsConfig.ts`: mobile core control editing, preserving
+  opaque desktop control definitions when settings are saved.
 - `src/composables/useHA.ts`: HA connections, entities and appliance displays;
   supplies only the optional home-state adapter to dashboard controls.
 - `src/composables/useInverterVisibility.ts`: core snapshot refresh on window

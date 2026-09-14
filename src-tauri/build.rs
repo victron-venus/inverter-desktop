@@ -2,6 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod mobile_build;
 mod release_identity;
 
 fn main() {
@@ -10,6 +11,13 @@ fn main() {
         .parent()
         .unwrap()
         .to_owned();
+    let frontend_receipt = root.join("dist/build-profile.json");
+    println!("cargo:rerun-if-changed={}", frontend_receipt.display());
+    let target = env::var("TARGET").unwrap_or_default();
+    let profile = env::var("PROFILE").unwrap_or_default();
+    let receipt = std::fs::read_to_string(&frontend_receipt).ok();
+    mobile_build::validate_frontend(&target, &profile, receipt.as_deref())
+        .unwrap_or_else(|error| panic!("{error}"));
     let plan_path = root.join(".release-plan.json");
     println!("cargo:rerun-if-changed={}", plan_path.display());
     println!("cargo:rerun-if-env-changed=RELEASE_CHANNEL");
@@ -61,7 +69,6 @@ fn main() {
     );
 
     // biometric.m is Apple-only (uses LocalAuthentication), skip for Android/Linux/Windows
-    let target = env::var("TARGET").unwrap_or_default();
     if target.contains("apple") {
         cc::Build::new()
             .file("src/biometric.m")

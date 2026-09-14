@@ -4,8 +4,7 @@
   "windows": [
     "main",
     "config",
-    "about",
-    "camera-video-*"
+    "about"
   ],
   "permissions": [
     "core:default",

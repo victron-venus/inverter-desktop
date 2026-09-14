@@ -46,7 +46,12 @@ jobs:
       - name: Lint Vue, TypeScript and Tailwind CSS
         run: pnpm run lint
       - name: Typecheck Vue templates and build frontend
-        run: pnpm run build
+        run: |
+          pnpm run test:build-profiles
+          pnpm run test:mobile
+          python3 -m unittest discover -s tests -p 'test_mobile_native_boundary.py'
+          pnpm run build:mobile
+          pnpm run build
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: clippy,rustfmt

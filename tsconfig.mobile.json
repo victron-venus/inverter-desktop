@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@features": ["./src/features/mobile.ts"],
+      "@feature-messages": ["./src/features/messages.mobile.ts"],
+      "@feature-defaults": ["./src/features/defaults.mobile.ts"]
+    }
+  }
+}
