@@ -2,6 +2,32 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { applyInverterState, state } from '../composables/useInverterState'
 
 describe('applyInverterState merge', () => {
+  it('replaces backup status so null power never retains an old sample', () => {
+    const backup = {
+      enabled: true,
+      available: true,
+      service: 'com.victronenergy.acload.example',
+      device_instance: 78,
+      name: 'Home',
+      power: -750,
+      measurement_time: 1000,
+      age_seconds: 1,
+    }
+    applyInverterState({ grid_backup: backup, grid_using_backup: true })
+    applyInverterState({
+      grid_backup: { ...backup, available: false, power: null },
+      grid_using_backup: false,
+    })
+    expect(state.value.grid_backup?.power).toBeNull()
+    expect(state.value.grid_using_backup).toBe(false)
+    applyInverterState({ grid_backup: { ...backup, service: null, power: null, available: false } })
+    expect(state.value.grid_backup?.service).toBeNull()
+    applyInverterState({ grid_backup: backup, grid_using_backup: true })
+    applyInverterState({ grid_backup: null })
+    expect(state.value.grid_backup).toBeUndefined()
+    expect(state.value.grid_using_backup).toBe(false)
+  })
+
   beforeEach(() => {
     state.value = { booleans: {}, features: {}, ui_config: {} }
   })

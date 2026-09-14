@@ -5,7 +5,21 @@ import type { AppConfig } from '../config'
 import type { DashboardControl } from '../inverterControl'
 import { invoke } from '@tauri-apps/api/core'
 
+export interface GridBackupStatus {
+  enabled: boolean
+  available: boolean
+  service: string | null
+  device_instance: number | null
+  name: string | null
+  power: number | null
+  measurement_time: number | null
+  age_seconds: number | null
+}
+
 export interface InverterState {
+  grid_backup?: GridBackupStatus | null
+  grid_using_backup?: boolean
+  grid_backup_observed_at?: number
   gt?: number
   g1?: number
   g2?: number
@@ -186,6 +200,10 @@ export function applyInverterState(
     if (val !== undefined && val !== null) {
       ;(merged as Record<string, unknown>)[key] = val
     }
+  }
+  if (newState.grid_backup === null) {
+    delete merged.grid_backup
+    merged.grid_using_backup = false
   }
   // Cerbo explicitly publishes null for unavailable/unused grid phases. Keep
   // ordinary partial-message holding, but never resurrect an invalid phase

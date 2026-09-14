@@ -734,6 +734,57 @@ impl MqttClient {
 mod tests {
     use super::*;
 
+    #[test]
+    fn explicit_grid_null_clears_cached_phase_but_malformed_samples_do_not() {
+        let mut devices = CerboDevices::default();
+        let mut state = InverterState::default();
+        for (path, payload) in [
+            ("Ac/Grid/L1/Power", r#"{"value":-743}"#),
+            ("Ac/Grid/L2/Power", r#"{"value":-7}"#),
+        ] {
+            assert!(MqttClient::apply_device_message(
+                &mut devices,
+                "system",
+                0,
+                path,
+                payload
+            ));
+        }
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.gt, Some(-750.0));
+        for payload in ["broken", r#"{}"#, r#"{"value":"invalid"}"#] {
+            assert!(!MqttClient::apply_device_message(
+                &mut devices,
+                "system",
+                0,
+                "Ac/Grid/L2/Power",
+                payload
+            ));
+        }
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.g2, Some(-7.0));
+        assert!(MqttClient::apply_device_message(
+            &mut devices,
+            "system",
+            0,
+            "Ac/Grid/L2/Power",
+            r#"{"value":null}"#
+        ));
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.g2, None);
+        assert_eq!(state.grid_l2_available, Some(false));
+        assert_eq!(state.gt, Some(-743.0));
+        assert!(MqttClient::apply_device_message(
+            &mut devices,
+            "system",
+            0,
+            "Ac/Grid/L1/Power",
+            r#"{"value":null}"#
+        ));
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.gt, None);
+    }
+
     fn bat(name: &str, amps: f64) -> Battery {
         Battery {
             name: Some(name.to_string()),

@@ -4,7 +4,19 @@
     <div
       class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
     >
-      <div class="classic-stat-label">Grid</div>
+      <div class="classic-stat-label flex flex-wrap items-center justify-center gap-1">
+        Grid
+        <span
+          v-if="gridBackup?.service"
+          data-testid="grid-backup"
+          class="normal-case tracking-normal font-normal"
+          :class="backupActive ? 'text-accent' : 'opacity-70'"
+          :title="backupHint"
+        >
+          · {{ gridBackup.name || 'Submeter' }} {{ backupPower }}
+          <span v-if="backupActive">(active)</span>
+        </span>
+      </div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-grid">
         {{ formatGridPower(gtH) }}
       </div>
@@ -75,29 +87,77 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { formatInverterState, formatPower, holdNumber } from '../utils'
+import type { GridBackupStatus } from '../composables/useInverterState'
 import SetpointOverride from './SetpointOverride.vue'
 
-const props = defineProps<{
-  gt?: number
-  g1?: number
-  g2?: number
-  gridL1Available?: boolean
-  gridL2Available?: boolean
-  tt?: number
-  t1?: number
-  t2?: number
-  solarTotal?: number
-  mpptTotal: number
-  pvInvertersTotal: number
-  batterySoc?: number
-  batteryPower?: number
-  batteryVoltage?: number
-  batteryCurrent?: number
-  setpoint?: number
-  inverterState?: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    gt?: number
+    g1?: number
+    g2?: number
+    gridL1Available?: boolean
+    gridL2Available?: boolean
+    gridBackup?: GridBackupStatus | null
+    gridUsingBackup?: boolean
+    gridBackupObservedAt?: number
+    tt?: number
+    t1?: number
+    t2?: number
+    solarTotal?: number
+    mpptTotal: number
+    pvInvertersTotal: number
+    batterySoc?: number
+    batteryPower?: number
+    batteryVoltage?: number
+    batteryCurrent?: number
+    setpoint?: number
+    inverterState?: string
+  }>(),
+  {
+    gridL1Available: undefined,
+    gridL2Available: undefined,
+  }
+)
+
+const now = ref(Date.now() / 1000)
+let freshnessTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  freshnessTimer = setInterval(() => {
+    now.value = Date.now() / 1000
+  }, 1000)
+})
+onUnmounted(() => clearInterval(freshnessTimer))
+const backupLive = computed(() => {
+  const observed = props.gridBackupObservedAt
+  return (
+    typeof observed === 'number' &&
+    Number.isFinite(observed) &&
+    now.value - observed <= 30 &&
+    now.value - observed >= -5
+  )
+})
+const backupActive = computed(
+  () => props.gridUsingBackup && backupLive.value && props.gridBackup?.available
+)
+const backupPower = computed(() => {
+  const backup = props.gridBackup
+  return backupLive.value &&
+    backup?.available &&
+    typeof backup.power === 'number' &&
+    Number.isFinite(backup.power)
+    ? formatPower(backup.power)
+    : '—'
+})
+const backupHint = computed(() => {
+  if (!backupLive.value) return 'Grid submeter status is stale'
+  if (backupActive.value) return 'Submeter is supplying the grid measurement'
+  if (!props.gridBackup?.available) return 'Grid submeter unavailable'
+  return props.gridBackup.enabled
+    ? 'Grid submeter ready as backup'
+    : 'Grid submeter detected; backup control disabled'
+})
 
 /** Sticky last-known for a numeric prop: hold on null/undefined, accept explicit 0. */
 function useHeldNumber(

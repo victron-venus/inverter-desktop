@@ -185,7 +185,23 @@ pub struct SetpointOverrideStatus {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GridBackupStatus {
+    pub enabled: bool,
+    pub available: bool,
+    pub service: Option<String>,
+    pub device_instance: Option<u32>,
+    pub name: Option<String>,
+    pub power: Option<f64>,
+    pub measurement_time: Option<f64>,
+    pub age_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
+    pub grid_backup: Option<GridBackupStatus>,
+    pub grid_using_backup: Option<bool>,
+    /// Genuine daemon receipt time; unrelated Cerbo overlays never renew it.
+    pub grid_backup_observed_at: Option<f64>,
     pub setpoint_override: Option<SetpointOverrideStatus>,
     pub gt: Option<f64>,
     pub g1: Option<f64>,
@@ -259,6 +275,9 @@ pub struct InverterState {
 
 #[derive(Deserialize, Default)]
 struct RawInverterState {
+    #[serde(default, deserialize_with = "deserialize_grid_backup")]
+    grid_backup: Option<Option<GridBackupStatus>>,
+    grid_using_backup: Option<bool>,
     // Deserialized for completeness / tests; never merged into live tiles.
     #[allow(dead_code)]
     gt: Option<f64>,
@@ -322,6 +341,15 @@ struct RawInverterState {
     // Ignoring them in JSON prevents daemon zeros from being tempting to merge.
     latest_version: Option<String>,
     console: Option<Vec<String>>,
+}
+
+fn deserialize_grid_backup<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<GridBackupStatus>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<GridBackupStatus>::deserialize(deserializer).map(Some)
 }
 
 impl RawInverterState {
@@ -3070,6 +3098,16 @@ impl MqttClient {
             merge_opt!(setpoint, raw.setpoint);
             merge_opt!(inverter_state, raw.inverter_state);
         }
+        // The daemon identifies the explicitly selected backup. Ordinary
+        // AC loads must never be inferred to be whole-house grid meters.
+        if let Some(backup) = raw.grid_backup {
+            if backup.is_none() {
+                new_state.grid_using_backup = Some(false);
+            }
+            new_state.grid_backup = backup;
+            new_state.grid_backup_observed_at = Some(Utc::now().timestamp_millis() as f64 / 1000.0);
+        }
+        merge_opt!(grid_using_backup, raw.grid_using_backup);
         merge_opt!(version, raw.version);
         merge_opt!(dashboard_version, raw.dashboard_version);
         merge_opt!(uptime, raw.uptime);
@@ -3481,6 +3519,66 @@ impl MqttClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_backup_survives_cerbo_overlay_and_clears_unavailable_power() {
+        let client = MqttClient::new("localhost".into(), 1883, None, None, "backup-test".into());
+        client.state.lock().unwrap().gt = Some(120.0);
+        let apply = |payload: serde_json::Value| {
+            MqttClient::process_state_update(
+                serde_json::from_value(payload).unwrap(),
+                client.state.clone(),
+                None,
+                Arc::new(Mutex::new(NotificationState {
+                    high_consumption: AlertState::new(),
+                    low_water: AlertState::new(),
+                    high_solar: AlertState::new(),
+                    high_load: HashMap::new(),
+                })),
+                None,
+                None,
+                Arc::new(Mutex::new(EvCache::default())),
+                &Arc::new(StateEmitter::new(false)),
+            );
+        };
+        let mut backup = serde_json::json!({"enabled":true,"available":true,
+            "service":"com.victronenergy.acload.example","device_instance":78,
+            "name":"Home","power":-750.0,"measurement_time":1000.0,"age_seconds":1.0});
+        apply(serde_json::json!({"grid_backup":backup,"grid_using_backup":false}));
+        assert_eq!(client.get_state().grid_backup.unwrap().power, Some(-750.0));
+        assert_eq!(client.get_state().gt, Some(120.0));
+        let observed = client.get_state().grid_backup_observed_at;
+        apply(serde_json::json!({"uptime":20}));
+        assert_eq!(client.get_state().grid_backup_observed_at, observed);
+        assert_eq!(
+            client.get_state().grid_backup.unwrap().name.as_deref(),
+            Some("Home")
+        );
+        backup["power"] = serde_json::Value::Null;
+        backup["available"] = false.into();
+        apply(serde_json::json!({"grid_backup":backup,"grid_using_backup":false}));
+        assert_eq!(client.get_state().grid_backup.unwrap().power, None);
+        backup["service"] = serde_json::Value::Null;
+        apply(serde_json::json!({"grid_backup":backup}));
+        assert_eq!(client.get_state().grid_backup.unwrap().service, None);
+        apply(serde_json::json!({"grid_backup":null}));
+        assert!(client.get_state().grid_backup.is_none());
+        assert_eq!(client.get_state().grid_using_backup, Some(false));
+    }
+
+    #[test]
+    fn override_requires_daemon_support_and_connected_mqtt() {
+        let client = MqttClient::new("localhost".into(), 1883, None, None, "override-test".into());
+        assert!(client
+            .request_setpoint_override(Some(-10), "id")
+            .unwrap_err()
+            .contains("support"));
+        client.state.lock().unwrap().setpoint_override = Some(SetpointOverrideStatus::default());
+        assert!(client
+            .request_setpoint_override(Some(-10), "id")
+            .unwrap_err()
+            .contains("not connected"));
+    }
 
     fn entry(friendly_name: &str) -> HaEntityEntry {
         HaEntityEntry {
