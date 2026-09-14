@@ -40,8 +40,8 @@ pushes request beta builds through the same validation and build gates. Publicat
 also requires the opt-in variable and an eligible unreleased base version. GitHub can delay
 scheduled runs; schedule timing is not an SLA. A committed base version (`X.Y.Z`)
 is required. Version changes go through PR review, including any native companion
-version files. Native binaries keep that base version; the release manifest records
-the beta/RC/nightly channel and exact source SHA.
+version files. The frozen release plan supplies full candidate versions to declared
+format adapters before compilation; the manifest binds the plan and build receipts.
 
 From a clean checkout matching GitHub's default-branch HEAD:
 
@@ -82,8 +82,7 @@ python3 scripts/release.py stable --rc v1.2.3-rc.1
 Approve the pending `release` environment in GitHub Actions. The publisher checks
 that reviewers are configured, verifies the RC's successful run/attempt, default
 branch ancestry, Release gate, immutable evidence and every payload checksum.
-Stable `vX.Y.Z` copies the tested RC bytes without rebuilding. No override or
-force-tag option exists. Expired/missing evidence requires a new RC. A partial
+Stable `vX.Y.Z` is a new build of the accepted RC's exact source, locks and recipe. The RC must match current HEAD. All checks and builds run again; approve the new final artifacts after acceptance. The manifest records new hashes and `derived_from_rc`. No override or force-tag option exists. Expired/missing evidence requires a new RC. A partial
 upload remains an unpublished draft; inspect it before any manual recovery.
 
 GitHub releases do not deploy production. Existing push/tag/CI deployment hooks
@@ -92,10 +91,10 @@ and PyPI publication use verified stable assets as a separate explicit operation
 
 ## Project limits and rollout requirements
 
-- Native source versions must all match the requested base version; channel is release metadata, not a binary version rewrite.
+- Committed base versions are synchronized before build using a frozen release plan; full beta/RC/final identity is embedded separately from native numeric metadata.
 - Retains macOS ARM/Intel, Linux, Windows, iOS unsigned and Android signed builds; configured Android signing secrets are required.
 - Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.
-- Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; automatic updating is not configured with the committed placeholder updater key.
+- Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; updates are installed manually using the Download updates menu.
 
 For public repositories, merge and verify the workflows before enabling the
 additive Terraform **CI gate** ruleset. Where release/deployment workflows use
@@ -117,8 +116,8 @@ References: [GitHub schedules](https://docs.github.com/en/actions/reference/work
 [protected environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
 [artifact provenance](https://docs.github.com/en/rest/actions/artifacts).
 
-### Validation consistency
+## Automatic version preparation
 
-Frontend checks and every native package use `pnpm install --frozen-lockfile --ignore-scripts` and the root `pnpm-lock.yaml`. `pnpm run build` runs `vue-tsc --noEmit` before Vite, checking Vue scripts and templates as well as TypeScript files. Run `pnpm run typecheck` for a fast type-only check.
+Run `python3 scripts/release.py prepare-version --pr` from the clean default-branch HEAD. The command refreshes tags and opens a PR with synchronized owned version fields. An existing unreleased base is retained; use `--bump minor`, `--bump major`, or `--version X.Y.Z` for explicit intent. See [version plans](VERSIONING.md) for build overlays, the dedicated allocation ledger and recovery.
 
-Mobile validation starts from the Quality gate for pull requests and the Release pipeline for main; `Mobile` remains manually runnable. Its job names and the required `CI gate` are preserved. Release packages are rebuilt separately for signing and artifact provenance.
+A local candidate package also needs the saved `.release-plan.json` at its exact source commit. Restore the `version_plan` object from the published `release-manifest.json` into a disposable checkout before `release.py package`; do not invent a tag or native counter locally. Ordinary development builds can use the project's native build command and explicitly local version identity.

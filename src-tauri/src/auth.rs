@@ -24,6 +24,7 @@ pub(super) fn public_command(command: &str) -> bool {
     matches!(
         command,
         "auth_status"
+            | "get_release_info"
             | "auth_login"
             | "auth_check"
             | "auth_logout"

@@ -1,53 +1,38 @@
 #!/usr/bin/env python3
+"""Check base files and require a verified plan for a final stable build."""
+
 # CLI filenames use hyphens to match their shell entry points.
 # pylint: disable=invalid-name
-"""Verify that release metadata matches committed application version sources."""
 
 import json
-import re
-import sys
 from pathlib import Path
+import subprocess
+import sys
 
-root = Path(__file__).resolve().parents[1]
-version, channel = sys.argv[1:]
-if not re.fullmatch(
-    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", version, re.ASCII
-):
-    raise SystemExit("Release version must be a base X.Y.Z version")
-if channel not in {"nightly", "beta", "rc"}:
-    raise SystemExit(
-        "Build only nightly/beta/rc; stable must promote verified RC artifacts"
-    )
-policy = json.loads((root / ".release-policy.json").read_text())
-paths = [policy["version_file"], *policy.get("version_companions", [])]
-for name in paths:
-    path = root / name
-    if path.suffix == ".json":
-        actual = json.loads(path.read_text())["version"]
-    elif path.suffix == ".toml":
-        match = re.search(r'^version\s*=\s*"([^\"]+)"', path.read_text(), re.MULTILINE)
-        if not match:
-            raise SystemExit(f"No explicit version found in {name}")
-        actual = match.group(1)
-    elif path.suffix in {".gradle", ".pbxproj"}:
-        pattern = (
-            r'versionName\s+"([^\"]+)"'
-            if path.suffix == ".gradle"
-            else r"MARKETING_VERSION\s*=\s*([^;]+);"
-        )
-        values = [
-            value.strip().strip('"') for value in re.findall(pattern, path.read_text())
-        ]
-        if not values or any(value != version for value in values):
-            raise SystemExit(
-                f"{name}: mobile version values {values} must all match {version}"
-            )
-        actual = version
-    else:
-        actual = path.read_text().strip().removeprefix("v")
-    if actual != version:
-        raise SystemExit(
-            f"{name}: committed {actual} does not match requested {version}; "
-            "bump all version files in a PR"
-        )
-print(f"Validated {version} for {channel}: {', '.join(paths)}")
+from version_plan import check_base_versions, validate_plan
+
+
+def check_release_version(root, version, channel):
+    """Require consistent base fields and any saved plan's exact source identity."""
+    if channel not in {"nightly", "beta", "rc", "stable"}:
+        raise ValueError("Unsupported release channel")
+    policy = json.loads((root / ".release-policy.json").read_text())
+    if channel == "stable" and policy["versioning"]["promotion"] != "final-build":
+        raise ValueError("Stable builds require the final-build promotion profile")
+    check_base_versions(root, policy, version)
+    plan_path = root / ".release-plan.json"
+    if plan_path.exists():
+        plan = json.loads(plan_path.read_text())
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        validate_plan(plan, policy, sha)
+        if plan["base_version"] != version or plan["channel"] != channel:
+            raise ValueError("Release plan does not match requested version/channel")
+    elif channel == "stable":
+        raise ValueError("Stable final-build requires a verified .release-plan.json")
+    print(f"Validated {version} for {channel}")
+
+
+if __name__ == "__main__":
+    check_release_version(Path(__file__).resolve().parents[1], *sys.argv[1:])

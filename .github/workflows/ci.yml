@@ -38,6 +38,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Check release version ownership and native package validators
+        run: |
+          python3 scripts/version_plan.py check-base
+          python3 -m unittest discover -s scripts -p 'test_*version*.py'
       - run: pnpm run format:check
       - name: Lint Vue, TypeScript and Tailwind CSS
         run: pnpm run lint

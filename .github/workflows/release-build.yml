@@ -7,7 +7,11 @@ name: Build release assets
         required: true
         type: string
       channel:
-        description: nightly, beta or rc; stable promotes existing RC bytes
+        description: nightly, beta, rc or an accepted final-build stable release
+        required: true
+        type: string
+      release_plan_artifact:
+        description: Artifact containing the frozen .release-plan.json for every platform
         required: true
         type: string
 permissions:
@@ -47,6 +51,15 @@ jobs:
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Download frozen release plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.release_plan_artifact }}
+          path: .
+      - name: Set up Python for release plan validation
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
       - name: Verify committed release version
         run: python3 scripts/check-release-version.py "$RELEASE_VERSION" "$RELEASE_CHANNEL"
       - name: Install frontend dependencies
@@ -64,6 +77,8 @@ jobs:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Synchronize candidate version inputs
+        run: python3 scripts/version_plan.py sync --plan .release-plan.json
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -72,7 +87,7 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             librsvg2-dev \
-            libssl-dev
+            libssl-dev rpm libarchive-tools
       - name: Install AppIndicator
         if: matrix.platform == 'ubuntu-22.04'
         run: sudo apt-get install -y libappindicator3-dev
@@ -87,6 +102,10 @@ jobs:
         run: python3 scripts/collect-release-desktop.py
         env:
           TAURI_TARGET: ${{ matrix.target }}
+      - name: Bind desktop packages to the release plan
+        run: >-
+          python3 scripts/version_receipt.py create --plan .release-plan.json --inputs .release-inputs.json
+          --assets release-output/desktop --output release-output/desktop/release-inputs-${{ matrix.artifact }}.json
       - name: Store release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -113,6 +132,15 @@ jobs:
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Download frozen release plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.release_plan_artifact }}
+          path: .
+      - name: Set up Python for release plan validation
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
       - name: Verify committed release version
         run: python3 scripts/check-release-version.py "$RELEASE_VERSION" "$RELEASE_CHANNEL"
       - name: Install pnpm
@@ -132,6 +160,8 @@ jobs:
             }}
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Synchronize candidate version inputs
+        run: python3 scripts/version_plan.py sync --plan .release-plan.json
       - name: Test iOS package version validation
         if: matrix.type == 'ios'
         run: python3 -m unittest discover -s scripts -p test_ios_version.py
@@ -187,7 +217,7 @@ jobs:
           TAURI_APP_VERSION: ${{ inputs.version }}
         run: |
           python3 scripts/ios_version.py sync \
-            src-tauri/gen/apple/inverter-dashboard_iOS/Info.plist --version "$TAURI_APP_VERSION"
+            src-tauri/gen/apple/inverter-dashboard_iOS/Info.plist --version "$TAURI_APP_VERSION" --plan .release-plan.json
           # Clean + custom DerivedData to avoid stale debug caches
           rm -rf "src-tauri/gen/apple/build/DerivedData"
           xcodebuild clean archive \
@@ -212,13 +242,18 @@ jobs:
           # .ipa is a zip archive with Payload/ at the root
           zip -qr "${{ github.workspace }}/inverter-dashboard-ios.ipa" Payload
           rm -rf Payload
-          python3 scripts/ios_version.py verify inverter-dashboard-ios.ipa --version "$TAURI_APP_VERSION"
+          python3 scripts/ios_version.py verify inverter-dashboard-ios.ipa --version "$TAURI_APP_VERSION" --plan .release-plan.json
+          python3 scripts/verify-native-release.py apple inverter-dashboard-ios.ipa
+          mkdir -p release-output/ios
+          cp inverter-dashboard-ios.ipa release-output/ios/
+          python3 scripts/version_receipt.py create --plan .release-plan.json --inputs .release-inputs.json \
+            --assets release-output/ios --output release-output/ios/release-inputs-ios.json
           echo "Created inverter-dashboard-ios.ipa"
       - name: Store release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-assets-mobile-ios
-          path: inverter-dashboard-ios.ipa
+          path: release-output/ios/*
           if-no-files-found: error
           retention-days: 14
         if: matrix.type == 'ios'
@@ -234,6 +269,13 @@ jobs:
       - name: Android – install required SDK components (compileSdk 36, build-tools 34.0.0)
         if: matrix.type == 'android'
         run: bash scripts/ci-android-install-sdk.sh
+      - name: Android – install pinned bundle metadata inspector
+        if: matrix.type == 'android'
+        run: |
+          curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' \
+            https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar \
+            --output "$RUNNER_TEMP/bundletool.jar"
+          echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_TEMP/bundletool.jar" | sha256sum --check
       - name: Android – init project
         if: matrix.type == 'android'
         run: pnpm tauri android init --ci
@@ -326,7 +368,7 @@ jobs:
       - name: Android – rename artifacts for release
         if: matrix.type == 'android'
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="$(python3 -c 'import json; print(json.load(open(".release-plan.json"))["version"])')"
           APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
           AAB_DIR="src-tauri/gen/android/app/build/outputs/bundle/universalRelease"
 
@@ -342,12 +384,17 @@ jobs:
       - name: Collect Android packages
         if: matrix.type == 'android'
         run: |-
+          VERSION="$(python3 -c 'import json; print(json.load(open(".release-plan.json"))["version"])')"
           mkdir -p release-output/android
-          APK="src-tauri/gen/android/app/build/outputs/apk/universal/release/Inverter.Desktop_${RELEASE_VERSION}_signed.apk"
-          AAB="src-tauri/gen/android/app/build/outputs/bundle/universalRelease/Inverter.Desktop_${RELEASE_VERSION}.aab"
+          APK="src-tauri/gen/android/app/build/outputs/apk/universal/release/Inverter.Desktop_${VERSION}_signed.apk"
+          AAB="src-tauri/gen/android/app/build/outputs/bundle/universalRelease/Inverter.Desktop_${VERSION}.aab"
           test -s "$APK"
           test -s "$AAB"
+          python3 scripts/verify-native-release.py android "$APK" --aapt "$ANDROID_HOME/build-tools/34.0.0/aapt"
+          python3 scripts/verify-native-release.py aab "$AAB" --bundletool "$RUNNER_TEMP/bundletool.jar"
           cp "$APK" "$AAB" release-output/android/
+          python3 scripts/version_receipt.py create --plan .release-plan.json --inputs .release-inputs.json \
+            --assets release-output/android --output release-output/android/release-inputs-android.json
       - name: Store release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

@@ -20,4 +20,5 @@ src/assets/
 /.github/workflows/quality-gate.yml
 /.github/workflows/release-pipeline.yml
 /docs/release-workflow.md
+/docs/VERSIONING.md
 /RELEASING.md

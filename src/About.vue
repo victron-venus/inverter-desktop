@@ -35,27 +35,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import UiButton from './components/UiButton.vue'
-import { getVersion } from '@tauri-apps/api/app'
+import { useReleaseVersion } from './composables/useReleaseVersion'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
-const appVersion = ref('...')
+const appVersion = useReleaseVersion()
 const imageError = ref(false)
 function onImageError() {
   imageError.value = true
 }
-
-onMounted(async () => {
-  try {
-    appVersion.value = await getVersion()
-  } catch {
-    appVersion.value = '1.1.2'
-  }
-})
 
 async function closeWindow() {
   try {
