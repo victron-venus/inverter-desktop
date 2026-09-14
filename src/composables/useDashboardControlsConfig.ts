@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 
 import type { AppConfig } from '../config'
 import { logger } from '../logger'
-import { INVERTER_CONTROL_FLAGS, type DashboardControl } from '../inverterControl'
+import { type DashboardControl } from '../inverterControl'
 
 export interface DiscoveredEntity {
   entity_id: string
@@ -12,14 +12,7 @@ export interface DiscoveredEntity {
   state: string
 }
 
-/** Header controls accept native inverter-control flags and optional HA entities. */
-export function isDashboardControlTarget(target: string): boolean {
-  if (!target || target !== target.trim()) return false
-  return (
-    INVERTER_CONTROL_FLAGS.some((flag) => flag === target) ||
-    /^[a-z_][a-z0-9_]*\.[a-z0-9_]+$/.test(target)
-  )
-}
+export { isDashboardControlTarget } from '../dashboardControlTarget'
 
 export function useDashboardControlsConfig() {
   const haEntitiesList = ref<
@@ -165,7 +158,23 @@ export function useDashboardControlsConfig() {
       discoveryLoading.value = false
     }
   }
+  function refreshSuggestions(config: AppConfig) {
+    return ensureEntitiesFetched(
+      config.ha_url || '',
+      config.ha_port,
+      config.ha_longlived_token || ''
+    )
+  }
+  function getSavedControls() {
+    return {
+      home: haEntitiesList.value,
+      header: headerTogglesList.value,
+      editableHeader: headerTogglesList.value,
+    }
+  }
   return {
+    getSavedControls,
+    refreshSuggestions,
     haEntitiesList,
     headerTogglesList,
     discoveryDialog,

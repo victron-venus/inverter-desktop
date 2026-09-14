@@ -13,13 +13,18 @@ import { appConfig, state } from './useInverterState'
 /** Optional home-device adapter; inverter controls never consult it. */
 export type HomeControlStateProvider = (control: DashboardControl) => ControlState | undefined
 
-export function useDashboardControls(homeState?: HomeControlStateProvider) {
+export function useDashboardControls(
+  homeState?: HomeControlStateProvider,
+  allowHomeControls = true
+) {
   const headerControls = computed(() => {
     const configured = appConfig.value?.header_toggles_config
     const controls = configured?.length
       ? configured
       : (state.value.ui_config?.header_toggles ?? DEFAULT_INVERTER_CONTROLS)
-    return controls.map(normalizeControlTarget)
+    return controls
+      .map(normalizeControlTarget)
+      .filter((control) => allowHomeControls || isInverterControlFlag(control.entity))
   })
 
   const homeButtons = computed(() => {
@@ -27,7 +32,13 @@ export function useDashboardControls(homeState?: HomeControlStateProvider) {
     const controls = configured?.length
       ? configured.filter((control) => control.enabled)
       : (state.value.ui_config?.home_buttons ?? [])
-    return controls.map(normalizeControlTarget)
+    return controls
+      .map(normalizeControlTarget)
+      .filter(
+        (control) =>
+          (allowHomeControls && state.value.features?.ha !== false) ||
+          isInverterControlFlag(control.entity)
+      )
   })
 
   function resolve(control: DashboardControl, fallbackKey = control.id): ControlState {

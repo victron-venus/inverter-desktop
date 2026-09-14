@@ -55,11 +55,11 @@
             <label :for="'ht-entity-' + index" class="classic-label px-1">{{
               $t('config.headerControlTarget')
             }}</label>
-            <EntityAutocompleteInput
+            <ControlTargetInput
               :id="'ht-entity-' + index"
               v-model="toggle.entity"
               :entities="controlTargets"
-              placeholder="only_charging / switch.example"
+              placeholder="Control target"
               @focus="$emit('focus-entity')"
             />
             <p
@@ -111,8 +111,8 @@ import {
   inverterControlFlagKey,
   type DashboardControl,
 } from '../inverterControl'
-import { isDashboardControlTarget } from '../composables/useDashboardControlsConfig'
-import EntityAutocompleteInput from './EntityAutocompleteInput.vue'
+import { isDashboardControlTarget } from '../dashboardControlTarget'
+import { ControlTargetInput } from '@features'
 
 const props = defineProps<{
   headerTogglesList: DashboardControl[]

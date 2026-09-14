@@ -12,34 +12,17 @@ export async function notify(title: string, body: string) {
 const prevEvChargingKw = ref<number | null>(null)
 const prevWaterValve = ref<boolean | null>(null)
 const prevPumpSwitch = ref<boolean | null>(null)
-const prevHomeStates = ref<Record<string, string>>({})
-const lastNotifyTime = new Map<string, number>()
-const NOTIFY_COOLDOWN_MS = 60_000
 let initialized = false
-const NOTIFIABLE_DOMAINS = new Set(['switch', 'input_boolean', 'light', 'fan', 'binary_sensor'])
-
-function shouldNotifyEntity(domain: string, st: string, entityId: string, now: number): boolean {
-  if (!NOTIFIABLE_DOMAINS.has(domain)) return false
-  if (domain === 'binary_sensor' && st !== 'on') return false
-  const lastTime = lastNotifyTime.get(entityId) || 0
-  return now - lastTime >= NOTIFY_COOLDOWN_MS
-}
-
-function getEntityName(entityId: string, attrs?: Record<string, unknown>): string {
-  return (attrs?.friendly_name as string) || entityId.split('.').pop() || entityId
-}
 
 export function initSystemNotifications(
-  haEntityStates: Ref<Record<string, string>>,
-  haEntityAttributes: Ref<Record<string, Record<string, unknown>>>,
-  haEvChargingKw: Ref<number | null>,
-  haWaterValve: Ref<boolean | null>,
-  haPumpSwitch: Ref<boolean | null>
+  evChargingKw: Ref<number | null>,
+  waterValve: Ref<boolean | null>,
+  pumpSwitch: Ref<boolean | null>
 ) {
   if (initialized) return
   initialized = true
 
-  watch(haEvChargingKw, (val) => {
+  watch(evChargingKw, (val) => {
     if (val === null || val === undefined) return
     const prev = prevEvChargingKw.value
     if (prev !== null && prev !== undefined) {
@@ -52,7 +35,7 @@ export function initSystemNotifications(
     prevEvChargingKw.value = val
   })
 
-  watch(haWaterValve, (val) => {
+  watch(waterValve, (val) => {
     if (val === null || val === undefined) return
     const prev = prevWaterValve.value
     if (prev !== null && prev !== undefined && val !== prev) {
@@ -61,7 +44,7 @@ export function initSystemNotifications(
     prevWaterValve.value = val
   })
 
-  watch(haPumpSwitch, (val) => {
+  watch(pumpSwitch, (val) => {
     if (val === null || val === undefined) return
     const prev = prevPumpSwitch.value
     if (prev !== null && prev !== undefined && val !== prev) {
@@ -69,23 +52,4 @@ export function initSystemNotifications(
     }
     prevPumpSwitch.value = val
   })
-
-  watch(
-    haEntityStates,
-    (states) => {
-      const prev = prevHomeStates.value
-      const now = Date.now()
-      for (const [entityId, st] of Object.entries(states) as [string, string][]) {
-        const prevSt = prev[entityId]
-        if (prevSt === undefined || prevSt === st) continue
-        const domain = entityId.split('.')[0]
-        if (!shouldNotifyEntity(domain, st, entityId, now)) continue
-        lastNotifyTime.set(entityId, now)
-        const name = getEntityName(entityId, haEntityAttributes.value[entityId])
-        notify('Home Control', `${name}: ${st.toUpperCase()}`)
-      }
-      prevHomeStates.value = { ...states }
-    },
-    { deep: true }
-  )
 }

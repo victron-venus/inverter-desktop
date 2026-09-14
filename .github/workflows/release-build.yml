@@ -117,6 +117,8 @@ jobs:
   mobile:
     name: Build mobile artifacts
     runs-on: ${{ matrix.platform }}
+    env:
+      INVERTER_BUILD_PROFILE: mobile
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -249,6 +251,10 @@ jobs:
           python3 scripts/version_receipt.py create --plan .release-plan.json --inputs .release-inputs.json \
             --assets release-output/ios --output release-output/ios/release-inputs-ios.json
           echo "Created inverter-dashboard-ios.ipa"
+
+      - name: iOS – verify packaged core excludes desktop features
+        if: matrix.type == 'ios'
+        run: python3 scripts/check-mobile-native-boundary.py --platform ios --artifact inverter-dashboard-ios.ipa
       - name: Store release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -287,6 +293,12 @@ jobs:
       - name: Android – verify release bundle native alignment
         if: matrix.type == 'android'
         run: python3 scripts/android/check_native_alignment.py src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
+      - name: Android – verify packaged core excludes desktop features
+        if: matrix.type == 'android'
+        run: >-
+          python3 scripts/check-mobile-native-boundary.py --platform android --artifact
+          src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
+          src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
       - name: Android – sign artifacts
         if: matrix.type == 'android' && github.repository_owner == 'victron-venus'
         env:
