@@ -7,6 +7,8 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/plugins/prepare-frigate-package.py"
 SPEC = importlib.util.spec_from_file_location("prepare_frigate_package", SCRIPT)
@@ -39,6 +41,15 @@ def executable_fixture(target):
     return bytes(data)
 
 
+def metadata_fixture(metadata, **changes):
+    """Copy file identity metadata and override only the property under test."""
+    names = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns",
+             "st_birthtime_ns", "st_file_attributes")
+    fields = {name: getattr(metadata, name) for name in names if hasattr(metadata, name)}
+    fields.update(changes)
+    return SimpleNamespace(**fields)
+
+
 class FrigatePackageTests(unittest.TestCase):
     """Only a deliberately selected desktop executable becomes package payload."""
 
@@ -55,7 +66,7 @@ class FrigatePackageTests(unittest.TestCase):
         (self.root / "unrelated.key").write_bytes(os.urandom(32))
         packaging.prepare(self.worker, "aarch64-apple-darwin", self.output)
         files = sorted(
-            str(path.relative_to(self.output))
+            path.relative_to(self.output).as_posix()
             for path in self.output.rglob("*") if path.is_file()
         )
         self.assertEqual(files, ["manifest.json", "payload/bin/inverter-frigate-worker"])
@@ -136,10 +147,110 @@ class FrigatePackageTests(unittest.TestCase):
             with self.subTest(target=target, data=data), self.assertRaises(ValueError):
                 packaging.verify_worker_target(data, target)
 
-    def test_architecture_failure_removes_partial_staging(self):
-        """Mislabelled payloads leave no output directory to accidentally sign."""
-        with self.assertRaisesRegex(ValueError, "match"):
+    def test_macho_platform_commands_remain_strict(self):
+        """Command bounds, duplicate platforms and legacy mobile tags are rejected."""
+        target = "aarch64-apple-darwin"
+        header = executable_fixture(target)[:32]
+        modern = struct.pack("<IIIIII", 0x32, 24, 1, 0, 0, 0)
+        legacy = struct.pack("<IIII", 0x24, 16, 0, 0)
+        unrelated = struct.pack("<II", 0x1B, 8)
+
+        def executable(commands):
+            data = bytearray(header + b"".join(commands))
+            struct.pack_into("<II", data, 16, len(commands), len(data) - 32)
+            return data
+
+        for commands in ((modern,), (legacy,), (unrelated, modern)):
+            packaging.verify_worker_target(executable(commands), target)
+        invalid = (
+            (modern, modern), (modern, legacy), (unrelated,),
+            (struct.pack("<II", 0x32, 8),),
+            (struct.pack("<II", 0x24, 8),),
+            (struct.pack("<II", 0x32, 0),),
+            (struct.pack("<III", 0x32, 12, 1),),
+            (struct.pack("<II", 0x32, 32),),
+            (struct.pack("<IIII", 0x25, 16, 0, 0),),
+            (struct.pack("<IIII", 0x2F, 16, 0, 0),),
+            (struct.pack("<IIII", 0x30, 16, 0, 0),),
+        )
+        for commands in invalid:
+            with self.subTest(commands=commands), self.assertRaises(ValueError):
+                packaging.verify_worker_target(executable(commands), target)
+
+    def test_architecture_failure_does_not_create_staging(self):
+        """Mislabelled payloads are rejected before output files are created."""
+        with (patch.object(Path, "mkdir", side_effect=AssertionError("Unexpected staging")),
+              self.assertRaisesRegex(ValueError, "match")):
             packaging.prepare(self.worker, "x86_64-unknown-linux-gnu", self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_rejects_file_replaced_after_path_inspection(self):
+        """A replacement cannot become the fresh baseline for the open checks."""
+        checked_path = packaging.checked_path
+
+        def inspect_then_replace(path):
+            result = checked_path(path)
+            self.worker.rename(self.root / "original-worker")
+            self.worker.write_bytes(executable_fixture("aarch64-apple-darwin"))
+            return result
+
+        with (patch.object(packaging, "checked_path", side_effect=inspect_then_replace),
+              self.assertRaisesRegex(ValueError, "changed")):
+            packaging.prepare(self.worker, "aarch64-apple-darwin", self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_rejects_parent_replaced_after_path_inspection(self):
+        """Replacing an inspected directory must not select a different executable."""
+        selected = self.root / "selected"
+        selected.mkdir()
+        worker = selected / "worker"
+        worker.write_bytes(self.worker.read_bytes())
+        checked_path = packaging.checked_path
+
+        def inspect_then_replace(path):
+            result = checked_path(path)
+            selected.rename(self.root / "original-directory")
+            selected.mkdir()
+            worker.write_bytes(executable_fixture("aarch64-apple-darwin"))
+            return result
+
+        with (patch.object(packaging, "checked_path", side_effect=inspect_then_replace),
+              self.assertRaisesRegex(ValueError, "changed")):
+            packaging.prepare(worker, "aarch64-apple-darwin", self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_rejects_file_replaced_between_validation_and_open(self):
+        """The opened handle must match the file originally inspected."""
+        open_file = os.open
+
+        def replace_then_open(path, flags):
+            self.worker.rename(self.root / "original-worker")
+            self.worker.write_bytes(executable_fixture("aarch64-apple-darwin"))
+            return open_file(path, flags)
+
+        with (patch.object(os, "open", side_effect=replace_then_open),
+              self.assertRaisesRegex(ValueError, "changed")):
+            packaging.prepare(self.worker, "aarch64-apple-darwin", self.output)
+        self.assertFalse(self.output.exists())
+
+    @unittest.skipIf(os.name == "nt", "Creating symlinks requires Windows developer privileges")
+    def test_rejects_canonical_escape_after_inspection(self):
+        """Canonical containment detects a file redirected outside its selected parent."""
+        selected = self.root / "selected"
+        selected.mkdir()
+        worker = selected / "worker"
+        worker.write_bytes(self.worker.read_bytes())
+        checked_path = packaging.checked_path
+
+        def inspect_then_redirect(path):
+            result = checked_path(path)
+            worker.unlink()
+            worker.symlink_to(self.worker)
+            return result
+
+        with (patch.object(packaging, "checked_path", side_effect=inspect_then_redirect),
+              self.assertRaisesRegex(ValueError, "inside its inspected parent")):
+            packaging.prepare(worker, "aarch64-apple-darwin", self.output)
         self.assertFalse(self.output.exists())
 
     @unittest.skipIf(os.name == "nt", "Creating symlinks requires Windows developer privileges")
@@ -164,6 +275,55 @@ class FrigatePackageTests(unittest.TestCase):
         self.assertEqual(staged.stat().st_nlink, 1)
         self.assertEqual(staged.read_bytes(), self.worker.read_bytes())
         self.assertFalse(os.path.samefile(staged, self.worker))
+
+    def test_windows_creation_and_change_times_are_not_interchangeable(self):
+        """The Python 3.12 path/fstat ctime difference does not reject unchanged input."""
+        worker, inspected = packaging.checked_path(self.worker)
+        source = metadata_fixture(inspected[-1][1], st_birthtime_ns=100, st_ctime_ns=100)
+        inspected[-1] = (worker, source)
+        opened = metadata_fixture(source, st_ctime_ns=200)
+        with (patch.object(packaging, "IS_WINDOWS", True),
+              patch.object(packaging, "checked_path", return_value=(worker, inspected)),
+              patch.object(os, "fstat", side_effect=(opened, opened))):
+            data = packaging.read_worker(self.worker)
+        self.assertEqual(data, self.worker.read_bytes())
+        with patch.object(packaging, "IS_WINDOWS", False):
+            self.assertFalse(packaging.selected_file_matches(source, opened))
+
+    def test_windows_path_to_handle_comparison_rejects_identity_and_content_changes(self):
+        """Handling Windows ctime never relaxes inode, device, size or modification checks."""
+        source = metadata_fixture(self.worker.stat(), st_birthtime_ns=100, st_ctime_ns=100)
+        opened = metadata_fixture(source, st_ctime_ns=200)
+        for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_birthtime_ns"):
+            changed = metadata_fixture(opened, **{field: getattr(opened, field) + 1})
+            with self.subTest(field=field), patch.object(packaging, "IS_WINDOWS", True):
+                self.assertFalse(packaging.selected_file_matches(source, changed))
+
+    def test_older_windows_requires_matching_creation_time_and_rejects_mixed_fields(self):
+        """Without birthtime, both legacy APIs use ctime as the same creation timestamp."""
+        source = metadata_fixture(self.worker.stat(), st_ctime_ns=100)
+        vars(source).pop("st_birthtime_ns", None)
+        opened = metadata_fixture(source)
+        changed = metadata_fixture(source, st_ctime_ns=200)
+        with patch.object(packaging, "IS_WINDOWS", True):
+            self.assertTrue(packaging.selected_file_matches(source, opened))
+            self.assertFalse(packaging.selected_file_matches(source, changed))
+            modern = metadata_fixture(source, st_birthtime_ns=100)
+            self.assertFalse(packaging.selected_file_matches(source, modern))
+            self.assertFalse(packaging.selected_file_matches(modern, source))
+
+    def test_windows_read_rejects_same_inode_change_with_unchanged_size_and_mtime(self):
+        """Full handle-to-handle ctime comparison detects changes while reading."""
+        worker, inspected = packaging.checked_path(self.worker)
+        source = metadata_fixture(inspected[-1][1], st_birthtime_ns=100, st_ctime_ns=100)
+        inspected[-1] = (worker, source)
+        opened = metadata_fixture(source, st_ctime_ns=200)
+        changed = metadata_fixture(opened, st_ctime_ns=201)
+        with (patch.object(packaging, "IS_WINDOWS", True),
+              patch.object(packaging, "checked_path", return_value=(worker, inspected)),
+              patch.object(os, "fstat", side_effect=(opened, changed)),
+              self.assertRaisesRegex(ValueError, "changed")):
+            packaging.read_worker(self.worker)
 
     def test_refuses_parent_traversal_before_normalizing_relative_paths(self):
         """Checking raw components prevents abspath from hiding traversal."""

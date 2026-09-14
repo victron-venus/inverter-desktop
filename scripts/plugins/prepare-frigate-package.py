@@ -30,6 +30,7 @@ TARGETS = (
     "x86_64-pc-windows-msvc",
 )
 MAX_WORKER_BYTES = 60 * 1024 * 1024
+IS_WINDOWS = os.name == "nt"
 
 
 def verify_worker_target(data, target):
@@ -70,15 +71,26 @@ def macho_target(data, arm):
         command, size = struct.unpack_from("<II", data, cursor)
         if size < 8 or size % 8 or cursor + size > end:
             return False
-        if command in (0x32, 0x24):  # LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX
-            if size < (24 if command == 0x32 else 16):
-                return False
-            platforms.append(struct.unpack_from("<I", data, cursor + 8)[0]
-                             if command == 0x32 else 1)
-        elif command in (0x25, 0x2F, 0x30):  # iOS, tvOS, watchOS minimum versions
+        platform = macho_command_platform(data, cursor, command, size)
+        if platform == -1:
             return False
+        if platform is not None:
+            platforms.append(platform)
         cursor += size
     return cursor == end and platforms == [1]
+
+
+def macho_command_platform(data, cursor, command, size):
+    """Return a declared platform, None for unrelated commands, or -1 if invalid."""
+    if command == 0x32:  # LC_BUILD_VERSION
+        if size < 24:
+            return -1
+        return struct.unpack_from("<I", data, cursor + 8)[0]
+    if command == 0x24:  # LC_VERSION_MIN_MACOSX
+        return 1 if size >= 16 else -1
+    if command in (0x25, 0x2F, 0x30):  # iOS, tvOS, watchOS minimum versions
+        return -1
+    return None
 
 
 def elf_target(data, arm):
@@ -120,31 +132,92 @@ def pe_target(data, arm):
 
 
 def checked_path(path):
-    """Reject symlinks, reparse points and traversal before resolving any input."""
+    """Reject links/traversal and retain identities observed during inspection."""
     path = Path(path)
     if ".." in path.parts:
         raise ValueError("Paths must not contain parent traversal")
     if not path.is_absolute():
         path = Path.cwd() / path
+    inspected = []
     for component in (*reversed(path.parents), path):
         metadata = component.lstat()
         if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & 0x400:
             raise ValueError("Paths must not contain symlinks or reparse points")
-    return path
+        inspected.append((component, metadata))
+    return path, inspected
+
+
+def verify_path_identities(inspected):
+    """Reject replacement of any inspected component without refreshing its baseline."""
+    for path, original in inspected:
+        current = path.lstat()
+        if ((current.st_dev, current.st_ino, current.st_mode) !=
+                (original.st_dev, original.st_ino, original.st_mode)
+                or getattr(current, "st_file_attributes", 0) & 0x400):
+            raise ValueError("Worker path changed while preparing the package")
+
+
+def file_version(metadata):
+    """Identify the selected file and changes observable through its open handle."""
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size,
+            metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+def selected_file_matches(source, opened):
+    """Compare path metadata to a handle using timestamps with matching meanings."""
+    if file_version(source)[:4] != file_version(opened)[:4]:
+        return False
+    if IS_WINDOWS:
+        # CPython 3.12 path stat reports creation time as ctime, while fstat can
+        # report NTFS ChangeTime. Birth time has the same meaning in both APIs.
+        source_birth = getattr(source, "st_birthtime_ns", None)
+        opened_birth = getattr(opened, "st_birthtime_ns", None)
+        if source_birth is not None or opened_birth is not None:
+            return source_birth == opened_birth
+        # Older CPython uses creation time as ctime consistently in both APIs.
+    return source.st_ctime_ns == opened.st_ctime_ns
+
+
+def read_worker(worker):
+    """Read the bounded selected file, retaining its original identity through open.
+
+    Explicit external files are supported. Canonical containment is relative to
+    the inspected parent, not a fixed build directory. Component and handle
+    checks detect replacement; they do not create a filesystem transaction.
+    """
+    worker, inspected = checked_path(worker)
+    source = inspected[-1][1]
+    if not stat.S_ISREG(source.st_mode):
+        raise ValueError("Worker must be a regular file")
+    if not 0 < source.st_size <= MAX_WORKER_BYTES:
+        raise ValueError("Worker size must be between 1 byte and 60 MiB")
+    parent = worker.parent.resolve(strict=True)
+    resolved = worker.resolve(strict=True)
+    if not resolved.is_relative_to(parent):
+        raise ValueError("Worker must remain inside its inspected parent directory")
+    verify_path_identities(inspected)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(resolved, flags), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not selected_file_matches(source, opened) or not stat.S_ISREG(opened.st_mode):
+            raise ValueError("Worker changed while preparing the package")
+        verify_path_identities(inspected)
+        data = stream.read(MAX_WORKER_BYTES + 1)
+        after = os.fstat(stream.fileno())
+    if len(data) != source.st_size or file_version(after) != file_version(opened):
+        raise ValueError("Worker changed while preparing the package")
+    verify_path_identities(inspected)
+    return data
 
 
 def prepare(worker, target, output):
     """Create a new staging directory containing only the supplied regular file."""
     if target not in TARGETS:
         raise ValueError("Only supported desktop targets can be packaged")
-    worker = checked_path(worker)
-    source = worker.stat()
-    if not stat.S_ISREG(source.st_mode):
-        raise ValueError("Worker must be a regular file")
-    if not 0 < source.st_size <= MAX_WORKER_BYTES:
-        raise ValueError("Worker size must be between 1 byte and 60 MiB")
+    data = read_worker(worker)
+    verify_worker_target(data, target)
     output = Path(output)
-    parent = checked_path(output.parent)
+    parent, _ = checked_path(output.parent)
     if output.name in ("", ".", ".."):
         raise ValueError("Choose a new staging directory")
     output = parent / output.name
@@ -154,23 +227,6 @@ def prepare(worker, target, output):
         payload.mkdir(parents=True)
         name = "inverter-frigate-worker" + (".exe" if "windows" in target else "")
         destination = payload / name
-        # Open without following a replaced final symlink; metadata also rejects
-        # nonregular files and replacement between inspection and opening.
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        with os.fdopen(os.open(worker, flags), "rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if (opened.st_dev, opened.st_ino, opened.st_size,
-                opened.st_mtime_ns, opened.st_ctime_ns) != (
-                source.st_dev, source.st_ino, source.st_size,
-                source.st_mtime_ns, source.st_ctime_ns
-            ) or not stat.S_ISREG(opened.st_mode):
-                raise ValueError("Worker changed while preparing the package")
-            data = stream.read(MAX_WORKER_BYTES + 1)
-            after = os.fstat(stream.fileno())
-        if (len(data) != source.st_size or after.st_mtime_ns != opened.st_mtime_ns
-                or after.st_ctime_ns != opened.st_ctime_ns):
-            raise ValueError("Worker changed while preparing the package")
-        verify_worker_target(data, target)
         destination.write_bytes(data)
         destination.chmod(0o755)
         manifest = json.loads(TEMPLATE.read_text(encoding="utf-8"))

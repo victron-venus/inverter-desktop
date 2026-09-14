@@ -95,6 +95,10 @@ target/CPU mismatches, non-executable formats, and mobile or universal Mach-O fi
 Cargo hardlinked inputs are copied to an independent staged file. Each
 archive contains one thin target executable. Header validation does not establish
 compiler provenance or compatibility with every system library on that platform.
+The helper retains the identities of the selected file and parent directories,
+then compares the opened file before and after its bounded read. These checks
+detect replacement and observable modification; they are not a filesystem
+transaction. Source validation finishes before the output directory is created.
 
 Staging produces `manifest.json` and `payload/`. Pass them to the existing
 [native package encoder](../../docs/plugin-packages.md#producing-an-archive) with an

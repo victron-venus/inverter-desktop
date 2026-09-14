@@ -101,6 +101,8 @@ jobs:
       - run: cargo clippy --locked --manifest-path desktop-plugins/frigate/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path desktop-plugins/frigate/Cargo.toml --all-targets
       - run: cargo build --release --locked --manifest-path desktop-plugins/frigate/Cargo.toml
+      - name: Test worker package staging on the current platform
+        run: python -m unittest discover -s tests -p 'test_frigate_package.py'
       - name: Stage the real worker and verify its target headers
         shell: bash
         run: |

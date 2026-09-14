@@ -82,6 +82,9 @@ camera implementation remains available during that transition.
       when the peer stops reading stdout. Keep credentials out of diagnostics.
 - [x] Add a target-specific manifest template and deterministic staging helper;
       use the existing archive encoder and disposable test signing keys only.
+- [x] Retain inspected file/directory identities while staging, reject replacement
+      before creating output, and compare Windows path/handle timestamps using
+      matching semantics. Cover the reproduced races and metadata regression.
 - [x] Exercise the actual packaged worker against a private loopback Mosquitto
       broker: subscription isolation, motion, duplicates, cooldown, reconnect,
       changed settings, disable, logout, and uninstall.
@@ -103,12 +106,13 @@ Local validation passed: 353 macOS native tests across all targets and strict
 Clippy, plus the explicitly selected real signed-package/Mosquitto acceptance
 (1 passed, 0 ignored). The ordinary native suite leaves that one broker test
 ignored; CI selects it separately and rejects zero-test success. Worker validation
-passed 9 unit tests, 6 subprocess/TCP tests, strict Clippy, formatting, debug build,
+passed 9 unit tests, 6 subprocess/TCP tests, strict Clippy, formatting, debug/release builds,
 and a refreshed dependency audit without advisory exceptions. The actual macOS
-binary passed staging/header/hash validation. Frontend checks passed 277 tests
+release binary passed staging/header/hash validation and the real signed-package/
+Mosquitto acceptance. Frontend checks passed 277 tests
 (32 manager tests), 8 mobile tests, 4 profile checks, typecheck, formatting, lint,
 and both builds; final output is desktop. Packaging/mobile Python suites passed
-10 and 25 tests respectively, with Pylint 10/10 and no scoped frontend diagnostics.
+19 and 25 tests respectively, with Pylint 10/10 and no scoped frontend diagnostics.
 
 Independent reviews found and fixed strict Shutdown decoding, notification-service
 liveness, UI signal coalescing, and repeated macOS backend initialization. All
@@ -118,6 +122,71 @@ of OS display; TLS process checks cover ClientHello/no plaintext fallback, not a
 complete certificate-trust/hostname fixture. No physical camera or inverter command
 was exercised. The PR records final hosted status separately from this completed
 source/local acceptance checklist.
+
+CI review reproduced a staging input replacement race and a Windows Python 3.12
+path-stat/fstat timestamp mismatch. The helper now preserves the original file
+and directory identities, validates before creating output, and compares creation
+timestamps across Windows APIs while retaining full open-handle change checks.
+Older Windows Python uses its matching creation-time fallback. Packaging tests
+now run in all three desktop worker jobs, in addition to actual release staging.
+
+### Next checkpoint: completed Frigate clips in owned desktop windows
+
+Deliver one actual feature slice: Frigate `end` with boolean `has_clip: true`
+opens its downloaded MP4 in a plugin-owned window. Reuse the existing complete-
+download-before-playback behavior; incremental HTTP receipt is not streaming
+playback. Keep this implementation separate from the current motion checkpoint.
+
+- [ ] Add optional direct `frigate_base_url` configuration; no base URL means
+      motion notifications continue and clip handling remains inactive. Preserve
+      explicit ports and reverse-proxy path prefixes; encode event IDs as one
+      URL path segment and reject unsupported URL forms.
+- [ ] Parse completed events with separate ten-minute ID history and 45-second
+      camera cooldown. A start notification must not consume a later clip; clip
+      notification IDs need a distinct namespace. Do not reject long recordings
+      using the motion parser's start-time freshness cutoff.
+- [ ] Preserve the existing clip-available notification and automatic opening
+      after complete download. Record dedupe when the event is admitted, matching
+      current behavior, and keep MQTT polling responsive during downloads.
+- [ ] Add a versioned, permission-checked HTTP-video operation and native media
+      ownership keyed by plugin, authentication epoch, worker generation, and
+      opaque media ID. Use a fresh revocable instance identity for every spawn:
+      generation numbers alone can repeat after removal and registration. Workers
+      never choose host paths or native window routes.
+- [ ] Extract reusable HTTP transfer policy without importing core HA credential
+      lookup. Bind allowed HTTP(S) origins and any optional credentials explicitly
+      to the installed plugin's configuration; keep URLs and tokens out of logs.
+- [ ] Preserve eight attempts, retry delays 1/2/3/4/5/5/5 seconds, 15-second connect,
+      60-second idle-read, ten-minute overall deadline, 256 MiB limit, and no
+      redirects. Retry empty/progressive-body failures and currently retryable
+      HTTP statuses; reject oversized bodies immediately.
+- [ ] Bound concurrent transfers, queued requests, windows, and aggregate media
+      storage. Write private host-owned files, clean partial writes and startup
+      leftovers, and avoid holding runtime/auth locks during HTTP or disk I/O.
+- [ ] Cancel downloads, revoke media access, and close owned windows on disable,
+      settings restart, crash/restart, update, rollback, logout/expiry, uninstall,
+      and app shutdown. Reject late completion before window creation and clean
+      files if window construction fails.
+- [ ] Serve completed files through an opaque, requesting-window-bound media
+      route with bounded byte-range responses. Do not broaden the existing global
+      temporary-directory asset scope or reuse URL-based webview media IPC.
+- [ ] Reuse the built-in player and 330x186 unfocused borderless windows, top-right
+      stacking/reflow, muted autoplay, and close-on-completion. Each clip gets its
+      own window; closing one must preserve sibling media and core telemetry.
+- [ ] Extend the signed-worker/Mosquitto acceptance with an isolated HTTP fixture:
+      start then end, duplicate clips, long events, delayed recording availability,
+      progressive/stalled/truncated/oversized bodies, invalid URLs, revocation near
+      completion, settings changes, and uninstall with owned media.
+- [ ] Verify actual native playback, focus, window stacking, user close, and
+      cleanup separately from backend fixtures. Keep testing isolated from the
+      bundled camera subscription to avoid duplicate handling.
+- [ ] Extend Android/iOS source/dependency/asset checks; add no mobile media plugin
+      route, window, package, worker, or optional integration implementation.
+
+Direct Frigate is the scope of this checkpoint. HA proxy enrichment, snapshots,
+Kerberos/Ring, configuration migration, and removing bundled compatibility code
+remain later work. The legacy media command is not a safe lifecycle shortcut: it
+reads shared configuration and lacks plugin/generation ownership across downloads.
 
 ### Completed checkpoint: retained data inventory and cleanup
 
