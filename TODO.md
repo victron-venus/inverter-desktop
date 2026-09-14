@@ -202,7 +202,10 @@ Frigate staging CLI. The installed-package fixtures verify HA settings restart,
 disable, logout and uninstall alongside an independent core MQTT connection,
 and preserve Frigate motion/clip behavior after transport extraction. Hosted
 checks and reviewed PR delivery remain pending; these results do not claim a
-production HA installation.
+production HA installation. Hosted Android setup exposed an unavailable `tools`
+package in the pinned setup action default. All three Android CI/release setup
+steps now request `platform-tools` explicitly and retain their subsequent required
+SDK/NDK installation, build and artifact-inspection gates.
 
 The production publisher policy stays empty and this iteration creates no
 production keys or application-signing prerequisite. HA services, full legacy feature extraction,
@@ -585,8 +588,8 @@ feature implementation does not satisfy worker lifecycle verification.
 - [x] Separate installed package inventory from feature settings and secrets.
 - [x] Stop before removing package files: cancel actions, remove contributions,
       confirm process reaping, and release the worker registry entry.
-- [ ] Close owned windows and clean owned media/temporary files when those host
-      services are introduced.
+- [x] Close owned video windows and clean owned media/temporary files when the
+      owning worker/session is revoked; verified in the Frigate clips checkpoint.
 - [x] Offer retention/deletion of plugin settings on uninstall; preserve core data.
 - [x] Add a retained-data inventory and explicit cleanup for uninstalled packages
       and unknown owners before end-user release, including quota recovery.
@@ -604,8 +607,10 @@ worker distribution, remaining host services, and migrated HA/camera packages.
 - [x] Add a separately built Frigate MQTT motion worker with isolated configuration,
       status, exact-topic subscription, deduplication/cooldown, and broker recovery.
       Prove package lifecycle against a real local broker without HA/core MQTT.
-- [ ] Move the remaining Frigate clip flow and Kerberos/Ring adapters to workers,
-      separately from core Cerbo MQTT and source selection.
+- [x] Move direct Frigate clips into the standalone worker with owned HTTP video
+      and native window cleanup; preserve independent core telemetry.
+- [ ] Move Kerberos/Ring adapters to workers separately from core Cerbo MQTT
+      and source selection, after verifying producer URL/auth requirements.
 - [ ] Preserve snapshots, complete configured-topic coverage, clip behavior, and
       window stacking; verify actual native notification display on supported OSes.
 - [ ] Move URL resolution, download validation, clip ownership/cancellation,
@@ -624,8 +629,9 @@ worker distribution, remaining host services, and migrated HA/camera packages.
       behavior, and cancellation when configuration changes.
 - [ ] Move appliance/entity UI, settings, translations, and assets into package
       contributions.
-- [ ] Retain all seven inverter flags, metadata, saved controls, and MQTT routing
-      in core, including `input_boolean.<flag>` aliases.
+- [x] Retain all seven inverter flags, metadata, saved controls, and MQTT routing
+      in core, including `input_boolean.<flag>` aliases. The HA worker treats
+      independently configured HA entity IDs literally without this alias lookup.
 - [ ] Verify HA-only install, real HA IDs resembling flag names, service scopes,
       worker restart, and removal during requests.
 - [ ] Remove bundled HA implementation after installable parity is verified.

@@ -272,6 +272,8 @@ jobs:
       - name: Android – setup SDK
         if: matrix.type == 'android'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: platform-tools
       - name: Android – install required SDK components (compileSdk 36, build-tools 34.0.0)
         if: matrix.type == 'android'
         run: bash scripts/ci-android-install-sdk.sh
