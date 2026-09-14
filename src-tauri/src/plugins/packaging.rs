@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, DateTime, ZipWriter};
+use zip::{CompressionMethod, DateTime, System, ZipWriter};
 
 use super::package::{
     canonical_manifest_bytes, manifest_signing_payload, read_regular_file, MAX_ARCHIVE_BYTES,
@@ -206,6 +206,14 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 
 /// Resolve a directory lexically while rejecting symlinks in every component.
 fn checked_directory(path: &Path) -> Result<PathBuf, String> {
+    // Joining onto a Windows verbatim working directory normalizes `..` away.
+    // Reject lexical traversal before constructing the absolute path.
+    if path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return Err("parent traversal is not allowed in source paths".into());
+    }
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -241,6 +249,9 @@ fn encode_archive(
     let fixed_time = DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0)
         .map_err(|_| "invalid fixed package timestamp")?;
     let options = SimpleFileOptions::default()
+        // ZIP otherwise records the build machine's OS (DOS on Windows), which
+        // changes archive bytes even for identical signed metadata and payloads.
+        .system(System::Unix)
         .compression_method(CompressionMethod::Stored)
         .last_modified_time(fixed_time)
         .unix_permissions(0o644)

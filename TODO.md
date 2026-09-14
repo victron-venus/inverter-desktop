@@ -337,7 +337,7 @@ requires application/UI integration, production trust, and migrated packages.
   inferred from archive contents; configuring release trust remains unchecked.
 - The desktop application keeps its empty worker registry until application/UI
   integration. HA/camera migration and final operational acceptance remain open.
-- Package verification: 17 tests passed with real Ed25519 signatures, canonical
+- Package verification: 19 tests passed with real Ed25519 signatures, canonical
   manifests, ZIP structure/CRC rejection, exact publisher scope, and file integrity.
 - Packaging: 11 local tests passed. The actual CLI produced byte-identical archives
   containing a compiled worker; Python `cryptography` independently verified the
@@ -359,6 +359,12 @@ requires application/UI integration, production trust, and migrated packages.
   embed Tauri's existing Common Controls v6 dependency in Windows test/example
   executables as well as the application. The initial Windows run compiled but
   its loader exited before tests; successful compilation alone is not acceptance.
+- Windows portability follow-up: admit regular-file modes emitted by Windows ZIP
+  tooling without admitting links or special files, pin producer creator metadata
+  across operating systems, and preserve raw `..` components in traversal fixtures
+  instead of letting Windows verbatim-path joining normalize them first.
+- After the portability fixes, all 77 local plugin tests, strict all-targets
+  clippy, formatting, and the independent real-CLI signature/archive checks passed.
 
 ## Reference constraints
 

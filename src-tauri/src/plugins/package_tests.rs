@@ -67,8 +67,20 @@ fn signed_manifest() -> PluginManifest {
 }
 
 fn zip_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    zip_entries_for_system(
+        entries,
+        if cfg!(windows) {
+            zip::System::Dos
+        } else {
+            zip::System::Unix
+        },
+    )
+}
+
+fn zip_entries_for_system(entries: &[(&str, &[u8])], system: zip::System) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default()
+        .system(system)
         .compression_method(zip::CompressionMethod::Stored)
         .last_modified_time(zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).unwrap())
         .unix_permissions(0o755);
@@ -121,6 +133,48 @@ fn real_signature_verifies_and_result_owns_exact_inventory_and_archive() {
         verified.files().collect::<Vec<_>>(),
         [("bin/worker", WORKER)]
     );
+}
+
+#[test]
+fn windows_zip_creator_with_unix_regular_modes_verifies_on_every_host() {
+    let manifest = canonical_manifest_bytes(&signed_manifest()).unwrap();
+    let bytes = zip_entries_for_system(
+        &[(MANIFEST_PATH, &manifest), ("bin/worker", WORKER)],
+        zip::System::Dos,
+    );
+    let central = central_start(&bytes);
+    assert_eq!(u16_at(&bytes, central + 4).unwrap() >> 8, 0);
+    assert_eq!(u32_at(&bytes, central + 38).unwrap() >> 16, 0o100755);
+    let verified = verify_archive_bytes(bytes, &trust(), TARGET).unwrap();
+    assert_eq!(verified.files().next().unwrap().1, WORKER);
+
+    // A classic DOS record without Unix mode bits remains an ordinary file.
+    let mut classic = verified.archive_bytes().to_vec();
+    set_u32(&mut classic, central + 38, 0);
+    verify_archive_bytes(classic, &trust(), TARGET).unwrap();
+}
+
+#[test]
+fn dos_creator_cannot_hide_symlinks_special_files_or_special_permissions() {
+    let manifest = canonical_manifest_bytes(&signed_manifest()).unwrap();
+    let original = zip_entries_for_system(
+        &[(MANIFEST_PATH, &manifest), ("bin/worker", WORKER)],
+        zip::System::Dos,
+    );
+    let central = central_start(&original);
+    for mode in [
+        0o120777, 0o040755, 0o060600, 0o020600, 0o010600, 0o140600, 0o104755, 0o102755, 0o101755,
+    ] {
+        let mut bytes = original.clone();
+        set_u32(&mut bytes, central + 38, mode << 16);
+        let error = verify_archive_bytes(bytes, &trust(), TARGET).unwrap_err();
+        assert!(error.contains("not a plain regular file"), "{error}");
+    }
+    for mode in [0, 0o100755 << 16] {
+        let mut directory = original.clone();
+        set_u32(&mut directory, central + 38, mode | 0x10);
+        assert_rejected(directory);
+    }
 }
 
 #[test]

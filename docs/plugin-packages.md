@@ -16,7 +16,11 @@ An `.idplugin` file uses a strict, uncompressed ZIP layout. `manifest.json` come
 first, followed by regular payload files in sorted portable-path order. Fixed ZIP
 timestamps and permissions make identical metadata, payload bytes, and signing
 keys produce identical archive bytes. No host filesystem timestamp enters the
-package identity. Compressed/encrypted entries, links, directories, extra fields,
+package identity. The producer pins ZIP creator metadata to Unix on every desktop
+OS. The verifier also accepts DOS creator metadata with ordinary file attributes,
+including the regular Unix mode written by Windows ZIP tooling, while rejecting
+links, special files, and directory attributes. Compressed/encrypted entries,
+directories, extra fields,
 comments, ZIP64, data descriptors, duplicate paths, and unlisted payloads are not
 part of this format. The entire archive is bounded to 64 MiB.
 

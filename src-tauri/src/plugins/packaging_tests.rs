@@ -90,7 +90,7 @@ fn manifest_is_first_payloads_are_sorted_and_actual_file_hashes_are_signed() {
     fs::write(root.join("z.txt"), b"last").unwrap();
     fs::write(root.join("a.txt"), b"first").unwrap();
     let archive = build(&root);
-    let mut reader = ZipArchive::new(Cursor::new(archive)).unwrap();
+    let mut reader = ZipArchive::new(Cursor::new(&archive)).unwrap();
     let names: Vec<_> = (0..reader.len())
         .map(|index| reader.by_index(index).unwrap().name().to_string())
         .collect();
@@ -109,6 +109,10 @@ fn manifest_is_first_payloads_are_sorted_and_actual_file_hashes_are_signed() {
     assert_eq!(parsed.signature.as_ref().unwrap().key_id, "test-key");
     for index in 0..reader.len() {
         let file = reader.by_index(index).unwrap();
+        assert_eq!(
+            archive[file.central_header_start() as usize + 5],
+            System::Unix as u8
+        );
         assert_eq!(file.compression(), CompressionMethod::Stored);
         assert_eq!(
             file.last_modified().unwrap(),
@@ -176,8 +180,23 @@ fn unportable_source_names_and_parent_traversal_are_rejected() {
     fs::write(root.join(".hidden"), b"invalid").unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
     fs::remove_file(root.join(".hidden")).unwrap();
-    let traversing = root.join("bin/..");
+    // PathBuf::join normalizes `..` for Windows canonical (verbatim) roots.
+    // Preserve the literal input so this fixture actually exercises rejection.
+    let mut literal = root.as_os_str().to_os_string();
+    literal.push(format!(
+        "{}bin{}..",
+        std::path::MAIN_SEPARATOR,
+        std::path::MAIN_SEPARATOR
+    ));
+    let traversing = PathBuf::from(literal);
+    assert!(traversing
+        .components()
+        .any(|component| component == Component::ParentDir));
     assert!(build_package(manifest(), &traversing, "test-key", &key()).is_err());
+    assert_eq!(
+        checked_directory(Path::new("bin/..")).unwrap_err(),
+        "parent traversal is not allowed in source paths"
+    );
     let mut metadata = manifest();
     metadata.entrypoint = "../worker".into();
     assert!(build_package(metadata, &root, "test-key", &key()).is_err());

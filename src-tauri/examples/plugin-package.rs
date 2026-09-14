@@ -97,7 +97,7 @@ or start workers.";
             return Err("provide all five option/value pairs; use --help for the format".into());
         }
         let mut values = BTreeMap::new();
-        for pair in args.chunks_exact(2) {
+        for pair in args.as_chunks::<2>().0 {
             let name = pair[0].to_str().ok_or("invalid option name")?;
             if !NAMES.contains(&name) || values.insert(name.into(), pair[1].clone()).is_some() {
                 return Err("unknown or duplicate option; use --help for the format".into());

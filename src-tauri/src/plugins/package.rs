@@ -455,9 +455,13 @@ fn scan_archive(bytes: &[u8]) -> Result<Vec<ArchiveEntry>, String> {
         let creator = u16_at(bytes, offset + 4)? >> 8;
         let external = u32_at(bytes, offset + 38)?;
         let mode = external >> 16;
+        let regular_mode = mode & 0o170000 == 0o100000 && mode & 0o7000 == 0;
         let regular = match creator {
-            3 => mode & 0o170000 == 0o100000 && mode & 0o7000 == 0,
-            0 => mode == 0,
+            3 => regular_mode,
+            // ZIP writers on Windows can retain Unix mode bits while marking
+            // the creator as DOS. Validate those bits; never ignore a symlink
+            // or special-file mode just because the creator is not Unix.
+            0 => mode == 0 || regular_mode,
             _ => false,
         };
         if u32_at(bytes, offset)? != 0x0201_4b50
