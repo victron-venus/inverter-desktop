@@ -6,6 +6,7 @@ mod config_store;
 mod ha_session;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_credentials;
+mod release_info;
 use camera::download_camera_clip;
 #[cfg(desktop)]
 use camera::{is_camera_video_label, remove_camera_clip_file};
@@ -1629,6 +1630,7 @@ pub fn run() {
                     }
                 }
                 let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                    release_info::get_release_info,
                     get_state,
                     disconnect_inverter,
                     perform_action,

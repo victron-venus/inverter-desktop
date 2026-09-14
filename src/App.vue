@@ -148,7 +148,7 @@
 </template>
 
 <script setup lang="ts">
-import { getVersion } from '@tauri-apps/api/app'
+import { useReleaseVersion } from './composables/useReleaseVersion'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -247,7 +247,7 @@ async function toggleCamera() {
 const { chartOption, forceUpdateChart, setChartPaused } = useChart(isDark)
 const isWindowHidden = ref(false)
 
-const appVersion = ref('')
+const appVersion = useReleaseVersion()
 const contextMenu = ref({ show: false, x: 0, y: 0 })
 const showSetupWizard = ref(false)
 const message = ref('')
@@ -440,12 +440,6 @@ watch(
 )
 
 onMounted(async () => {
-  try {
-    appVersion.value = await getVersion()
-  } catch (e) {
-    logger.error('Failed to get app version:', e)
-    appVersion.value = 'unknown'
-  }
   await ensureNotificationPermission()
   notify('Inverter Desktop', 'App started')
 

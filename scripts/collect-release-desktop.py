@@ -6,6 +6,7 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 root = Path.cwd()
@@ -25,6 +26,16 @@ for base in bases:
         continue
     for path in sorted(bundle.rglob("*")):
         if path.is_dir() and path.suffix == ".app":
+            if (root / ".release-plan.json").exists():
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "scripts/verify-native-release.py",
+                        "apple",
+                        str(path),
+                    ],
+                    check=True,
+                )
             dest = out / (
                 path.stem.replace(" ", ".") + f"_{target or platform}.app.zip"
             )
@@ -58,6 +69,22 @@ for base in bases:
                 )
             )
         ):
+            if (root / ".release-plan.json").exists():
+                kind = (
+                    "linux"
+                    if path.suffix in {".deb", ".rpm", ".AppImage"}
+                    else "windows" if path.suffix in {".exe", ".msi"} else None
+                )
+                if kind:
+                    subprocess.run(
+                        [
+                            sys.executable,
+                            "scripts/verify-native-release.py",
+                            kind,
+                            str(path),
+                        ],
+                        check=True,
+                    )
             dest = out / (f"{target or platform}_" + path.name.replace(" ", "."))
             shutil.copy2(path, dest)
             found += 1
