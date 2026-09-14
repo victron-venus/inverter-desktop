@@ -218,5 +218,28 @@ class MobileNativeBoundaryTests(unittest.TestCase):
             boundary.verify_archive(path, "ios")
 
 
+class MobilePluginBoundaryTests(unittest.TestCase):
+    """Keep the signed package ecosystem out of native mobile inputs."""
+
+    def test_plugin_package_dependencies_are_rejected(self):
+        """Package verification and installation must not enter mobile runtime code."""
+        for crate in ("ed25519-dalek", "curve25519-dalek", "zip"):
+            with self.subTest(crate=crate), self.assertRaisesRegex(ValueError, crate):
+                boundary.verify_dependency_tree(
+                    f"inverter-dashboard v1.0.0\npackage-adapter v1.0.0\n{crate} v1.0.0"
+                )
+
+    def test_compiler_graph_rejects_embedded_plugin_publisher_policy(self):
+        """An embedded publisher file is part of the excluded desktop ecosystem."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "library.d"
+            path.write_text(
+                "/target/lib.a: /checkout/src-tauri/src/lib.rs "
+                "/checkout/src-tauri/src/plugins/publishers.json\n"
+            )
+            with self.assertRaisesRegex(ValueError, "plugins"):
+                boundary.verify_depfile(path)
+
+
 if __name__ == "__main__":
     unittest.main()

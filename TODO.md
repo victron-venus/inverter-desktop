@@ -40,6 +40,12 @@ a versioned worker protocol, real process supervision, and declarative dashboard
 contributions. Its shipped registry remains empty until package installation is
 implemented; legacy HA/camera features are still bundled.
 
+The next checkpoint implements the native package pipeline: deterministic signed
+archives, publisher and content verification, and transactional package lifecycle
+APIs exercised with real workers. It does not expose installation IPC or a plugin
+manager yet. Production publisher keys, application startup integration, settings,
+and migrated HA/camera packages remain separate delivery requirements.
+
 The intended package is a signed first-party `.idplugin` archive: a versioned
 manifest, a target-specific executable worker, and declarative UI contributions.
 Use a bounded, versioned JSON protocol instead of Rust dynamic-library ABI or
@@ -153,28 +159,44 @@ loading. Complete phase 4 acceptance also requires the remaining contribution
 surfaces and scoped host services above. A fake registry or statically linked
 feature implementation does not satisfy worker lifecycle verification.
 
-### 5. Installation, update, rollback, and removal
+### 5. Installation, update, rollback, and removal — native API checkpoint
 
-- [ ] Produce deterministic `.idplugin` archives for supported macOS, Linux, and
-      Windows architectures.
-- [ ] Verify publisher signature, API range, target, schema, complete file
+- [x] Implement a deterministic, bounded `.idplugin` format and a native packaging
+      CLI that signs actual file inventories with an externally supplied key.
+- [ ] Produce and publish real worker archives for supported macOS, Linux, and
+      Windows architectures; a host-platform fixture does not establish delivery
+      or native signing on every desktop target.
+- [x] Verify publisher signature, API range, target, schema, complete file
       inventory, sizes, and digests before executing package content.
-- [ ] Reject traversal, absolute paths, links, duplicate/case-colliding entries,
+- [x] Reject traversal, absolute paths, links, duplicate/case-colliding entries,
       oversized archives, unexpected files, and unsupported schemas.
-- [ ] Stage privately and atomically activate immutable versions after validation
+- [x] Stage privately and atomically activate immutable versions after validation
       and a successful startup handshake; retain a working rollback version.
-- [ ] Serialize install/update/remove operations and recover after interruption.
+- [x] Serialize native install/update/remove operations; recover interrupted
+      initialization, staging, and inventory changes without executing workers.
+- [x] Bind asynchronous activation to its original authentication epoch and
+      release worker registry capacity only after process reaping.
+- [x] Embed a release-owned publisher policy scoped to exact plugin IDs; reject
+      unknown keys and never trust a key supplied by the package or webview.
+- [ ] Configure real production publisher keys and signing provenance in a
+      reviewed release. Disposable fixture keys must never become shipped trust.
 - [ ] Add desktop install/enable/disable/update/uninstall UI with compatibility
       errors, declared permissions, and restart requirements.
-- [ ] Separate installed package inventory from feature settings and secrets.
-- [ ] Stop before removing: cancel work, remove contributions, close owned windows,
-      and clean owned temporary files.
+- [ ] Connect the native package manager to authenticated application startup,
+      settings, and shutdown without automatically installing legacy features.
+- [x] Separate installed package inventory from feature settings and secrets.
+- [x] Stop before removing package files: cancel actions, remove contributions,
+      confirm process reaping, and release the worker registry entry.
+- [ ] Close owned windows and clean owned media/temporary files when those host
+      services are introduced.
 - [ ] Offer retention/deletion of plugin settings on uninstall; preserve core data.
-- [ ] Test clean install, update, failed activation, rollback, and uninstall with
-      actual produced archives.
+- [x] Test native clean install, update, failed activation, rollback, and uninstall
+      with actual signed archives and executable workers.
 
 Acceptance: a clean core installation contains no HA/camera payloads. Installing
 or removing a package changes available features without reinstalling the app.
+The native APIs satisfy package lifecycle tests; full phase acceptance still
+requires application/UI integration, production trust, and migrated packages.
 
 ### 6. Cameras package
 
@@ -297,9 +319,39 @@ or removing a package changes available features without reinstalling the app.
   local HTTP fixture required localhost permission; no working service was used.
 - Mobile guards reject both worker IPC commands and the fixed host event;
   all 18 packaged-verifier fixtures passed. Final Android/iOS archive checks
-  remain required in the PR quality gate before merge.
+  passed in [PR #420](https://github.com/victron-venus/inverter-desktop/pull/420):
+  [quality gate 34809280336](https://github.com/victron-venus/inverter-desktop/actions/runs/34809280336)
+  verified the IPA and APK/AAB for integration head `82bd964`; merged as `5b80aaa`.
+  Hosted Rust passed 195 Linux tests and strict clippy.
 - Scope: no installed plugin package, signature verification, HA/camera migration,
   physical inverter write, or real-device deployment is claimed by this checkpoint.
+
+### Native package checkpoint
+
+- Baseline: merged worker-host PR #420, main `5b80aaa`.
+- Branch: `feat/desktop-plugin-packages`, isolated from the canonical checkout.
+- Acceptance requires actual signed archives and executable worker lifecycle tests,
+  including tampering, unknown publishers, wrong target/API, failed activation,
+  rollback, interrupted work, disabled startup, and removal after process reaping.
+- The compiled publisher policy starts empty. No production key is invented or
+  inferred from archive contents; configuring release trust remains unchecked.
+- The desktop application keeps its empty worker registry until application/UI
+  integration. HA/camera migration and final operational acceptance remain open.
+- Package verification: 17 tests passed with real Ed25519 signatures, canonical
+  manifests, ZIP structure/CRC rejection, exact publisher scope, and file integrity.
+- Packaging: 11 local tests passed. The actual CLI produced byte-identical archives
+  containing a compiled worker; Python `cryptography` independently verified the
+  Ed25519 signature, and Python `zipfile` checked CRC and inventory digests.
+  Existing output and accidental private-seed inclusion were rejected.
+- Native lifecycle: 21 focused tests passed, including real cross-process locking,
+  failed activation and rollback, authentication epochs, caller cancellation,
+  corruption, initialization recovery, and file-count/disk quota preflight.
+- Integration: the initial full macOS suite passed 245 tests; final integration
+  checks and hosted Windows/Linux/Android/iOS gates remain required before merge.
+- Frontend/core: all 212 desktop tests and eight mobile tests passed, along with
+  typecheck/build, formatting, and lint (existing lint warnings remain).
+- Mobile boundary verifier: all 20 fixtures passed, including the new package
+  dependency and embedded publisher-policy rejection checks.
 
 ## Reference constraints
 

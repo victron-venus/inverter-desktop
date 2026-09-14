@@ -451,7 +451,7 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<PluginManifest, String> {
     Ok(manifest)
 }
 
-fn relative_path(path: &str) -> Result<(), String> {
+pub fn validate_package_path(path: &str) -> Result<(), String> {
     if path.is_empty() || path.len() > 240 || path.contains('\\') || path.contains(':') {
         return Err("entrypoint and inventory paths must be portable relative paths".into());
     }
@@ -526,7 +526,7 @@ impl PluginManifest {
         if !DESKTOP_TARGETS.contains(&self.target.as_str()) {
             return Err("plugin target must be a supported desktop target".into());
         }
-        relative_path(&self.entrypoint)?;
+        validate_package_path(&self.entrypoint)?;
         bounded_json(&self.config_schema, MAX_ACTION_RESULT_BYTES)?;
         if !self.config_schema.is_object()
             || self.config_schema.get("type").and_then(Value::as_str) != Some("object")
@@ -563,7 +563,7 @@ impl PluginManifest {
         let mut total_size = 0_u64;
         let mut has_entrypoint = false;
         for item in &self.inventory {
-            relative_path(&item.path)?;
+            validate_package_path(&item.path)?;
             // Case-insensitive collisions cannot be portable across our targets.
             if !paths.insert(item.path.to_ascii_lowercase()) {
                 return Err("duplicate plugin inventory path".into());

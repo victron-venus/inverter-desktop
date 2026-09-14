@@ -267,10 +267,11 @@ not be confused with a host API for publishing arbitrary core control messages.
 
 A non-null `signature` object contains `algorithm: "ed25519"`, a bounded
 `key_id`, and a `signature` string of exactly 128 lowercase hexadecimal digits.
-This phase validates its encoding only. Trusted keys, canonical signed bytes,
-cryptographic verification, and production install policy remain later package
-work. An unsigned or syntactically signed manifest must never be described as
-a verified package based on this parser alone.
+The protocol parser validates its encoding only. The separate
+[package pipeline](plugin-packages.md) defines canonical signed bytes, publisher
+trust, cryptographic verification, and file verification. An unsigned or
+syntactically signed manifest must never be described as a verified package based
+on this parser alone.
 
 ## Compatibility and implementation
 
@@ -289,8 +290,9 @@ references, and signature encoding without claiming signature verification.
 
 Tauri owns one desktop `PluginHost`, shared by all windows. The shipped app
 registers no workers automatically and exposes no executable-path or start-worker
-IPC. `WorkerSpec` is a trusted native development API, exercised by a separately
-compiled fixture executable; it is not an installed-package trust decision.
+IPC. `WorkerSpec` is a trusted native API, exercised by a separately compiled
+fixture executable. The package manager constructs it only after package
+verification; a manually constructed spec itself is not a package trust decision.
 
 Only authenticated `main` and `config` windows can call `get_plugin_snapshot` or
 `plugin_action`. The latter accepts a worker ID, an advertised action ID, and the
