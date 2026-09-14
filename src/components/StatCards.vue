@@ -13,8 +13,7 @@
           :class="backupActive ? 'text-accent' : 'opacity-70'"
           :title="backupHint"
         >
-          · {{ gridBackup.name || 'Submeter' }} {{ backupPower }}
-          <span v-if="backupActive">(active)</span>
+          · {{ backupPower }}
         </span>
       </div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-grid">

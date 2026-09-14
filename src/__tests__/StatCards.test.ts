@@ -48,17 +48,19 @@ describe('StatCards sticky hold', () => {
         gridBackupObservedAt: Date.now() / 1000,
       },
     })
-    expect(wrapper.get('[data-testid="grid-backup"]').text()).toContain('(active)')
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· -750W')
+    expect(wrapper.get('[data-testid="grid-backup"]').classes()).toContain('text-accent')
     await vi.advanceTimersByTimeAsync(31000)
     await wrapper.setProps({ gt: 200 })
-    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· Home —')
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· —')
     expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('stale')
   })
 
   it('shows only the selected submeter next to Grid, preserving primary totals', () => {
     const wrapper = mount(StatCards, { props: { ...baseProps, gridBackup } })
     const card = wrapper.find('.metric-card')
-    expect(card.find('.classic-stat-label').text().replace(/\s+/g, ' ')).toBe('Grid · Home -750W')
+    expect(card.find('.classic-stat-label').text().replace(/\s+/g, ' ')).toBe('Grid · -750W')
+    expect(card.text()).not.toContain('Home')
     expect(card.find('.classic-stat-value').text()).toBe('1.2kW')
     expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('ready')
   })
@@ -66,9 +68,10 @@ describe('StatCards sticky hold', () => {
   it('clears unavailable submeter power and shows recovery including zero', async () => {
     const wrapper = mount(StatCards, { props: { ...baseProps, gridBackup } })
     await wrapper.setProps({ gridBackup: { ...gridBackup, available: false, power: null } })
-    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· Home —')
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· —')
     await wrapper.setProps({ gridBackup: { ...gridBackup, power: 0 }, gridUsingBackup: true })
-    expect(wrapper.get('[data-testid="grid-backup"]').text()).toContain('Home 0W (active)')
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· 0W')
+    expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('supplying')
   })
 
   it('shows a detected submeter with backup disabled and removes a cleared selection', async () => {
