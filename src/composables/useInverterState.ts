@@ -8,6 +8,9 @@ export interface InverterState {
   gt?: number
   g1?: number
   g2?: number
+  /** False explicitly invalidates a phase; omitted means no availability update. */
+  grid_l1_available?: boolean
+  grid_l2_available?: boolean
   tt?: number
   t1?: number
   t2?: number
@@ -132,6 +135,20 @@ export function applyInverterState(newState: InverterState) {
     if (val !== undefined && val !== null) {
       ;(merged as Record<string, unknown>)[key] = val
     }
+  }
+  // Cerbo explicitly publishes null for unavailable/unused grid phases. Keep
+  // ordinary partial-message holding, but never resurrect an invalid phase
+  // or add its previous value into the live total.
+  if (merged.grid_l1_available === false) delete merged.g1
+  if (merged.grid_l2_available === false) delete merged.g2
+  if (
+    typeof merged.grid_l1_available === 'boolean' ||
+    typeof merged.grid_l2_available === 'boolean'
+  ) {
+    const phases = [merged.g1, merged.g2].filter(
+      (value): value is number => typeof value === 'number' && Number.isFinite(value)
+    )
+    merged.gt = phases.length ? phases.reduce((sum, value) => sum + value, 0) : undefined
   }
   // IGW serde omits null time_to_go; a partial MQTT/IGW race must not blank the
   // "40h 48m" chip every couple of seconds while still Charging/Discharging.

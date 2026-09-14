@@ -33,6 +33,8 @@
           :gt="state.gt"
           :g1="state.g1"
           :g2="state.g2"
+          :gridL1Available="state.grid_l1_available"
+          :gridL2Available="state.grid_l2_available"
           :tt="state.tt"
           :t1="state.t1"
           :t2="state.t2"

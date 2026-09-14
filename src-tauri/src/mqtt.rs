@@ -199,11 +199,25 @@ pub struct DiscoveredInstance {
     pub name: Option<String>,
 }
 
+/// Authoritative override state acknowledged by inverter-control on Cerbo.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SetpointOverrideStatus {
+    pub value: Option<i32>,
+    pub last_error: Option<String>,
+    pub request_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
+    pub setpoint_override: Option<SetpointOverrideStatus>,
     pub gt: Option<f64>,
     pub g1: Option<f64>,
     pub g2: Option<f64>,
+    /// Explicit source validity. None means this phase has not been observed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid_l1_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid_l2_available: Option<bool>,
     pub tt: Option<f64>,
     pub t1: Option<f64>,
     pub t2: Option<f64>,
@@ -453,6 +467,9 @@ pub struct Vebus {
 struct SystemTotals {
     g1: Option<f64>,
     g2: Option<f64>,
+    // Distinguish an explicit MQTT null from an unrelated partial update.
+    g1_seen: bool,
+    g2_seen: bool,
     t1: Option<f64>,
     t2: Option<f64>,
 }
@@ -671,7 +688,7 @@ impl CerboDevices {
     fn owns_grid(&self) -> bool {
         self.system
             .values()
-            .any(|e| e.data.g1.is_some() || e.data.g2.is_some())
+            .any(|e| e.data.g1_seen || e.data.g2_seen)
             || self.vebus.values().any(|e| {
                 e.data.l1_power.is_some() || e.data.l2_power.is_some() || e.data.ac_power.is_some()
             })
@@ -2051,6 +2068,7 @@ impl MqttClient {
 
         // Subscribe to topics using QoS 1 (AtLeastOnce)
         client.subscribe("inverter/state", QoS::AtLeastOnce)?;
+        client.subscribe("inverter/setpoint_override", QoS::AtLeastOnce)?;
         client.subscribe("inverter/console", QoS::AtLeastOnce)?;
         client.subscribe("inverter/notifications", QoS::AtLeastOnce)?;
         // Portal ID advertised by inverter-control (retained) - lets the app
@@ -2277,6 +2295,18 @@ impl MqttClient {
                         e
                     );
                 }
+            }
+        } else if topic == "inverter/setpoint_override" {
+            match serde_json::from_str::<SetpointOverrideStatus>(payload) {
+                Ok(status) => {
+                    if let Ok(mut guard) = state.lock() {
+                        guard.setpoint_override = Some(status.clone());
+                    }
+                    if let Some(handle) = app_handle {
+                        let _ = handle.emit("setpoint-override-update", &status);
+                    }
+                }
+                Err(error) => log::warn!("Invalid inverter-control override status: {error}"),
             }
         } else if topic == "inverter/notifications" {
             match serde_json::from_str::<MqttNotification>(payload) {
@@ -2748,6 +2778,16 @@ impl MqttClient {
             .as_f64()
     }
 
+    /// Missing/malformed envelopes are not source invalidation. An explicit
+    /// {"value": null} is authoritative and must clear the previous phase.
+    fn parse_cerbo_grid_sample(payload: &str) -> Option<Option<f64>> {
+        let envelope = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+        match envelope.get("value")? {
+            serde_json::Value::Null => Some(None),
+            value => value.as_f64().map(Some),
+        }
+    }
+
     /// /TimeToGo arrives in seconds (null when idle -> parse_cerbo_value
     /// already yields None). Format like the inverter-control daemon does.
     pub(crate) fn format_time_to_go(secs: f64) -> Option<String> {
@@ -2944,8 +2984,20 @@ impl MqttClient {
                 entry.touch();
                 let s = &mut entry.data;
                 match path {
-                    "Ac/Grid/L1/Power" => s.g1 = val,
-                    "Ac/Grid/L2/Power" => s.g2 = val,
+                    "Ac/Grid/L1/Power" => {
+                        let Some(sample) = Self::parse_cerbo_grid_sample(payload) else {
+                            return false;
+                        };
+                        s.g1 = sample;
+                        s.g1_seen = true;
+                    }
+                    "Ac/Grid/L2/Power" => {
+                        let Some(sample) = Self::parse_cerbo_grid_sample(payload) else {
+                            return false;
+                        };
+                        s.g2 = sample;
+                        s.g2_seen = true;
+                    }
                     "Ac/Consumption/L1/Power" => s.t1 = val,
                     "Ac/Consumption/L2/Power" => s.t2 = val,
                     _ => return false,
@@ -3163,20 +3215,19 @@ impl MqttClient {
         // Prefer systemcalc grid/consumption (same paths as inverter-control).
         if let Some(entry) = devices.system.values().next() {
             let s = &entry.data;
-            if let Some(g1) = s.g1 {
-                st.g1 = Some(g1);
+            if s.g1_seen {
+                st.g1 = s.g1;
+                st.grid_l1_available = Some(s.g1.is_some());
             }
-            if let Some(g2) = s.g2 {
-                st.g2 = Some(g2);
+            if s.g2_seen {
+                st.g2 = s.g2;
+                st.grid_l2_available = Some(s.g2.is_some());
             }
             if let Some(t1) = s.t1 {
                 st.t1 = Some(t1);
             }
             if let Some(t2) = s.t2 {
                 st.t2 = Some(t2);
-            }
-            if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
-                st.gt = Some(g1 + g2);
             }
             match (st.t1, st.t2) {
                 (Some(t1), Some(t2)) => st.tt = Some(t1 + t2),
@@ -3189,14 +3240,16 @@ impl MqttClient {
         if let Some(entry) = devices.vebus.values().next() {
             let v = &entry.data;
             // Grid from vebus only when systemcalc has not filled it.
-            if st.g1.is_none() {
+            if st.g1.is_none() && st.grid_l1_available != Some(false) {
                 if let Some(l1) = v.l1_power {
                     st.g1 = Some(l1);
+                    st.grid_l1_available = Some(true);
                 }
             }
-            if st.g2.is_none() {
+            if st.g2.is_none() && st.grid_l2_available != Some(false) {
                 if let Some(l2) = v.l2_power {
                     st.g2 = Some(l2);
+                    st.grid_l2_available = Some(true);
                 }
             }
             if st.gt.is_none() {
@@ -3213,6 +3266,15 @@ impl MqttClient {
             if let Some(ref mode) = v.inverter_state {
                 st.inverter_state = Some(mode.clone());
             }
+        }
+        if st.grid_l1_available.is_some() || st.grid_l2_available.is_some() {
+            // Sum only presently available phases. In particular, a current
+            // single-phase fallback must not include a cached meter L2 value.
+            st.gt = match (st.g1, st.g2) {
+                (Some(a), Some(b)) => Some(a + b),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            };
         }
         if !devices.acloads.is_empty() {
             // Stable instance-id keys for watts; names live in load_names so
@@ -4132,6 +4194,31 @@ impl MqttClient {
             .publish(topic, QoS::AtLeastOnce, false, payload)
             .map_err(|e| format!("Cerbo water Mode publish failed: {e}"))?;
         Ok(())
+    }
+
+    pub fn setpoint_override_status(&self) -> Option<SetpointOverrideStatus> {
+        self.state.lock().ok()?.setpoint_override.clone()
+    }
+
+    /// A single explicit command; inverter-control owns all periodic writes.
+    pub fn request_setpoint_override(
+        &self,
+        value: Option<i32>,
+        request_id: &str,
+    ) -> Result<(), String> {
+        if self.setpoint_override_status().is_none() {
+            return Err("Waiting for inverter-control override support on Cerbo".into());
+        }
+        let slot = self.client.lock().map_err(|e| e.to_string())?;
+        let client = slot.as_ref().ok_or("Cerbo MQTT is not connected")?;
+        client
+            .try_publish(
+                "inverter/cmd/setpoint_override",
+                QoS::AtMostOnce,
+                false,
+                serde_json::json!({"value": value, "request_id": request_id}).to_string(),
+            )
+            .map_err(|e| format!("Could not send setpoint override: {e}"))
     }
 
     pub fn publish_command(
