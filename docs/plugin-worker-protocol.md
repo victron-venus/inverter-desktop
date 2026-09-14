@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.1.0**, independently of the application version. The
+The current host API is **1.2.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -61,7 +61,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.1.0",
+  "host_api_version": "1.2.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -73,7 +73,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.1.0",
+  "host_api_version": "1.2.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -101,7 +101,7 @@ After a valid `ready`, a verified installed package declaring
 ```
 
 The worker must acknowledge the exact revision before contributing dashboard data
-or accepting actions:
+or accepting actions or sending notifications:
 
 ```json
 {
@@ -115,7 +115,7 @@ startup deadline covers both steps. Early contributions, missing/mismatched or
 duplicate acknowledgments fail that generation. Packages without configuration
 permission receive no configuration frame and complete startup after `ready`.
 Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
-are incompatible with a 1.1 host. The wire protocol and manifest remain version 1.
+are incompatible with a 1.2 host. The wire protocol and manifest remain version 1.
 A configured worker should declare an API requirement such as `^1.1`.
 
 The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
@@ -181,6 +181,53 @@ Four contribution kinds are supported:
 The UI renders text using text bindings. A string such as `<b>example</b>` is
 literal text, not markup. Metric formatting and visual appearance belong to
 the host. A worker supplies data, not application code.
+
+## Native desktop notifications (host API 1.2)
+
+A verified package declaring `desktop_notifications` may send a notification
+only after its startup handshake and required configuration acknowledgment:
+
+```json
+{
+  "type": "notification",
+  "id": "motion-13d7bbf9",
+  "title": "Frigate Garage camera motion detected",
+  "body": "Motion started"
+}
+```
+
+The ID follows the existing 128-byte identifier grammar. Title and body must be
+nonblank plain text without control characters, bounded to 128 and 1,024 UTF-8
+bytes respectively. Unknown fields, malformed content, missing permission, and
+messages before readiness fail that worker generation. There are no URLs,
+actions, images, sounds, Tauri commands, or arbitrary notification options.
+Packages using this capability must declare a compatible range such as `^1.2`.
+
+Delivery is best effort. Each registered worker has at most 16 queued notifications,
+30 accepted notifications per minute, and 512 recent IDs remembered for ten minutes.
+The host accepts at most 120 per minute globally; eight registered workers bound
+the aggregate queue to 128. Valid duplicate, rate-limited, or overflowing messages
+are dropped without failing the worker. The existing total frame-rate limit still
+applies. Pending notifications expire after 30 seconds. Deduplication survives
+automatic worker restarts; process/session replacement cannot revive a queued item.
+
+The native dispatcher checks the original session epoch, running process generation,
+stop signal, reaped state, and delivery age while holding the authority guard. The
+application keeps one dedicated dispatcher and one pending signal, so slow OS
+calls do not hold up the UI change-signal loop or create overlapping delivery tasks. Each started
+dispatch checks live authentication before entering the authority guard. Actual
+native submission happens inside the guard; the callback never defers unchecked
+delivery to another application task. Linux notification-service waits are bounded
+to two seconds; the macOS backend has its own two-second confirmation wait, whose
+timeout can still return success. Both remain best-effort OS submission. Notification text is absent from manager
+snapshots, webview events, and host logs. Freedesktop body markup is escaped so
+worker text remains literal. Disable, uninstall, logout, and shutdown discard
+pending work. Notifications already submitted to the operating system may remain
+visible; OS permission, presentation timing, and notification-center retention are
+outside the worker lifecycle contract. Native submission failures are not retried.
+
+No plugin notification IPC or worker dependency is added to Android/iOS. Core
+inverter notifications continue using their existing platform integration.
 
 ## Actions, cancellation, and results
 
@@ -314,7 +361,7 @@ are unsupported. The package settings service further compiles the bounded
 It does not fetch external schemas or migrate legacy feature configuration.
 
 The permission vocabulary is `dashboard_contributions`,
-`plugin_configuration`, `network_http`, and `network_mqtt`. Duplicate and
+`plugin_configuration`, `desktop_notifications`, `network_http`, and `network_mqtt`. Duplicate and
 unknown permissions are rejected. These names declare feature requirements;
 they do not grant Tauri commands, access to core MQTT controls, or operating
 system isolation. Access to a network MQTT service from a native worker must
@@ -373,7 +420,10 @@ preview token. The management frontend coalesces snapshot requests and the nativ
 service caches inventory metadata by revision. Configuration-capable packages also
 use a native-validated declarative settings editor with isolated encrypted storage
 and startup configuration delivery. Worker-driven settings contributions, request-time
-secret access, network, media, and notification services remain future work.
+secret access and scoped network/media host services remain future work. Native
+desktop notifications use the permission and delivery contract above. The first
+[Frigate worker](../desktop-plugins/frigate/README.md) owns its MQTT connection;
+`network_mqtt` is a declaration, not an OS firewall or a core MQTT host service.
 
 Normal application exit waits for package initialization and transactions, stops
 and reaps workers, and releases the package-store lease before permitting exit.

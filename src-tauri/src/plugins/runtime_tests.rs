@@ -40,6 +40,7 @@ fn spec(mode: &str) -> WorkerSpec {
         executable: fixture(),
         args: vec![mode.into()],
         configuration: None,
+        desktop_notifications: false,
     }
 }
 
@@ -51,6 +52,252 @@ fn configured_spec(mode: &str) -> WorkerSpec {
         secrets: [("token".into(), "fixture-secret".into())].into(),
     });
     worker
+}
+
+fn notification_spec(mode: &str) -> WorkerSpec {
+    let mut worker = if mode.starts_with("configuration") {
+        configured_spec(mode)
+    } else {
+        spec(mode)
+    };
+    worker.desktop_notifications = true;
+    worker
+}
+
+#[tokio::test]
+async fn notifications_deliver_once_after_readiness_without_exposing_snapshot_content() {
+    let host = PluginHost::default();
+    assert!(!host.has_pending_notifications());
+    host.start(notification_spec("notifications"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    assert!(host.has_pending_notifications());
+    let public = serde_json::to_string(&host.snapshots()).unwrap();
+    assert!(!public.contains("Private camera"));
+    assert!(!public.contains("motion-1"));
+    let mut delivered = Vec::new();
+    assert_eq!(
+        host.dispatch_notifications(|item| {
+            delivered.push((
+                item.plugin_id.clone(),
+                item.id.clone(),
+                item.title.clone(),
+                item.body.clone(),
+            ));
+        }),
+        2
+    );
+    assert_eq!(
+        delivered[0],
+        (
+            TEST_PLUGIN.into(),
+            "motion-1".into(),
+            "Private camera title".into(),
+            "Private camera body".into()
+        )
+    );
+    assert_eq!(delivered[1].1, "motion-2");
+    assert!(!host.has_pending_notifications());
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("duplicate delivery")),
+        0
+    );
+    host.shutdown().await;
+
+    let host = PluginHost::default();
+    host.start(notification_spec("configuration_notifications"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|item| assert_eq!(item.id, "configured-motion")),
+        1
+    );
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn unauthorized_premature_oversized_and_frame_flood_notifications_fail_closed() {
+    for (mode, permitted, expected) in [
+        ("notifications", false, "worker_notification_unauthorized"),
+        (
+            "notifications_before_ready",
+            true,
+            "worker_handshake_invalid",
+        ),
+        (
+            "configuration_early_notification",
+            true,
+            "worker_configuration_ack_invalid",
+        ),
+        ("notifications_oversize", true, "worker_frame_invalid"),
+        ("notifications_flood", true, "worker_rate_limit"),
+    ] {
+        let host = PluginHost::default();
+        let mut worker = notification_spec(mode);
+        worker.desktop_notifications = permitted;
+        host.start(worker).await.unwrap();
+        let failed = wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert_eq!(failed.last_error.as_deref(), Some(expected), "{mode}");
+        assert!(failed.contributions.is_empty());
+        assert_eq!(
+            host.dispatch_notifications(|_| panic!("failed worker notification")),
+            0
+        );
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn valid_notification_bursts_drop_queue_and_rate_excess_without_failing_worker() {
+    let host = PluginHost::default();
+    host.start(notification_spec("notifications_actions"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    for expected in [
+        NOTIFICATION_QUEUE_CAPACITY,
+        NOTIFICATIONS_PER_WORKER_PER_MINUTE - NOTIFICATION_QUEUE_CAPACITY,
+        0,
+    ] {
+        action(&host, "echo").await.unwrap();
+        assert_eq!(host.dispatch_notifications(|_| {}), expected);
+        assert_eq!(host.snapshots()[0].state, WorkerState::Running);
+    }
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    assert_eq!(
+        entry.notifications.lock().unwrap().seen.len(),
+        NOTIFICATIONS_PER_WORKER_PER_MINUTE
+    );
+    // Advancing only the rate windows avoids a minute of wall-clock waiting.
+    entry.notifications.lock().unwrap().rate.window = Instant::now() - Duration::from_secs(61);
+    host.0.notification_rate.lock().unwrap().window = Instant::now() - Duration::from_secs(61);
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|_| {}),
+        NOTIFICATION_QUEUE_CAPACITY
+    );
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn global_notification_rate_bounds_multiple_real_workers() {
+    let host = PluginHost::default();
+    let mut total = 0;
+    for index in 0..5 {
+        let mut worker = notification_spec("notifications_actions");
+        worker.plugin_id = format!("test.notifications-{index}");
+        let id = worker.plugin_id.clone();
+        host.start(worker).await.unwrap();
+        time::timeout(Duration::from_secs(5), async {
+            while !host.snapshots().iter().any(|snapshot| {
+                snapshot.plugin_id == id
+                    && snapshot.state == WorkerState::Running
+                    && !snapshot.contributions.is_empty()
+            }) {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            host.action(&id, "echo", json!({}), Duration::from_secs(2))
+                .await
+                .unwrap();
+            total += host.dispatch_notifications(|_| {});
+        }
+    }
+    assert_eq!(total, NOTIFICATIONS_GLOBAL_PER_MINUTE);
+    assert!(host
+        .snapshots()
+        .iter()
+        .all(|snapshot| snapshot.state == WorkerState::Running));
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_notifications_cannot_cross_stop_removal_revocation_or_restart() {
+    for transition in ["stop", "remove", "revoke", "restart"] {
+        let host = PluginHost::default();
+        host.start(notification_spec("notifications"))
+            .await
+            .unwrap();
+        let first = ready(&host).await;
+        action(&host, "echo").await.unwrap();
+        assert_eq!(
+            host.entry(TEST_PLUGIN)
+                .unwrap()
+                .notifications
+                .lock()
+                .unwrap()
+                .pending
+                .len(),
+            2
+        );
+        match transition {
+            "stop" => host.stop(TEST_PLUGIN).await.unwrap(),
+            "remove" => host.remove(TEST_PLUGIN).await.unwrap(),
+            "revoke" => {
+                host.revoke();
+                host.resume();
+            }
+            "restart" => {
+                assert!(action(&host, "crash").await.is_err());
+                wait_for(&host, |snapshot| {
+                    snapshot.generation > first.generation
+                        && snapshot.state == WorkerState::Running
+                        && !snapshot.contributions.is_empty()
+                })
+                .await;
+                action(&host, "echo").await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            host.dispatch_notifications(|_| panic!("stale notification after {transition}")),
+            0
+        );
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn queued_notification_expiry_and_duplicate_retention_are_bounded() {
+    let host = PluginHost::default();
+    host.start(notification_spec("notifications"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    {
+        let mut state = entry.notifications.lock().unwrap();
+        for queued in &mut state.pending {
+            queued.created = Instant::now() - NOTIFICATION_DELIVERY_TTL;
+        }
+    }
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("expired notification")),
+        0
+    );
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("duplicate after queue expiry")),
+        0
+    );
+    {
+        let mut state = entry.notifications.lock().unwrap();
+        for (_, created) in &mut state.seen {
+            *created = Instant::now() - NOTIFICATION_DEDUP_TTL;
+        }
+    }
+    action(&host, "echo").await.unwrap();
+    assert_eq!(host.dispatch_notifications(|_| {}), 2);
+    host.shutdown().await;
 }
 
 #[tokio::test]
@@ -65,6 +312,7 @@ async fn configuration_is_acknowledged_before_running_or_accepting_actions() {
     );
     let snapshot = ready(&host).await;
     let reply = action(&host, "echo").await.unwrap();
+    assert!(!host.has_pending_notifications());
     assert_eq!(reply["configuration_revision"], "revision-1");
     assert_eq!(reply["configuration_secret_matches"], true);
     let public = serde_json::to_string(&snapshot).unwrap();

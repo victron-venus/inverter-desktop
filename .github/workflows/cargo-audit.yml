@@ -7,6 +7,8 @@ on:
     paths:
       - 'src-tauri/Cargo.toml'
       - 'src-tauri/Cargo.lock'
+      - 'desktop-plugins/frigate/Cargo.toml'
+      - 'desktop-plugins/frigate/Cargo.lock'
   pull_request:
     branches: [main]
   schedule:
@@ -35,7 +37,7 @@ jobs:
             echo "any_changed=true" >> "$GITHUB_OUTPUT"
           else
             base="${{ github.event.pull_request.base.sha || github.event.before }}"
-            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^src-tauri/Cargo\.(toml|lock)$'; then
+            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^(src-tauri|desktop-plugins/frigate)/Cargo\.(toml|lock)$'; then
               echo "any_changed=true" >> "$GITHUB_OUTPUT"
             else
               echo "any_changed=false" >> "$GITHUB_OUTPUT"
@@ -54,7 +56,9 @@ jobs:
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: steps.changed.outputs.any_changed == 'true'
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            src-tauri -> target
+            desktop-plugins/frigate -> target
 
       - name: Install cargo-audit
         if: steps.changed.outputs.any_changed == 'true'
@@ -90,6 +94,15 @@ jobs:
           --ignore RUSTSEC-2026-0104
           --ignore RUSTSEC-2026-0194
           --ignore RUSTSEC-2026-0195
+
+      - name: Fetch independent Frigate worker dependencies
+        if: steps.changed.outputs.any_changed == 'true'
+        run: cargo fetch --locked --manifest-path desktop-plugins/frigate/Cargo.toml
+
+      - name: Audit the independent Frigate worker lockfile
+        if: steps.changed.outputs.any_changed == 'true'
+        # Host-only advisory exceptions do not apply to this separate executable.
+        run: cargo audit --file desktop-plugins/frigate/Cargo.lock
 
       - name: Skip (no Cargo changes)
         if: steps.changed.outputs.any_changed != 'true'

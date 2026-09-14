@@ -34,8 +34,11 @@ Data belonging to installed packages stays protected from this cleanup.
 disabled.** The manager reports this directly; it does not offer unsigned packages
 or user-supplied trust. Production publisher provisioning remains a separate step.
 Home Assistant and cameras still come bundled with desktop and are not managed as
-packages yet. Their worker extraction and the remaining contribution services are
-still open; see the [worker protocol](docs/plugin-worker-protocol.md).
+packages yet. A separately built [Frigate motion worker](desktop-plugins/frigate/README.md)
+starts their extraction with an independent MQTT connection and native motion
+notifications. It does not yet replace snapshots, clips, media windows, or other
+camera adapters. See the [worker protocol](docs/plugin-worker-protocol.md) and
+TODO for the remaining work and validation boundaries.
 
 | Surface                     | Recommended project                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ |

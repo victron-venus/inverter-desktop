@@ -352,7 +352,22 @@ pub(crate) fn install(app: &tauri::AppHandle) {
     watch_session_expiry(app.clone());
 }
 
+const NOTIFICATION_SIGNAL_CAPACITY: usize = 1;
+
 fn forward_changes(app: tauri::AppHandle, changes: Arc<tokio::sync::Notify>) {
+    let (notifications, requests) = tokio::sync::mpsc::channel(NOTIFICATION_SIGNAL_CAPACITY);
+    let notification_app = app.clone();
+    tauri::async_runtime::spawn(drain_notification_requests(requests, move || {
+        let app = notification_app.clone();
+        async move {
+            // One awaited blocking dispatcher keeps native calls off the async
+            // executor. Its own exit/auth checks run only once the task starts.
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                forward_notifications(&app);
+            })
+            .await;
+        }
+    }));
     tauri::async_runtime::spawn(async move {
         loop {
             changes.notified().await;
@@ -367,8 +382,60 @@ fn forward_changes(app: tauri::AppHandle, changes: Arc<tokio::sync::Notify>) {
             {
                 break;
             }
+            if app
+                .state::<DesktopPlugins>()
+                .host
+                .has_pending_notifications()
+            {
+                // A single pending signal coalesces bursts while the separate
+                // dispatcher waits for the OS; UI refreshes never await it.
+                let _ = notifications.try_send(());
+            }
             // The fixed event carries no worker data; each window rechecks its session.
             let _ = app.emit("plugin-host-update", ());
+        }
+    });
+}
+
+async fn drain_notification_requests<F, Submission>(
+    mut requests: tokio::sync::mpsc::Receiver<()>,
+    mut submit: F,
+) where
+    F: FnMut() -> Submission,
+    Submission: std::future::Future<Output = ()>,
+{
+    // There is one receiver for the app lifetime, at most one pending signal,
+    // and no overlapping submission tasks. Dropping the producer on shutdown
+    // closes this loop after its already-owned dispatch finishes.
+    while requests.recv().await.is_some() {
+        submit().await;
+    }
+}
+
+fn forward_notifications(app: &tauri::AppHandle) {
+    let state = app.state::<DesktopPlugins>();
+    if state.exit.started.load(Ordering::Acquire) || !state.host.has_pending_notifications() {
+        return;
+    }
+    // Validate before entering the host authority guard; auth transitions reenter
+    // the host. The dispatcher then checks each generation and stop signal.
+    if auth::require_session(app).is_err() {
+        authentication_changed(app);
+        let _ = app.emit("auth-state-changed", ());
+        return;
+    }
+    state.host.dispatch_notifications(|message| {
+        if state.exit.started.load(Ordering::Acquire) {
+            return;
+        }
+        // Tauri's notification wrapper schedules another task. Submit directly
+        // through the same native backend while this generation is authorized.
+        // Display timing and already submitted notifications belong to the OS.
+        if super::native_notifications::submit(app, message).is_err() {
+            log::warn!(
+                "Desktop notification delivery failed for plugin {}",
+                message.plugin_id
+            );
         }
     });
 }
@@ -469,7 +536,70 @@ pub(crate) fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{management_window, trusted_window, ExitGate, Ordering};
+    use super::{
+        drain_notification_requests, management_window, trusted_window, ExitGate, Ordering,
+        NOTIFICATION_SIGNAL_CAPACITY,
+    };
+
+    #[tokio::test]
+    async fn slow_notification_delivery_coalesces_without_blocking_or_overlapping() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let (signals, requests) = tokio::sync::mpsc::channel(NOTIFICATION_SIGNAL_CAPACITY);
+        let (started, receiving) = tokio::sync::oneshot::channel();
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(false));
+        let mut first = Some((started, blocked));
+        let count = calls.clone();
+        let in_flight = active.clone();
+        let drain = tokio::spawn(drain_notification_requests(requests, move || {
+            let first = first.take();
+            let count = count.clone();
+            let in_flight = in_flight.clone();
+            async move {
+                assert!(!in_flight.swap(true, Ordering::AcqRel));
+                count.fetch_add(1, Ordering::AcqRel);
+                if let Some((started, blocked)) = first {
+                    let _ = started.send(());
+                    blocked.await.unwrap();
+                }
+                in_flight.store(false, Ordering::Release);
+            }
+        }));
+        signals.try_send(()).unwrap();
+        receiving.await.unwrap();
+
+        // The producer remains free to forward UI events while the native
+        // submission is blocked. A burst retains only one follow-up request.
+        let mut accepted = 0;
+        for _ in 0..100 {
+            accepted += usize::from(signals.try_send(()).is_ok());
+        }
+        assert_eq!(accepted, 1);
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        assert!(!drain.is_finished());
+        drop(signals);
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), drain)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        assert!(!active.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn idle_notification_dispatcher_never_starts_native_or_auth_work() {
+        let (signals, requests) = tokio::sync::mpsc::channel(NOTIFICATION_SIGNAL_CAPACITY);
+        drop(signals);
+        drain_notification_requests(requests, || async {
+            panic!("an idle dispatcher must not inspect auth or submit notifications");
+        })
+        .await;
+    }
 
     #[test]
     fn repeated_quit_waits_until_worker_cleanup_finishes() {

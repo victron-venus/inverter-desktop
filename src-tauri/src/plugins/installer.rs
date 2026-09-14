@@ -927,6 +927,10 @@ impl PackageManager {
                     executable,
                     args: Vec::new(),
                     configuration,
+                    desktop_notifications: package
+                        .manifest()
+                        .permissions
+                        .contains(&PluginPermission::DesktopNotifications),
                 },
                 epoch,
             )

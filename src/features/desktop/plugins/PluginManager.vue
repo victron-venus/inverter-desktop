@@ -216,6 +216,7 @@ const permissionKeys: Record<string, string> = {
   plugin_configuration: 'plugins.manager.permissionConfiguration',
   network_http: 'plugins.manager.permissionHttp',
   network_mqtt: 'plugins.manager.permissionMqtt',
+  desktop_notifications: 'plugins.manager.permissionNotifications',
 }
 function permissionLabel(permission: string) {
   const key = permissionKeys[permission]

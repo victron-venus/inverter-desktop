@@ -225,6 +225,57 @@ class MobileNativeBoundaryTests(unittest.TestCase):
 class MobilePluginBoundaryTests(unittest.TestCase):
     """Keep the signed package ecosystem out of native mobile inputs."""
 
+    def test_external_frigate_crate_and_source_are_rejected(self):
+        """A separate worker cannot become a dependency or included mobile source."""
+        with self.assertRaisesRegex(ValueError, "inverter-frigate-worker"):
+            boundary.verify_dependency_tree(
+                "inverter-dashboard v1.0.0\ninverter-frigate-worker v0.1.0"
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "library.d"
+            path.write_text(
+                "/target/lib.a: /checkout/src-tauri/src/lib.rs "
+                "/checkout/desktop-plugins/frigate/src/main.rs\n"
+            )
+            with self.assertRaisesRegex(ValueError, "desktop-plugins"):
+                boundary.verify_depfile(path)
+
+    def test_external_worker_assets_are_rejected_in_mobile_archives(self):
+        """A clean main executable cannot hide a bundled plugin binary or archive."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in (
+                "inverter-frigate-worker",
+                "inverter-frigate-worker.exe",
+                "frigate.idplugin",
+                "desktop-plugins/frigate/Cargo.toml",
+            ):
+                for platform in ("android", "ios"):
+                    if platform == "android":
+                        entries = {"base/lib/arm64-v8a/libinverter_dashboard_lib.so": CORE}
+                        entries[f"base/assets/{asset}"] = b"external worker"
+                    else:
+                        entries = {
+                            "Payload/Energy.app/Info.plist": plistlib.dumps(
+                                {"CFBundleExecutable": "Energy"}
+                            ),
+                            "Payload/Energy.app/Energy": CORE,
+                            f"Payload/Energy.app/{asset}": b"external worker",
+                        }
+                    path = package_fixture(root / "mobile.zip", entries)
+                    with (
+                        self.subTest(platform=platform, asset=asset),
+                        self.assertRaisesRegex(ValueError, "Desktop plugin asset"),
+                    ):
+                        boundary.verify_archive(path, platform)
+
+    def test_external_worker_identity_is_rejected_in_mobile_executable(self):
+        """Neither inlining nor embedding the worker identity bypasses the gate."""
+        for marker in ("inverter-desktop.frigate", "inverter-frigate-worker"):
+            payload = CORE + marker.encode()
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, marker):
+                boundary.verify_native_payload(payload, "mobile")
+
     def test_plugin_manager_commands_are_rejected_in_every_mobile_package_format(self):
         """Shared handler registration cannot leak manager actions into mobile apps."""
         # TestCase exits this context even when a package assertion fails.
@@ -267,7 +318,10 @@ class MobilePluginBoundaryTests(unittest.TestCase):
 
     def test_plugin_package_dependencies_are_rejected(self):
         """Package verification and installation must not enter mobile runtime code."""
-        for crate in ("ed25519-dalek", "curve25519-dalek", "zip"):
+        for crate in (
+            "ed25519-dalek", "curve25519-dalek", "zip", "notify-rust",
+            "mac-notification-sys",
+        ):
             with self.subTest(crate=crate), self.assertRaisesRegex(ValueError, crate):
                 boundary.verify_dependency_tree(
                     f"inverter-dashboard v1.0.0\npackage-adapter v1.0.0\n{crate} v1.0.0"

@@ -20,6 +20,7 @@
   "permissionConfiguration": "Plugin configuration",
   "permissionHttp": "HTTP network connections",
   "permissionMqtt": "MQTT network connections",
+  "permissionNotifications": "Desktop notifications",
   "enableAfterInstall": "Enable after installation",
   "install": "Install",
   "update": "Update",

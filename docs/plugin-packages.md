@@ -91,6 +91,22 @@ The parser's larger declared-inventory limit does not relax the stricter archive
 limit. A signed manifest with incompatible target/API, unsafe paths, unexpected
 files, missing files, or incorrect lengths/digests is rejected.
 
+## Frigate worker package
+
+The first real feature payload is the separately built
+[Frigate motion worker](../desktop-plugins/frigate/README.md). Its manifest declares
+configuration, dashboard status, MQTT networking, and native desktop notifications.
+The staging helper verifies a target-specific native executable header and copies
+only that worker into the payload. It does not execute the binary, generate keys,
+install anything, or modify publisher policy. Compiler provenance and runtime
+library compatibility still require target builds and execution checks.
+
+A dedicated acceptance test packages the actual executable with a disposable
+fixture key and exercises it through the application service against a private
+Mosquitto broker. This does not provision production trust or replace the bundled
+camera feature. Frigate snapshots/clips, media ownership, other camera adapters,
+and legacy configuration migration remain unfinished.
+
 ## Producing an archive
 
 Build the frontend once, then run the desktop packaging tool from the repository
@@ -265,11 +281,13 @@ mocked native IPC and does not establish native file-dialog GUI behavior.
 A verified package authenticates content and publisher scope. Its worker still
 runs with the user's OS privileges; this is not an OS sandbox. Permission
 metadata alone does not grant host services. This checkpoint implements scoped
-native settings and startup configuration for `plugin_configuration`; network,
-request-time secret access, and media services remain unfinished.
+native settings and startup configuration for `plugin_configuration`, plus bounded
+notifications for `desktop_notifications`. Scoped network host services, request-time
+secret access, and media services remain unfinished. Frigate opens its own MQTT
+connection and has no access to the core MQTT client through this protocol.
 The remaining contribution services and HA/camera parity work stay in
 [TODO.md](../TODO.md).
 
 This checkpoint does not establish production publisher provisioning, signed
-macOS/Windows worker distribution, real HA/camera behavior, physical inverter
+macOS/Windows worker distribution, complete HA/camera parity, physical inverter
 commands, or mobile device usability.
