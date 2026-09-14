@@ -9,11 +9,11 @@
       <!-- Dashboard Header: Compact buttons and theme switcher -->
       <div class="flex items-center justify-between">
         <AppHeader
-          :dryRun="coerceBool(state.dry_run)"
+          :dryRun="coerceBoolean(state.dry_run)"
           :essClass="essClass"
           :essText="essText"
-          :headerToggles="headerToggles"
-          :toggleStates="headerToggleStates"
+          :headerControls="headerControls"
+          :controlStates="headerControlStates"
           :isDark="isDark"
           :showHeaderToggles="appConfig?.show_header_toggles !== false"
           :showCameraToggle="showCameraToggle"
@@ -77,7 +77,7 @@
               :dishwasherActive="dishwasherActive"
               :dishwasherRemainingTime="dishwasherRemainingTime"
               :homeButtons="homeButtons"
-              :buttonStates="buttonStates"
+              :buttonStates="homeButtonStates"
               :haConnected="haConnected"
               :haSensors="haSensors"
               :haNumbers="haNumbers"
@@ -169,6 +169,8 @@ import { checkForUpdates } from './composables/useAutoUpdate'
 import { addHistoryPoint, useChart } from './composables/useChart'
 import { notify, useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
+import { sendControlAction, useDashboardControls } from './composables/useDashboardControls'
+import { useInverterVisibility } from './composables/useInverterVisibility'
 import { useMQTTState } from './composables/useMQTTState'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
@@ -176,6 +178,7 @@ import { isHaCameraMqttConfigured } from './connectionPolicy'
 import { getAppConfig, needsSetup } from './config'
 import type { AppConfig } from './config'
 import { logger } from './logger'
+import { coerceBoolean } from './utils'
 
 const {
   state,
@@ -193,10 +196,6 @@ const {
   haConnected,
   haEntityStates,
   haEntityAttributes,
-  homeButtons,
-  buttonStates,
-  headerToggles,
-  headerToggleStates,
   haSensors,
   haNumbers,
   haCovers,
@@ -213,12 +212,14 @@ const {
   dryerPauseEntity,
   dishwasherActive,
   dishwasherRemainingTime,
-  coerceBool,
   initHa,
-  sendHaOrMqtt,
   cleanupHa,
-  setWindowHidden,
+  setHaWindowHidden,
+  getHaControlState,
 } = useHA()
+const { headerControls, headerControlStates, homeButtons, homeButtonStates } =
+  useDashboardControls(getHaControlState)
+const { setInverterWindowHidden, cleanupInverterVisibility } = useInverterVisibility()
 const {
   waterLevel,
   pumpSwitchState,
@@ -290,7 +291,7 @@ async function openConfig() {
 
 async function send(action: string, payload: Record<string, unknown> = {}) {
   try {
-    await sendHaOrMqtt(action, payload)
+    await sendControlAction(action, payload)
   } catch (e) {
     logger.error('Action failed:', action, payload, e)
     showError(`Failed: ${e?.toString() || e}`)
@@ -487,12 +488,14 @@ onMounted(async () => {
   const unlistenHidden = await listen('window-hidden', () => {
     isWindowHidden.value = true
     setChartPaused(true)
-    setWindowHidden(true)
+    void setInverterWindowHidden(true)
+    void setHaWindowHidden(true)
   })
   const unlistenShown = await listen('window-shown', () => {
     isWindowHidden.value = false
     setChartPaused(false)
-    setWindowHidden(false)
+    void setInverterWindowHidden(false)
+    void setHaWindowHidden(false)
   })
 
   unlistenWindowEvents = () => {
@@ -505,6 +508,7 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
   cleanupConnection()
   cleanupHa()
+  cleanupInverterVisibility()
   if (unlistenConfig) unlistenConfig()
   if (unlistenWindowEvents) unlistenWindowEvents()
 })

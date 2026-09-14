@@ -712,6 +712,8 @@ pub struct HeaderToggle {
     pub id: String,
     pub label: String,
     pub entity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -3109,7 +3111,8 @@ impl MqttClient {
         }
 
         // Skip alert/notification processing when window hidden (CPU/battery optimization)
-        let hidden = crate::ha_api::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+        let hidden =
+            crate::app_visibility::WINDOW_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
 
         if !hidden {
             let mut alert_notifications: Vec<(String, String)> = Vec::new();
@@ -3401,8 +3404,9 @@ impl MqttClient {
     pub fn publish_command(
         &self,
         action: &str,
-        payload: serde_json::Value,
+        mut payload: serde_json::Value,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        crate::inverter_control::prepare_command(action, &mut payload, |key| self.flag_state(key));
         let guard = self
             .client
             .lock()
@@ -3829,6 +3833,21 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(serde_json::to_string(&b).unwrap(), r#"{"soc":87.5}"#);
+    }
+
+    #[test]
+    fn daemon_header_control_preserves_state_key_in_frontend_payload() {
+        let control = serde_json::json!({
+            "id": "charging", "label": "Charging", "entity": "only_charging",
+            "state_key": "only_charging"
+        });
+        let raw: RawInverterState = serde_json::from_value(serde_json::json!({
+            "ui_config": {"header_toggles": [control]}
+        }))
+        .unwrap();
+        let header = raw.ui_config.unwrap().header_toggles.unwrap();
+        assert_eq!(header[0].state_key.as_deref(), Some("only_charging"));
+        assert_eq!(serde_json::to_value(&header[0]).unwrap(), control);
     }
 
     #[test]

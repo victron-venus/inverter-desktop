@@ -2,6 +2,7 @@ import { markRaw, ref, shallowRef } from 'vue'
 // shallowRef + replace-with-new-object (see applyInverterState): nested loads/etc.
 // update when MQTT sends a fresh snapshot. markRaw avoids deep-proxying big payloads.
 import type { AppConfig } from '../config'
+import type { DashboardControl } from '../inverterControl'
 import { invoke } from '@tauri-apps/api/core'
 
 export interface InverterState {
@@ -62,8 +63,8 @@ export interface InverterState {
   /** Cerbo acload instance id → CustomName/ProductName (stable; loads stay id-keyed). */
   load_names?: Record<string, string>
   ui_config?: {
-    home_buttons?: Array<{ id: string; label: string; entity: string; state_key?: string }>
-    header_toggles?: Array<{ id: string; label: string; entity: string }>
+    home_buttons?: DashboardControl[]
+    header_toggles?: DashboardControl[]
   }
   daily_stats?: {
     produced_today?: number

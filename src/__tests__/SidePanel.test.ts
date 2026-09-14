@@ -277,3 +277,30 @@ describe('HA offline controls', () => {
     wrapper.unmount()
   })
 })
+
+describe('inverter controls with HA disabled', () => {
+  it('keeps MQTT home controls visible and usable without a stale HA warning', async () => {
+    const wrapper = mount(SidePanel, {
+      props: {
+        ...baseProps,
+        features: { ha: false },
+        haConnected: false,
+        showHomeSection: true,
+        haSensors: [],
+        haNumbers: [],
+        homeButtons: [
+          { id: 'limit', label: 'Export limit', entity: 'no_feed' },
+          { id: 'lamp', label: 'Lamp', entity: 'switch.lamp' },
+        ],
+        buttonStates: { limit: 'on' },
+      },
+    })
+    expect(wrapper.text()).not.toContain('status.haStale')
+    const buttons = wrapper.findAll('button.classic-btn-tile')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].attributes('disabled')).toBeUndefined()
+    await buttons[0].trigger('click')
+    expect(wrapper.emitted('send')).toEqual([['toggle', { entity: 'no_feed' }]])
+    wrapper.unmount()
+  })
+})

@@ -88,7 +88,7 @@
     <div
       v-if="
         haConnected === false &&
-        (homeButtons.length ||
+        (hasHaHomeButtons ||
           haSensors.length ||
           haNumbers.length ||
           haCovers.length ||
@@ -103,7 +103,7 @@
 
     <!-- Home Controls -->
     <div
-      v-if="features?.ha !== false && showHomeSection !== false && homeButtons.length > 0"
+      v-if="showHomeSection !== false && visibleHomeButtons.length > 0"
       class="classic-card flex-1 min-h-0"
     >
       <div class="classic-header flex items-center gap-1.5">
@@ -111,18 +111,14 @@
       </div>
       <div class="home-btn-grid p-1 overflow-y-auto max-h-[300px]">
         <UiButton
-          v-for="btn in homeButtons"
+          v-for="btn in visibleHomeButtons"
           :key="btn.id"
           variant="tile"
           class="home-btn-tile"
           toggle
           :active="buttonStates[btn.id] === 'on'"
           :unavailable="isBtnUnavailable(buttonStates[btn.id])"
-          :disabled="
-            haConnected === false &&
-            !isInverterControlFlag(btn.entity) &&
-            !isInverterControlFlag(btn.id)
-          "
+          :disabled="haConnected === false && !isInverterControlFlag(btn.entity)"
           @click="$emit('send', 'toggle', { entity: btn.entity })"
         >
           <component
@@ -481,10 +477,11 @@ import {
   Sparkles,
   WashingMachine,
 } from '@lucide/vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
-import { isHaUnavailableState, isInverterControlFlag } from '../utils'
+import { isHaUnavailableState } from '../utils'
+import { isInverterControlFlag } from '../inverterControl'
 import type {
   HaCoverDisplay,
   HaMediaPlayerDisplay,
@@ -539,6 +536,16 @@ const props = defineProps<{
     show_ha_weather?: boolean
   } | null
 }>()
+
+// Inverter controls remain usable even if HA features are disabled.
+const visibleHomeButtons = computed(() =>
+  props.homeButtons.filter(
+    (button) => props.features?.ha !== false || isInverterControlFlag(button.entity)
+  )
+)
+const hasHaHomeButtons = computed(() =>
+  visibleHomeButtons.value.some((button) => !isInverterControlFlag(button.entity))
+)
 
 const emit = defineEmits<{
   send: [action: string, payload?: Record<string, unknown>]

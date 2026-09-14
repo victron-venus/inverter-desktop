@@ -6,13 +6,39 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 // Import config loading functions from lib
-use crate::load_config;
+use crate::{app_visibility::WINDOW_HIDDEN, load_config};
 mod lifecycle;
 pub use lifecycle::{
     config_changes, connection_status, notify_config_changed, set_connection_status,
 };
 
-pub static WINDOW_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Entity domains exposed through the optional Home Assistant integration.
+const ENTITY_DOMAINS: &[&str] = &[
+    "switch",
+    "light",
+    "input_boolean",
+    "fan",
+    "cover",
+    "lock",
+    "media_player",
+    "scene",
+    "script",
+    "number",
+    "sensor",
+    "binary_sensor",
+    "climate",
+    "button",
+];
+
+pub(crate) fn is_entity(entity_id: &str) -> bool {
+    let domain = entity_id.split('.').next().unwrap_or("");
+    ENTITY_DOMAINS.contains(&domain)
+}
+
+/// Inverter-control flags use Cerbo MQTT, independently of HA configuration.
+pub(crate) fn should_use_rest(entity_id: Option<&str>, enabled: bool) -> bool {
+    enabled && entity_id.is_some_and(|id| is_entity(id) && !crate::inverter_control::is_flag(id))
+}
 
 /// Interactive entities refresh quickly; the larger sensor inventory has a
 /// separate bounded cadence so a busy HA installation does not saturate WebKit.
@@ -934,7 +960,7 @@ impl HaWebSocketClient {
                 // Home buttons (ha_entities) — skip inverter-control flags (MQTT-only).
                 if let Some(ref entities) = config.ha_entities {
                     for entity in entities {
-                        if crate::is_inverter_control_flag(&entity.entity) {
+                        if crate::inverter_control::is_flag(&entity.entity) {
                             continue;
                         }
                         insert_if_not_empty(&Some(entity.entity.clone()));
@@ -944,7 +970,7 @@ impl HaWebSocketClient {
                 // Header toggles — skip inverter-control flags (MQTT-only).
                 if let Some(ref toggles) = config.header_toggles_config {
                     for toggle in toggles {
-                        if crate::is_inverter_control_flag(&toggle.entity) {
+                        if crate::inverter_control::is_flag(&toggle.entity) {
                             continue;
                         }
                         insert_if_not_empty(&Some(toggle.entity.clone()));
@@ -1199,5 +1225,47 @@ mod subscription_regression_tests {
             .await
             .unwrap()
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod action_routing_tests {
+    use super::*;
+
+    #[test]
+    fn inverter_control_flags_never_use_ha_rest() {
+        for key in crate::inverter_control::FLAG_KEYS {
+            for id in [(*key).to_string(), format!("input_boolean.{key}")] {
+                assert!(!should_use_rest(Some(&id), true), "{id}");
+                assert!(!should_use_rest(Some(&id), false), "{id}");
+            }
+        }
+    }
+
+    #[test]
+    fn genuine_ha_entities_with_flag_names_still_use_ha_rest() {
+        for id in [
+            "switch.only_charging",
+            "sensor.no_feed",
+            "light.house_support",
+        ] {
+            assert!(should_use_rest(Some(id), true), "{id}");
+            assert!(!should_use_rest(Some(id), false), "{id}");
+        }
+    }
+
+    #[test]
+    fn custom_home_actions_follow_the_ha_setting() {
+        for id in [
+            "switch.garage",
+            "input_boolean.guest_mode",
+            "button.washer_start",
+            "cover.shade",
+        ] {
+            assert!(should_use_rest(Some(id), true), "{id}");
+            assert!(!should_use_rest(Some(id), false), "{id}");
+        }
+        assert!(!should_use_rest(None, true));
+        assert!(!should_use_rest(Some("unknown"), true));
     }
 }

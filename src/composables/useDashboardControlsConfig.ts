@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 
 import type { AppConfig } from '../config'
 import { logger } from '../logger'
+import { INVERTER_CONTROL_FLAGS, type DashboardControl } from '../inverterControl'
 
 export interface DiscoveredEntity {
   entity_id: string
@@ -11,11 +12,20 @@ export interface DiscoveredEntity {
   state: string
 }
 
-export function useHAEntityManager() {
+/** Header controls accept native inverter-control flags and optional HA entities. */
+export function isDashboardControlTarget(target: string): boolean {
+  if (!target || target !== target.trim()) return false
+  return (
+    INVERTER_CONTROL_FLAGS.some((flag) => flag === target) ||
+    /^[a-z_][a-z0-9_]*\.[a-z0-9_]+$/.test(target)
+  )
+}
+
+export function useDashboardControlsConfig() {
   const haEntitiesList = ref<
     Array<{ id: string; label: string; entity: string; domain: string; enabled: boolean }>
   >([])
-  const headerTogglesList = ref<Array<{ id: string; label: string; entity: string }>>([])
+  const headerTogglesList = ref<DashboardControl[]>([])
   const discoveryDialog = ref(false)
   const discoveredEntities = ref<DiscoveredEntity[]>([])
   const selectedDiscovery = ref<string[]>([])
@@ -104,8 +114,17 @@ export function useHAEntityManager() {
     haEntitiesList.value.splice(index + 1, 0, item)
   }
 
-  function addHeaderToggle() {
-    headerTogglesList.value.push({ id: '', label: '', entity: '' })
+  function addHeaderToggle(control?: DashboardControl) {
+    if (!control) {
+      headerTogglesList.value.push({ id: '', label: '', entity: '' })
+      return
+    }
+    let id = control.id
+    let suffix = 2
+    while (headerTogglesList.value.some((existing) => existing.id === id)) {
+      id = `${control.id}_${suffix++}`
+    }
+    headerTogglesList.value.push({ ...control, id })
   }
 
   function removeHeaderToggle(index: number) {

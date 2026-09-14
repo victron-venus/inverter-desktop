@@ -1,3 +1,4 @@
+mod app_visibility;
 mod auth;
 mod camera;
 mod config_backup;
@@ -11,6 +12,7 @@ use camera::download_camera_clip;
 use camera::{is_camera_video_label, remove_camera_clip_file};
 mod gateway;
 mod ha_api;
+mod inverter_control;
 pub(crate) mod mqtt;
 #[cfg(target_os = "macos")]
 mod tray_icon;
@@ -34,35 +36,6 @@ use config_store::{load_config, save_config_encrypted};
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
 const DEFAULT_MQTT_PORT: u16 = 1883;
 const DEFAULT_HA_PORT: u16 = 8123;
-const HA_ENTITY_DOMAINS: &[&str] = &[
-    "switch",
-    "light",
-    "input_boolean",
-    "fan",
-    "cover",
-    "lock",
-    "media_player",
-    "scene",
-    "script",
-    "number",
-    "sensor",
-    "binary_sensor",
-    "climate",
-    "button",
-];
-
-/// Inverter-control flags owned by inverter-control. Always published to
-/// Cerbo MQTT `inverter/cmd/toggle` — never Home Assistant REST, even when
-/// `ha_use_direct_api` is on. Accepts `input_boolean.<key>` or bare `<key>`.
-const INVERTER_CONTROL_FLAGS: &[&str] = &[
-    "only_charging",
-    "no_feed",
-    "house_support",
-    "charge_battery",
-    "do_not_supply_charger",
-    "set_limit_to_ev_charger",
-    "minimize_charging",
-];
 #[cfg(desktop)]
 const ABOUT_WINDOW_W: f64 = 380.0;
 #[cfg(desktop)]
@@ -103,10 +76,12 @@ struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
 pub(crate) struct HaEntityStates(pub(crate) Arc<Mutex<HashMap<String, ha_api::HaEntityEntry>>>);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct HaEntityConfig {
+struct HomeButtonConfig {
     id: String,
     label: String,
     entity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state_key: Option<String>,
     domain: String,
     enabled: bool,
 }
@@ -144,8 +119,8 @@ struct FullConfig {
     ha_consumption_clamps: Option<Vec<String>>,
     ha_generation_clamps: Option<Vec<String>>,
     color_scheme: Option<String>,
-    // unified entities config
-    ha_entities: Option<Vec<HaEntityConfig>>,
+    // Home buttons retain the legacy ha_entities key in saved settings.
+    ha_entities: Option<Vec<HomeButtonConfig>>,
     header_toggles_config: Option<Vec<HeaderToggle>>,
     portal_id: Option<String>,
     #[serde(default)]
@@ -350,30 +325,6 @@ fn get_state(
     }
 }
 
-/// If the action is `toggle` and the entity is an inverter-control flag,
-/// inject an explicit `state` field so inverter-control's `_handle_toggle`
-/// sets the absolute value instead of flipping whatever it last saw.
-fn stamp_toggle_state(payload: &mut serde_json::Value, client: &MqttClient, action: &str) {
-    if action != "toggle" {
-        return;
-    }
-    let Some(entity) = payload.get("entity").and_then(|v| v.as_str()) else {
-        return;
-    };
-    if !is_inverter_control_flag(entity) {
-        return;
-    }
-    let key = entity.split('.').next_back().unwrap_or(entity);
-    let current = client.flag_state(key).unwrap_or(false);
-    let new_state = if !current { "on" } else { "off" };
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert(
-            "state".to_string(),
-            serde_json::Value::String(new_state.to_string()),
-        );
-    }
-}
-
 #[tauri::command]
 async fn perform_action(
     action: String,
@@ -407,7 +358,7 @@ async fn perform_action(
     // not apply to them (inverter-control no longer reads HA for those 7).
     let ha_direct =
         config.ha_use_direct_api && config.ha_url.is_some() && config.ha_longlived_token.is_some();
-    if should_use_ha_rest(entity_id, ha_direct) {
+    if ha_api::should_use_rest(entity_id, ha_direct) {
         if let Some(entity) = entity_id {
             let domain = entity.split('.').next().unwrap_or("");
             // For switch/input_boolean/light entities, always prefer HA API
@@ -500,7 +451,7 @@ async fn perform_action(
         }
     }
 
-    info!("perform_action: MQTT fallback for action={}", action);
+    info!("perform_action: MQTT command action={}", action);
     let client = mqtt_client
         .0
         .lock()
@@ -509,37 +460,9 @@ async fn perform_action(
         .as_ref()
         .ok_or_else(|| "MQTT client not connected".to_string())?;
 
-    // Inverter-control flags: send an explicit `state` so inverter-control's
-    // _handle_toggle can set the absolute value, rather than flipping whatever
-    // it last saw (and getting out of sync if a click was lost in flight).
-    let mut payload = payload;
-    stamp_toggle_state(&mut payload, client, &action);
-
     client
         .publish_command(&action, payload)
         .map_err(|e| e.to_string())
-}
-
-fn is_ha_entity(entity_id: &str) -> bool {
-    let domain = entity_id.split('.').next().unwrap_or("");
-    HA_ENTITY_DOMAINS.contains(&domain)
-}
-
-/// Bare key (`only_charging`) or HA-style id (`input_boolean.only_charging`).
-pub(crate) fn is_inverter_control_flag(entity_or_id: &str) -> bool {
-    let key = entity_or_id.split('.').next_back().unwrap_or("").trim();
-    INVERTER_CONTROL_FLAGS.contains(&key)
-}
-
-/// HA REST is for home devices only — inverter-control flags always go to MQTT.
-fn should_use_ha_rest(entity_id: Option<&str>, ha_direct: bool) -> bool {
-    if !ha_direct {
-        return false;
-    }
-    match entity_id {
-        Some(e) => is_ha_entity(e) && !is_inverter_control_flag(e),
-        None => false,
-    }
 }
 
 /// Build HA WebSocket URL from config, handling host:port format properly.
@@ -1122,7 +1045,7 @@ async fn discover_ha_entities(
             entity_id.clone()
         };
         if let Some(domain_str) = domain {
-            if HA_ENTITY_DOMAINS.contains(&domain_str.as_str()) {
+            if ha_api::is_entity(&entity_id) {
                 result.push(DiscoveredEntity {
                     entity_id,
                     friendly_name,
@@ -1568,7 +1491,7 @@ fn set_window_hidden(
     mqtt_client: State<'_, MqttState>,
     ha_entity_states: State<'_, HaEntityStates>,
 ) {
-    ha_api::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
+    app_visibility::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
     if !hidden {
         if let Ok(guard) = mqtt_client.0.lock() {
             if let Some(ref client) = *guard {
@@ -2073,78 +1996,52 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod perform_action_tests {
+mod dashboard_control_config_tests {
     use super::*;
+    use serde_json::json;
 
-    fn client_with_flags(flags: impl IntoIterator<Item = (&'static str, bool)>) -> MqttClient {
-        let c = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
-        {
-            let mut st = c.state.lock().unwrap();
-            st.booleans = Some(flags.into_iter().map(|(k, v)| (k.into(), v)).collect());
+    fn roundtrip_controls(state_key: Option<&str>) -> serde_json::Value {
+        let mut config = serde_json::to_value(FullConfig::default()).unwrap();
+        let mut header =
+            json!({"id": "custom_header", "label": "Custom", "entity": "switch.custom"});
+        let mut home = json!({
+            "id": "custom_home", "label": "Home", "entity": "switch.home",
+            "domain": "switch", "enabled": true
+        });
+        if let Some(key) = state_key {
+            header["state_key"] = json!(key);
+            home["state_key"] = json!(key);
         }
-        c
+        config["header_toggles_config"] = json!([header]);
+        config["ha_entities"] = json!([home]);
+
+        // Same typed boundary used by save_config/load_config: unknown fields
+        // would silently disappear here and change which MQTT flag a UI uses.
+        let decoded: FullConfig = serde_json::from_value(config.clone()).unwrap();
+        let saved = serde_json::to_value(decoded).unwrap();
+        assert_eq!(
+            saved["header_toggles_config"],
+            config["header_toggles_config"]
+        );
+        assert_eq!(saved["ha_entities"], config["ha_entities"]);
+        saved
     }
 
     #[test]
-    fn stamp_toggle_adds_state_for_inverter_control_flag() {
-        let client = client_with_flags([("only_charging", true)]);
-        let mut payload = serde_json::json!({"entity": "only_charging"});
-        stamp_toggle_state(&mut payload, &client, "toggle");
-        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("off"));
+    fn saved_header_and_home_controls_preserve_their_state_key() {
+        let saved = roundtrip_controls(Some("custom_status"));
+        assert_eq!(
+            saved["header_toggles_config"][0]["state_key"],
+            "custom_status"
+        );
+        assert_eq!(saved["ha_entities"][0]["state_key"], "custom_status");
     }
 
     #[test]
-    fn stamp_toggle_removes_flag_when_off() {
-        let client = client_with_flags([("house_support", false)]);
-        let mut payload = serde_json::json!({"entity": "house_support"});
-        stamp_toggle_state(&mut payload, &client, "toggle");
-        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("on"));
-    }
-
-    #[test]
-    fn stamp_toggle_handles_input_boolean_prefix() {
-        let client = client_with_flags([("no_feed", false)]);
-        let mut payload = serde_json::json!({"entity": "input_boolean.no_feed"});
-        stamp_toggle_state(&mut payload, &client, "toggle");
-        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("on"));
-    }
-
-    #[test]
-    fn stamp_toggle_ignores_non_toggle_actions() {
-        let client = client_with_flags([("only_charging", true)]);
-        let mut payload = serde_json::json!({"entity": "only_charging"});
-        stamp_toggle_state(&mut payload, &client, "press");
-        assert!(payload.get("state").is_none());
-    }
-
-    #[test]
-    fn stamp_toggle_ignores_non_flag_entities() {
-        let client = client_with_flags([("only_charging", true)]);
-        let mut payload = serde_json::json!({"entity": "switch.garage"});
-        stamp_toggle_state(&mut payload, &client, "toggle");
-        assert!(payload.get("state").is_none());
-    }
-
-    #[test]
-    fn stamp_toggle_defaults_to_on_when_unknown() {
-        let client = MqttClient::new("localhost".into(), 1883, None, None, "test".into());
-        let mut payload = serde_json::json!({"entity": "only_charging"});
-        stamp_toggle_state(&mut payload, &client, "toggle");
-        assert_eq!(payload.get("state").and_then(|v| v.as_str()), Some("on"));
-    }
-
-    #[test]
-    fn is_inverter_control_flag_accepts_bare_key() {
-        assert!(is_inverter_control_flag("only_charging"));
-        assert!(is_inverter_control_flag("no_feed"));
-        assert!(!is_inverter_control_flag("switch.garage"));
-    }
-
-    #[test]
-    fn is_inverter_control_flag_accepts_input_boolean_prefix() {
-        assert!(is_inverter_control_flag("input_boolean.only_charging"));
-        assert!(is_inverter_control_flag("input_boolean.house_support"));
-        assert!(!is_inverter_control_flag("input_boolean.garage"));
+    fn legacy_controls_without_state_key_keep_their_shape() {
+        let saved = roundtrip_controls(None);
+        assert!(saved["header_toggles_config"][0].get("state_key").is_none());
+        assert!(saved["ha_entities"][0].get("state_key").is_none());
     }
 }
 

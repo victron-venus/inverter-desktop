@@ -60,7 +60,18 @@ export default {
     mediaPlayers: 'Media Players',
     scenes: 'Scenes',
     homeButtons: 'Home Buttons',
-    headerToggles: 'Header Toggles (ONLY CHARGING, etc.)',
+    headerToggles: 'Header Controls',
+    headerControlsTitle: 'Header Controls',
+    addHeaderControl: 'Add Control',
+    headerControlTarget: 'Inverter flag / HA entity',
+    inverterControlPresets: 'Add an inverter control',
+    headerControlsHelp:
+      'Inverter controls are provided by inverter-control through Cerbo MQTT and work without Home Assistant. You can also add custom Home Assistant entities.',
+    noHeaderControls:
+      'No custom header controls. Controls supplied over MQTT or built-in inverter defaults are used.',
+    invalidHeaderControlTarget: 'Use an inverter flag or a Home Assistant entity (domain.entity).',
+    haControlsHelp:
+      'Home Assistant is optional and supplies home device controls. Inverter controls are provided by inverter-control through Cerbo MQTT; Home Assistant can expose them as switches in its own ecosystem.',
     save: 'Save Configuration',
     saved: 'Configuration saved successfully',
     reset: 'Reset to Defaults',

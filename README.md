@@ -384,9 +384,22 @@ flowchart LR
     MQB -->|"N/&lt;portal&gt;/ev/22/Soc<br/>N/&lt;portal&gt;/ev/22/Ac/Power<br/>N/&lt;portal&gt;/evcharger/40/Ac/Power"| APP["inverter-desktop<br/>EV card (SOC %, kW)"]
 ```
 
+### Inverter controls and Home Assistant
+
+`inverter-control` owns the seven operating flags, publishes their values in
+`inverter/state.booleans` and supplies button metadata through
+`inverter/state.ui_config.header_toggles`. Desktop consumes that MQTT contract;
+Home Assistant is an optional parallel consumer that exposes MQTT switches.
+HA entities do not supply inverter flag state or execute these commands.
+
+Desktop keeps a fallback button list for older daemons without metadata. A saved
+nonempty `header_toggles_config` overrides the published labels/order; an empty
+local list uses the daemon defaults. See [control ownership](docs/mqtt-control-ownership.md)
+for source files, wire compatibility, HA switch configuration and validation.
+
 ### Published (commands)
 
-- `inverter/cmd/toggle` - Toggle boolean entities (always used for the 7 inverter-control flags: `only_charging`, `no_feed`, `house_support`, `charge_battery`, `do_not_supply_charger`, `set_limit_to_ev_charger`, `minimize_charging`. Payload `{entity: "input_boolean.<key>"}`, QoS 1, retain=false. `ha_use_direct_api` does not apply to these flags.)
+- `inverter/cmd/toggle` - Set an inverter-control flag using a bare key and explicit state, e.g. `{"entity":"no_feed","state":"on"}` (QoS 1, retain=false). All seven flags use Cerbo MQTT regardless of HA settings. Saved `input_boolean.<key>` aliases remain supported. See [control ownership and compatibility](docs/mqtt-control-ownership.md).
 - `inverter/cmd/press` - Press button entities
 - `inverter/cmd/setpoint` - Set power setpoint
 - `inverter/cmd/dry_run` - Toggle dry run mode
@@ -418,8 +431,14 @@ flowchart LR
     "is_external": false
   },
   "booleans": {
-    "auto_mode": true,
-    "ev_boost": false
+    "only_charging": true,
+    "no_feed": false
+  },
+  "ui_config": {
+    "header_toggles": [
+      { "id": "only_charging", "label": "ONLY CHARGING", "entity": "only_charging" },
+      { "id": "no_feed", "label": "NO FEED", "entity": "no_feed" }
+    ]
   },
   "daily_stats": {
     "produced_today": 25.5,

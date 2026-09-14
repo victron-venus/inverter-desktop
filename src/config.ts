@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from './logger'
+import type { DashboardControl } from './inverterControl'
 
 /** Default MQTT broker address – configure to match your local setup */
 const DEFAULT_MQTT_HOST = 'Cerbo'
@@ -50,7 +51,8 @@ export interface AppConfig {
   ev_instance?: number
   ha_consumption_clamps?: string[]
   ha_generation_clamps?: string[]
-  header_toggles_config?: Array<{ id: string; label: string; entity: string }>
+  /** Optional presentation override; MQTT ui_config.header_toggles remains the daemon default. */
+  header_toggles_config?: DashboardControl[]
   color_scheme?: string | null
   portal_id?: string | null
   camera_topic?: string | null

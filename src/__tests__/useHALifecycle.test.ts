@@ -2,7 +2,7 @@ import { flushPromises } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultConfig } from '../config'
 import { useHA } from '../composables/useHA'
-import { appConfig, resetInverterState } from '../composables/useInverterState'
+import { appConfig, applyInverterState, resetInverterState } from '../composables/useInverterState'
 import type { HaFilteredData } from '../types/ha'
 
 const boundary = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }))
@@ -79,12 +79,32 @@ afterEach(() => {
 })
 
 describe('HA event and snapshot lifecycle', () => {
+  it('tracks displayed daemon home controls when saved override lists are empty', async () => {
+    appConfig.value = { ...configured(), ha_entities: [], header_toggles_config: [] }
+    applyInverterState({
+      ui_config: {
+        header_toggles: [
+          { id: 'no_feed', label: 'Relay', entity: 'switch.no_feed' },
+          { id: 'limit', label: 'Limit', entity: 'no_feed' },
+        ],
+        home_buttons: [{ id: 'lamp', label: 'Lamp', entity: 'switch.lamp' }],
+      },
+    })
+    await ha.initHa()
+    expect(boundary.invoke).toHaveBeenCalledWith(
+      'get_ha_entity_states',
+      expect.objectContaining({
+        entityIds: ['switch.no_feed', 'switch.lamp'],
+      })
+    )
+  })
+
   it('bootstraps cached display and actual WS status when startup events were missed', async () => {
     await ha.initHa()
     expect(ha.haSensors.value[0].state).toBe('20')
     expect(ha.haNumbers.value).toHaveLength(1)
     expect(ha.haConnected.value).toBe(true)
-    expect(ha.buttonStates.value.lamp).toBe('on')
+    expect(ha.getHaControlState({ id: 'lamp', label: 'Lamp', entity: 'switch.lamp' })).toBe('on')
     expect(boundary.invoke).toHaveBeenCalledWith('get_ha_connection_status')
     expect(boundary.invoke).not.toHaveBeenCalledWith('test_ha_connection', expect.anything())
     expect([...events.keys()]).toContain('ha-filtered-update')
@@ -115,7 +135,7 @@ describe('HA event and snapshot lifecycle', () => {
     emit('ha-state-update', { entity_id: 'switch.lamp', state: 'off' })
     pending.resolve([{ entity_id: 'switch.lamp', state: 'on' }])
     await init
-    expect(ha.buttonStates.value.lamp).toBe('off')
+    expect(ha.getHaControlState({ id: 'lamp', label: 'Lamp', entity: 'switch.lamp' })).toBe('off')
   })
 
   it('marks disconnected immediately and clears every display group after the grace period', async () => {
