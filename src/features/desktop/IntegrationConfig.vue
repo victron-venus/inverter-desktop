@@ -13,7 +13,7 @@
         <label for="ha_url" class="classic-label px-1">Server URL</label>
         <input
           id="ha_url"
-          v-model="config.ha_url"
+          v-model="fields.ha_url"
           type="text"
           class="classic-input w-full"
           placeholder="http://homeassistant.local"
@@ -24,7 +24,7 @@
           <label for="ha_port" class="classic-label px-1">API Port</label>
           <input
             id="ha_port"
-            v-model.number="config.ha_port"
+            v-model.number="fields.ha_port"
             type="number"
             class="classic-input w-full"
             placeholder="8123"
@@ -45,7 +45,7 @@
         <label for="ha_token" class="classic-label px-1">Access Token</label>
         <input
           id="ha_token"
-          v-model="config.ha_longlived_token"
+          v-model="fields.ha_longlived_token"
           type="password"
           class="classic-input w-full"
           placeholder="Token"
@@ -84,7 +84,7 @@
           <label for="mqtt_ha_host" class="classic-label px-1">{{ $t('config.haMqttHost') }}</label>
           <input
             id="mqtt_ha_host"
-            v-model="config.mqtt_ha_host"
+            v-model="fields.mqtt_ha_host"
             type="text"
             class="classic-input w-full"
             :placeholder="$t('config.haMqttHostPlaceholder')"
@@ -94,7 +94,7 @@
           <label for="mqtt_ha_port" class="classic-label px-1">{{ $t('config.haMqttPort') }}</label>
           <input
             id="mqtt_ha_port"
-            v-model.number="config.mqtt_ha_port"
+            v-model.number="fields.mqtt_ha_port"
             type="number"
             class="classic-input w-full"
             placeholder="1883"
@@ -108,7 +108,7 @@
           }}</label>
           <input
             id="mqtt_ha_login"
-            v-model="config.mqtt_ha_login"
+            v-model="fields.mqtt_ha_login"
             type="text"
             class="classic-input w-full"
             :placeholder="$t('config.optional')"
@@ -120,7 +120,7 @@
           }}</label>
           <input
             id="mqtt_ha_password"
-            v-model="config.mqtt_ha_password"
+            v-model="fields.mqtt_ha_password"
             type="password"
             class="classic-input w-full"
             :placeholder="$t('config.optional')"
@@ -134,7 +134,7 @@
         >
           <input
             type="checkbox"
-            v-model="config.camera_enabled"
+            v-model="fields.camera_enabled"
             class="rounded border-slate-300 text-accent focus:ring-accent"
           />
           <span class="text-[11px] font-bold text-main">{{ $t('config.cameraEnabled') }}</span>
@@ -144,7 +144,7 @@
         <label for="camera_topic" class="classic-label px-1">{{ $t('config.cameraTopic') }}</label>
         <input
           id="camera_topic"
-          v-model="config.camera_topic"
+          v-model="fields.camera_topic"
           type="text"
           :disabled="!config.camera_enabled"
           class="classic-input w-full disabled:opacity-50"
@@ -160,7 +160,7 @@
         }}</label>
         <input
           id="frigate_base_url"
-          v-model="config.frigate_base_url"
+          v-model="fields.frigate_base_url"
           type="text"
           class="classic-input w-full"
           :placeholder="$t('config.frigateBaseUrlPlaceholder')"
@@ -175,7 +175,7 @@
         }}</label>
         <input
           id="ring_snapshot_url_template"
-          v-model="config.ring_snapshot_url_template"
+          v-model="fields.ring_snapshot_url_template"
           type="text"
           class="classic-input w-full"
           :placeholder="$t('config.ringSnapshotUrlTemplatePlaceholder')"
@@ -189,7 +189,7 @@
       >
         <input
           type="checkbox"
-          v-model="config.show_advanced_settings"
+          v-model="fields.show_advanced_settings"
           class="rounded border-slate-300 text-accent focus:ring-accent"
         />
         <span class="text-[11px] font-bold text-main">{{ $t('config.advancedSettings') }}</span>
@@ -206,7 +206,7 @@
         <label for="ha_dryer_entity" class="classic-label px-1">Dryer Entity</label>
         <input
           id="ha_dryer_entity"
-          v-model="config.ha_dryer_entity"
+          v-model="fields.ha_dryer_entity"
           type="text"
           class="classic-input w-full"
           placeholder="sensor.dryer_remaining_time"
@@ -219,7 +219,7 @@
         <label for="ha_dryer_start_entity" class="classic-label px-1">Dryer Start Entity</label>
         <input
           id="ha_dryer_start_entity"
-          v-model="config.ha_dryer_start_entity"
+          v-model="fields.ha_dryer_start_entity"
           type="text"
           class="classic-input w-full"
           placeholder="button.dryer_remote_start"
@@ -232,7 +232,7 @@
         <label for="ha_dryer_pause_entity" class="classic-label px-1">Dryer Pause Entity</label>
         <input
           id="ha_dryer_pause_entity"
-          v-model="config.ha_dryer_pause_entity"
+          v-model="fields.ha_dryer_pause_entity"
           type="text"
           class="classic-input w-full"
           placeholder="button.dryer_pause"
@@ -245,7 +245,7 @@
         <label for="ha_washer_entity" class="classic-label px-1">Washer Entity</label>
         <input
           id="ha_washer_entity"
-          v-model="config.ha_washer_entity"
+          v-model="fields.ha_washer_entity"
           type="text"
           class="classic-input w-full"
           placeholder="sensor.washer_remaining_time"
@@ -258,7 +258,7 @@
         <label for="ha_washer_start_entity" class="classic-label px-1">Washer Start Entity</label>
         <input
           id="ha_washer_start_entity"
-          v-model="config.ha_washer_start_entity"
+          v-model="fields.ha_washer_start_entity"
           type="text"
           class="classic-input w-full"
           placeholder="button.washer_remote_start"
@@ -271,7 +271,7 @@
         <label for="ha_washer_pause_entity" class="classic-label px-1">Washer Pause Entity</label>
         <input
           id="ha_washer_pause_entity"
-          v-model="config.ha_washer_pause_entity"
+          v-model="fields.ha_washer_pause_entity"
           type="text"
           class="classic-input w-full"
           placeholder="button.washer_pause"
@@ -286,7 +286,7 @@
         >
         <input
           id="ha_dishwasher_running_entity"
-          v-model="config.ha_dishwasher_running_entity"
+          v-model="fields.ha_dishwasher_running_entity"
           type="text"
           class="classic-input w-full"
           placeholder="binary_sensor.dishwasher_running"
@@ -301,7 +301,7 @@
         >
         <input
           id="ha_dishwasher_duration_entity"
-          v-model="config.ha_dishwasher_duration_entity"
+          v-model="fields.ha_dishwasher_duration_entity"
           type="text"
           class="classic-input w-full"
           placeholder="sensor.dishwasher_duration"
@@ -317,11 +317,34 @@
 import type { AppConfig } from '../../config'
 import type { useDashboardControlsConfig } from '../../composables/useDashboardControlsConfig'
 import { invoke } from '@tauri-apps/api/core'
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UiButton from '../../components/UiButton.vue'
-const { config, controls } = defineProps<{
-  config: AppConfig
+import { configField } from './configField'
+const config = defineModel<AppConfig>('config', { required: true })
+const fields = reactive({
+  ha_url: configField(config, 'ha_url'),
+  ha_port: configField(config, 'ha_port'),
+  ha_longlived_token: configField(config, 'ha_longlived_token'),
+  mqtt_ha_host: configField(config, 'mqtt_ha_host'),
+  mqtt_ha_port: configField(config, 'mqtt_ha_port'),
+  mqtt_ha_login: configField(config, 'mqtt_ha_login'),
+  mqtt_ha_password: configField(config, 'mqtt_ha_password'),
+  camera_enabled: configField(config, 'camera_enabled'),
+  camera_topic: configField(config, 'camera_topic'),
+  frigate_base_url: configField(config, 'frigate_base_url'),
+  ring_snapshot_url_template: configField(config, 'ring_snapshot_url_template'),
+  show_advanced_settings: configField(config, 'show_advanced_settings'),
+  ha_dryer_entity: configField(config, 'ha_dryer_entity'),
+  ha_dryer_start_entity: configField(config, 'ha_dryer_start_entity'),
+  ha_dryer_pause_entity: configField(config, 'ha_dryer_pause_entity'),
+  ha_washer_entity: configField(config, 'ha_washer_entity'),
+  ha_washer_start_entity: configField(config, 'ha_washer_start_entity'),
+  ha_washer_pause_entity: configField(config, 'ha_washer_pause_entity'),
+  ha_dishwasher_running_entity: configField(config, 'ha_dishwasher_running_entity'),
+  ha_dishwasher_duration_entity: configField(config, 'ha_dishwasher_duration_entity'),
+})
+const { controls } = defineProps<{
   controls: ReturnType<typeof useDashboardControlsConfig>
 }>()
 const { t: $t } = useI18n()
@@ -331,23 +354,26 @@ const haTestResult = ref('')
 const haTestSuccess = ref(false)
 const haDirectMonitoringEnabled = computed(() => {
   return !!(
-    config.ha_url &&
-    config.ha_longlived_token &&
-    config.ha_url.trim() &&
-    config.ha_longlived_token.trim()
+    config.value.ha_url &&
+    config.value.ha_longlived_token &&
+    config.value.ha_url.trim() &&
+    config.value.ha_longlived_token.trim()
   )
 })
 
 watch(
-  [() => config.ha_longlived_token, () => config.ha_url],
+  [() => config.value.ha_longlived_token, () => config.value.ha_url],
   ([token, url]) => {
-    config.ha_use_direct_api = !!(token && url && token.trim() && url.trim())
+    const enabled = !!(token && url && token.trim() && url.trim())
+    if (config.value.ha_use_direct_api !== enabled) {
+      config.value = { ...config.value, ha_use_direct_api: enabled }
+    }
   },
   { immediate: true }
 )
 
 async function testHaConnection() {
-  if (!config.ha_url || !config.ha_longlived_token) {
+  if (!config.value.ha_url || !config.value.ha_longlived_token) {
     haTestResult.value = 'URL and Token required'
     haTestSuccess.value = false
     return
@@ -356,9 +382,9 @@ async function testHaConnection() {
   haTestResult.value = ''
   try {
     await invoke('test_ha_connection', {
-      url: config.ha_url,
-      port: config.ha_port || 8123,
-      token: config.ha_longlived_token,
+      url: config.value.ha_url,
+      port: config.value.ha_port || 8123,
+      token: config.value.ha_longlived_token,
     })
     haTestResult.value = 'Connection successful'
     haTestSuccess.value = true
@@ -371,13 +397,17 @@ async function testHaConnection() {
 }
 
 async function handleFetchHaEntities() {
-  if (!config.ha_url || !config.ha_longlived_token) {
+  if (!config.value.ha_url || !config.value.ha_longlived_token) {
     haTestResult.value = 'Please enter HA URL and Token first'
     haTestSuccess.value = false
     return
   }
   try {
-    await fetchHaEntities(config.ha_url, config.ha_port, config.ha_longlived_token)
+    await fetchHaEntities(
+      config.value.ha_url,
+      config.value.ha_port,
+      config.value.ha_longlived_token
+    )
   } catch (e) {
     haTestResult.value = `Discovery failed: ${e?.toString() || e}`
     haTestSuccess.value = false

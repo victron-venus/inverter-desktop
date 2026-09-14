@@ -240,7 +240,7 @@
 
             <FeatureConfigSection
               v-if="activeTab === 'integrations'"
-              :config="config"
+              v-model:config="featureConfig"
               :controls="controls"
             />
             <div v-if="activeTab === 'devices'" class="flex flex-col gap-4">
@@ -540,7 +540,7 @@
                   <span class="text-[11px] font-bold text-main">Console</span>
                 </label>
 
-                <FeatureSectionVisibility :config="config" />
+                <FeatureSectionVisibility v-model:config="featureConfig" />
 
                 <!-- App Settings -->
                 <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
@@ -715,6 +715,7 @@ import {
   prepareFeatureConfig,
 } from '@features'
 import { useConfigForm } from './composables/useConfigForm'
+import type { AppConfig } from './config'
 
 const {
   config,
@@ -727,6 +728,12 @@ const {
   resetToDefaults,
   clearMessage,
 } = useConfigForm()
+const featureConfig = computed({
+  get: () => config,
+  set: (updated: AppConfig) => {
+    Object.assign(config, updated)
+  },
+})
 const controls = useConfigControls()
 const {
   haEntitiesList,

@@ -20,6 +20,10 @@ supplies feature panels, settings, setup, status, camera routes, and lifecycle.
 The fixed mobile composition supplies empty contributions without importing those
 implementations; it contains no plugin manager or package loader.
 
+`@feature-defaults` resolves directly to the platform's data-only defaults module.
+Core configuration must not import the UI contribution entry point: that would
+create an initialization cycle through the settings components and lose defaults.
+
 HA/camera presentation and connection code lives under `src/features/desktop/`.
 The legacy `useHA`, camera-view, and entity-discovery entry points are reachable
 only through the desktop composition. Core MQTT/IGW source selection and inverter

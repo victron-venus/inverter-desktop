@@ -6,6 +6,18 @@ import { notify } from '../../composables/useSystemNotifications'
 import { MQTT_OFFLINE_DELAY_MS } from '../../connectionPolicy'
 import { logger } from '../../logger'
 
+function cameraConnectArgs(config: AppConfig) {
+  return {
+    host: config.mqtt_ha_host,
+    port: config.mqtt_ha_port,
+    username: config.mqtt_ha_login || null,
+    password: config.mqtt_ha_password || null,
+    cameraTopic: config.camera_topic || null,
+    frigateBaseUrl: config.frigate_base_url || null,
+    ringSnapshotUrlTemplate: config.ring_snapshot_url_template || null,
+  }
+}
+
 /** Separate broker lifecycle owned by the desktop camera feature. */
 export function createCameraConnection() {
   let generation = 0
@@ -47,15 +59,7 @@ export function createCameraConnection() {
     const revision = ++settingsRevision
     if (config.camera_enabled && config.mqtt_ha_host?.trim() && config.mqtt_ha_port) {
       try {
-        await transport('connect_ha_mqtt', {
-          host: config.mqtt_ha_host,
-          port: config.mqtt_ha_port,
-          username: config.mqtt_ha_login || null,
-          password: config.mqtt_ha_password || null,
-          cameraTopic: config.camera_topic || null,
-          frigateBaseUrl: config.frigate_base_url || null,
-          ringSnapshotUrlTemplate: config.ring_snapshot_url_template || null,
-        })
+        await transport('connect_ha_mqtt', cameraConnectArgs(config))
         if (current !== generation || revision !== settingsRevision) return
         haMqttConnected.value = true
         notify('Cameras', 'Connected to camera MQTT broker')
@@ -64,16 +68,20 @@ export function createCameraConnection() {
         logger.error('Failed to connect camera MQTT:', error)
       }
     } else {
-      if (offlineTimer) clearTimeout(offlineTimer)
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      offlineTimer = reconnectTimer = null
-      try {
-        await transport('disconnect_ha_mqtt')
-      } catch (error) {
-        logger.warn('Camera MQTT disconnect failed:', error)
-      }
-      if (current === generation && revision === settingsRevision) haMqttConnected.value = null
+      await disconnectForSettings(current, revision)
     }
+  }
+
+  async function disconnectForSettings(current: number, revision: number) {
+    if (offlineTimer) clearTimeout(offlineTimer)
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    offlineTimer = reconnectTimer = null
+    try {
+      await transport('disconnect_ha_mqtt')
+    } catch (error) {
+      logger.warn('Camera MQTT disconnect failed:', error)
+    }
+    if (current === generation && revision === settingsRevision) haMqttConnected.value = null
   }
 
   async function connect(config: AppConfig) {

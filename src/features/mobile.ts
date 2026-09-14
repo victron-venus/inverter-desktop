@@ -17,8 +17,10 @@ export const FeatureDiscoveryDialog = Empty
 export const FeatureSetup = Empty
 export const featureConfigSections: Array<{ id: string; label: string; icon: Component }> = []
 export const featureSetupAvailable = false
-export const featureDefaultConfig: Partial<AppConfig> = {}
-export function prepareFeatureConfig(_config: AppConfig) {}
+export { featureDefaultConfig } from './defaults.mobile'
+export function prepareFeatureConfig(_config: AppConfig) {
+  // Mobile preserves opaque desktop settings without interpreting or normalizing them.
+}
 export function getFeatureView(_path: string): Component | undefined {
   return undefined
 }

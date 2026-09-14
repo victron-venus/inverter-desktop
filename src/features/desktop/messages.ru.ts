@@ -48,7 +48,7 @@ export default {
       'HTTP-база для клипов Frigate ({base}/api/events/{id}/clip.mp4). Обязателен при подписке на frigate/events; пустое значение — клипы Frigate пропускаются. Пример: Synology :5005→5000.',
     ringSnapshotUrlTemplate: 'Шаблон URL снимка Ring',
     ringSnapshotUrlTemplatePlaceholder:
-      'http://ha:8123/api/camera_proxy/camera.front_door_snapshot',
+      'https://homeassistant.example.com/api/camera_proxy/camera.front_door_snapshot',
     ringSnapshotUrlTemplateHelp:
       'HTTP(S) URL при Ring motion/ding ON. Плейсхолдеры: {device_id}, {location_id}, {event}. Удобно camera_proxy HA (токен из настроек HA). Пусто — только уведомление. RTSP окном не поддерживается — см. docs/ring-mqtt.md.',
     cameraMotionDetected: '{agent} — обнаружено движение камеры',

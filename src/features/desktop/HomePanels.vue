@@ -1,6 +1,6 @@
 <template>
   <div class="flex flex-col gap-1.5">
-    <div
+    <output
       v-if="
         haConnected === false &&
         (hasHaHomeButtons ||
@@ -11,10 +11,9 @@
           haWeather)
       "
       class="text-[10px] text-consumption px-1"
-      role="status"
     >
       {{ $t('status.haStale') }}
-    </div>
+    </output>
 
     <!-- HA Weather -->
     <div v-if="haWeather && appConfig?.show_ha_weather !== false" class="classic-card">

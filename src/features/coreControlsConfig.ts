@@ -6,6 +6,16 @@ import {
   type DashboardControl,
 } from '../inverterControl'
 
+function mergeVisible<T extends { entity: string }>(original: T[], edited: T[]): T[] {
+  const remaining = edited.map((entry) => ({ ...entry }))
+  const merged: T[] = []
+  for (const entry of original) {
+    if (!isInverterControlFlag(entry.entity)) merged.push({ ...entry })
+    else if (remaining.length) merged.push(remaining.shift()!)
+  }
+  return [...merged, ...remaining]
+}
+
 /** Core control editor has no entity discovery or optional service dependency. */
 export function useCoreControlsConfig() {
   const haEntitiesList = ref<NonNullable<AppConfig['ha_entities']>>([])
@@ -13,16 +23,6 @@ export function useCoreControlsConfig() {
   const discoveredEntities = ref<never[]>([])
   let originalHome: NonNullable<AppConfig['ha_entities']> = []
   let originalHeader: DashboardControl[] = []
-
-  function mergeVisible<T extends { entity: string }>(original: T[], edited: T[]): T[] {
-    const remaining = edited.map((entry) => ({ ...entry }))
-    const merged: T[] = []
-    for (const entry of original) {
-      if (!isInverterControlFlag(entry.entity)) merged.push({ ...entry })
-      else if (remaining.length) merged.push(remaining.shift()!)
-    }
-    return [...merged, ...remaining]
-  }
 
   function getSavedControls() {
     return {

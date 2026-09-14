@@ -186,7 +186,7 @@
           </div>
         </div>
 
-        <FeatureSetup v-else :config="config" />
+        <FeatureSetup v-else v-model:config="featureConfig" />
       </div>
 
       <div
@@ -205,7 +205,7 @@
 import { FeatureSetup, featureSetupAvailable, prepareFeatureConfig } from '@features'
 import { Settings } from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import type { AppConfig } from '../config'
 import { defaultConfig } from '../config'
 import { logger } from '../logger'
@@ -218,6 +218,12 @@ const emit = defineEmits<{
 const activeTab = ref<'main' | 'advanced'>('main')
 const connectionMode = ref<'mqtt' | 'igw'>('mqtt')
 const config = reactive<AppConfig>({ ...defaultConfig })
+const featureConfig = computed({
+  get: () => config,
+  set: (updated: AppConfig) => {
+    Object.assign(config, updated)
+  },
+})
 const saving = ref(false)
 const error = ref('')
 const testingGateway = ref(false)

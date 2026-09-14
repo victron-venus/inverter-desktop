@@ -37,6 +37,12 @@ export function featureAliases(root, profile) {
   return {
     '@features': path.resolve(root, `src/features/${profile}.ts`),
     '@feature-messages': path.resolve(root, `src/features/messages.${profile}.ts`),
+    '@feature-defaults': path.resolve(
+      root,
+      profile === 'desktop'
+        ? 'src/features/desktop/defaultConfig.ts'
+        : 'src/features/defaults.mobile.ts'
+    ),
   }
 }
 
@@ -44,7 +50,7 @@ export function featureAliases(root, profile) {
 // A direct import added to a shared screen must fail the mobile build, even when
 // the UI would be hidden by a runtime setting or the module is tree-shaken later.
 export const desktopModulePatterns = [
-  /^src\/features\/desktop(?:\/|\.)/,
+  /^src\/features\/desktop[/.]/,
   /^src\/features\/messages\.desktop\./,
   /^src\/plugins\//,
   /^src\/CameraVideo\.vue$/,
@@ -77,7 +83,7 @@ export function frontendProfileAudit(root, profile) {
             })
             .filter((id) => id.startsWith('src/'))
         ),
-      ].sort()
+      ].sort((left, right) => left.localeCompare(right, 'en'))
       if (!modules.includes('src/main.ts')) throw new Error('Frontend module graph is empty')
       if (profile === 'mobile') assertMobileModuleGraph(modules)
       this.emitFile({

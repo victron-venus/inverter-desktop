@@ -1,4 +1,4 @@
-import { featureDefaultConfig } from '@features'
+import { featureDefaultConfig } from '@feature-defaults'
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from './logger'
 import type { DashboardControl } from './inverterControl'

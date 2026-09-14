@@ -4,7 +4,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_washer"
+      v-model="fields.show_washer"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">Washer</span>
@@ -14,7 +14,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_dryer"
+      v-model="fields.show_dryer"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">Dryer</span>
@@ -24,7 +24,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_dishwasher"
+      v-model="fields.show_dishwasher"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">Dishwasher</span>
@@ -34,7 +34,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_ha_sensors"
+      v-model="fields.show_ha_sensors"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">{{ $t('config.sensors') }}</span>
@@ -44,7 +44,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_ha_numbers"
+      v-model="fields.show_ha_numbers"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">{{ $t('config.numbers') }}</span>
@@ -54,7 +54,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_ha_covers"
+      v-model="fields.show_ha_covers"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">{{ $t('config.covers') }}</span>
@@ -64,7 +64,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_ha_media"
+      v-model="fields.show_ha_media"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">{{ $t('config.mediaPlayers') }}</span>
@@ -74,7 +74,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_ha_scenes"
+      v-model="fields.show_ha_scenes"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">{{ $t('config.scenes') }}</span>
@@ -84,7 +84,7 @@
   >
     <input
       type="checkbox"
-      v-model="config.show_ha_weather"
+      v-model="fields.show_ha_weather"
       class="rounded border-slate-300 text-accent focus:ring-accent"
     />
     <span class="text-[11px] font-bold text-main">{{ $t('config.weather') }}</span>
@@ -92,5 +92,18 @@
 </template>
 <script setup lang="ts">
 import type { AppConfig } from '../../config'
-defineProps<{ config: AppConfig }>()
+import { reactive } from 'vue'
+import { configField } from './configField'
+const config = defineModel<AppConfig>('config', { required: true })
+const fields = reactive({
+  show_washer: configField(config, 'show_washer'),
+  show_dryer: configField(config, 'show_dryer'),
+  show_dishwasher: configField(config, 'show_dishwasher'),
+  show_ha_sensors: configField(config, 'show_ha_sensors'),
+  show_ha_numbers: configField(config, 'show_ha_numbers'),
+  show_ha_covers: configField(config, 'show_ha_covers'),
+  show_ha_media: configField(config, 'show_ha_media'),
+  show_ha_scenes: configField(config, 'show_ha_scenes'),
+  show_ha_weather: configField(config, 'show_ha_weather'),
+})
 </script>

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/check-mobile-native-boundary.py"
 SPEC = importlib.util.spec_from_file_location("mobile_native_boundary", SCRIPT)
@@ -37,11 +38,59 @@ class MobileNativeBoundaryTests(unittest.TestCase):
     def test_registered_feature_commands_are_rejected(self):
         """Every desktop command is forbidden even when core commands exist."""
         for command in boundary.FORBIDDEN_COMMANDS:
+            payload = CORE + command.encode()
             with (
                 self.subTest(command=command),
                 self.assertRaisesRegex(ValueError, command),
             ):
-                boundary.verify_native_payload(CORE + command.encode(), "mobile")
+                boundary.verify_native_payload(payload, "mobile")
+
+    def test_cargo_rejects_option_like_and_nonmobile_targets(self):
+        """Invalid target arguments must fail before any Cargo process starts."""
+        manifest = boundary.CHECKOUT / "src-tauri/Cargo.toml"
+        with patch.object(boundary.subprocess, "run") as run:
+            for target in (
+                "--config=/tmp/injected.toml",
+                "aarch64-linux-android --config=/tmp/injected.toml",
+                "x86_64-unknown-linux-gnu",
+            ):
+                with (
+                    self.subTest(target=target),
+                    self.assertRaisesRegex(ValueError, "Unsupported mobile target"),
+                ):
+                    boundary.cargo_tree(manifest, target)
+            run.assert_not_called()
+
+    def test_cargo_rejects_manifest_outside_this_checkout(self):
+        """Neither inspection command may select an arbitrary Cargo project."""
+        external = self.root / "Cargo.toml"
+        external.write_text('[package]\nname = "external"\nversion = "0.1.0"\n')
+        with patch.object(boundary.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "this checkout"):
+                boundary.cargo_tree(external, "aarch64-apple-ios")
+            with self.assertRaisesRegex(ValueError, "this checkout"):
+                boundary.cargo_metadata(external)
+            run.assert_not_called()
+
+    def test_cargo_receives_canonical_manifest_and_allowlisted_target(self):
+        """Valid arguments retain fixed offline inspection commands and paths."""
+        manifest = boundary.CHECKOUT / "src-tauri/../src-tauri/Cargo.toml"
+        expected = str((boundary.CHECKOUT / "src-tauri/Cargo.toml").resolve())
+        with patch.object(
+            boundary.subprocess, "run", return_value=Mock(stdout="{}")
+        ) as run:
+            boundary.cargo_tree(manifest, "aarch64-apple-ios-sim")
+            tree_arguments = run.call_args.args[0]
+            self.assertEqual(
+                tree_arguments[tree_arguments.index("--target") + 1],
+                "aarch64-apple-ios-sim",
+            )
+            self.assertEqual(tree_arguments[-1], expected)
+            self.assertIn("--offline", tree_arguments)
+            self.assertEqual(run.call_args.kwargs["cwd"], boundary.CHECKOUT)
+            self.assertFalse(run.call_args.kwargs["shell"])
+            boundary.cargo_metadata(manifest)
+            self.assertEqual(run.call_args.args[0][-1], expected)
 
     def test_empty_or_unrelated_binary_cannot_pass(self):
         """Require application identity before accepting an otherwise clean file."""

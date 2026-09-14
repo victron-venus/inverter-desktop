@@ -50,7 +50,7 @@ not an OS sandbox. Arbitrary executable UI is outside the initial package contra
 - [x] Separate dashboard controls and action dispatch from `useHA` (desktop PR #408).
 - [x] Record desktop-only plugins and the core-only mobile product.
 - [x] Preserve the previous completed TODO in the documentation archive.
-- [ ] Record exact checks, commit, and PR for the first implementation checkpoint.
+- [x] Record exact checks, commit, and PR for the first implementation checkpoint.
 
 ### 1. Frontend core and desktop feature boundaries — implemented
 
@@ -222,19 +222,31 @@ or removing a package changes available features without reinstalling the app.
 
 - Baseline: desktop `c51fad8` (PR #408), daemon `84999d8` (PR #210).
 - Working branch: `feat/desktop-plugin-modules`, isolated from other local work.
+- First implementation commit: `c805d833`; review and integration:
+  [PR #411](https://github.com/victron-venus/inverter-desktop/pull/411).
 - Initial validation: `pnpm test:build-profiles` passed four tests, including an
   actual Vite build that deliberately imports forbidden desktop code. The real
   `pnpm build:mobile` passed Vue typecheck/build and emitted a core-only source
   graph in `dist/build-profile.json`.
-- Native artifact verifier: 14 fixture tests passed; real mobile archives remain
+- Native artifact verifier: 17 fixture tests passed, including rejection of
+  arbitrary Cargo manifests and option-like targets; real mobile archives remain
   subject to their build/upload gates.
-- Local integration: 187 desktop/core frontend tests and 7 mobile tests passed;
+- Local integration: 192 desktop/core frontend tests and 7 mobile tests passed;
   both profile typechecks/builds and formatting passed. Rust: 171 full-suite tests,
   5 final auth-focused tests, clippy, and iOS simulator/Android aarch64
   `cargo check --locked --all-features` passed. Lint completed with warnings.
 - Release helper: all four iOS build-order/failure fixtures passed after updating
   their expected command to `build:mobile`; 12 version/native-package tests passed.
-  Full hosted release and mobile artifact gates are still pending.
+  The complete local release contract suite also passed all 178 tests.
+  Hosted integration and mobile artifact gates are still pending.
+- Hosted iOS at `c805d833`: the native release, IPA packaging, and packaged
+  exclusion verifier passed in
+  [Quality gate run 34802901966](https://github.com/victron-venus/inverter-desktop/actions/runs/34802901966).
+  Android packaging and the final reviewed integration head remain pending.
+- Review fixes: desktop fields emit model updates into the existing reactive
+  draft; tests cover real settings save/reset and both defaults import orders.
+  Data-only defaults remove a configuration/UI initialization cycle introduced
+  by the extraction. Both frontend builds and all frontend tests passed again.
 - Remaining validation boundary: no physical inverter commands, installed HA/camera
   deployment, or real mobile device exercise was performed.
 - Append PR links and final hosted gate results here.
