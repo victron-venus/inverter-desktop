@@ -59,6 +59,14 @@ manager commands are also desktop-only; mobile never opens a package store or
 restores package workers.
 Shared HTTP, MQTT, authentication, and notification dependencies remain in core.
 
+Owned plugin video also stays behind that desktop boundary: generation leases,
+HTTP downloads, private media files, the `plugin-media` scheme, and
+`close_plugin_video_window`/`drag_plugin_video_window` commands are not registered
+on mobile. The reused `CameraVideo.vue` player and its route helper remain in the
+desktop frontend graph. Both mobile configuration overlays replace the desktop
+media CSP with only `'self'` and `blob:` and keep the asset scope empty. The
+`plugin-video-windows` capability explicitly targets Linux, macOS, and Windows.
+
 Mobile registers the core commands and rejects non-core control targets. The
 seven daemon flag keys and legacy `input_boolean.<flag>` aliases retain the MQTT
 normalization path. No mobile feature startup task or placeholder HA/camera command
@@ -97,6 +105,12 @@ run it on every produced app artifact before upload:
 python3 scripts/check-mobile-native-boundary.py --platform ios --artifact app.ipa
 python3 scripts/check-mobile-native-boundary.py --platform android --artifact app.aab app.apk
 ```
+
+The native verifier rejects the media commands, scheme/window/cache markers,
+worker payloads, and any compiled `plugins/` source. Its independent fixture
+tests put the new markers into APK, AAB, and IPA executables, independently of the
+verifier's own marker lists. Hosted mobile build and release jobs run the same
+verifier against their actual artifacts.
 
 For a locally built mobile library, use `--native-library PATH --target TRIPLE`
 with the appropriate `--target-dir` and `--profile` if they differ from Cargo's

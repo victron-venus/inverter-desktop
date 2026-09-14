@@ -1,6 +1,6 @@
 use crate::{
     config::Configuration,
-    frigate::{MotionEvents, MAX_PAYLOAD_BYTES},
+    frigate::{ClipEvents, MotionEvents, MAX_PAYLOAD_BYTES},
     wire::Output,
 };
 use rumqttc::{
@@ -93,7 +93,16 @@ fn options(config: &Configuration, transport: Transport) -> MqttOptions {
     options
 }
 
-pub async fn run(config: Configuration, output: &Output) -> Result<(), &'static str> {
+pub async fn run(
+    config: Configuration,
+    output: &Output,
+    supports_http_video: bool,
+) -> Result<(), &'static str> {
+    let base = if supports_http_video {
+        crate::media::base_url(config.values.frigate_base_url.as_deref())?
+    } else {
+        None
+    };
     let transport = if config.values.mqtt_tls {
         // Native trust loading can block; cancellation of the session never has
         // to wait for the OS certificate store to respond.
@@ -104,6 +113,7 @@ pub async fn run(config: Configuration, output: &Output) -> Result<(), &'static 
         Transport::Tcp
     };
     let mut events = MotionEvents::default();
+    let mut clips = ClipEvents::default();
     let mut notification_budget = NotificationBudget::default();
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -157,17 +167,22 @@ pub async fn run(config: Configuration, output: &Output) -> Result<(), &'static 
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs_f64();
-                    if let Some(motion) = events.parse(
-                        &message.payload,
-                        message.retain,
-                        Instant::now(),
-                        unix_seconds,
-                    ) {
-                        // Bound broker bursts before the host's general frame
-                        // rate limit. The host separately authorizes delivery.
-                        if notification_budget.take(Instant::now()) {
-                            output.send(json!({"type":"notification","id":motion.id,"title":motion.title,"body":"Motion started"})).await?;
-                        }
+                    let now = Instant::now();
+                    let frame = if let Some(motion) =
+                        events.parse(&message.payload, message.retain, now, unix_seconds)
+                    {
+                        Some(
+                            json!({"type":"notification","id":motion.id,"title":motion.title,"body":"Motion started"}),
+                        )
+                    } else {
+                        clips.parse(&message.payload, message.retain, now, base.as_ref())
+                            .map(|clip| json!({"type":"http_video","id":clip.id,"url":clip.url,"title":clip.title}))
+                    };
+                    // One shared budget preserves the existing frame bound.
+                    // The bounded queue drops events while the host is slow;
+                    // neither video fetching nor pipe backpressure blocks MQTT.
+                    if let Some(frame) = frame.filter(|_| notification_budget.take(now)) {
+                        let _ = output.try_send(frame)?;
                     }
                 }
                 Err(_) => break,

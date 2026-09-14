@@ -3,6 +3,7 @@
 use super::application::{
     ManagerSnapshot, PackageApplication, PackagePreview, RetainedPluginData, SettingsSaveResult,
 };
+use super::media::MediaService;
 use super::publishers::embedded_trust;
 use super::runtime::{PluginHost, PluginSnapshot, WorkerState};
 use super::settings::PluginSettingsView;
@@ -17,8 +18,11 @@ use tauri::{Emitter, Manager, State};
 pub(crate) struct DesktopPlugins {
     host: PluginHost,
     packages: PackageApplication,
+    media: MediaService,
     session_gate: Mutex<()>,
     exit: ExitGate,
+    #[cfg(feature = "native-media-smoke")]
+    native_media_smoke: bool,
 }
 
 #[derive(Default)]
@@ -320,11 +324,13 @@ pub(crate) fn install(app: &tauri::AppHandle) {
     }));
     let trust = embedded_trust();
     let notify = changes.clone();
-    let packages = PackageApplication::new(
+    let (media, media_events) = MediaService::new();
+    let packages = PackageApplication::new_with_media(
         host.clone(),
         env!("INVERTER_DESKTOP_TARGET").into(),
         trust.as_ref().is_ok_and(|trust| !trust.is_empty()),
         Arc::new(move || notify.notify_one()),
+        Some(media.clone()),
     );
     let root = app
         .path()
@@ -334,9 +340,13 @@ pub(crate) fn install(app: &tauri::AppHandle) {
     app.manage(DesktopPlugins {
         host,
         packages: packages.clone(),
+        media: media.clone(),
         session_gate: Mutex::new(()),
         exit: ExitGate::default(),
+        #[cfg(feature = "native-media-smoke")]
+        native_media_smoke: false,
     });
+    super::media_windows::forward_events(app.clone(), media, media_events);
     let key_app = app.clone();
     tauri::async_runtime::spawn(async move {
         packages
@@ -350,6 +360,64 @@ pub(crate) fn install(app: &tauri::AppHandle) {
     forward_changes(app.clone(), changes);
     authentication_changed(app);
     watch_session_expiry(app.clone());
+}
+
+/// Only explicit native harness setup can mark this process-local state.
+#[cfg(feature = "native-media-smoke")]
+pub(crate) fn native_media_smoke_session(app: &tauri::AppHandle) -> bool {
+    // Browser persistence belongs to this immutable process identity, even if
+    // exit starts while a rejected window is still being constructed.
+    app.try_state::<DesktopPlugins>()
+        .is_some_and(|state| state.native_media_smoke)
+}
+
+/// Explicitly isolated harness installation. No normal auth/config/keychain
+/// paths or notification/session watchers are installed by this entry.
+#[cfg(feature = "native-media-smoke")]
+pub(crate) async fn install_native_media_smoke(
+    app: &tauri::AppHandle,
+    root: std::path::PathBuf,
+) -> Result<MediaService, String> {
+    let host = PluginHost::default();
+    let (media, events) = MediaService::new();
+    let packages = PackageApplication::new_with_media(
+        host.clone(),
+        env!("INVERTER_DESKTOP_TARGET").into(),
+        false,
+        Arc::new(|| {}),
+        Some(media.clone()),
+    );
+    app.manage(DesktopPlugins {
+        host,
+        packages: packages.clone(),
+        media: media.clone(),
+        session_gate: Mutex::new(()),
+        exit: ExitGate::default(),
+        native_media_smoke: true,
+    });
+    super::media_windows::forward_events(app.clone(), media.clone(), events);
+    // Keep initialization owned even if the harness deadline cancels its caller.
+    // Shutdown waits for the resulting Ready/Failed publication before cleanup.
+    let initializing = packages.clone();
+    tauri::async_runtime::spawn(async move {
+        initializing
+            .initialize_with_key(
+                Ok(root),
+                super::package::TrustStore::new(Vec::new()),
+                Arc::new(|| Err("Native media smoke never accesses settings keys".into())),
+            )
+            .await;
+    })
+    .await
+    .map_err(|_| "Native media smoke initialization task failed")?;
+    let epoch = packages
+        .session_changed(true)
+        .ok_or("Native media smoke session unavailable")?;
+    let snapshot = packages.snapshot(epoch).await?;
+    if !snapshot.ready || snapshot.error.is_some() {
+        return Err("Native media smoke package initialization failed".into());
+    }
+    Ok(media)
 }
 
 const NOTIFICATION_SIGNAL_CAPACITY: usize = 1;
@@ -391,10 +459,74 @@ fn forward_changes(app: tauri::AppHandle, changes: Arc<tokio::sync::Notify>) {
                 // dispatcher waits for the OS; UI refreshes never await it.
                 let _ = notifications.try_send(());
             }
+            forward_http_videos(&app);
             // The fixed event carries no worker data; each window rechecks its session.
             let _ = app.emit("plugin-host-update", ());
         }
     });
+}
+
+/// Live session policy is checked outside runtime and generation guards.
+pub(crate) fn media_access(app: &tauri::AppHandle) -> Option<MediaService> {
+    let state = app.try_state::<DesktopPlugins>()?;
+    if state.exit.started.load(Ordering::Acquire) {
+        return None;
+    }
+    #[cfg(feature = "native-media-smoke")]
+    if state.native_media_smoke {
+        return Some(state.media.clone());
+    }
+    if auth::require_session(app).is_err() {
+        authentication_changed(app);
+        let _ = app.emit("auth-state-changed", ());
+        return None;
+    }
+    Some(state.media.clone())
+}
+
+fn forward_http_videos(app: &tauri::AppHandle) {
+    let state = app.state::<DesktopPlugins>();
+    if !state.host.has_pending_http_videos() {
+        return;
+    }
+    let Some(media) = media_access(app) else {
+        return;
+    };
+    for request in state.host.take_http_video_requests() {
+        // Admission is bounded and never waits for HTTP, disk, or native windows.
+        let _ = media.try_submit(request);
+    }
+}
+
+#[tauri::command]
+pub(crate) fn close_plugin_video_window(
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    check_owned_video(&state.media, window.label())?;
+    window
+        .close()
+        .map_err(|_| "Cannot close video window".into())
+}
+
+#[tauri::command]
+pub(crate) fn drag_plugin_video_window(
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    check_owned_video(&state.media, window.label())?;
+    window
+        .start_dragging()
+        .map_err(|_| "Cannot drag video window".into())
+}
+
+fn check_owned_video(media: &MediaService, label: &str) -> Result<(), String> {
+    let id = super::media_windows::media_id_for_label(label)
+        .ok_or("Only an owned video window can use this command")?;
+    if !media.is_window_active(&id, label) {
+        return Err("Video window is no longer active".into());
+    }
+    Ok(())
 }
 
 async fn drain_notification_requests<F, Submission>(
@@ -458,7 +590,8 @@ fn watch_session_expiry(app: tauri::AppHandle) {
                     WorkerState::Starting | WorkerState::Running | WorkerState::Restarting
                 )
             });
-            if (active || state.packages.has_session_work()) && auth::require_session(&app).is_err()
+            if (active || state.packages.has_session_work() || state.media.has_owned_work())
+                && auth::require_session(&app).is_err()
             {
                 authentication_changed(&app);
                 let _ = app.emit("auth-state-changed", ());
@@ -529,6 +662,7 @@ pub(crate) fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     } = event
     {
         state.packages.window_closed(&label);
+        state.media.window_destroyed(&label);
     } else if matches!(event, tauri::RunEvent::Exit) {
         state.packages.begin_shutdown();
     }

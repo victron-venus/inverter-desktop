@@ -7,7 +7,13 @@
 
 pub(crate) mod application;
 pub(crate) mod bridge;
+pub(crate) mod generation;
+mod http_video;
 pub mod installer;
+pub(crate) mod media;
+pub(crate) mod media_windows;
+#[cfg(feature = "native-media-smoke")]
+pub(crate) mod native_media_smoke;
 mod native_notifications;
 pub mod package;
 pub mod packaging;

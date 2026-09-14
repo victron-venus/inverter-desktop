@@ -18,6 +18,7 @@ fn manifest() -> PluginManifest {
         entrypoint: "bin/worker".into(),
         config_schema: json!({"type": "object", "properties": {"server": {"type": "string"}}}),
         permissions: vec![PluginPermission::DashboardContributions],
+        http_video: None,
         inventory: Vec::new(),
         signature: None,
     }

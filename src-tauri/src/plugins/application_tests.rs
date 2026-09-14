@@ -66,6 +66,7 @@ fn configured_archive(
     let entrypoint = format!("{mode}{}", std::env::consts::EXE_SUFFIX);
     fs::copy(fixture(), source.join(&entrypoint)).unwrap();
     let metadata = PluginManifest {
+        http_video: None,
         schema_version: 1,
         plugin_id: PLUGIN.into(),
         version: version.into(),

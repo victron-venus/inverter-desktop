@@ -122,6 +122,7 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
         entrypoint,
         config_schema: json!({"type":"object","properties":{}}),
         permissions: vec![PluginPermission::DashboardContributions],
+        http_video: None,
         inventory: Vec::new(),
         signature: None,
     };
@@ -132,6 +133,12 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
         manifest.config_schema = json!({"type":"object","properties":{
             "server":{"type":"string"}, "token":{"type":"string","writeOnly":true}
         }});
+    }
+    if mode == "configuration_video_authorized" {
+        manifest.permissions.push(PluginPermission::HttpVideo);
+        manifest.http_video = Some(super::super::protocol::HttpVideoDeclaration {
+            base_url_setting: "server".into(),
+        });
     }
     if mode == "notifications_authorized" {
         manifest
@@ -1849,6 +1856,7 @@ async fn signed_deep_inventory_cannot_create_excessive_implicit_directories() {
         entrypoint: inventory[0].path.clone(),
         config_schema: json!({"type":"object"}),
         permissions: Vec::new(),
+        http_video: None,
         inventory,
         signature: None,
     };
@@ -1911,4 +1919,65 @@ async fn ownership_sentinel_is_atomic_directory_and_rejects_partial_files() {
     .await
     .is_err());
     assert_eq!(fs::read(&sentinel).unwrap(), b"partial marker");
+}
+
+#[tokio::test]
+async fn http_video_permission_and_origin_come_from_verified_package_and_its_startup_configuration()
+{
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let configuration = Arc::new(Mutex::new(WorkerConfiguration {
+        revision: "video-settings".into(),
+        values: json!({"server":"https://video.test/base/"}),
+        secrets: Default::default(),
+    }));
+    let current = configuration.clone();
+    let manager = PackageManager::open_with_configuration(
+        directory.0.join("store"),
+        host_target(),
+        trust(),
+        host.clone(),
+        Arc::new(move |_| Ok(current.lock().unwrap().clone())),
+    )
+    .await
+    .unwrap();
+    manager
+        .install(
+            package(&directory.0, "1.0.0", "configuration_video_authorized"),
+            true,
+        )
+        .await
+        .unwrap();
+    let original = host
+        .action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap();
+    let request = host.take_http_video_requests().pop().unwrap();
+    assert!(request.lease.is_active());
+    assert!(request
+        .grant
+        .validate_url("https://video.test/base/api/events/other/clip.mp4")
+        .is_ok());
+    configuration.lock().unwrap().values =
+        json!({"server":"https://username:secret@video.test/base/"});
+    assert!(manager
+        .install(
+            package(&directory.0, "1.1.0", "configuration_video_authorized"),
+            true
+        )
+        .await
+        .is_err());
+    assert!(
+        request.lease.is_active(),
+        "invalid candidate grant must not stop the existing worker"
+    );
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["pid"],
+        original["pid"]
+    );
+    manager.disable(PLUGIN).await.unwrap();
+    assert!(!request.lease.is_active());
+    manager.close().await.unwrap();
 }

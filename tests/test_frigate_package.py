@@ -73,8 +73,10 @@ class FrigatePackageTests(unittest.TestCase):
         metadata = json.loads((self.output / "manifest.json").read_text())
         self.assertEqual(metadata["target"], "aarch64-apple-darwin")
         self.assertEqual(metadata["plugin_id"], "inverter-desktop.frigate")
-        self.assertEqual(metadata["version"], "0.1.0")
-        self.assertEqual(metadata["host_api"], "^1.2")
+        self.assertEqual(metadata["version"], "0.2.0")
+        self.assertEqual(metadata["host_api"], "^1.3")
+        self.assertEqual(metadata["http_video"], {"base_url_setting": "frigate_base_url"})
+        self.assertIn("http_video", metadata["permissions"])
         self.assertIsNone(metadata["signature"])
         self.assertEqual(metadata["inventory"], [])
         self.assertEqual(
@@ -85,6 +87,9 @@ class FrigatePackageTests(unittest.TestCase):
         self.assertTrue(fields["mqtt_username"]["writeOnly"])
         self.assertTrue(fields["mqtt_password"]["writeOnly"])
         self.assertEqual(fields["mqtt_topic"]["default"], "frigate/events")
+        self.assertNotIn("frigate_base_url", metadata["config_schema"]["required"])
+        self.assertEqual(fields["frigate_base_url"]["type"], "string")
+        self.assertEqual(fields["frigate_base_url"]["maxLength"], 2048)
 
     def test_windows_entrypoint_uses_executable_suffix(self):
         """The same metadata template supports the Windows binary name."""

@@ -1,5 +1,6 @@
 mod config;
 mod frigate;
+mod media;
 mod network;
 mod wire;
 
@@ -33,7 +34,7 @@ async fn session(
     tokio::select! {
         biased;
         _=incoming.recv()=>Err("unexpected host command"),
-        result=network::run(configuration,output)=>result,
+        result=network::run(configuration,output,wire::supports_http_video(&api))=>result,
     }
 }
 

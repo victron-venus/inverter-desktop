@@ -278,12 +278,9 @@ class MobilePluginBoundaryTests(unittest.TestCase):
 
     def test_plugin_manager_commands_are_rejected_in_every_mobile_package_format(self):
         """Shared handler registration cannot leak manager actions into mobile apps."""
-        # TestCase exits this context even when a package assertion fails.
-        # pylint: disable-next=consider-using-with
-        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         # Keep the required manager surface explicit rather than deriving this
         # fixture from the guard, so an omitted command fails the regression.
-        for command in (
+        self.assert_packaged_markers_rejected((
             "delete_retained_plugin_data",
             "discard_plugin_package",
             "get_plugin_manager_snapshot",
@@ -295,8 +292,25 @@ class MobilePluginBoundaryTests(unittest.TestCase):
             "save_plugin_settings",
             "set_plugin_enabled",
             "uninstall_plugin_package",
-        ):
-            payload = CORE + b"\x00" + command.encode()
+        ))
+
+    def test_plugin_media_markers_are_rejected_in_every_mobile_package_format(self):
+        """Explicit media expectations catch an accidentally omitted guard marker."""
+        self.assert_packaged_markers_rejected((
+            "close_plugin_video_window",
+            "drag_plugin_video_window",
+            "plugin-media",
+            "plugin-video-",
+            "desktop-plugin-media",
+        ))
+
+    def assert_packaged_markers_rejected(self, markers):
+        """Exercise the actual APK, AAB and IPA readers with a contaminated core."""
+        # TestCase exits this context even when a package assertion fails.
+        # pylint: disable-next=consider-using-with
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for marker in markers:
+            payload = CORE + b"\x00" + marker.encode()
             for suffix, prefix in (("apk", ""), ("aab", "base/"), ("ipa", "")):
                 if suffix == "ipa":
                     entries = {
@@ -311,9 +325,9 @@ class MobilePluginBoundaryTests(unittest.TestCase):
                         f"{prefix}lib/arm64-v8a/libinverter_dashboard_lib.so": payload
                     }
                     platform = "android"
-                with self.subTest(command=command, suffix=suffix):
+                with self.subTest(marker=marker, suffix=suffix):
                     archive = package_fixture(root / f"app.{suffix}", entries)
-                    with self.assertRaisesRegex(ValueError, command):
+                    with self.assertRaisesRegex(ValueError, "Desktop feature marker"):
                         boundary.verify_archive(archive, platform)
 
     def test_plugin_package_dependencies_are_rejected(self):

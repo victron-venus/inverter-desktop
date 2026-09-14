@@ -23,6 +23,8 @@ pub struct Values {
     pub mqtt_tls: bool,
     #[serde(default = "default_topic")]
     pub mqtt_topic: String,
+    #[serde(default)]
+    pub frigate_base_url: Option<String>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -61,6 +63,7 @@ impl Configuration {
             return Err("invalid configuration");
         }
         let values = &self.values;
+        crate::media::base_url(values.frigate_base_url.as_deref())?;
         let host = &values.mqtt_host;
         let hostname = !host.is_empty()
             && host.len() <= 253
@@ -125,6 +128,7 @@ mod tests {
         assert_eq!(config.values.mqtt_port, 1883);
         assert_eq!(config.values.mqtt_topic, "frigate/events");
         assert!(!config.values.mqtt_tls);
+        assert!(config.values.frigate_base_url.is_none());
         let mut value = valid();
         value["values"]["mqtt_password"] = json!("not-public");
         assert!(serde_json::from_value::<Configuration>(value).is_err());
@@ -155,6 +159,10 @@ mod tests {
             ),
             ("mqtt_port", vec![json!(0), json!(65536), json!("1883")]),
             ("mqtt_tls", vec![json!("false")]),
+            (
+                "frigate_base_url",
+                vec![json!(7), json!(true), json!("https://user:password@host")],
+            ),
         ] {
             for invalid in values {
                 let mut value = valid();

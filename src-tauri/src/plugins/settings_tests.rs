@@ -11,6 +11,7 @@ fn manifest(schema: Value) -> PluginManifest {
         entrypoint: "worker".into(),
         config_schema: schema,
         permissions: vec![PluginPermission::PluginConfiguration],
+        http_video: None,
         inventory: vec![],
         signature: None,
     }

@@ -41,11 +41,7 @@ pub struct Output {
 
 impl Output {
     pub async fn send(&self, value: Value) -> Result<(), &'static str> {
-        let mut bytes = serde_json::to_vec(&value).map_err(|_| "cannot encode worker response")?;
-        if bytes.len() >= MAX_FRAME_BYTES {
-            return Err("worker response too large");
-        }
-        bytes.push(b'\n');
+        let bytes = encode_frame(value)?;
         let (written, result) = oneshot::channel();
         self.sender
             .send(Outbound { bytes, written })
@@ -53,6 +49,27 @@ impl Output {
             .map_err(|_| "host output closed")?;
         result.await.map_err(|_| "host output closed")?
     }
+
+    /// MQTT events are best effort: a slow host cannot block broker polling.
+    /// Handshake/configuration/status still use send() and wait for the flush.
+    pub fn try_send(&self, value: Value) -> Result<bool, &'static str> {
+        let bytes = encode_frame(value)?;
+        let (written, _) = oneshot::channel();
+        match self.sender.try_send(Outbound { bytes, written }) {
+            Ok(()) => Ok(true),
+            Err(mpsc::error::TrySendError::Full(_)) => Ok(false),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err("host output closed"),
+        }
+    }
+}
+
+fn encode_frame(value: Value) -> Result<Vec<u8>, &'static str> {
+    let mut bytes = serde_json::to_vec(&value).map_err(|_| "cannot encode worker response")?;
+    if bytes.len() >= MAX_FRAME_BYTES {
+        return Err("worker response too large");
+    }
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 /// Own threads, rather than Tokio's blocking stdio pool, allow the process to
@@ -158,6 +175,14 @@ pub fn validate_hello(frame: HostFrame) -> Result<String, &'static str> {
     }
 }
 
+pub fn supports_http_video(host_api: &str) -> bool {
+    semver::Version::parse(host_api).is_ok_and(|version| {
+        semver::VersionReq::parse("^1.3")
+            .expect("fixed version requirement")
+            .matches(&version)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +242,44 @@ mod tests {
             plugin_id: PLUGIN_ID.into()
         })
         .is_err());
+    }
+
+    #[test]
+    fn video_capability_requires_stable_host_api_13() {
+        for (version, supported) in [
+            ("1.2.0", false),
+            ("1.2.99", false),
+            ("1.3.0", true),
+            ("1.3.1", true),
+            ("1.10.0", true),
+            ("1.3.0-beta.1", false),
+            ("2.0.0", false),
+            ("invalid", false),
+        ] {
+            assert_eq!(supports_http_video(version), supported);
+        }
+    }
+
+    #[test]
+    fn slow_host_event_queue_is_bounded_without_waiting_for_output_flush() {
+        let (sender, mut outgoing) = mpsc::channel(2);
+        let output = Output { sender };
+        let frame = serde_json::json!({"type":"http_video","id":"clip-1",
+            "url":"https://frigate.local/api/events/a/clip.mp4","title":"Clip"});
+        assert!(output.try_send(frame.clone()).unwrap());
+        assert!(output.try_send(frame.clone()).unwrap());
+        assert!(!output.try_send(frame.clone()).unwrap());
+        let queued = outgoing.try_recv().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&queued.bytes).unwrap(),
+            frame
+        );
+        assert!(output.try_send(frame.clone()).unwrap());
+        assert!(output
+            .try_send(serde_json::json!({"padding":"x".repeat(MAX_FRAME_BYTES)}))
+            .is_err());
+        drop(outgoing);
+        assert!(output.try_send(frame).is_err());
     }
 
     #[tokio::test(flavor = "current_thread")]

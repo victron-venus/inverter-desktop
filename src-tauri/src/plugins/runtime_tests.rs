@@ -41,6 +41,7 @@ fn spec(mode: &str) -> WorkerSpec {
         args: vec![mode.into()],
         configuration: None,
         desktop_notifications: false,
+        http_video: None,
     }
 }
 
@@ -1012,4 +1013,152 @@ async fn an_epoch_bound_resume_cannot_revive_a_shutdown_host() {
     assert!(!host.resume_in_epoch(stopped_epoch));
     assert!(!host.resume_in_epoch(epoch));
     assert!(!host.is_authorized_epoch(stopped_epoch));
+}
+
+fn video_spec(mode: &str) -> WorkerSpec {
+    let mut worker = configured_spec(mode);
+    worker.configuration.as_mut().unwrap().values = json!({"server":"https://video.test/base/"});
+    let manifest = serde_json::from_value(json!({
+        "schema_version":1,"plugin_id":TEST_PLUGIN,"version":"1.0.0","host_api":"^1.3",
+        "target":"aarch64-apple-darwin","entrypoint":"worker","inventory":[],"signature":null,
+        "config_schema":{"type":"object","properties":{"server":{"type":"string"}}},
+        "permissions":["plugin_configuration","http_video"],"http_video":{"base_url_setting":"server"}
+    })).unwrap();
+    worker.http_video =
+        HttpVideoGrant::from_manifest_configuration(&manifest, worker.configuration.as_ref())
+            .unwrap();
+    worker
+}
+
+#[tokio::test]
+async fn http_video_admission_is_private_deduplicated_and_notification_permission_scoped() {
+    let host = PluginHost::default();
+    let mut worker = video_spec("configuration_video");
+    worker.desktop_notifications = true;
+    host.start(worker).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let snapshot = serde_json::to_string(&host.snapshots()).unwrap();
+    assert!(!snapshot.contains("video.test") && !snapshot.contains("Private camera"));
+    let requests = host.take_http_video_requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "same ID and same title are independently suppressed"
+    );
+    assert_eq!(requests[0].id, "clip-1");
+    assert_eq!(requests[0].lease.plugin_id(), TEST_PLUGIN);
+    assert_eq!(requests[0].lease.epoch(), host.authority_epoch());
+    let mut notifications = Vec::new();
+    host.dispatch_notifications(|item| notifications.push(item.body.clone()));
+    assert_eq!(notifications, ["Camera motion clip available"]);
+    host.shutdown().await;
+    assert!(!requests[0].lease.is_active());
+}
+
+#[tokio::test]
+async fn http_video_rejects_missing_permission_wrong_origin_and_preconfiguration_requests() {
+    for (mode, permission) in [
+        ("configuration_video", false),
+        ("configuration_video_bad_url", true),
+        ("configuration_early_video", true),
+    ] {
+        let host = PluginHost::default();
+        let worker = if permission {
+            video_spec(mode)
+        } else {
+            configured_spec(mode)
+        };
+        host.start(worker).await.unwrap();
+        wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert!(host.take_http_video_requests().is_empty());
+        assert!(!host.has_pending_notifications());
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn http_video_queue_is_bounded_and_old_leases_cannot_survive_same_epoch_reregistration() {
+    let host = PluginHost::default();
+    host.start(video_spec("configuration_video_burst"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let requests = host.take_http_video_requests();
+    assert_eq!(requests.len(), HTTP_VIDEO_QUEUE_CAPACITY);
+    assert!(
+        !host.has_pending_notifications(),
+        "HttpVideo alone does not grant notifications"
+    );
+    let old = requests[0].lease.clone();
+    host.remove(TEST_PLUGIN).await.unwrap();
+    assert!(!old.is_active());
+    host.start(video_spec("configuration_video")).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let fresh = host.take_http_video_requests().pop().unwrap().lease;
+    assert_eq!(old.epoch(), fresh.epoch());
+    assert_eq!(old.generation(), fresh.generation());
+    assert_ne!(old.instance_id(), fresh.instance_id());
+    assert!(old
+        .commit_if_active(|| panic!("old instance revived"))
+        .is_err());
+    host.revoke();
+    host.resume();
+    assert!(!fresh.is_active());
+    assert!(host.take_http_video_requests().is_empty());
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn http_video_crash_revokes_before_restart_and_supervisor_drop_revokes_current_lease() {
+    let host = PluginHost::default();
+    host.start(video_spec("configuration_video")).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let old = host.take_http_video_requests().pop().unwrap().lease;
+    let _ = action(&host, "crash").await;
+    wait_for(&host, |snapshot| {
+        snapshot.generation > old.generation() && snapshot.state == WorkerState::Running
+    })
+    .await;
+    assert!(!old.is_active());
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let fresh = entry.generation_lease.lock().unwrap().clone().unwrap();
+    assert_ne!(old.instance_id(), fresh.instance_id());
+    entry.task.lock().unwrap().as_ref().unwrap().abort();
+    time::timeout(Duration::from_secs(2), fresh.cancelled())
+        .await
+        .unwrap();
+    assert!(!fresh.is_active());
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn generation_is_revoked_if_the_first_spawn_callback_panics() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let host = PluginHost::new(Arc::new(move || {
+        if observed.fetch_add(1, Ordering::SeqCst) == 1 {
+            panic!("fixture spawn callback panic");
+        }
+    }));
+    host.start(video_spec("configuration_video")).await.unwrap();
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let lease = time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(lease) = entry.generation_lease.lock().unwrap().clone() {
+                break lease;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    time::timeout(Duration::from_secs(2), lease.cancelled())
+        .await
+        .unwrap();
+    assert!(!lease.is_active());
+    host.shutdown().await;
 }
