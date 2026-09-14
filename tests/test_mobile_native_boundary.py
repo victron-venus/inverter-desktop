@@ -234,6 +234,8 @@ class MobilePluginBoundaryTests(unittest.TestCase):
         # fixture from the guard, so an omitted command fails the regression.
         for command in (
             "get_plugin_manager_snapshot",
+            "get_plugin_settings",
+            "save_plugin_settings",
             "preview_plugin_package",
             "install_plugin_package",
             "discard_plugin_package",
@@ -269,11 +271,17 @@ class MobilePluginBoundaryTests(unittest.TestCase):
                     f"inverter-dashboard v1.0.0\npackage-adapter v1.0.0\n{crate} v1.0.0"
                 )
 
-    def test_compiler_graph_rejects_plugin_application_bridge_and_publisher_policy(self):
-        """Startup services and embedded policy must stay out even without handlers."""
+    def test_compiler_graph_rejects_plugin_services_and_publisher_policy(self):
+        """Startup, storage, and embedded policy stay out even without handlers."""
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "library.d"
-            for source in ("application.rs", "bridge.rs", "publishers.json"):
+            for source in (
+                "application.rs",
+                "bridge.rs",
+                "settings.rs",
+                "settings_store.rs",
+                "publishers.json",
+            ):
                 path.write_text(
                     "/target/lib.a: /checkout/src-tauri/src/lib.rs "
                     f"/checkout/src-tauri/src/plugins/{source}\n"
@@ -283,6 +291,18 @@ class MobilePluginBoundaryTests(unittest.TestCase):
                     self.assertRaisesRegex(ValueError, "plugins"),
                 ):
                     boundary.verify_depfile(path)
+
+    def test_shared_config_source_excludes_the_plugin_key_adapter_on_mobile(self):
+        """Core encryption remains shared; its desktop adapter needs its own guard."""
+        source = (SCRIPT.parents[1] / "src-tauri/src/config_store.rs").read_text()
+        # Depfiles correctly include config_store.rs on mobile. This narrow
+        # source check complements native target compilation for its one new
+        # desktop-only entry point, without excluding core credential storage.
+        self.assertRegex(
+            source,
+            r'#\[cfg\(not\(any\(target_os = "android", target_os = "ios"\)\)\)\]\s*'
+            r'pub\(crate\) fn plugin_settings_key\(',
+        )
 
 
 if __name__ == "__main__":

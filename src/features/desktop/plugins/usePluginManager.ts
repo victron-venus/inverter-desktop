@@ -17,6 +17,9 @@ export function createPluginManager(fallbackError: () => string) {
   const preview = ref<PluginPackagePreview | null>(null)
   const enableAfterInstall = ref(true)
   const confirmRemoval = ref<string | null>(null)
+  const deleteSettings = ref(false)
+  const settingsEditor = ref<{ plugin_id: string; version: string; key: number } | null>(null)
+  const settingsBusy = ref(false)
   const busy = ref(false)
   const loading = ref(true)
   const error = ref<string | null>(null)
@@ -30,8 +33,10 @@ export function createPluginManager(fallbackError: () => string) {
   let refreshing: Promise<void> | undefined
   let startup: Promise<void> | undefined
   let listeners: Array<() => void> = []
+  let editorKey = 0
+  const working = computed(() => busy.value || settingsBusy.value)
   const canManage = computed(
-    () => authorized.value && active && connected.value && snapshot.value?.ready && !busy.value
+    () => authorized.value && active && connected.value && snapshot.value?.ready && !working.value
   )
   const canInstall = computed(() => canManage.value && snapshot.value?.installation_available)
 
@@ -48,10 +53,17 @@ export function createPluginManager(fallbackError: () => string) {
     if (previous) void discardToken(previous.token)
   }
 
+  function clearSettings() {
+    settingsEditor.value = null
+    settingsBusy.value = false
+  }
+
   function clear() {
     clearPreview()
+    clearSettings()
     snapshot.value = null
     confirmRemoval.value = null
+    deleteSettings.value = false
     authorized.value = false
     connected.value = false
     busy.value = false
@@ -73,10 +85,24 @@ export function createPluginManager(fallbackError: () => string) {
       connected.value = true
       if (!value.plugins.some((plugin) => plugin.plugin_id === confirmRemoval.value)) {
         confirmRemoval.value = null
+        deleteSettings.value = false
       }
+      const editor = settingsEditor.value
+      if (
+        editor &&
+        (!value.ready ||
+          !value.plugins.some(
+            (plugin) =>
+              plugin.plugin_id === editor.plugin_id &&
+              plugin.version === editor.version &&
+              plugin.permissions.includes('plugin_configuration')
+          ))
+      )
+        clearSettings()
     } catch (error_) {
       if (!current(session)) return
       connected.value = false
+      clearSettings()
       error.value = message(error_)
     } finally {
       if (current(session)) loading.value = false
@@ -164,13 +190,14 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   async function retry() {
-    if (busy.value) return
+    if (working.value) return
     if (active) await refreshSession()
     else await start()
   }
 
   async function pickPackage() {
     if (!canInstall.value) return
+    clearSettings()
     const session = generation
     busy.value = true
     error.value = null
@@ -197,11 +224,13 @@ export function createPluginManager(fallbackError: () => string) {
 
   async function mutate(command: string, args: Record<string, unknown>, installing = false) {
     if (!canManage.value) return
+    clearSettings()
     const session = generation
     busy.value = true
     error.value = null
     installFailed.value = false
     confirmRemoval.value = null
+    deleteSettings.value = false
     if (!installing) clearPreview()
     try {
       await invoke(command, args)
@@ -237,13 +266,37 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   function requestRemoval(pluginId: string) {
-    if (canManage.value && findPlugin(pluginId)) confirmRemoval.value = pluginId
+    if (!canManage.value || !findPlugin(pluginId)) return
+    clearSettings()
+    confirmRemoval.value = pluginId
+    deleteSettings.value = false
   }
 
   async function uninstall(pluginId: string) {
     if (confirmRemoval.value === pluginId && findPlugin(pluginId)) {
-      await mutate('uninstall_plugin_package', { pluginId })
+      await mutate('uninstall_plugin_package', { pluginId, deleteSettings: deleteSettings.value })
     }
+  }
+
+  function openSettings(pluginId: string) {
+    const plugin = findPlugin(pluginId)
+    if (!canManage.value || !plugin?.permissions.includes('plugin_configuration')) return
+    clearPreview()
+    confirmRemoval.value = null
+    settingsEditor.value = { plugin_id: pluginId, version: plugin.version, key: ++editorKey }
+    settingsBusy.value = true
+  }
+
+  function setSettingsBusy(key: number, value: boolean) {
+    if (settingsEditor.value?.key === key) settingsBusy.value = value
+  }
+
+  function closeSettings(key: number) {
+    if (settingsEditor.value?.key === key) clearSettings()
+  }
+
+  async function settingsSaved(key: number) {
+    if (settingsEditor.value?.key === key) await refresh()
   }
 
   return {
@@ -251,6 +304,9 @@ export function createPluginManager(fallbackError: () => string) {
     preview,
     enableAfterInstall,
     confirmRemoval,
+    deleteSettings,
+    settingsEditor,
+    working,
     busy,
     loading,
     error,
@@ -268,5 +324,9 @@ export function createPluginManager(fallbackError: () => string) {
     rollback,
     requestRemoval,
     uninstall,
+    openSettings,
+    setSettingsBusy,
+    closeSettings,
+    settingsSaved,
   }
 }

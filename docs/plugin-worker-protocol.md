@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The host API starts at **1.0.0**, independently of the application version. The
+The current host API is **1.1.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -61,7 +61,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.0.0",
+  "host_api_version": "1.1.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -73,7 +73,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.0.0",
+  "host_api_version": "1.1.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -83,6 +83,59 @@ supported host API range belongs in its manifest; `ready.host_api_version`
 acknowledges the negotiated version and is not a version range. Identity comes
 from the host's selected worker, not from an arbitrary frame claiming to be a
 different plugin.
+
+## Startup configuration (host API 1.1)
+
+After a valid `ready`, a verified installed package declaring
+`plugin_configuration` receives exactly one configuration frame on stdin:
+
+```json
+{
+  "type": "configuration",
+  "configuration": {
+    "revision": "abceb85b-59bd-44d8-8135-e7f2ef873122",
+    "values": { "endpoint": "https://example.invalid", "enabled": true },
+    "secrets": { "token": "example-placeholder" }
+  }
+}
+```
+
+The worker must acknowledge the exact revision before contributing dashboard data
+or accepting actions:
+
+```json
+{
+  "type": "configuration_ready",
+  "revision": "abceb85b-59bd-44d8-8135-e7f2ef873122"
+}
+```
+
+The worker remains `starting` until both acknowledgments succeed. The existing
+startup deadline covers both steps. Early contributions, missing/mismatched or
+duplicate acknowledgments fail that generation. Packages without configuration
+permission receive no configuration frame and complete startup after `ready`.
+Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
+are incompatible with a 1.1 host. The wire protocol and manifest remain version 1.
+A configured worker should declare an API requirement such as `^1.1`.
+
+The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
+frame limit. Values and secrets are scoped to the verified plugin ID; fields not
+present in its current schema are retained on disk but withheld from the worker.
+The native service validates required values before launching. Missing required
+setup therefore requires installing disabled, saving settings, then enabling.
+
+Configuration is sent through the owned worker's startup pipe only. It is absent
+from command-line arguments, inherited environment, runtime snapshots, UI events,
+and host debug formatting. The pipe writer checks the originating authentication
+epoch, stop signal, and startup deadline before delivery; an interrupted partial
+frame fails that worker generation. A trusted native worker necessarily receives
+its own secrets and must not echo them into diagnostics, contributions, or action
+results. This is not process sandboxing or a guarantee against a malicious worker.
+
+Saving settings restarts an enabled worker with the new configuration; disabled
+workers remain stopped. There is no hot-reload or request-time secret API in this
+checkpoint. See [plugin settings](plugin-settings.md) for the schema, encryption,
+retention, revision, and failure contracts.
 
 ## Dashboard contributions
 
@@ -256,8 +309,9 @@ filesystem, or verify their digests. Those checks belong to package handling.
 `config_schema` is bounded object-schema metadata, using the same depth and
 node limits as message data and a 16,384-byte limit. Its root must declare
 `"type": "object"`; schema references (`$ref`, `$dynamicRef`, `$recursiveRef`)
-are unsupported. The contract does not fetch external schemas or implement a
-configuration editor or configuration migration engine.
+are unsupported. The package settings service further compiles the bounded
+[declarative subset](plugin-settings.md) for its editor and startup configuration.
+It does not fetch external schemas or migrate legacy feature configuration.
 
 The permission vocabulary is `dashboard_contributions`,
 `plugin_configuration`, `network_http`, and `network_mqtt`. Duplicate and
@@ -316,9 +370,10 @@ authorized snapshot. The desktop dashboard renders text, metrics, status, and
 preset actions; an empty host renders no plugin panel. The desktop Plugins settings tab manages package lifecycle through separate
 settings-window-only IPC, including native selection and a single-use verified
 preview token. The management frontend coalesces snapshot requests and the native
-service caches inventory metadata by revision. Plugin-provided settings, media,
-and notification services remain later contribution surfaces; package management
-does not implement those services.
+service caches inventory metadata by revision. Configuration-capable packages also
+use a native-validated declarative settings editor with isolated encrypted storage
+and startup configuration delivery. Worker-driven settings contributions, request-time
+secret access, network, media, and notification services remain future work.
 
 Normal application exit waits for package initialization and transactions, stops
 and reaps workers, and releases the package-store lease before permitting exit.

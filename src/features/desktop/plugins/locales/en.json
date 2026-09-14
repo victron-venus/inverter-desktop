@@ -38,5 +38,21 @@
   "disabled": "Disabled",
   "operationFailed": "Unable to complete the plugin operation.",
   "notReady": "Plugin management is not ready. Refresh to try again.",
-  "pickAgain": "Select the package again to review it before another installation attempt."
+  "pickAgain": "Select the package again to review it before another installation attempt.",
+  "settings": "Settings",
+  "settingsHelp": "Saving restarts an enabled plugin. Disabled plugins stay disabled.",
+  "settingsSaved": "Settings saved.",
+  "settingsRestartFailed": "Settings were saved, but the plugin could not restart.",
+  "settingsFailed": "Unable to read or save plugin settings. Reload the settings and try again.",
+  "noSettings": "This plugin has no editable settings.",
+  "secretStored": "A secret is stored.",
+  "secretNotStored": "No secret is stored.",
+  "secretHelp": "Leave blank to keep the stored value. Saved secrets are never shown.",
+  "removeSecret": "Remove the stored secret when saving",
+  "chooseValue": "Choose a value…",
+  "saveSettings": "Save settings",
+  "reloadSettings": "Reload saved settings",
+  "deleteSettings": "Also delete this plugin’s settings and secrets",
+  "retainSettings": "Settings and secrets are kept for a later installation unless you choose to delete them.",
+  "invalidSetting": "Check the value for {field}."
 }

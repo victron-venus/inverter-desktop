@@ -39,21 +39,57 @@ real process supervision, and declarative dashboard contributions. The third
 implemented deterministic signed archives, publisher/content verification, and
 transactional native package APIs exercised with real workers.
 
-The current checkpoint connects the package pipeline to authenticated desktop
-startup, settings, and shutdown. The **Plugins** settings tab now reviews a
-natively selected archive, shows verified package metadata and capabilities, and
-commits the exact reviewed bytes after an explicit Install/Update action. Saved
-enabled packages may resume after successful authentication. An empty inventory
-or preserved legacy settings never imply installation.
+[PR #422](https://github.com/victron-venus/inverter-desktop/pull/422) completed
+application integration and the package manager on main, including hosted mobile
+artifact checks. The next checkpoint adds isolated encrypted plugin settings,
+a declarative desktop editor, and verified worker startup configuration.
 
-**The embedded production publisher policy is empty, so installation is disabled
-in the shipped configuration.** The UI reports this directly. Desktop still bundles
-its existing HA/camera implementations; they are not installed or removed through
-the manager. Production publisher provisioning, real worker distribution,
-HA/camera extraction, settings/secrets migration, and the remaining contribution
-services are separate, unfinished requirements.
+**The embedded production publisher policy is still empty, so installation is
+disabled in the shipped configuration.** This checkpoint does not introduce new
+publisher keys or app signing. Existing HA/camera implementations remain bundled
+desktop features until real package parity is verified. Network/media host services,
+legacy configuration migration, and feature extraction remain unfinished.
 
-### Current checkpoint: application integration and management UI
+### Current checkpoint: isolated settings and worker configuration
+
+- [x] Add a versioned, encrypted record per plugin ID outside package contents;
+      reuse the existing application encryption key with a separate authenticated
+      encryption domain. Missing records must not touch the OS credential store.
+- [x] Bound records, retained data, field counts, input sizes, filesystem entries,
+      and temporary transactions; reject unsafe links and corrupt ciphertext.
+- [x] Compile a flat declarative schema subset with typed ordinary values and
+      write-only string secrets. Validate defaults, required fields, enums, and
+      bounds natively; reject unsupported schema features.
+- [x] Return only ordinary values and secret-presence flags to the settings UI.
+      Support explicit secret replacement/clear and preserve omitted secrets.
+      Prevent an updated schema from exposing a previously secret field.
+- [x] Bind saves to both archive identity and data revision; preserve unknown
+      stored fields through updates/rollback and reject stale editors.
+- [x] Stage encrypted writes before the auth commit, serialize them with package
+      lifecycle operations, survive IPC cancellation, and reject stale epochs.
+- [x] Send configuration only to a verified worker declaring configuration
+      permission; require an exact startup acknowledgment before accepting data.
+      Keep secrets out of argv, environment, runtime snapshots, and host logging.
+- [x] Save before restarting an enabled worker; keep disabled workers stopped
+      and distinguish successful persistence from failed runtime activation.
+- [x] Add a desktop-only typed settings editor with English/Russian messages,
+      secret draft cleanup, auth/lifecycle invalidation, and cross-window races.
+- [x] Offer explicit settings deletion on uninstall, defaulting to retention;
+      deletion must remain within the same authorized package operation.
+- [x] Verify schema/storage failure cases, real worker startup/save/restart,
+      auth races, UI flows, and mobile absence. Keep heavy local checks serialized.
+- [x] Update protocol/package documentation and complete independent reviews of
+      storage, schema/application integration, protocol/lifecycle, UI, and mobile
+      boundaries. Address the review findings with focused regressions.
+
+Local validation: 323 macOS native tests and strict Clippy, 252 frontend tests, 8 mobile frontend
+checks, 4 build-profile checks, and 22 native mobile-boundary tests passed. Both
+frontend production builds passed; final desktop output is restored. Hosted
+Linux/Windows/iOS/Android checks and final APK/AAB/IPA inspection must pass on the
+PR's current head before merging; the PR records live delivery status. This
+checkpoint does not establish real HA/camera package or physical-device parity.
+
+### Completed checkpoint: application integration and management UI
 
 - [x] Open one private package store per application, retaining its exclusive
       lease across authenticated sessions and releasing it after worker cleanup.
@@ -94,12 +130,6 @@ services are separate, unfinished requirements.
       simulator and Android aarch64 targets.
 - [x] Bind advertised actions to their original session and reject stale calls
       before enqueueing to a replacement worker; pass the real-worker regression.
-
-Delivery gate: [PR #422](https://github.com/victron-venus/inverter-desktop/pull/422)
-must pass hosted checks on its current head, including final Android APK/AAB and
-iOS IPA inspection for manager/native-command absence, before merging. The PR
-records live check results and merge status; the checklist above tracks completed
-implementation and local validation.
 
 The intended package is a signed first-party `.idplugin` archive: a versioned
 manifest, a target-specific executable worker, and declarative UI contributions.
@@ -246,7 +276,9 @@ feature implementation does not satisfy worker lifecycle verification.
       confirm process reaping, and release the worker registry entry.
 - [ ] Close owned windows and clean owned media/temporary files when those host
       services are introduced.
-- [ ] Offer retention/deletion of plugin settings on uninstall; preserve core data.
+- [x] Offer retention/deletion of plugin settings on uninstall; preserve core data.
+- [ ] Add a retained-data inventory and explicit cleanup for uninstalled or
+      unavailable packages before end-user release, including quota recovery.
 - [x] Test native clean install, update, failed activation, rollback, and uninstall
       with actual signed archives and executable workers.
 

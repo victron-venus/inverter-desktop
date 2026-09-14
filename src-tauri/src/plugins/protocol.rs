@@ -3,14 +3,14 @@
 //! Validation here establishes a wire contract, not a process sandbox, publisher
 //! trust, or verification of the files described by a manifest.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.0.0";
+pub const HOST_API_VERSION: &str = "1.1.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -19,6 +19,7 @@ pub const MAX_ACTION_PARAMS_BYTES: usize = 4 * 1024;
 pub const MAX_ACTION_RESULT_BYTES: usize = 16 * 1024;
 pub const MAX_ACTION_DEADLINE_MS: u64 = 60_000;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 const MAX_JSON_DEPTH: usize = 8;
 const MAX_JSON_NODES: usize = 512;
 const MAX_INVENTORY_FILES: usize = 128;
@@ -41,6 +42,9 @@ pub enum HostMessage {
         host_api_version: String,
         plugin_id: String,
     },
+    Configuration {
+        configuration: WorkerConfiguration,
+    },
     Action {
         request_id: String,
         action_id: String,
@@ -62,6 +66,9 @@ pub enum WorkerMessage {
         host_api_version: String,
         plugin_id: String,
     },
+    ConfigurationReady {
+        revision: String,
+    },
     /// Replaces this worker's entire contribution snapshot.
     Contributions {
         items: Vec<DashboardContribution>,
@@ -80,6 +87,47 @@ pub enum WorkerMessage {
         name: String,
         data: Value,
     },
+}
+
+/// Delivered only to the owning worker through its authenticated startup pipe.
+/// Debug output deliberately omits both maps, including accidental secrets in values.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerConfiguration {
+    pub revision: String,
+    pub values: Value,
+    pub secrets: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for WorkerConfiguration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WorkerConfiguration { contents: [redacted] }")
+    }
+}
+
+impl WorkerConfiguration {
+    pub fn validate(&self) -> Result<(), String> {
+        token(&self.revision, "configuration revision")?;
+        if !self.values.is_object() {
+            return Err("worker configuration values must be an object".into());
+        }
+        bounded_json(&self.values, MAX_CONFIGURATION_BYTES)?;
+        for key in self.secrets.keys() {
+            token(key, "secret key")?;
+            if self.values.get(key).is_some() {
+                return Err("worker values and secrets must have separate keys".into());
+            }
+        }
+        if self.secrets.len() > MAX_JSON_NODES
+            || serde_json::to_vec(self)
+                .map_err(|_| "cannot encode worker configuration")?
+                .len()
+                > MAX_CONFIGURATION_BYTES
+        {
+            return Err("worker configuration exceeds byte or field limit".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -284,6 +332,7 @@ pub fn validate_host_message(message: &HostMessage) -> Result<(), String> {
             validate_versions(*protocol_version, host_api_version)?;
             validate_plugin_id(plugin_id)?;
         }
+        HostMessage::Configuration { configuration } => configuration.validate()?,
         HostMessage::Action {
             request_id,
             action_id,
@@ -378,6 +427,9 @@ pub fn validate_worker_message(message: &WorkerMessage) -> Result<(), String> {
         } => {
             validate_versions(*protocol_version, host_api_version)?;
             validate_plugin_id(plugin_id)?;
+        }
+        WorkerMessage::ConfigurationReady { revision } => {
+            token(revision, "configuration revision")?
         }
         WorkerMessage::Contributions { items } => validate_contributions(items)?,
         WorkerMessage::ActionResult { request_id, value } => {
@@ -844,5 +896,45 @@ mod tests {
             .permissions
             .push(PluginPermission::DashboardContributions);
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn worker_configuration_is_bounded_strict_and_redacted() {
+        let mut configuration = WorkerConfiguration {
+            revision: "revision-1".into(),
+            values: json!({"server":"https://plugin.example"}),
+            secrets: [("token".into(), "sensitive-fixture-value".into())].into(),
+        };
+        let message = HostMessage::Configuration {
+            configuration: configuration.clone(),
+        };
+        assert!(validate_host_message(&message).is_ok());
+        let encoded = encode_host_frame(&message).unwrap();
+        assert!(String::from_utf8(encoded)
+            .unwrap()
+            .contains("sensitive-fixture-value"));
+        assert!(!format!("{message:?}").contains("sensitive-fixture-value"));
+        assert!(!format!("{message:?}").contains("plugin.example"));
+        assert!(
+            parse_worker_frame(br#"{"type":"configuration_ready","revision":"revision-1"}"#)
+                .is_ok()
+        );
+        assert!(parse_worker_frame(
+            br#"{"type":"configuration_ready","revision":"revision-1","secret":"not-allowed"}"#
+        )
+        .is_err());
+        configuration.values = json!({"token":"public-reclassification"});
+        assert!(configuration.validate().is_err());
+        configuration.values = json!({});
+        configuration
+            .secrets
+            .insert("token".into(), "x".repeat(MAX_CONFIGURATION_BYTES));
+        assert!(configuration.validate().is_err());
+        configuration.secrets.clear();
+        configuration.revision = "bad\nrevision".into();
+        assert!(configuration.validate().is_err());
+        configuration.revision = "valid".into();
+        configuration.values = json!([]);
+        assert!(configuration.validate().is_err());
     }
 }

@@ -1,10 +1,12 @@
 //! App session and window authority around the desktop worker host.
 
-use super::application::{ManagerSnapshot, PackageApplication, PackagePreview};
+use super::application::{ManagerSnapshot, PackageApplication, PackagePreview, SettingsSaveResult};
 use super::publishers::embedded_trust;
 use super::runtime::{PluginHost, PluginSnapshot, WorkerState};
+use super::settings::PluginSettingsView;
 use crate::auth;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -196,13 +198,49 @@ pub(crate) async fn rollback_plugin_package(
 #[tauri::command]
 pub(crate) async fn uninstall_plugin_package(
     plugin_id: String,
+    delete_settings: Option<bool>,
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     state: State<'_, DesktopPlugins>,
 ) -> Result<(), String> {
     let epoch = management_epoch(&app, &window, &state)?;
-    state.packages.uninstall(&plugin_id, epoch).await?;
+    state
+        .packages
+        .uninstall_with_settings(&plugin_id, delete_settings.unwrap_or(false), epoch)
+        .await?;
     finish_management(&app, &window, &state, epoch)
+}
+
+#[tauri::command]
+pub(crate) async fn get_plugin_settings(
+    plugin_id: String,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<PluginSettingsView, String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    let settings = state.packages.get_settings(&plugin_id, epoch).await?;
+    finish_management(&app, &window, &state, epoch)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+pub(crate) async fn save_plugin_settings(
+    plugin_id: String,
+    revision: String,
+    values: BTreeMap<String, Value>,
+    secret_changes: BTreeMap<String, Option<String>>,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<SettingsSaveResult, String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    let result = state
+        .packages
+        .save_settings(&plugin_id, epoch, revision, values, secret_changes)
+        .await?;
+    finish_management(&app, &window, &state, epoch)?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -269,8 +307,15 @@ pub(crate) fn install(app: &tauri::AppHandle) {
         session_gate: Mutex::new(()),
         exit: ExitGate::default(),
     });
+    let key_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        packages.initialize(root, trust).await;
+        packages
+            .initialize_with_key(
+                root,
+                trust,
+                Arc::new(move || crate::config_store::plugin_settings_key(&key_app)),
+            )
+            .await;
     });
     forward_changes(app.clone(), changes);
     authentication_changed(app);
