@@ -1,4 +1,5 @@
 import java.util.Properties
+import groovy.json.JsonSlurper
 
 plugins {
     id("com.android.application")
@@ -13,6 +14,13 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Tauri rewrites tauri.properties during each build. Read the immutable release
+// plan separately so candidate names and reserved native counters survive that step.
+val releasePlanFile = file("../../../../.release-plan.json")
+val releasePlan = if (releasePlanFile.exists()) {
+    JsonSlurper().parse(releasePlanFile) as Map<*, *>
+} else null
+
 android {
     compileSdk = 36
     namespace = "com.alvit.inverter_dashboard"
@@ -21,8 +29,10 @@ android {
         applicationId = "com.alvit.inverter_dashboard"
         minSdk = 24
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        versionCode = releasePlan?.get("build_number")?.let { (it as Number).toInt() }
+            ?: tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
+        versionName = releasePlan?.get("version") as String?
+            ?: tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
     buildTypes {
         getByName("debug") {

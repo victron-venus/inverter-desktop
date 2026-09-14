@@ -1,7 +1,12 @@
 {
   "identifier": "default",
   "description": "Capability for all windows",
-  "windows": ["main", "config", "about", "camera-video-*"],
+  "windows": [
+    "main",
+    "config",
+    "about",
+    "camera-video-*"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-close",
@@ -9,7 +14,6 @@
     "core:window:allow-destroy",
     "opener:default",
     "notification:default",
-    "store:default",
     "log:default"
   ]
 }

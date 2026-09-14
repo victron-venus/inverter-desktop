@@ -1,0 +1,80 @@
+{
+  "version_file": "src-tauri/Cargo.toml",
+  "validation_workflows": [
+    "ci.yml",
+    "unit-tests.yml",
+    "mobile.yml",
+    "codeql.yml",
+    "cargo-audit.yml",
+    "cargo-deny.yml"
+  ],
+  "artifact_pattern": "release-assets*",
+  "local_checks": [
+    "pnpm install --frozen-lockfile --ignore-scripts",
+    "pnpm run format:check",
+    "pnpm run lint",
+    "pnpm run typecheck",
+    "pnpm run build",
+    "pnpm test",
+    "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
+    "python3 -m unittest discover -s scripts -p test_ios_version.py",
+    "python3 -m unittest discover -s scripts -p test_release_versions.py"
+  ],
+  "notes": [
+    "Committed base versions are synchronized before build using a frozen release plan; full beta/RC/final identity is embedded separately from native numeric metadata.",
+    "Retains macOS ARM/Intel, Linux, Windows, iOS unsigned and Android signed builds; configured Android signing secrets are required.",
+    "Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.",
+    "Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; updates are installed manually using the Download updates menu."
+  ],
+  "version_companions": ["package.json", "src-tauri/tauri.conf.json"],
+  "repository": "victron-venus/inverter-desktop",
+  "mode": "release",
+  "default_branch": "main",
+  "visibility": "public",
+  "versioning": {
+    "schema": 1,
+    "promotion": "final-build",
+    "files": [
+      {
+        "path": "package.json",
+        "format": "json",
+        "field": "version",
+        "value": "full"
+      },
+      {
+        "path": "src-tauri/Cargo.toml",
+        "format": "toml",
+        "field": "package.version",
+        "value": "full"
+      },
+      {
+        "path": "src-tauri/Cargo.lock",
+        "format": "cargo-lock",
+        "package": "inverter-dashboard",
+        "value": "full"
+      },
+      {
+        "path": "src-tauri/tauri.conf.json",
+        "format": "json",
+        "field": "version",
+        "value": "base"
+      },
+      {
+        "path": "src-tauri/tauri.conf.json",
+        "format": "json",
+        "field": "bundle.macOS.bundleVersion",
+        "value": "apple-build"
+      },
+      {
+        "path": "src-tauri/tauri.conf.json",
+        "format": "json",
+        "field": "bundle.iOS.bundleVersion",
+        "value": "apple-build"
+      }
+    ],
+    "build_number_floor": 2005042,
+    "toolkit_revision": "5671b9a05817576a8ae6bd69cacfb3202c60ad0a"
+  }
+}

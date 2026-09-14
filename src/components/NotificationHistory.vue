@@ -42,25 +42,22 @@
       <div v-if="notifications.length === 0" class="px-2.5 py-4 text-[10px] text-muted text-center">
         {{ $t('notifications.noNotifications') }}
       </div>
-      <div
+      <button
+        type="button"
         v-for="n in notifications"
         :key="n.id"
-        class="row-hover px-2.5 py-1.5 border-b border-black/[0.04] dark:border-white/[0.05] last:border-0 cursor-pointer"
+        class="w-full text-left row-hover px-2.5 py-1.5 border-b border-black/[0.04] dark:border-white/[0.05] last:border-0 cursor-pointer"
         :class="{ 'opacity-50': n.read }"
         @click="markRead(n.id)"
-        @keydown.enter="markRead(n.id)"
-        @keydown.space.prevent="markRead(n.id)"
-        role="button"
-        tabindex="0"
       >
-        <div class="flex items-start justify-between gap-2">
+        <span class="flex items-start justify-between gap-2">
           <span class="text-[10px] font-semibold text-main tracking-tight">{{ n.title }}</span>
           <span class="text-[8px] text-muted whitespace-nowrap tabular">
             {{ formatTime(n.timestamp) }}
           </span>
-        </div>
-        <div class="text-[9px] text-muted truncate mt-0.5">{{ n.body }}</div>
-      </div>
+        </span>
+        <span class="block text-[9px] text-muted truncate mt-0.5">{{ n.body }}</span>
+      </button>
     </div>
   </div>
 </template>

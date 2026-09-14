@@ -1,6 +1,7 @@
 name: Cargo Audit
 
 on:
+  workflow_call: {}
   push:
     branches: [main]
     paths:
@@ -16,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cargo-audit-${{ github.ref }}
+  group: cargo-audit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,7 +31,7 @@ jobs:
       - name: Check if Cargo files changed
         id: changed
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "any_changed=true" >> "$GITHUB_OUTPUT"
           else
             base="${{ github.event.pull_request.base.sha || github.event.before }}"

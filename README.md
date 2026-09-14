@@ -66,20 +66,19 @@ Live **Inverter Desktop** on macOS and iOS Simulator — real-time grid, solar, 
 
 ---
 
-## Release Channels & CI/CD
+<!-- ci-release-process:start -->
 
-This repository follows a multi-channel release strategy managed by GitHub Actions:
+## Release process
 
-- **Stable Releases**: Tagged as `vX.Y.Z` (e.g., `v1.0.0`). Includes signed/unsigned installers for macOS, Windows, Linux, Android, and iOS.
-- **Pre-releases**: Tagged with release candidate or beta suffixes like `vX.Y.Z-rc.1` or `vX.Y.Z-beta.1`. Flagged automatically as Pre-release on GitHub Releases to isolate test builds.
-- **Nightly Builds**: Built daily at 02:00 UTC from the `main` branch. Artifacts are published to the rolling **[Nightly Build Release](https://github.com/victron-venus/inverter-desktop/releases/tag/nightly)**.
+See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and stable promotion rules, and the [operator runbook](docs/release-workflow.md) for local commands.
+<!-- ci-release-process:end -->
 
 ---
 
 ## Completed Features
 
-- ✅ **CI/CD Releases & Nightly Builds**: Pre-release tag detection and nightly builds configured
-- ✅ **Tauri v2 Auto-Updater**: Integrated `@tauri-apps/plugin-updater` connected to GitHub Releases API for automated update checks on macOS, Windows, and Linux (commit cdd80f2)
+- ✅ **Release packaging**: Candidate artifacts and checksums; see the [release strategy](RELEASING.md).
+- **Manual updates**: Choose **Download updates…** in the dashboard menu to open the latest release and install the package for your platform. The app does not download or install updates automatically.
 - ✅ **Encrypted Storage**: Integrated `@tauri-apps/plugin-store` for encrypted local persistence of MQTT credentials, HA access tokens, and custom layout preferences (PR: feat/encrypted-storage)
 - ✅ **Native Mobile Notifications**: Implemented `@tauri-apps/plugin-notification` for OS-level push alerts when Battery SoC drops below 20% or grid connection is lost (PR: feat/native-notifications)
 - ✅ **Cargo Security Audit**: Added `cargo-deny` configuration to enforce dependency security and license compliance checks in CI (PR: feat/cargo-security-audit)
@@ -133,7 +132,13 @@ sudo rpm -i inverter-dashboard_*.rpm
 
 ---
 
+### Google Play preparation
+
+Maintainers can build a separately upload-key-signed Android App Bundle with the manual [Google Play workflow](docs/google-play.md). Existing GitHub APK signing remains unchanged; Play enrollment must preserve the existing app signing certificate for cross-store upgrades. Android 64-bit builds now align both load segments and RELRO boundaries for 16 KB pages; the Play workflow checks the actual bundle before signing.
+
 ### iOS Installation
+
+Starting with 2.5.40, the iOS app and build versions match the release; earlier IPAs could report 1.0.0. The IPA remains unsigned for sideloading.
 
 iOS requires sideloading since the app is not on the App Store. Two options:
 
@@ -143,7 +148,7 @@ AltStore allows sideloading apps with a free Apple ID (no paid developer account
 
 **Prerequisites:**
 
-- iPhone/iPad running iOS 14 or later
+- iPhone/iPad running iOS 26 or later
 - A free [Apple ID](https://appleid.apple.com/) account
 - AltServer installed on your Mac or PC
 
@@ -305,6 +310,8 @@ adb install inverter-dashboard-android.apk
 
 ## Configuration
 
+To disconnect inverter telemetry, clear the MQTT host and disable IGW (or remove its required connection settings), then save. This stops both inverter transports, clears their displayed telemetry, and cancels pending reconnect attempts. Home Assistant camera MQTT remains independently controlled by its own settings. Reconfigure either inverter transport to reconnect.
+
 Edit `src-tauri/capabilities/default.json` and `src/config.ts` for MQTT settings:
 
 ```typescript
@@ -377,9 +384,22 @@ flowchart LR
     MQB -->|"N/&lt;portal&gt;/ev/22/Soc<br/>N/&lt;portal&gt;/ev/22/Ac/Power<br/>N/&lt;portal&gt;/evcharger/40/Ac/Power"| APP["inverter-desktop<br/>EV card (SOC %, kW)"]
 ```
 
+### Inverter controls and Home Assistant
+
+`inverter-control` owns the seven operating flags, publishes their values in
+`inverter/state.booleans` and supplies button metadata through
+`inverter/state.ui_config.header_toggles`. Desktop consumes that MQTT contract;
+Home Assistant is an optional parallel consumer that exposes MQTT switches.
+HA entities do not supply inverter flag state or execute these commands.
+
+Desktop keeps a fallback button list for older daemons without metadata. A saved
+nonempty `header_toggles_config` overrides the published labels/order; an empty
+local list uses the daemon defaults. See [control ownership](docs/mqtt-control-ownership.md)
+for source files, wire compatibility, HA switch configuration and validation.
+
 ### Published (commands)
 
-- `inverter/cmd/toggle` - Toggle boolean entities (always used for the 7 inverter-control flags: `only_charging`, `no_feed`, `house_support`, `charge_battery`, `do_not_supply_charger`, `set_limit_to_ev_charger`, `minimize_charging`. Payload `{entity: "input_boolean.<key>"}`, QoS 1, retain=false. `ha_use_direct_api` does not apply to these flags.)
+- `inverter/cmd/toggle` - Set an inverter-control flag using a bare key and explicit state, e.g. `{"entity":"no_feed","state":"on"}` (QoS 1, retain=false). All seven flags use Cerbo MQTT regardless of HA settings. Saved `input_boolean.<key>` aliases remain supported. See [control ownership and compatibility](docs/mqtt-control-ownership.md).
 - `inverter/cmd/press` - Press button entities
 - `inverter/cmd/setpoint` - Set power setpoint
 - `inverter/cmd/dry_run` - Toggle dry run mode
@@ -411,8 +431,14 @@ flowchart LR
     "is_external": false
   },
   "booleans": {
-    "auto_mode": true,
-    "ev_boost": false
+    "only_charging": true,
+    "no_feed": false
+  },
+  "ui_config": {
+    "header_toggles": [
+      { "id": "only_charging", "label": "ONLY CHARGING", "entity": "only_charging" },
+      { "id": "no_feed", "label": "NO FEED", "entity": "no_feed" }
+    ]
   },
   "daily_stats": {
     "produced_today": 25.5,
@@ -455,15 +481,18 @@ This project includes comprehensive security measures:
 
 ## Development
 
+See [session, transport and credential-storage contracts](docs/desktop-hardening.md)
+for migration behaviour, validation commands and hardware acceptance boundaries.
+
 ```bash
 # Install dependencies
-npm install
+pnpm install --frozen-lockfile
 
 # Run dev server
-npm run tauri dev
+pnpm tauri dev
 
 # Build for production
-npm run tauri build
+pnpm tauri build
 ```
 
 ### Building for Mobile
@@ -532,3 +561,7 @@ For issues specific to:
 - **iOS installation**: Check AltStore/AltServer status and device trust settings
 - **Android installation**: Verify ADB connection and USB debugging enabled
 - **This project**: Open an issue in this repository
+
+## Privacy
+
+Read the [privacy policy](docs/privacy-policy.md) for information about local settings, configured services and your choices. Privacy and support contact: [alvit.work@gmail.com](mailto:alvit.work@gmail.com).

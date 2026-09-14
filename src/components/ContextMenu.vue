@@ -26,7 +26,11 @@
       @click="$emit('check-updates')"
     >
       <Download :size="13" class="text-muted" />
-      Check for Updates
+      <span
+        >Download updates…<small class="block text-[10px] font-normal text-muted"
+          >Manual installation</small
+        ></span
+      >
     </button>
   </div>
 </template>

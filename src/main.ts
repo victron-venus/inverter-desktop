@@ -1,4 +1,5 @@
-import { createApp } from 'vue'
+import { createApp, h } from 'vue'
+import AuthGate from './components/AuthGate.vue'
 import About from './About.vue'
 import App from './App.vue'
 import CameraVideo from './CameraVideo.vue'
@@ -24,7 +25,7 @@ if (isConfigWindow) {
   rootComponent = App
 }
 
-const app = createApp(rootComponent)
+const app = createApp({ render: () => h(AuthGate, null, { default: () => h(rootComponent) }) })
 app.use(i18n)
 app.config.errorHandler = (err, instance, info) => {
   logger.error('Unhandled Vue error:', err, 'Component:', instance, 'Info:', info)

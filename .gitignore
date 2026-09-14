@@ -78,3 +78,6 @@ C*.md
 
 # Local iOS simulator scratch
 .tmp-ios-sim/
+/release-output/
+/.release-plan.json
+/.release-inputs.json

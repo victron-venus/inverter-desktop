@@ -1,18 +1,19 @@
 <template>
   <ErrorBoundary>
-    <div
+    <section
       id="app"
+      aria-label="Inverter dashboard"
       class="app-shell h-screen flex flex-col p-1.5 gap-1 select-none overflow-hidden"
       @contextmenu.prevent="onContextMenu"
     >
       <!-- Dashboard Header: Compact buttons and theme switcher -->
       <div class="flex items-center justify-between">
         <AppHeader
-          :dryRun="coerceBool(state.dry_run)"
+          :dryRun="coerceBoolean(state.dry_run)"
           :essClass="essClass"
           :essText="essText"
-          :headerToggles="headerToggles"
-          :toggleStates="headerToggleStates"
+          :headerControls="headerControls"
+          :controlStates="headerControlStates"
           :isDark="isDark"
           :showHeaderToggles="appConfig?.show_header_toggles !== false"
           :showCameraToggle="showCameraToggle"
@@ -78,7 +79,8 @@
               :dishwasherActive="dishwasherActive"
               :dishwasherRemainingTime="dishwasherRemainingTime"
               :homeButtons="homeButtons"
-              :buttonStates="buttonStates"
+              :buttonStates="homeButtonStates"
+              :haConnected="haConnected"
               :haSensors="haSensors"
               :haNumbers="haNumbers"
               :haCovers="haCovers"
@@ -135,9 +137,6 @@
       <!-- First-run setup wizard -->
       <SetupWizard v-if="showSetupWizard" @complete="handleSetupComplete" />
 
-      <!-- Auth Screen Overlay -->
-      <AuthScreen v-if="showAuthScreen && !showSetupWizard" @authenticated="handleAuthenticated" />
-
       <!-- Toast Notification -->
       <div
         v-if="message"
@@ -146,17 +145,16 @@
       >
         {{ message }}
       </div>
-    </div>
+    </section>
   </ErrorBoundary>
 </template>
 
 <script setup lang="ts">
-import { getVersion } from '@tauri-apps/api/app'
+import { useReleaseVersion } from './composables/useReleaseVersion'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
-import AuthScreen from './components/AuthScreen.vue'
 import SetupWizard from './components/SetupWizard.vue'
 import BatterySolarPanel from './components/BatterySolarPanel.vue'
 import ChartPanel from './components/ChartPanel.vue'
@@ -169,10 +167,12 @@ import NotificationBanner from './components/NotificationBanner.vue'
 import SidePanel from './components/SidePanel.vue'
 import StatCards from './components/StatCards.vue'
 import StatusBar from './components/StatusBar.vue'
-import { checkForUpdates, checkForUpdatesSilent } from './composables/useAutoUpdate'
+import { checkForUpdates } from './composables/useAutoUpdate'
 import { addHistoryPoint, useChart } from './composables/useChart'
 import { notify, useConnection } from './composables/useConnection'
 import { useHA } from './composables/useHA'
+import { sendControlAction, useDashboardControls } from './composables/useDashboardControls'
+import { useInverterVisibility } from './composables/useInverterVisibility'
 import { useMQTTState } from './composables/useMQTTState'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
@@ -180,6 +180,7 @@ import { isHaCameraMqttConfigured } from './connectionPolicy'
 import { getAppConfig, needsSetup } from './config'
 import type { AppConfig } from './config'
 import { logger } from './logger'
+import { coerceBoolean } from './utils'
 
 const {
   state,
@@ -197,10 +198,6 @@ const {
   haConnected,
   haEntityStates,
   haEntityAttributes,
-  homeButtons,
-  buttonStates,
-  headerToggles,
-  headerToggleStates,
   haSensors,
   haNumbers,
   haCovers,
@@ -217,12 +214,14 @@ const {
   dryerPauseEntity,
   dishwasherActive,
   dishwasherRemainingTime,
-  coerceBool,
   initHa,
-  sendHaOrMqtt,
   cleanupHa,
-  setWindowHidden,
+  setHaWindowHidden,
+  getHaControlState,
 } = useHA()
+const { headerControls, headerControlStates, homeButtons, homeButtonStates } =
+  useDashboardControls(getHaControlState)
+const { setInverterWindowHidden, cleanupInverterVisibility } = useInverterVisibility()
 const {
   waterLevel,
   pumpSwitchState,
@@ -250,10 +249,8 @@ async function toggleCamera() {
 const { chartOption, forceUpdateChart, setChartPaused } = useChart(isDark)
 const isWindowHidden = ref(false)
 
-const appVersion = ref('')
+const appVersion = useReleaseVersion()
 const contextMenu = ref({ show: false, x: 0, y: 0 })
-const authToken = ref<string | null>(null)
-const showAuthScreen = ref(false)
 const showSetupWizard = ref(false)
 const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
@@ -269,13 +266,6 @@ function showError(msg: string) {
   messageType.value = 'error'
   setTimeout(clearMessage, 3000)
 }
-function handleAuthenticated(token: string) {
-  authToken.value = token
-  showAuthScreen.value = false
-  // Store token in session
-  sessionStorage.setItem('auth_token', token)
-}
-
 async function handleSetupComplete(cfg: AppConfig) {
   showSetupWizard.value = false
   appConfig.value = cfg
@@ -303,7 +293,7 @@ async function openConfig() {
 
 async function send(action: string, payload: Record<string, unknown> = {}) {
   try {
-    await sendHaOrMqtt(action, payload)
+    await sendControlAction(action, payload)
   } catch (e) {
     logger.error('Action failed:', action, payload, e)
     showError(`Failed: ${e?.toString() || e}`)
@@ -452,12 +442,6 @@ watch(
 )
 
 onMounted(async () => {
-  try {
-    appVersion.value = await getVersion()
-  } catch (e) {
-    logger.error('Failed to get app version:', e)
-    appVersion.value = 'unknown'
-  }
   await ensureNotificationPermission()
   notify('Inverter Desktop', 'App started')
 
@@ -477,27 +461,6 @@ onMounted(async () => {
     showSetupWizard.value = true
   }
 
-  // Check if authentication is enabled
-  try {
-    if (cfg?.auth_enabled) {
-      // Check for existing session
-      const storedToken = sessionStorage.getItem('auth_token')
-      if (storedToken) {
-        const valid = await invoke<boolean>('auth_check', { token: storedToken })
-        if (valid) {
-          authToken.value = storedToken
-        } else {
-          sessionStorage.removeItem('auth_token')
-          showAuthScreen.value = true
-        }
-      } else {
-        showAuthScreen.value = true
-      }
-    }
-  } catch (e) {
-    logger.warn('Auth check failed:', e)
-  }
-
   // Defer MQTT/HA until setup wizard completes
   if (!showSetupWizard.value) {
     await connectMqtt()
@@ -511,9 +474,6 @@ onMounted(async () => {
     pumpSwitchState
   )
 
-  // Check for updates on startup (silent check)
-  checkForUpdatesSilent().catch((e) => logger.warn('Update check failed:', e))
-
   document.addEventListener('click', onDocumentClick)
 
   unlistenConfig = await listen<{ color_scheme?: string }>('config-saved', async (event) => {
@@ -524,20 +484,20 @@ onMounted(async () => {
       localStorage.setItem('theme', scheme)
     }
     await connectMqtt()
-    haEntityStates.value = {}
-    haEntityAttributes.value = {}
   })
 
   // Pause updates and charts when window is minimized/closed to tray
   const unlistenHidden = await listen('window-hidden', () => {
     isWindowHidden.value = true
     setChartPaused(true)
-    setWindowHidden(true)
+    void setInverterWindowHidden(true)
+    void setHaWindowHidden(true)
   })
   const unlistenShown = await listen('window-shown', () => {
     isWindowHidden.value = false
     setChartPaused(false)
-    setWindowHidden(false)
+    void setInverterWindowHidden(false)
+    void setHaWindowHidden(false)
   })
 
   unlistenWindowEvents = () => {
@@ -550,6 +510,7 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
   cleanupConnection()
   cleanupHa()
+  cleanupInverterVisibility()
   if (unlistenConfig) unlistenConfig()
   if (unlistenWindowEvents) unlistenWindowEvents()
 })

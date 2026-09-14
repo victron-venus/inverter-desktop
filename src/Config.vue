@@ -21,6 +21,7 @@
             size="sm"
             class="!h-[22px] gap-1"
             :loading="saving"
+            :disabled="!configLoaded"
             title="Save changes"
             @click="handleSave"
           >
@@ -242,8 +243,7 @@
               <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">Home Assistant</h2>
                 <p class="text-[10px] text-muted mt-1">
-                  HA API is for home devices (garage, laundry, EV, covers). Inverter control flags
-                  always go to Cerbo MQTT, even when API is enabled.
+                  {{ $t('config.haControlsHelp') }}
                 </p>
               </header>
 
@@ -1060,14 +1060,13 @@
                 <h2 class="classic-section-title">UI Controls</h2>
               </header>
 
-              <HaEntitiesEditor
-                :haEntitiesList="haEntitiesList"
+              <HeaderTogglesEditor
+                :headerTogglesList="headerTogglesList"
                 :discoveredEntities="discoveredEntities"
-                :entityRules="entityRules"
-                @add="addHaEntity"
-                @remove="removeHaEntity"
-                @move-up="moveEntityUp"
-                @move-down="moveEntityDown"
+                @add="addHeaderToggle"
+                @remove="removeHeaderToggle"
+                @move-up="moveToggleUp"
+                @move-down="moveToggleDown"
                 @focus-entity="
                   ensureEntitiesFetched(
                     config.ha_url || '',
@@ -1079,14 +1078,14 @@
 
               <div class="h-px bg-slate-100 dark:bg-slate-800"></div>
 
-              <HeaderTogglesEditor
-                :headerTogglesList="headerTogglesList"
+              <HaEntitiesEditor
+                :haEntitiesList="haEntitiesList"
                 :discoveredEntities="discoveredEntities"
                 :entityRules="entityRules"
-                @add="addHeaderToggle"
-                @remove="removeHeaderToggle"
-                @move-up="moveToggleUp"
-                @move-down="moveToggleDown"
+                @add="addHaEntity"
+                @remove="removeHaEntity"
+                @move-up="moveEntityUp"
+                @move-down="moveEntityDown"
                 @focus-entity="
                   ensureEntitiesFetched(
                     config.ha_url || '',
@@ -1145,39 +1144,36 @@
               >
                 No matches
               </div>
-              <div
+              <button
+                type="button"
                 v-for="e in filteredDiscoveredEntities"
                 :key="e.entity_id"
                 @click="toggleSelection(e.entity_id)"
-                @keydown.enter="toggleSelection(e.entity_id)"
-                @keydown.space.prevent="toggleSelection(e.entity_id)"
-                role="button"
-                tabindex="0"
-                class="p-2 rounded border border-transparent cursor-pointer transition-all flex items-center justify-between group"
+                class="w-full text-left p-2 rounded border border-transparent cursor-pointer transition-all flex items-center justify-between group"
                 :class="
                   selectedDiscovery.includes(e.entity_id)
                     ? 'bg-accent/10 border-accent/20'
                     : 'hover:bg-slate-50 dark:hover:bg-slate-800'
                 "
               >
-                <div>
-                  <div
-                    class="text-[11px] font-bold group-hover:text-accent transition-colors"
+                <span class="block">
+                  <span
+                    class="block text-[11px] font-bold group-hover:text-accent transition-colors"
                     :class="{
                       'text-accent': selectedDiscovery.includes(e.entity_id),
                       'dark:text-slate-300': !selectedDiscovery.includes(e.entity_id),
                     }"
                   >
                     {{ e.friendly_name }}
-                  </div>
-                  <div class="text-[9px] text-muted font-mono">
+                  </span>
+                  <span class="block text-[9px] text-muted font-mono">
                     {{ e.entity_id }}
-                  </div>
-                </div>
-                <div v-if="selectedDiscovery.includes(e.entity_id)" class="text-accent">
+                  </span>
+                </span>
+                <span v-if="selectedDiscovery.includes(e.entity_id)" class="block text-accent">
                   <Check :size="12" />
-                </div>
-              </div>
+                </span>
+              </button>
             </template>
           </div>
           <footer
@@ -1206,7 +1202,7 @@
                     : 'text-slate-500 opacity-50 dark:text-slate-400'
                 "
               >
-                Header Toggles
+                {{ $t('config.headerControlsTitle') }}
               </button>
             </div>
             <div class="flex gap-2">
@@ -1272,10 +1268,11 @@ import {
 import HaEntitiesEditor from './components/HaEntitiesEditor.vue'
 import HeaderTogglesEditor from './components/HeaderTogglesEditor.vue'
 import { useConfigForm } from './composables/useConfigForm'
-import { useHAEntityManager } from './composables/useHAEntityManager'
+import { useDashboardControlsConfig } from './composables/useDashboardControlsConfig'
 
 const {
   config,
+  configLoaded,
   saving,
   message,
   messageType,
@@ -1306,7 +1303,7 @@ const {
   moveToggleUp,
   moveToggleDown,
   ensureEntitiesFetched,
-} = useHAEntityManager()
+} = useDashboardControlsConfig()
 
 const activeTab = ref('mqtt')
 
@@ -1324,7 +1321,7 @@ const discoveredEvchargers = computed(() =>
 )
 
 function ingestDiscovered(list: DiscoveredInst[] | null | undefined) {
-  if (!list || !list.length) return
+  if (!list?.length) return
   discoveredWaterEv.value = list
   // Auto-pick sensible defaults when saved config is missing from discovery.
   const tanks = list.filter((i) => i.kind === 'tank')
@@ -1467,7 +1464,7 @@ async function handleFetchHaEntities() {
 }
 
 async function handleSave() {
-  await saveConfig(haEntitiesList.value, headerTogglesList.value)
+  if (!(await saveConfig(haEntitiesList.value, headerTogglesList.value))) return
   // Apply auto-start setting
   try {
     await invoke('set_auto_start', { enable: config.auto_start ?? false })
@@ -1485,7 +1482,7 @@ async function handleBackup() {
   backupBusy.value = true
   try {
     const done = await invoke<boolean>('backup_config')
-    message.value = done ? 'Configuration saved' : 'Backup cancelled'
+    message.value = done ? 'Settings exported without passwords or tokens' : 'Backup cancelled'
     messageType.value = done ? 'success' : 'info'
   } catch (e) {
     message.value = `Backup failed: ${e?.toString() || e}`

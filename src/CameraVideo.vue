@@ -53,9 +53,11 @@
 
       <div
         v-else
-        class="flex-1 flex items-center justify-center text-white/70 text-[13px] px-4 text-center"
+        class="flex-1 min-h-0 flex flex-col overflow-y-auto text-white/70 text-[13px] mt-12 px-4 pb-4 text-center"
       >
-        {{ errorMessage || 'Waiting for camera clip…' }}
+        <p class="my-auto shrink-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {{ errorMessage || 'Waiting for camera clip…' }}
+        </p>
       </div>
     </div>
   </ErrorBoundary>
@@ -77,7 +79,7 @@ const videoEl = ref<HTMLVideoElement | null>(null)
 let imageCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 function setName(name?: string | null) {
-  cameraName.value = (name && name.trim()) || 'Camera'
+  cameraName.value = name?.trim() || 'Camera'
 }
 
 function clearImageCloseTimer() {

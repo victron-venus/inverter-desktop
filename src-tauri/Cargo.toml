@@ -1,6 +1,6 @@
 [package]
 name = "inverter-dashboard"
-version = "2.5.38"
+version = "2.5.42"
 description = "Desktop application for monitoring Victron inverter systems via MQTT"
 authors = ["4alvit <4alvit@users.noreply.github.com>"]
 edition = "2021"
@@ -28,6 +28,8 @@ strip = true
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 cc = "1"
+serde_json = "1"
+semver = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
@@ -35,7 +37,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rumqttc = { package = "rumqttc-v4-next", version = "0.33" }
@@ -51,6 +52,9 @@ rand = "0.10"
 aes-gcm = "0.11"
 aead = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+semver = "1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"

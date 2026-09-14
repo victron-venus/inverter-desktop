@@ -1,14 +1,12 @@
 name: Mobile
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call: {}
+  # Quality gate owns PR validation; Release pipeline owns main validation.
   workflow_dispatch: {}
 
 concurrency:
-  group: mobile-${{ github.ref }}
+  group: mobile-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -36,8 +34,11 @@ jobs:
           targets: aarch64-apple-ios
       - name: Get version
         id: version
-        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Test iOS package version validation
+        run: python3 -m unittest discover -s scripts -p test_ios_version.py
+
       - name: Init iOS project
         env:
           SERVER_ADDR_FILE: ''
@@ -73,19 +74,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-          git config --global --add safe.directory $PWD
+          git config --global --add safe.directory "$PWD"
 
       - name: Pre-build Rust library for iOS
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cargo build --target aarch64-apple-ios --release \
-            --package inverter-dashboard --lib \
-            --manifest-path src-tauri/Cargo.toml
-          mkdir -p src-tauri/gen/apple/Externals/arm64/release
-          cp src-tauri/target/aarch64-apple-ios/release/libinverter_dashboard_lib.a \
-            src-tauri/gen/apple/Externals/arm64/release/libapp.a
+        run: bash scripts/ci-build-ios-library.sh
 
       - name: Patch Xcode build phase to skip xcode-script if lib exists
         run: python3 scripts/patch_pbxproj.py
@@ -102,6 +97,8 @@ jobs:
         env:
           TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          python3 scripts/ios_version.py sync \
+            src-tauri/gen/apple/inverter-dashboard_iOS/Info.plist --version "$TAURI_APP_VERSION"
           # Clean + custom DerivedData to avoid stale debug caches
           rm -rf "src-tauri/gen/apple/build/DerivedData"
           xcodebuild clean archive \
@@ -115,6 +112,8 @@ jobs:
             ARCHS=arm64
 
       - name: Package .ipa
+        env:
+          TAURI_APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           XCA="src-tauri/gen/apple/build/InverterDesktop.xcarchive"
           APP_DIR="$XCA/Products/Applications"
@@ -122,6 +121,7 @@ jobs:
           cp -R "$APP_DIR/"*.app Payload/
           zip -qr "inverter-dashboard-ios.ipa" Payload
           rm -rf Payload
+          python3 scripts/ios_version.py verify inverter-dashboard-ios.ipa --version "$TAURI_APP_VERSION"
           echo "Created inverter-dashboard-ios.ipa"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -153,18 +153,25 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: gradle
+          cache-jdk: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          cache-dependency-path: |
+            src-tauri/gen/android/**/*.gradle*
+            src-tauri/gen/android/**/*.properties
+            src-tauri/gen/android/**/gradle.lockfile
+            pnpm-lock.yaml
+      - name: Test Play signing and native alignment contracts (disposable keys only)
+        run: |
+          python3 -m unittest discover -s tests -p 'test_play_upload_signing.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_alignment.py' -v
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - name: Install required Android SDK components (compileSdk 36, build-tools 34.0.0)
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" \
-            "platforms;android-36" \
-            "build-tools;34.0.0" \
-            "platform-tools" 2>&1 | tail -5
-          echo "✓ Android SDK components installed"
+        run: bash scripts/ci-android-install-sdk.sh
       - name: Get version
         id: version
-        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+        run: echo "version=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install system deps
         run: |
@@ -172,8 +179,24 @@ jobs:
           sudo apt-get install -y libssl-dev
       - name: Init Android project
         run: pnpm tauri android init --ci
+      - name: Fingerprint Android NDK installations
+        id: ndk-cache
+        shell: bash
+        run: |
+          # Tauri selects an installed NDK; invalidate native dependencies if any version changes.
+          fingerprint=$(sha256sum "$ANDROID_HOME"/ndk/*/source.properties | sha256sum | cut -d' ' -f1)
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+      - name: Cache Android Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          key: android-ndk-${{ steps.ndk-cache.outputs.fingerprint }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST ANDROID NDK
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build Android
         run: pnpm tauri android build --ci
+      - name: Verify 64-bit Android load and RELRO alignment
+        run: python3 scripts/android/check_native_alignment.py src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: inverter-dashboard-android-v${{ steps.version.outputs.version }}

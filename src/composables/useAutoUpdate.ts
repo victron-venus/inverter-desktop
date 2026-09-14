@@ -1,45 +1,16 @@
-import type { Update } from '@tauri-apps/plugin-updater'
-import { check } from '@tauri-apps/plugin-updater'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { logger } from '../logger'
+
+export const RELEASE_DOWNLOAD_URL =
+  'https://github.com/victron-venus/inverter-desktop/releases/latest'
 
 export async function checkForUpdates(): Promise<void> {
   try {
-    const update: Update | null = await check()
-    if (update?.available) {
-      logger.info('Update available:', update.version)
-
-      // Notify user about update
-      if (window.confirm(`New version ${update.version} available. Download and install now?`)) {
-        await installUpdate(update)
-      }
-    } else {
-      logger.info('No updates available')
-    }
+    await openUrl(RELEASE_DOWNLOAD_URL)
   } catch (error) {
-    logger.error('Failed to check for updates:', error)
-  }
-}
-
-async function installUpdate(update: Update): Promise<void> {
-  try {
-    logger.info('Downloading update...')
-    await update.download()
-    logger.info('Installing update...')
-    await update.install()
-    logger.info('Update installed. Restarting...')
-  } catch (error) {
-    logger.error('Failed to install update:', error)
-  }
-}
-
-export async function checkForUpdatesSilent(): Promise<void> {
-  try {
-    const update: Update | null = await check()
-    if (update?.available) {
-      logger.info('Update available:', update.version)
-      // Could emit an event to notify UI
-    }
-  } catch (error) {
-    logger.error('Silent update check failed:', error)
+    logger.error('Failed to open release downloads:', error)
+    window.alert(
+      `Could not open the downloads page. Download and install updates manually from:\n${RELEASE_DOWNLOAD_URL}`
+    )
   }
 }

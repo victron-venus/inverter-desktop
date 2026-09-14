@@ -21,17 +21,17 @@
         <Zap :size="10" /> {{ essText }}
       </UiButton>
 
-      <template v-if="showHeaderToggles !== false && headerToggles.length > 0">
+      <template v-if="showHeaderToggles !== false && headerControls.length > 0">
         <div class="soft-divider mx-0.5"></div>
 
         <UiButton
-          v-for="toggle in headerToggles"
+          v-for="toggle in headerControls"
           :key="toggle.id"
           class="min-w-[55px]"
           size="sm"
           toggle
-          :active="toggleStates?.[toggle.id] === 'on'"
-          :unavailable="isToggleUnavailable(toggleStates?.[toggle.id])"
+          :active="controlStates?.[toggle.id] === 'on'"
+          :unavailable="isToggleUnavailable(controlStates?.[toggle.id])"
           @click="$emit('send', 'toggle', { entity: toggle.entity })"
         >
           {{ toggle.label }}
@@ -67,14 +67,14 @@
 import { Camera, CameraOff, FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import UiButton from './UiButton.vue'
-import { isHaUnavailableState } from '../utils'
+import type { DashboardControl } from '../inverterControl'
 
 defineProps<{
   dryRun: boolean
   essClass: string
   essText: string
-  headerToggles: Array<{ id: string; label: string; entity: string }>
-  toggleStates: Record<string, string> | undefined
+  headerControls: DashboardControl[]
+  controlStates: Record<string, string> | undefined
   isDark: boolean
   showHeaderToggles?: boolean
   showCameraToggle?: boolean
@@ -90,6 +90,6 @@ defineEmits<{
 const { t: $t } = useI18n()
 
 function isToggleUnavailable(state: string | undefined): boolean {
-  return isHaUnavailableState(state)
+  return state === 'unavailable'
 }
 </script>

@@ -1,5 +1,11 @@
 export default {
   status: {
+    haStale: 'Home Assistant offline — last known values',
+    telemetrylive: 'Live data',
+    telemetrystale: 'Stale data',
+    telemetryunknown: 'Waiting for data',
+    receivedAt: 'Received',
+
     ha: 'HA',
     mqtt: 'MQTT',
     igw: 'IGW',
@@ -7,7 +13,7 @@ export default {
     uptime: 'Uptime',
     desktop: 'Desktop',
     control: 'Control',
-    tipHa: 'Home Assistant REST API connection',
+    tipHa: 'Home Assistant WebSocket connection',
     tipIgw: 'Remote inverter-gateway via Cloudflare Access',
     tipMqtt: 'Cerbo GX LAN MQTT live data',
     tipHaMqtt: 'HA MQTT broker for Kerberos camera motion events',
@@ -54,7 +60,18 @@ export default {
     mediaPlayers: 'Media Players',
     scenes: 'Scenes',
     homeButtons: 'Home Buttons',
-    headerToggles: 'Header Toggles (ONLY CHARGING, etc.)',
+    headerToggles: 'Header Controls',
+    headerControlsTitle: 'Header Controls',
+    addHeaderControl: 'Add Control',
+    headerControlTarget: 'Inverter flag / HA entity',
+    inverterControlPresets: 'Add an inverter control',
+    headerControlsHelp:
+      'Inverter controls are provided by inverter-control through Cerbo MQTT and work without Home Assistant. You can also add custom Home Assistant entities.',
+    noHeaderControls:
+      'No custom header controls. Controls supplied over MQTT or built-in inverter defaults are used.',
+    invalidHeaderControlTarget: 'Use an inverter flag or a Home Assistant entity (domain.entity).',
+    haControlsHelp:
+      'Home Assistant is optional and supplies home device controls. Inverter controls are provided by inverter-control through Cerbo MQTT; Home Assistant can expose them as switches in its own ecosystem.',
     save: 'Save Configuration',
     saved: 'Configuration saved successfully',
     reset: 'Reset to Defaults',
