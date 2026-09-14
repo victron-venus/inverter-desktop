@@ -94,9 +94,12 @@ services are separate, unfinished requirements.
       simulator and Android aarch64 targets.
 - [x] Bind advertised actions to their original session and reject stale calls
       before enqueueing to a replacement worker; pass the real-worker regression.
-- [ ] Verify the final Android APK/AAB and iOS IPA exclude the manager/native
-      commands and pass all required hosted checks on the current PR head.
-- [ ] Deliver the reviewed application/manager PR and merge after those checks pass.
+
+Delivery gate: [PR #422](https://github.com/victron-venus/inverter-desktop/pull/422)
+must pass hosted checks on its current head, including final Android APK/AAB and
+iOS IPA inspection for manager/native-command absence, before merging. The PR
+records live check results and merge status; the checklist above tracks completed
+implementation and local validation.
 
 The intended package is a signed first-party `.idplugin` archive: a versioned
 manifest, a target-specific executable worker, and declarative UI contributions.
@@ -451,8 +454,10 @@ worker distribution, remaining host services, and migrated HA/camera packages.
 - Final action/session fix: all 96 plugin tests passed, including a delayed
   old-session crash action rejected before reaching the replacement worker;
   a new-session echo action succeeded. The other 181 native tests are unchanged.
-- Hosted APK/AAB/IPA, exact-commit review/checks, and merge evidence remain pending. These local
-  results do not prove production publisher provisioning, migrated HA/camera
+- Implementation commit: `b0e6dbd`. Hosted APK/AAB/IPA validation, exact-commit
+  review/check results, and merge status are recorded in
+  [PR #422](https://github.com/victron-venus/inverter-desktop/pull/422).
+  Local results do not prove production publisher provisioning, migrated HA/camera
   packages, physical inverter commands, or real-device behavior.
 
 ## Reference constraints
