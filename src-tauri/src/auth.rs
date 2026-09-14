@@ -81,6 +81,12 @@ fn policy_changed(before: &FullConfig, after: &FullConfig) -> bool {
         || before.auth_biometric != after.auth_biometric
 }
 
+fn notify_session_changed(app: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    crate::plugins::bridge::authentication_changed(app);
+    let _ = app.emit("auth-state-changed", ());
+}
+
 pub(super) fn revoke_if_policy_changed(
     app: &tauri::AppHandle,
     before: &FullConfig,
@@ -88,7 +94,7 @@ pub(super) fn revoke_if_policy_changed(
 ) -> Result<(), String> {
     if policy_changed(before, after) {
         *SESSION.lock().map_err(|e| e.to_string())? = None;
-        let _ = app.emit("auth-state-changed", ());
+        notify_session_changed(app);
     }
     Ok(())
 }
@@ -99,7 +105,7 @@ fn start_session(app: &tauri::AppHandle) -> Result<String, String> {
         token: token.clone(),
         created: Instant::now(),
     });
-    let _ = app.emit("auth-state-changed", ());
+    notify_session_changed(app);
     Ok(token)
 }
 
@@ -149,7 +155,7 @@ pub(crate) fn auth_check(token: String) -> Result<bool, String> {
 #[tauri::command]
 pub(crate) fn auth_logout(app: tauri::AppHandle) -> Result<(), String> {
     *SESSION.lock().map_err(|e| e.to_string())? = None;
-    let _ = app.emit("auth-state-changed", ());
+    notify_session_changed(&app);
     Ok(())
 }
 
@@ -212,6 +218,8 @@ mod tests {
             "perform_action",
             "get_setpoint_override",
             "set_setpoint_override",
+            "get_plugin_snapshot",
+            "plugin_action",
             "set_cover_position",
             "connect_mqtt",
             "connect_gateway",

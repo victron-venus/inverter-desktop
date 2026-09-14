@@ -44,8 +44,12 @@ FORBIDDEN_COMMANDS = (
     "set_cover_position",
     "open_camera_video_window",
     "close_camera_video_window",
+    "get_plugin_snapshot",
+    "plugin_action",
 )
-FORBIDDEN_PROTOCOLS = ("ha-filtered-update", "camera-event", "frigate/events")
+FORBIDDEN_PROTOCOLS = (
+    "ha-filtered-update", "camera-event", "frigate/events", "plugin-host-update"
+)
 FORBIDDEN_CRATES = {"tokio-tungstenite", "tungstenite"}
 REQUIRED_CORE_COMMANDS = (
     "perform_action",

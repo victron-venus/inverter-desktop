@@ -10,8 +10,11 @@ the packaged native check requires the override commands on both mobile platform
 
 This implementation checkpoint separates feature source code and enforces mobile
 exclusion. Desktop still bundles its existing HA/camera implementations. It does
-not yet offer independently installable packages. The worker protocol, installer,
-package migration, and delivery acceptance criteria remain open in [TODO](../TODO.md).
+not yet offer independently installable packages. A desktop worker host now supplies
+versioned process communication, session-aware supervision, and generic dashboard
+contributions; see the [worker protocol](plugin-worker-protocol.md). The shipped
+host starts empty. Package installation, HA/camera migration, and the remaining
+contribution surfaces are tracked in [TODO](../TODO.md).
 
 ## Frontend composition
 
