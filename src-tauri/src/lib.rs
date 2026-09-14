@@ -1822,6 +1822,8 @@ pub fn run() {
                     plugins::bridge::get_plugin_snapshot,
                     plugins::bridge::plugin_action,
                     plugins::bridge::get_plugin_manager_snapshot,
+                    plugins::bridge::get_plugin_settings,
+                    plugins::bridge::save_plugin_settings,
                     plugins::bridge::preview_plugin_package,
                     plugins::bridge::install_plugin_package,
                     plugins::bridge::discard_plugin_package,

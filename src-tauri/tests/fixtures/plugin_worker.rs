@@ -15,9 +15,25 @@ fn emit(value: &str) {
     stdout.flush().unwrap();
 }
 
+fn contribute() {
+    emit(
+        r#"{"type":"contributions","items":[{"kind":"text","id":"greeting","title":"Fixture","text":"Separate executable"},{"kind":"action","id":"echo","title":"Echo","action_id":"echo","label":"Echo","params":{}},{"kind":"action","id":"hold","title":"Hold","action_id":"hold","label":"Hold","params":{}},{"kind":"action","id":"crash","title":"Crash","action_id":"crash","label":"Crash","params":{}},{"kind":"action","id":"cancel_count","title":"Cancellations","action_id":"cancel_count","label":"Count","params":{}}]}"#,
+    );
+}
+
 fn main() {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "normal".into());
+    let mode = std::env::args().nth(1).unwrap_or_else(|| {
+        let executable = std::env::current_exe().unwrap();
+        let stem = executable.file_stem().unwrap().to_string_lossy();
+        if stem.starts_with("configuration") {
+            stem.into_owned()
+        } else {
+            "normal".into()
+        }
+    });
     let mut cancellations = 0;
+    let mut configuration_revision = String::new();
+    let mut configuration_secret_matches = false;
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = line.unwrap();
@@ -33,16 +49,17 @@ fn main() {
                     field(&line, "plugin_id")
                 };
                 let version = if mode == "bad_version" { 999 } else { 1 };
-                emit(&format!("{{\"type\":\"ready\",\"protocol_version\":{version},\"host_api_version\":\"1.0.0\",\"plugin_id\":\"{id}\"}}"));
+                let api = field(&line, "host_api_version");
+                emit(&format!("{{\"type\":\"ready\",\"protocol_version\":{version},\"host_api_version\":\"{api}\",\"plugin_id\":\"{id}\"}}"));
                 if mode == "oversize" {
                     print!("{}", "x".repeat(70_000));
                     io::stdout().flush().unwrap();
                     std::thread::sleep(Duration::from_secs(60));
                     return;
                 }
-                emit(
-                    r#"{"type":"contributions","items":[{"kind":"text","id":"greeting","title":"Fixture","text":"Separate executable"},{"kind":"action","id":"echo","title":"Echo","action_id":"echo","label":"Echo","params":{}},{"kind":"action","id":"hold","title":"Hold","action_id":"hold","label":"Hold","params":{}},{"kind":"action","id":"crash","title":"Crash","action_id":"crash","label":"Crash","params":{}},{"kind":"action","id":"cancel_count","title":"Cancellations","action_id":"cancel_count","label":"Count","params":{}}]}"#,
-                );
+                if !mode.starts_with("configuration") || mode == "configuration_early_data" {
+                    contribute();
+                }
                 if mode == "crash_always" {
                     std::process::exit(17);
                 }
@@ -63,6 +80,29 @@ fn main() {
                     stderr.flush().unwrap();
                 }
             }
+            "configuration" => {
+                configuration_revision = field(&line, "revision").to_owned();
+                configuration_secret_matches = field(&line, "token") == "fixture-secret";
+                if mode == "configuration_no_ack" {
+                    std::thread::sleep(Duration::from_secs(60));
+                    return;
+                }
+                if mode == "configuration_delayed" {
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                let revision = if mode == "configuration_wrong_ack" {
+                    "wrong"
+                } else {
+                    &configuration_revision
+                };
+                let ack =
+                    format!("{{\"type\":\"configuration_ready\",\"revision\":\"{revision}\"}}");
+                emit(&ack);
+                if mode == "configuration_duplicate_ack" {
+                    emit(&ack);
+                }
+                contribute();
+            }
             "action" => {
                 let request_id = field(&line, "request_id");
                 let value = match field(&line, "action_id") {
@@ -70,9 +110,11 @@ fn main() {
                     "crash" => std::process::exit(23),
                     "cancel_count" => cancellations.to_string(),
                     _ => format!(
-                        "{{\"ok\":true,\"pid\":{},\"inherited_environment\":{}}}",
+                        "{{\"ok\":true,\"pid\":{},\"inherited_environment\":{},\"configuration_revision\":\"{}\",\"configuration_secret_matches\":{}}}",
                         std::process::id(),
-                        std::env::var_os("CARGO_MANIFEST_DIR").is_some()
+                        std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+                        configuration_revision,
+                        configuration_secret_matches
                     ),
                 };
                 emit(&format!("{{\"type\":\"action_result\",\"request_id\":\"{request_id}\",\"value\":{value}}}"));

@@ -3,7 +3,7 @@
 The desktop application now connects its signed package pipeline to settings,
 authentication, startup, and shutdown. **Configuration → Plugins** shows installed
 workers and supports native package selection, verified install/update review,
-enable/disable, version-specific rollback, and confirmed uninstall.
+enable/disable, version-specific rollback, typed settings, and confirmed uninstall.
 
 The embedded production publisher policy is currently empty. The manager therefore
 shows **This build has no approved plugin publishers** and disables package
@@ -42,8 +42,13 @@ or failed attempt requires selecting and reviewing the package again.
 Installed cards show their version and running, starting, failed, installed, or
 disabled state. Rollback names the retained version. Uninstall requires an inline
 confirmation identifying the plugin and version, then stops its worker and removes
-owned package files. This UI does not yet edit plugin settings or secrets. Native
-failures are rendered as text in English/Russian UI; metadata never becomes HTML or
+owned package files. Settings are retained by default; the confirmation offers
+explicit deletion of that plugin's settings and secrets. A configuration-capable
+package has a **Settings** action with a native-validated declarative editor.
+Password fields show only whether a secret exists; replacement and clearing are
+explicit. Saving persists immediately and restarts an enabled worker. A failed
+restart is reported separately from a failed save. See the [settings
+contract](plugin-settings.md). Native failures are rendered as text in English/Russian UI; metadata never becomes HTML or
 executable frontend code.
 
 ## Package and signature contract
@@ -143,7 +148,7 @@ reverified before a subsequent start.
 Tauri owns one desktop `PluginHost` and `PackageApplication`, shared by all
 windows. The application opens its private plugin store once under its local data
 directory. Only authenticated `config` windows may call manager snapshot, selection,
-review, install/update, enable/disable, rollback, or uninstall commands. Dashboard
+review, install/update, enable/disable, rollback, settings, or uninstall commands. Dashboard
 windows can read contributions and dispatch advertised actions, but cannot manage
 packages. File dialogs and trusted publisher configuration remain native-owned.
 The management IPC surface is:
@@ -156,10 +161,18 @@ The management IPC surface is:
   `discard_plugin_package({ token })`: consume or discard the native-owned review.
 - `set_plugin_enabled({ pluginId, enabled })`,
   `rollback_plugin_package({ pluginId })`, and
-  `uninstall_plugin_package({ pluginId })`: manage an installed identity.
+  `uninstall_plugin_package({ pluginId, deleteSettings? })`: manage an installed
+  identity. Omitted `deleteSettings` retains data.
+- `get_plugin_settings({ pluginId })`: verified schema, ordinary values, opaque
+  revision, and secret-presence flags.
+- `save_plugin_settings({ pluginId, revision, values, secretChanges })`: validate
+  and persist typed values/secret changes; return refreshed settings and a separate
+  nullable `restart_error`.
 
-The underlying entry point is `PackageManager::open(root, target, trust, host)`.
-Its clones share one transaction mutex. A lifetime OS file lock excludes another
+The application uses `PackageManager::open_with_configuration` with its private
+settings loader; `PackageManager::open(root, target, trust, host)` remains available
+for native callers without configured workers. Its clones share one transaction
+mutex. A lifetime OS file lock excludes another
 manager/process from the same store until owned workers have been reaped. Call
 `close().await` to complete cleanup explicitly; if process cleanup cannot be
 confirmed, the lease must remain held until the hosting process exits.
@@ -238,7 +251,9 @@ mocked native IPC and does not establish native file-dialog GUI behavior.
 
 A verified package authenticates content and publisher scope. Its worker still
 runs with the user's OS privileges; this is not an OS sandbox. Permission
-metadata does not implement network, secret, configuration, or media services.
+metadata alone does not grant host services. This checkpoint implements scoped
+native settings and startup configuration for `plugin_configuration`; network,
+request-time secret access, and media services remain unfinished.
 The remaining contribution services and HA/camera parity work stay in
 [TODO.md](../TODO.md).
 

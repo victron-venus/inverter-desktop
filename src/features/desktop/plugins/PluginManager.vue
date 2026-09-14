@@ -90,6 +90,13 @@
           {{ plugin.error }}
         </p>
         <div class="flex flex-wrap gap-2">
+          <UiButton
+            v-if="plugin.permissions.includes('plugin_configuration')"
+            :disabled="!canManage"
+            @click="openSettings(plugin.plugin_id)"
+          >
+            {{ $t('plugins.manager.settings') }}
+          </UiButton>
           <UiButton :disabled="!canManage" @click="setEnabled(plugin.plugin_id, !plugin.enabled)">
             {{ $t(plugin.enabled ? 'plugins.manager.disable' : 'plugins.manager.enable') }}
           </UiButton>
@@ -104,6 +111,16 @@
             {{ $t('plugins.manager.remove') }}
           </UiButton>
         </div>
+        <PluginSettingsEditor
+          v-if="settingsEditor?.plugin_id === plugin.plugin_id"
+          :key="settingsEditor.key"
+          :plugin-id="settingsEditor.plugin_id"
+          :version="settingsEditor.version"
+          :editor-key="settingsEditor.key"
+          @busy="setSettingsBusy"
+          @close="closeSettings"
+          @saved="settingsSaved"
+        />
         <div
           v-if="confirmRemoval === plugin.plugin_id"
           class="classic-inset p-2 flex flex-col gap-2"
@@ -116,6 +133,16 @@
               })
             }}
           </p>
+          <label class="flex items-center gap-2 text-[12px]">
+            <input
+              v-model="deleteSettings"
+              type="checkbox"
+              :disabled="busy"
+              name="delete-plugin-settings"
+            />
+            {{ $t('plugins.manager.deleteSettings') }}
+          </label>
+          <p class="text-[11px] text-muted">{{ $t('plugins.manager.retainSettings') }}</p>
           <div class="flex gap-2">
             <UiButton
               variant="danger"
@@ -137,6 +164,7 @@
 import { onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UiButton from '../../../components/UiButton.vue'
+import PluginSettingsEditor from './PluginSettingsEditor.vue'
 import { createPluginManager } from './usePluginManager'
 import type { ManagedPlugin } from './types'
 
@@ -147,7 +175,9 @@ const {
   preview,
   enableAfterInstall,
   confirmRemoval,
-  busy,
+  deleteSettings,
+  settingsEditor,
+  working: busy,
   loading,
   error,
   installFailed,
@@ -161,6 +191,10 @@ const {
   rollback,
   requestRemoval,
   uninstall,
+  openSettings,
+  setSettingsBusy,
+  closeSettings,
+  settingsSaved,
 } = manager
 const permissionKeys: Record<string, string> = {
   dashboard_contributions: 'plugins.manager.permissionDashboard',

@@ -113,7 +113,7 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
     create_private_directory(&payload).unwrap();
     let entrypoint = format!("worker{}", std::env::consts::EXE_SUFFIX);
     fs::copy(fixture(mode), payload.join(&entrypoint)).unwrap();
-    let manifest = PluginManifest {
+    let mut manifest = PluginManifest {
         schema_version: 1,
         plugin_id: id.into(),
         version: version.into(),
@@ -125,6 +125,14 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
         inventory: Vec::new(),
         signature: None,
     };
+    if mode.starts_with("configuration") {
+        manifest
+            .permissions
+            .push(PluginPermission::PluginConfiguration);
+        manifest.config_schema = json!({"type":"object","properties":{
+            "server":{"type":"string"}, "token":{"type":"string","writeOnly":true}
+        }});
+    }
     let bytes = build_package(manifest, &payload, KEY_ID, &key()).unwrap();
     let archive = directory.join(format!("archive-{}.idplugin", uuid::Uuid::new_v4()));
     fs::write(&archive, bytes).unwrap();
@@ -159,6 +167,369 @@ async fn wait_running(host: &PluginHost) {
     })
     .await
     .unwrap();
+}
+
+fn worker_configuration(revision: &str) -> WorkerConfiguration {
+    WorkerConfiguration {
+        revision: revision.into(),
+        values: json!({"server":"https://plugin.example"}),
+        secrets: [("token".into(), "fixture-secret".into())].into(),
+    }
+}
+
+#[tokio::test]
+async fn settings_are_scoped_to_verified_permission_and_restart_only_enabled_workers() {
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let current = Arc::new(Mutex::new(worker_configuration("first")));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let manager = PackageManager::open_with_configuration(
+        directory.0.join("store"),
+        host_target(),
+        trust(),
+        host.clone(),
+        Arc::new({
+            let current = current.clone();
+            let calls = calls.clone();
+            move |manifest| {
+                assert_eq!(manifest.plugin_id, PLUGIN);
+                assert!(manifest
+                    .permissions
+                    .contains(&PluginPermission::PluginConfiguration));
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(current.lock().unwrap().clone())
+            }
+        }),
+    )
+    .await
+    .unwrap();
+    manager
+        .install(package(&directory.0, "1.0.0", "normal"), true)
+        .await
+        .unwrap();
+    let epoch = host.authority_epoch();
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(manager
+        .read_settings_in_epoch(PLUGIN, epoch, |_, _| -> Result<(), String> {
+            panic!("unpermitted read")
+        })
+        .await
+        .is_err());
+    assert!(manager
+        .apply_settings_in_epoch(
+            PLUGIN,
+            epoch,
+            |_, _| -> Result<((), SettingsCommit), String> { panic!("unpermitted write") }
+        )
+        .await
+        .is_err());
+    manager
+        .install(package(&directory.0, "2.0.0", "configuration"), true)
+        .await
+        .unwrap();
+    wait_running(&host).await;
+    let first = host
+        .action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(first["configuration_revision"], "first");
+    assert_eq!(first["configuration_secret_matches"], true);
+    let record = manager.list().await.unwrap().remove(0);
+    let observed = manager
+        .read_settings_in_epoch(PLUGIN, epoch, |manifest, digest| {
+            Ok((manifest.plugin_id.clone(), digest.to_owned()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(observed, (PLUGIN.into(), record.active.sha256));
+
+    let saved = current.clone();
+    let (revision, outcome) = manager
+        .apply_settings_in_epoch(PLUGIN, epoch, move |_, _| {
+            Ok((
+                "second",
+                Box::new(move || {
+                    *saved.lock().unwrap() = worker_configuration("second");
+                    Ok(())
+                }) as SettingsCommit,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(revision, "second");
+    assert!(outcome.restart_error.is_none());
+    wait_running(&host).await;
+    let second = host
+        .action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(second["configuration_revision"], "second");
+    assert_ne!(first["pid"], second["pid"]);
+    manager.disable_in_epoch(PLUGIN, epoch).await.unwrap();
+    let loads_before = calls.load(Ordering::SeqCst);
+    let saved = current.clone();
+    let (_, outcome) = manager
+        .apply_settings_in_epoch(PLUGIN, epoch, move |_, _| {
+            Ok((
+                (),
+                Box::new(move || {
+                    *saved.lock().unwrap() = worker_configuration("third");
+                    Ok(())
+                }) as SettingsCommit,
+            ))
+        })
+        .await
+        .unwrap();
+    assert!(outcome.restart_error.is_none());
+    assert!(host.snapshots().is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), loads_before);
+    manager.enable_in_epoch(PLUGIN, epoch).await.unwrap();
+    wait_running(&host).await;
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["configuration_revision"],
+        "third"
+    );
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn settings_prepare_cannot_commit_after_revocation_and_reads_recheck_epoch() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    manager
+        .install(package(&directory.0, "1.0.0", "configuration"), false)
+        .await
+        .unwrap();
+    let epoch = host.authority_epoch();
+    let committed = Arc::new(AtomicBool::new(false));
+    let saved = committed.clone();
+    let revoker = host.clone();
+    assert!(manager
+        .apply_settings_in_epoch(PLUGIN, epoch, move |_, _| {
+            revoker.revoke();
+            revoker.resume();
+            Ok((
+                (),
+                Box::new(move || {
+                    saved.store(true, Ordering::SeqCst);
+                    Ok(())
+                }) as SettingsCommit,
+            ))
+        })
+        .await
+        .is_err());
+    assert!(!committed.load(Ordering::SeqCst));
+    let epoch = host.authority_epoch();
+    let revoker = host.clone();
+    assert!(manager
+        .read_settings_in_epoch(PLUGIN, epoch, move |_, _| {
+            revoker.revoke();
+            revoker.resume();
+            Ok("must not cross sessions")
+        })
+        .await
+        .is_err());
+    assert!(host.snapshots().is_empty());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn saved_settings_survive_worker_restart_failure_without_reverting_secrets() {
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let current = Arc::new(Mutex::new(worker_configuration("first")));
+    let manager = PackageManager::open_with_configuration(
+        directory.0.join("store"),
+        host_target(),
+        trust(),
+        host.clone(),
+        Arc::new({
+            let current = current.clone();
+            move |_| {
+                let configuration = current.lock().unwrap().clone();
+                if configuration.revision == "changed" {
+                    Err("configuration unavailable".into())
+                } else {
+                    Ok(configuration)
+                }
+            }
+        }),
+    )
+    .await
+    .unwrap();
+    manager
+        .install(package(&directory.0, "1.0.0", "configuration"), true)
+        .await
+        .unwrap();
+    let saved = current.clone();
+    let (_, outcome) = manager
+        .apply_settings_in_epoch(PLUGIN, host.authority_epoch(), move |_, _| {
+            Ok((
+                (),
+                Box::new(move || {
+                    let mut configuration = saved.lock().unwrap();
+                    configuration.revision = "changed".into();
+                    configuration.secrets.clear();
+                    Ok(())
+                }) as SettingsCommit,
+            ))
+        })
+        .await
+        .unwrap();
+    assert!(outcome.restart_error.is_some());
+    assert!(current.lock().unwrap().secrets.is_empty());
+    assert!(manager.list().await.unwrap()[0].enabled);
+    assert!(host.snapshots().is_empty());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn candidate_settings_failure_preserves_the_previous_running_worker() {
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let manager = PackageManager::open_with_configuration(
+        directory.0.join("store"),
+        host_target(),
+        trust(),
+        host.clone(),
+        Arc::new({
+            let loads = loads.clone();
+            move |manifest| {
+                loads.fetch_add(1, Ordering::SeqCst);
+                if manifest.version == "2.0.0" {
+                    Err("Required plugin setting is missing".into())
+                } else {
+                    Ok(worker_configuration("first"))
+                }
+            }
+        }),
+    )
+    .await
+    .unwrap();
+    let original = manager
+        .install(package(&directory.0, "1.0.0", "configuration"), true)
+        .await
+        .unwrap();
+    wait_running(&host).await;
+    let pid = host
+        .action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap()["pid"]
+        .clone();
+    assert!(manager
+        .install(package(&directory.0, "2.0.0", "configuration"), true)
+        .await
+        .is_err());
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["pid"],
+        pid
+    );
+    assert_eq!(manager.list().await.unwrap(), vec![original]);
+    assert_eq!(loads.load(Ordering::SeqCst), 2);
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_settings_cleanup_runs_only_after_package_worker_is_reaped() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let retained = Arc::new(AtomicBool::new(true));
+    manager
+        .install(package(&directory.0, "1.0.0", "normal"), true)
+        .await
+        .unwrap();
+    manager
+        .remove_in_epoch(PLUGIN, host.authority_epoch())
+        .await
+        .unwrap();
+    assert!(retained.load(Ordering::SeqCst));
+    let record = manager
+        .install(package(&directory.0, "1.0.0", "normal"), true)
+        .await
+        .unwrap();
+    let content = manager.version_path(PLUGIN, &record.active);
+    let cleanup_content = content.clone();
+    let observing_host = host.clone();
+    let removed = retained.clone();
+    manager
+        .remove_with_settings_in_epoch(
+            PLUGIN,
+            host.authority_epoch(),
+            Some(Box::new(move || {
+                assert!(observing_host.snapshots().is_empty());
+                assert!(cleanup_content.exists());
+                removed.store(false, Ordering::SeqCst);
+                Ok(())
+            })),
+        )
+        .await
+        .unwrap();
+    assert!(!retained.load(Ordering::SeqCst));
+    assert!(!content.exists());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_settings_cleanup_preserves_the_installed_record_for_retry() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let record = manager
+        .install(package(&directory.0, "1.0.0", "normal"), true)
+        .await
+        .unwrap();
+    let content = manager.version_path(PLUGIN, &record.active);
+    assert!(manager
+        .remove_with_settings_in_epoch(
+            PLUGIN,
+            host.authority_epoch(),
+            Some(Box::new(|| Err("settings deletion failed".into())))
+        )
+        .await
+        .is_err());
+    assert_eq!(manager.list().await.unwrap(), vec![record]);
+    assert!(content.exists());
+    assert!(host.snapshots().is_empty());
+    manager
+        .remove_with_settings_in_epoch(PLUGIN, host.authority_epoch(), Some(Box::new(|| Ok(()))))
+        .await
+        .unwrap();
+    assert!(manager.list().await.unwrap().is_empty());
+    assert!(!content.exists());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn aggregate_store_quota_rejects_settings_before_prepare_creates_files() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    manager
+        .install(package(&directory.0, "1.0.0", "configuration"), false)
+        .await
+        .unwrap();
+    let (bytes, _) = tree_usage(&manager.0.root).unwrap();
+    let filler = manager.0.root.join("quota-fixture");
+    File::create(&filler)
+        .unwrap()
+        .set_len(MAX_STORE_BYTES - bytes - MAX_SETTINGS_FILE_BYTES as u64 + 1)
+        .unwrap();
+    assert!(manager
+        .apply_settings_in_epoch(
+            PLUGIN,
+            host.authority_epoch(),
+            |_, _| -> Result<((), SettingsCommit), String> {
+                panic!("settings prepare must not run beyond the aggregate quota");
+            }
+        )
+        .await
+        .is_err());
+    assert!(!manager.0.root.join("settings").exists());
+    fs::remove_file(filler).unwrap();
+    manager.close().await.unwrap();
 }
 
 #[tokio::test]

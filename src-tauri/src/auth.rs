@@ -221,6 +221,8 @@ mod tests {
             "get_plugin_snapshot",
             "plugin_action",
             "get_plugin_manager_snapshot",
+            "get_plugin_settings",
+            "save_plugin_settings",
             "preview_plugin_package",
             "install_plugin_package",
             "discard_plugin_package",

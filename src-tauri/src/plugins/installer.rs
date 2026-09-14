@@ -8,8 +8,11 @@
 use super::package::{
     read_regular_file, verify_archive_bytes, TrustStore, VerifiedPackage, MAX_ARCHIVE_BYTES,
 };
-use super::protocol::{validate_plugin_id, PluginManifest, DESKTOP_TARGETS};
+use super::protocol::{
+    validate_plugin_id, PluginManifest, PluginPermission, WorkerConfiguration, DESKTOP_TARGETS,
+};
 use super::runtime::{PluginError, PluginHost, WorkerSpec, WorkerState};
+use super::settings_store::MAX_SETTINGS_FILE_BYTES;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,6 +65,15 @@ pub(crate) struct PluginRestoreResult {
     pub error: Option<String>,
 }
 
+pub(crate) type ConfigurationLoader =
+    Arc<dyn Fn(&PluginManifest) -> Result<WorkerConfiguration, String> + Send + Sync>;
+pub(crate) type SettingsCommit = Box<dyn FnOnce() -> Result<(), String> + Send>;
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct SettingsApplyResult {
+    pub restart_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoreState {
@@ -87,6 +99,7 @@ struct ManagerInner {
     lease: Mutex<Option<File>>,
     owned: Mutex<BTreeMap<String, String>>,
     closed: AtomicBool,
+    configuration: Option<ConfigurationLoader>,
 }
 
 struct CleanupLease(Option<File>);
@@ -168,6 +181,26 @@ impl PackageManager {
         trust: TrustStore,
         host: PluginHost,
     ) -> Result<Self, String> {
+        Self::open_inner(root, target, trust, host, None).await
+    }
+
+    pub(crate) async fn open_with_configuration(
+        root: PathBuf,
+        target: String,
+        trust: TrustStore,
+        host: PluginHost,
+        configuration: ConfigurationLoader,
+    ) -> Result<Self, String> {
+        Self::open_inner(root, target, trust, host, Some(configuration)).await
+    }
+
+    async fn open_inner(
+        root: PathBuf,
+        target: String,
+        trust: TrustStore,
+        host: PluginHost,
+        configuration: Option<ConfigurationLoader>,
+    ) -> Result<Self, String> {
         if !DESKTOP_TARGETS.contains(&target.as_str()) {
             return Err("package store requires a supported desktop target".into());
         }
@@ -181,6 +214,7 @@ impl PackageManager {
             lease: Mutex::new(Some(lease)),
             owned: Mutex::new(BTreeMap::new()),
             closed: AtomicBool::new(false),
+            configuration,
         }));
         let state = manager.read_state()?;
         manager.recover(&state)?;
@@ -345,14 +379,24 @@ impl PackageManager {
         .map_err(|_| "package disable task failed".to_string())?
     }
 
-    /// Removes only package records/content. No legacy/core configuration or
-    /// future plugin-owned settings namespace is deleted by this checkpoint.
+    /// Removes package records/content while retaining the plugin settings.
+    /// An explicit native cleanup callback can remove only that plugin's settings.
     pub async fn remove(&self, plugin_id: &str) -> Result<(), String> {
         self.remove_in_epoch(plugin_id, self.0.host.authority_epoch())
             .await
     }
 
     pub(crate) async fn remove_in_epoch(&self, plugin_id: &str, epoch: u64) -> Result<(), String> {
+        self.remove_with_settings_in_epoch(plugin_id, epoch, None)
+            .await
+    }
+
+    pub(crate) async fn remove_with_settings_in_epoch(
+        &self,
+        plugin_id: &str,
+        epoch: u64,
+        cleanup: Option<SettingsCommit>,
+    ) -> Result<(), String> {
         let manager = self.clone();
         let id = plugin_id.to_owned();
         tokio::spawn(async move {
@@ -364,14 +408,110 @@ impl PackageManager {
             }
             manager.stop_owned(&id).await?;
             state.plugins.remove(&id);
-            manager
-                .0
-                .host
-                .commit_in_epoch(epoch, || manager.write_state(&state))?;
-            manager.recover(&state)
+            manager.0.host.commit_in_epoch(epoch, || {
+                // Keep the installed record visible if explicit settings deletion
+                // fails. A later inventory I/O failure may leave settings cleared
+                // on that visible record; these are separate filesystem commits.
+                if let Some(cleanup) = cleanup {
+                    cleanup()?;
+                }
+                manager.write_state(&state)
+            })?;
+            manager.recover(&state)?;
+            manager.check_epoch(epoch)
         })
         .await
         .map_err(|_| "package removal task failed".to_string())?
+    }
+
+    pub(crate) async fn read_settings_in_epoch<R, F>(
+        &self,
+        plugin_id: &str,
+        epoch: u64,
+        read: F,
+    ) -> Result<R, String>
+    where
+        F: FnOnce(&PluginManifest, &str) -> Result<R, String> + Send + 'static,
+        R: Send + 'static,
+    {
+        let manager = self.clone();
+        let id = plugin_id.to_owned();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            let state = manager.read_state()?;
+            let record = state.plugins.get(&id).ok_or("plugin is not installed")?;
+            let package = manager.configuration_package(record)?;
+            let result = read(package.manifest(), &record.active.sha256)?;
+            manager.check_epoch(epoch)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| "plugin settings read task failed".to_string())?
+    }
+
+    pub(crate) async fn apply_settings_in_epoch<R, F>(
+        &self,
+        plugin_id: &str,
+        epoch: u64,
+        prepare: F,
+    ) -> Result<(R, SettingsApplyResult), String>
+    where
+        F: FnOnce(&PluginManifest, &str) -> Result<(R, SettingsCommit), String> + Send + 'static,
+        R: Send + 'static,
+    {
+        let manager = self.clone();
+        let id = plugin_id.to_owned();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            let state = manager.read_state()?;
+            let record = state.plugins.get(&id).ok_or("plugin is not installed")?;
+            let package = manager.configuration_package(record)?;
+            let (bytes, entries) = tree_usage(&manager.0.root)?;
+            // Reserve staging before prepare has filesystem effects: one bounded
+            // ciphertext, the settings directory, and pending/final file entries.
+            if bytes + MAX_SETTINGS_FILE_BYTES as u64 > MAX_STORE_BYTES
+                || entries + 3 > MAX_STORE_FILES
+            {
+                return Err("package store quota leaves no room for plugin settings".into());
+            }
+            let (result, commit) = prepare(package.manifest(), &record.active.sha256)?;
+            manager.0.host.commit_in_epoch(epoch, commit)?;
+            let restart_error = if record.enabled {
+                match manager.stop_owned(&id).await {
+                    Ok(()) => match manager.launch(&id, &record.active, epoch).await {
+                        Ok(()) => None,
+                        Err(error) => {
+                            let cleanup = manager.stop_owned(&id).await;
+                            Some(match cleanup {
+                                Ok(()) => error,
+                                Err(cleanup) => format!("{error}; {cleanup}"),
+                            })
+                        }
+                    },
+                    Err(error) => Some(error),
+                }
+            } else {
+                None
+            };
+            manager.check_epoch(epoch)?;
+            Ok((result, SettingsApplyResult { restart_error }))
+        })
+        .await
+        .map_err(|_| "plugin settings update task failed".to_string())?
+    }
+
+    fn configuration_package(&self, record: &InstalledPlugin) -> Result<VerifiedPackage, String> {
+        let package = self.verify_installed(&record.plugin_id, &record.active)?;
+        if !package
+            .manifest()
+            .permissions
+            .contains(&PluginPermission::PluginConfiguration)
+        {
+            return Err("plugin does not have configuration permission".into());
+        }
+        Ok(package)
     }
 
     /// Explicit authenticated restoration; opening the store still never starts
@@ -613,12 +753,20 @@ impl PackageManager {
         });
         // Reverification precedes stopping the existing worker, including archive,
         // signature, exact scoped publisher, and every extracted payload byte.
-        self.verify_installed(id, &record.active)?;
+        let configuration = {
+            let package = self.verify_installed(id, &record.active)?;
+            if record.enabled {
+                self.load_configuration(package.manifest(), epoch)?
+            } else {
+                None
+            }
+        };
         self.check_epoch(epoch)?;
         self.stop_owned(id).await?;
         let activation = async {
             if record.enabled {
-                self.launch(id, &record.active, epoch).await?;
+                self.launch_with_configuration(id, &record.active, epoch, configuration)
+                    .await?;
             }
             self.check_epoch(epoch)?;
             let mut next = original.clone();
@@ -657,7 +805,58 @@ impl PackageManager {
 
     async fn launch(&self, id: &str, version: &PackageVersion, epoch: u64) -> Result<(), String> {
         self.check_epoch(epoch)?;
+        let configuration = {
+            let package = self.verify_installed(id, version)?;
+            self.load_configuration(package.manifest(), epoch)?
+        };
+        self.launch_with_configuration(id, version, epoch, configuration)
+            .await
+    }
+
+    fn load_configuration(
+        &self,
+        manifest: &PluginManifest,
+        epoch: u64,
+    ) -> Result<Option<WorkerConfiguration>, String> {
+        self.check_epoch(epoch)?;
+        let configuration = if manifest
+            .permissions
+            .contains(&PluginPermission::PluginConfiguration)
+        {
+            let load = self
+                .0
+                .configuration
+                .as_ref()
+                .ok_or("plugin configuration provider is unavailable")?;
+            let configuration = load(manifest)?;
+            configuration.validate()?;
+            Some(configuration)
+        } else {
+            None
+        };
+        self.check_epoch(epoch)?;
+        Ok(configuration)
+    }
+
+    async fn launch_with_configuration(
+        &self,
+        id: &str,
+        version: &PackageVersion,
+        epoch: u64,
+        configuration: Option<WorkerConfiguration>,
+    ) -> Result<(), String> {
+        self.check_epoch(epoch)?;
+        // The prepared settings belong to this operation's verified immutable
+        // package. Reverify its actual files immediately before execution.
         let package = self.verify_installed(id, version)?;
+        if configuration.is_some()
+            != package
+                .manifest()
+                .permissions
+                .contains(&PluginPermission::PluginConfiguration)
+        {
+            return Err("plugin configuration permission changed".into());
+        }
         let executable = self
             .version_path(id, version)
             .join("payload")
@@ -669,6 +868,7 @@ impl PackageManager {
                     plugin_id: id.into(),
                     executable,
                     args: Vec::new(),
+                    configuration,
                 },
                 epoch,
             )

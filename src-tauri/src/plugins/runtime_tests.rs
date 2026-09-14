@@ -39,6 +39,159 @@ fn spec(mode: &str) -> WorkerSpec {
         plugin_id: TEST_PLUGIN.into(),
         executable: fixture(),
         args: vec![mode.into()],
+        configuration: None,
+    }
+}
+
+fn configured_spec(mode: &str) -> WorkerSpec {
+    let mut worker = spec(mode);
+    worker.configuration = Some(WorkerConfiguration {
+        revision: "revision-1".into(),
+        values: json!({"server":"https://plugin.example"}),
+        secrets: [("token".into(), "fixture-secret".into())].into(),
+    });
+    worker
+}
+
+#[tokio::test]
+async fn configuration_is_acknowledged_before_running_or_accepting_actions() {
+    let host = PluginHost::default();
+    host.start(configured_spec("configuration_delayed"))
+        .await
+        .unwrap();
+    assert_eq!(
+        action(&host, "echo").await.unwrap_err(),
+        PluginError::Unavailable
+    );
+    let snapshot = ready(&host).await;
+    let reply = action(&host, "echo").await.unwrap();
+    assert_eq!(reply["configuration_revision"], "revision-1");
+    assert_eq!(reply["configuration_secret_matches"], true);
+    let public = serde_json::to_string(&snapshot).unwrap();
+    assert!(!public.contains("fixture-secret"));
+    assert!(!public.contains("plugin.example"));
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn missing_wrong_early_and_duplicate_configuration_acknowledgements_fail() {
+    for mode in [
+        "configuration_wrong_ack",
+        "configuration_early_data",
+        "configuration_duplicate_ack",
+        "configuration_no_ack",
+    ] {
+        let host = PluginHost::default();
+        host.start(configured_spec(mode)).await.unwrap();
+        let failed = wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert!(failed.contributions.is_empty(), "{mode}");
+        assert!(
+            failed.last_error.as_deref().is_some_and(|error| matches!(
+                error,
+                "worker_configuration_ack_invalid"
+                    | "worker_duplicate_handshake"
+                    | "worker_startup_timeout"
+            )),
+            "{mode}: {:?}",
+            failed.last_error
+        );
+        assert_eq!(
+            action(&host, "echo").await.unwrap_err(),
+            PluginError::Unavailable
+        );
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn configuration_writer_rejects_revoked_epoch_and_expired_deadline_before_write() {
+    for expired in [false, true] {
+        let (writer, mut reader) = tokio::io::duplex(8);
+        let (outgoing, receiver) = mpsc::channel(2);
+        let (_stop, stop_receiver) = watch::channel(false);
+        let authority = Arc::new(Mutex::new(Authority {
+            enabled: true,
+            epoch: u64::from(!expired),
+        }));
+        outgoing
+            .send(Outgoing::Configuration {
+                encoded: b"secret must never be written\n".to_vec(),
+                deadline: if expired {
+                    Instant::now() - Duration::from_millis(1)
+                } else {
+                    Instant::now() + Duration::from_secs(1)
+                },
+            })
+            .await
+            .unwrap();
+        drop(outgoing);
+        let result = write_frames(writer, receiver, stop_receiver, authority, 0).await;
+        if expired {
+            assert_eq!(result.unwrap_err(), "worker_configuration_timeout");
+        } else {
+            result.unwrap();
+        }
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).await.unwrap();
+        assert!(actual.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn interrupted_configuration_frame_never_allows_a_following_frame() {
+    for revoked in [false, true] {
+        let (writer, mut reader) = tokio::io::duplex(8);
+        let (outgoing, receiver) = mpsc::channel(2);
+        let (stop, stop_receiver) = watch::channel(false);
+        let authority = Arc::new(Mutex::new(Authority {
+            enabled: true,
+            epoch: 0,
+        }));
+        outgoing
+            .send(Outgoing::Configuration {
+                encoded: b"configuration frame longer than the pipe\n".to_vec(),
+                deadline: Instant::now()
+                    + if revoked {
+                        Duration::from_secs(1)
+                    } else {
+                        Duration::from_millis(20)
+                    },
+            })
+            .await
+            .unwrap();
+        outgoing
+            .send(Outgoing::Control(
+                b"must never follow partial configuration\n".to_vec(),
+            ))
+            .await
+            .unwrap();
+        let task = tokio::spawn(write_frames(
+            writer,
+            receiver,
+            stop_receiver,
+            authority.clone(),
+            0,
+        ));
+        time::sleep(Duration::from_millis(40)).await;
+        if revoked {
+            *authority.lock().unwrap() = Authority {
+                enabled: false,
+                epoch: 1,
+            };
+            stop.send(true).unwrap();
+        }
+        let result = time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        if revoked {
+            result.unwrap();
+        } else {
+            assert_eq!(result.unwrap_err(), "worker_configuration_timeout");
+        }
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).await.unwrap();
+        assert_eq!(actual, &b"configuration"[..8]);
     }
 }
 

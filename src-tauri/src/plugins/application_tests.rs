@@ -52,9 +52,18 @@ fn fixture() -> PathBuf {
 }
 
 fn archive(directory: &Path, version: &str) -> PathBuf {
+    configured_archive(directory, version, None, "worker")
+}
+
+fn configured_archive(
+    directory: &Path,
+    version: &str,
+    schema: Option<Value>,
+    mode: &str,
+) -> PathBuf {
     let source = directory.join(format!("payload-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&source).unwrap();
-    let entrypoint = format!("worker{}", std::env::consts::EXE_SUFFIX);
+    let entrypoint = format!("{mode}{}", std::env::consts::EXE_SUFFIX);
     fs::copy(fixture(), source.join(&entrypoint)).unwrap();
     let metadata = PluginManifest {
         schema_version: 1,
@@ -63,8 +72,15 @@ fn archive(directory: &Path, version: &str) -> PathBuf {
         host_api: "^1.0".into(),
         target: env!("INVERTER_DESKTOP_TARGET").into(),
         entrypoint,
-        config_schema: json!({"type":"object"}),
-        permissions: vec![PluginPermission::DashboardContributions],
+        permissions: if schema.is_some() {
+            vec![
+                PluginPermission::DashboardContributions,
+                PluginPermission::PluginConfiguration,
+            ]
+        } else {
+            vec![PluginPermission::DashboardContributions]
+        },
+        config_schema: schema.unwrap_or_else(|| json!({"type":"object"})),
         inventory: Vec::new(),
         signature: None,
     };
@@ -400,4 +416,277 @@ async fn empty_policy_and_store_failure_are_visible_without_installation_fallbac
         Some("Store location unavailable")
     );
     failed.close().await.unwrap();
+}
+
+fn settings_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"properties":{
+        "endpoint":{"type":"string","default":"https://example.invalid"},
+        "token":{"type":"string","writeOnly":true,"minLength":1}
+    },"required":["token"]})
+}
+
+fn settings_test_key() -> SettingsKeyProvider {
+    let key = rand::random::<[u8; 32]>();
+    Arc::new(move || Ok(key.to_vec()))
+}
+
+async fn settings_application(
+    directory: &Path,
+    key: SettingsKeyProvider,
+) -> (PackageApplication, PluginHost, u64) {
+    let host = PluginHost::default();
+    let service = PackageApplication::new(
+        host.clone(),
+        env!("INVERTER_DESKTOP_TARGET").into(),
+        true,
+        Arc::new(|| {}),
+    );
+    service
+        .initialize_with_key(Ok(directory.join("store")), Ok(trust()), key)
+        .await;
+    let epoch = service.session_changed(true).unwrap();
+    (service, host, epoch)
+}
+
+async fn settings_view(service: &PackageApplication, epoch: u64) -> Value {
+    serde_json::to_value(service.get_settings(PLUGIN, epoch).await.unwrap()).unwrap()
+}
+
+async fn save_fixture_settings(
+    service: &PackageApplication,
+    epoch: u64,
+    revision: &Value,
+) -> SettingsSaveResult {
+    service
+        .save_settings(
+            PLUGIN,
+            epoch,
+            revision.as_str().unwrap().into(),
+            BTreeMap::new(),
+            BTreeMap::from([("token".into(), Some("fixture-secret".into()))]),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn settings_save_keeps_disabled_workers_stopped_and_restarts_enabled_workers() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (service, host, epoch) = settings_application(&root, settings_test_key()).await;
+    install(
+        &service,
+        configured_archive(&root, "1.0.0", Some(settings_schema()), "configuration"),
+        epoch,
+        false,
+    )
+    .await;
+    let initial = settings_view(&service, epoch).await;
+    assert_eq!(initial["secret_present"]["token"], false);
+    let saved = save_fixture_settings(&service, epoch, &initial["revision"]).await;
+    assert!(saved.restart_error.is_none());
+    assert!(host.snapshots().is_empty());
+    let public = serde_json::to_value(saved).unwrap();
+    assert_eq!(public["settings"]["secret_present"]["token"], true);
+    assert!(!public.to_string().contains("fixture-secret"));
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    let before = host
+        .action_in_epoch(PLUGIN, "echo", json!({}), Duration::from_secs(2), epoch)
+        .await
+        .unwrap();
+    assert_eq!(before["configuration_secret_matches"], true);
+    let revision = &public["settings"]["revision"];
+    let saved = service
+        .save_settings(
+            PLUGIN,
+            epoch,
+            revision.as_str().unwrap().into(),
+            BTreeMap::from([("endpoint".into(), json!("https://updated.invalid"))]),
+            BTreeMap::new(),
+        )
+        .await
+        .unwrap();
+    assert!(saved.restart_error.is_none());
+    let after = host
+        .action_in_epoch(PLUGIN, "echo", json!({}), Duration::from_secs(2), epoch)
+        .await
+        .unwrap();
+    assert_ne!(before["pid"], after["pid"]);
+    assert_ne!(
+        before["configuration_revision"],
+        after["configuration_revision"]
+    );
+    assert_eq!(after["configuration_secret_matches"], true);
+    service.session_changed(false);
+    assert!(service.get_settings(PLUGIN, epoch).await.is_err());
+    let next_epoch = service.session_changed(true).unwrap();
+    service.restore(next_epoch).await.unwrap();
+    let restored = host
+        .action_in_epoch(
+            PLUGIN,
+            "echo",
+            json!({}),
+            Duration::from_secs(2),
+            next_epoch,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        restored["configuration_revision"],
+        after["configuration_revision"]
+    );
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_settings_and_package_revisions_cannot_overwrite_current_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (service, _, epoch) = settings_application(&root, settings_test_key()).await;
+    install(
+        &service,
+        configured_archive(&root, "1.0.0", Some(settings_schema()), "configuration"),
+        epoch,
+        false,
+    )
+    .await;
+    let initial = settings_view(&service, epoch).await;
+    save_fixture_settings(&service, epoch, &initial["revision"]).await;
+    assert!(service
+        .save_settings(
+            PLUGIN,
+            epoch,
+            initial["revision"].as_str().unwrap().into(),
+            BTreeMap::new(),
+            BTreeMap::new()
+        )
+        .await
+        .is_err());
+    let current = settings_view(&service, epoch).await;
+    install(
+        &service,
+        configured_archive(&root, "1.1.0", Some(settings_schema()), "configuration"),
+        epoch,
+        false,
+    )
+    .await;
+    assert!(service
+        .save_settings(
+            PLUGIN,
+            epoch,
+            current["revision"].as_str().unwrap().into(),
+            BTreeMap::new(),
+            BTreeMap::new()
+        )
+        .await
+        .is_err());
+    let updated = settings_view(&service, epoch).await;
+    assert_eq!(updated["version"], "1.1.0");
+    assert_eq!(updated["secret_present"]["token"], true);
+    assert_ne!(updated["revision"], current["revision"]);
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstall_retains_settings_unless_explicitly_deleted() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (service, _, epoch) = settings_application(&root, settings_test_key()).await;
+    let path = configured_archive(&root, "1.0.0", Some(settings_schema()), "configuration");
+    install(&service, path.clone(), epoch, false).await;
+    let initial = settings_view(&service, epoch).await;
+    save_fixture_settings(&service, epoch, &initial["revision"]).await;
+    service
+        .uninstall_with_settings(PLUGIN, false, epoch)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .settings_store()
+            .unwrap()
+            .read(PLUGIN)
+            .unwrap()
+            .secrets["token"],
+        "fixture-secret"
+    );
+    assert!(service.get_settings(PLUGIN, epoch).await.is_err());
+    install(&service, path.clone(), epoch, false).await;
+    assert_eq!(
+        settings_view(&service, epoch).await["secret_present"]["token"],
+        true
+    );
+    service
+        .uninstall_with_settings(PLUGIN, true, epoch)
+        .await
+        .unwrap();
+    assert!(service
+        .settings_store()
+        .unwrap()
+        .read(PLUGIN)
+        .unwrap()
+        .secrets
+        .is_empty());
+    install(&service, path, epoch, false).await;
+    assert_eq!(
+        settings_view(&service, epoch).await["secret_present"]["token"],
+        false
+    );
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn saved_settings_survive_restart_failure_and_enabled_intent_is_preserved() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let fail_at = Arc::new(AtomicUsize::new(usize::MAX));
+    let key_calls = calls.clone();
+    let key_failure = fail_at.clone();
+    let test_key = rand::random::<[u8; 32]>();
+    let (service, host, epoch) = settings_application(
+        &root,
+        Arc::new(move || {
+            if key_calls.fetch_add(1, Ordering::SeqCst) >= key_failure.load(Ordering::SeqCst) {
+                Err("provider unavailable".into())
+            } else {
+                Ok(test_key.to_vec())
+            }
+        }),
+    )
+    .await;
+    install(
+        &service,
+        configured_archive(&root, "1.0.0", Some(settings_schema()), "configuration"),
+        epoch,
+        false,
+    )
+    .await;
+    let initial = settings_view(&service, epoch).await;
+    save_fixture_settings(&service, epoch, &initial["revision"]).await;
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    let current = settings_view(&service, epoch).await;
+    // Reading the current record and preparing ciphertext succeed. Restart's
+    // credential lookup fails after the authorized rename has committed.
+    fail_at.store(calls.load(Ordering::SeqCst) + 2, Ordering::SeqCst);
+    let saved = service
+        .save_settings(
+            PLUGIN,
+            epoch,
+            current["revision"].as_str().unwrap().into(),
+            BTreeMap::from([("endpoint".into(), json!("https://persisted.invalid"))]),
+            BTreeMap::new(),
+        )
+        .await
+        .unwrap();
+    assert!(saved.restart_error.is_some());
+    assert!(host.snapshots().is_empty());
+    assert!(service.manager().unwrap().list().await.unwrap()[0].enabled);
+    fail_at.store(usize::MAX, Ordering::SeqCst);
+    assert_eq!(
+        settings_view(&service, epoch).await["values"]["endpoint"],
+        "https://persisted.invalid"
+    );
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    assert_eq!(host.snapshots()[0].state, WorkerState::Running);
+    service.close().await.unwrap();
 }

@@ -58,3 +58,33 @@ export interface PluginPackagePreview {
   publisher_key_id: string
   restart_required: false
 }
+
+export type PluginSettingValue = string | number | boolean
+
+export interface PluginSettingsField {
+  key: string
+  title: string
+  description: string | null
+  type: 'string' | 'boolean' | 'number' | 'integer'
+  required: boolean
+  secret: boolean
+  enum: string[] | null
+  minimum: number | null
+  maximum: number | null
+  min_length: number | null
+  max_length: number | null
+}
+
+export interface PluginSettingsView {
+  plugin_id: string
+  version: string
+  revision: string
+  fields: PluginSettingsField[]
+  values: Record<string, PluginSettingValue>
+  secret_present: Record<string, boolean>
+}
+
+export interface PluginSettingsSaveResult {
+  settings: PluginSettingsView
+  restart_error: string | null
+}

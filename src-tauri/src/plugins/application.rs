@@ -4,7 +4,10 @@ use super::installer::{InstalledPluginDetails, PackageManager};
 use super::package::{TrustStore, VerifiedPackage};
 use super::protocol::{validate_plugin_id, PluginPermission};
 use super::runtime::{PluginHost, PluginSnapshot};
+use super::settings::{PluginSettingsView, SettingsSchema};
+use super::settings_store::{SettingsKeyProvider, SettingsStore};
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
@@ -15,6 +18,12 @@ use tokio::sync::Notify;
 
 const PREVIEW_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_FAILURES: usize = 8;
+
+#[derive(Serialize)]
+pub(crate) struct SettingsSaveResult {
+    settings: PluginSettingsView,
+    restart_error: Option<String>,
+}
 
 struct SessionActivity(Arc<ApplicationInner>);
 
@@ -76,7 +85,7 @@ impl PendingReview {
 
 enum StoreStatus {
     Opening,
-    Ready(PackageManager),
+    Ready(PackageManager, SettingsStore),
     Failed(String),
 }
 
@@ -122,17 +131,47 @@ impl PackageApplication {
     }
 
     /// Called once by application setup. Metadata recovery never executes a worker.
+    #[cfg(test)]
     pub(crate) async fn initialize(
         &self,
         root: Result<PathBuf, String>,
         trust: Result<TrustStore, String>,
+    ) {
+        self.initialize_with_key(
+            root,
+            trust,
+            Arc::new(|| Err("Test key provider is not configured".into())),
+        )
+        .await;
+    }
+
+    pub(crate) async fn initialize_with_key(
+        &self,
+        root: Result<PathBuf, String>,
+        trust: Result<TrustStore, String>,
+        key: SettingsKeyProvider,
     ) {
         let result = async {
             let root = root?;
             let trust = trust?;
             let parent = root.parent().ok_or("Invalid plugin store parent")?;
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            PackageManager::open(root, self.0.target.clone(), trust, self.0.host.clone()).await
+            let settings = SettingsStore::new(root.clone(), key);
+            let worker_settings = settings.clone();
+            let manager = PackageManager::open_with_configuration(
+                root,
+                self.0.target.clone(),
+                trust,
+                self.0.host.clone(),
+                Arc::new(move |manifest| {
+                    let schema = SettingsSchema::compile(manifest)?;
+                    let data = worker_settings.read(&manifest.plugin_id)?;
+                    schema.configuration(&data)
+                }),
+            )
+            .await?;
+            settings.recover()?;
+            Ok::<_, String>((manager, settings))
         }
         .await;
         *self
@@ -140,7 +179,7 @@ impl PackageApplication {
             .store
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = match result {
-            Ok(manager) => StoreStatus::Ready(manager),
+            Ok((manager, settings)) => StoreStatus::Ready(manager, settings),
             Err(error) => StoreStatus::Failed(error),
         };
         self.0.initialized.notify_waiters();
@@ -161,10 +200,93 @@ impl PackageApplication {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
         {
-            StoreStatus::Ready(manager) => Ok(manager.clone()),
+            StoreStatus::Ready(manager, _) => Ok(manager.clone()),
             StoreStatus::Opening => Err("Plugin store is still opening".into()),
             StoreStatus::Failed(error) => Err(error.clone()),
         }
+    }
+
+    fn settings_store(&self) -> Result<SettingsStore, String> {
+        match &*self
+            .0
+            .store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            StoreStatus::Ready(_, settings) => Ok(settings.clone()),
+            StoreStatus::Opening => Err("Plugin store is still opening".into()),
+            StoreStatus::Failed(error) => Err(error.clone()),
+        }
+    }
+
+    pub(crate) async fn get_settings(
+        &self,
+        id: &str,
+        epoch: u64,
+    ) -> Result<PluginSettingsView, String> {
+        let activity = self.begin_activity();
+        self.check_epoch(epoch)?;
+        let manager = self.manager()?;
+        let store = self.settings_store()?;
+        let id = id.to_owned();
+        let service = self.clone();
+        run_owned(activity, async move {
+            let view = manager
+                .read_settings_in_epoch(&id, epoch, move |manifest, digest| {
+                    let schema = SettingsSchema::compile(manifest)?;
+                    schema.view(manifest, digest, &store.read(&manifest.plugin_id)?)
+                })
+                .await?;
+            service.check_epoch(epoch)?;
+            Ok(view)
+        })
+        .await
+    }
+
+    pub(crate) async fn save_settings(
+        &self,
+        id: &str,
+        epoch: u64,
+        revision: String,
+        values: BTreeMap<String, Value>,
+        changes: BTreeMap<String, Option<String>>,
+    ) -> Result<SettingsSaveResult, String> {
+        let activity = self.begin_activity();
+        self.prepare_mutation(id, epoch)?;
+        let manager = self.manager()?;
+        let store = self.settings_store()?;
+        let id = id.to_owned();
+        let service = self.clone();
+        run_owned(activity, async move {
+            let result = manager
+                .apply_settings_in_epoch(&id, epoch, move |manifest, digest| {
+                    let schema = SettingsSchema::compile(manifest)?;
+                    let current = store.read(&manifest.plugin_id)?;
+                    let next = schema.merge(digest, &current, &revision, values, changes)?;
+                    // Enforce the worker envelope bound even while the plugin is disabled.
+                    schema.configuration(&next)?;
+                    let view = schema.view(manifest, digest, &next)?;
+                    let prepared = store.prepare_write(&manifest.plugin_id, &next)?;
+                    Ok((
+                        view,
+                        Box::new(move || prepared.commit())
+                            as Box<dyn FnOnce() -> Result<(), String> + Send>,
+                    ))
+                })
+                .await;
+            let status = match &result {
+                Ok((_, applied)) => applied.restart_error.clone().map_or(Ok(()), Err),
+                Err(error) => Err(error.clone()),
+            };
+            service.record_result(&id, epoch, &status);
+            let (settings, applied) = result?;
+            service.check_epoch(epoch)?;
+            Ok(SettingsSaveResult {
+                settings,
+                restart_error: applied.restart_error,
+            })
+        })
+        .await
     }
 
     async fn wait_manager(&self) -> Result<PackageManager, String> {
@@ -177,7 +299,7 @@ impl PackageApplication {
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
                 match &*store {
-                    StoreStatus::Ready(manager) => return Ok(manager.clone()),
+                    StoreStatus::Ready(manager, _) => return Ok(manager.clone()),
                     StoreStatus::Failed(error) => return Err(error.clone()),
                     StoreStatus::Opening => {}
                 }
@@ -469,13 +591,33 @@ impl PackageApplication {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn uninstall(&self, id: &str, epoch: u64) -> Result<(), String> {
+        self.uninstall_with_settings(id, false, epoch).await
+    }
+
+    pub(crate) async fn uninstall_with_settings(
+        &self,
+        id: &str,
+        delete_settings: bool,
+        epoch: u64,
+    ) -> Result<(), String> {
         let activity = self.begin_activity();
         self.prepare_mutation(id, epoch)?;
         let manager = self.manager()?;
+        let store = self.settings_store()?;
         let id = id.to_owned();
         self.run_operation(id.clone(), epoch, activity, async move {
-            manager.remove_in_epoch(&id, epoch).await
+            let cleanup = if delete_settings {
+                let settings_id = id.clone();
+                Some(Box::new(move || store.remove(&settings_id))
+                    as Box<dyn FnOnce() -> Result<(), String> + Send>)
+            } else {
+                None
+            };
+            manager
+                .remove_with_settings_in_epoch(&id, epoch, cleanup)
+                .await
         })
         .await
     }
@@ -585,9 +727,10 @@ impl PackageApplication {
 
 /// Installer transactions outlive a cancelled IPC caller. Their expiry-watch
 /// activity and completion notification must have the same owned lifetime.
-async fn run_owned<F>(activity: SessionActivity, operation: F) -> Result<(), String>
+async fn run_owned<T, F>(activity: SessionActivity, operation: F) -> Result<T, String>
 where
-    F: Future<Output = Result<(), String>> + Send + 'static,
+    T: Send + 'static,
+    F: Future<Output = Result<T, String>> + Send + 'static,
 {
     tokio::spawn(async move {
         let _activity = activity;

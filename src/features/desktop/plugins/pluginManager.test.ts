@@ -6,8 +6,15 @@ import { defaultConfig } from '../../../config'
 import en from '../messages.en'
 import ru from '../messages.ru'
 import PluginManager from './PluginManager.vue'
+import PluginSettingsEditor from './PluginSettingsEditor.vue'
 import { createPluginManager } from './usePluginManager'
-import type { ManagedPlugin, PluginManagerSnapshot, PluginPackagePreview } from './types'
+import type {
+  ManagedPlugin,
+  PluginManagerSnapshot,
+  PluginPackagePreview,
+  PluginSettingsSaveResult,
+  PluginSettingsView,
+} from './types'
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), emit: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }))
@@ -70,6 +77,16 @@ function controller() {
   const value = createPluginManager(() => 'Operation failed')
   controllers.push(value)
   return value
+}
+
+function managerWrapper() {
+  if (!wrapper) throw new Error('Manager is not mounted')
+  return wrapper
+}
+
+function activeEditorKey(value: ReturnType<typeof createPluginManager>) {
+  if (!value.settingsEditor.value) throw new Error('Settings editor is not open')
+  return value.settingsEditor.value.key
 }
 
 function translations(locale = 'en') {
@@ -247,6 +264,7 @@ describe('desktop plugin manager', () => {
     await flushPromises()
     expect(native.invoke).toHaveBeenCalledWith('uninstall_plugin_package', {
       pluginId: installed.plugin_id,
+      deleteSettings: false,
     })
     expect(wrapper?.text()).toContain('No plugins installed.')
   })
@@ -469,4 +487,118 @@ describe('desktop plugin manager', () => {
     await flushPromises()
     expect(wrapper.findComponent(PluginManager).exists()).toBe(false)
   })
+
+  it('retains settings by default and requests deletion only after explicit selection', async () => {
+    snapshot.plugins = [structuredClone(installed)]
+    await openManager()
+    await button('Uninstall…').trigger('click')
+    const checkbox = () => managerWrapper().find('input[name="delete-plugin-settings"]')
+    expect((checkbox().element as HTMLInputElement).checked).toBe(false)
+    await checkbox().setValue(true)
+    await button('Cancel').trigger('click')
+    await button('Uninstall…').trigger('click')
+    expect((checkbox().element as HTMLInputElement).checked).toBe(false)
+    await checkbox().setValue(true)
+    await button('Uninstall plugin').trigger('click')
+    await flushPromises()
+    expect(native.invoke).toHaveBeenCalledWith('uninstall_plugin_package', {
+      pluginId: installed.plugin_id,
+      deleteSettings: true,
+    })
+  })
+
+  it('shows settings only for configured permission and blocks lifecycle actions during a settings read', async () => {
+    snapshot.plugins = [structuredClone(installed)]
+    await openManager()
+    expect(wrapper?.findAll('button').some((item) => item.text() === 'Settings')).toBe(false)
+    snapshot.plugins[0].permissions.push('plugin_configuration')
+    event('plugin-host-update')
+    await flushPromises()
+    const pending = deferred<PluginSettingsView>()
+    handlers.set('get_plugin_settings', () => pending.promise)
+    await button('Settings').trigger('click')
+    await flushPromises()
+    expect(button('Disable').attributes('disabled')).toBeDefined()
+    expect(button('Uninstall…').attributes('disabled')).toBeDefined()
+    expect(button('Choose plugin package…').attributes('disabled')).toBeDefined()
+    await button('Disable').trigger('click')
+    expect(calls('set_plugin_enabled')).toHaveLength(0)
+    snapshot.plugins[0].version = '3.0.0'
+    event('plugin-host-update')
+    await flushPromises()
+    expect(wrapper?.findComponent(PluginSettingsEditor).exists()).toBe(false)
+    pending.resolve(settingsView())
+    await flushPromises()
+    expect(wrapper?.findComponent(PluginSettingsEditor).exists()).toBe(false)
+  })
+
+  it('clears settings on logout and drops save completion from the old editor', async () => {
+    snapshot.plugins = [{ ...structuredClone(installed), permissions: ['plugin_configuration'] }]
+    handlers.set('get_plugin_settings', settingsView)
+    const pending = deferred<PluginSettingsSaveResult>()
+    handlers.set('save_plugin_settings', () => pending.promise)
+    await openManager()
+    await button('Settings').trigger('click')
+    await flushPromises()
+    await managerWrapper().find('input[name="token"]').setValue('temporary-secret')
+    await managerWrapper().find('form').trigger('submit')
+    expect(button('Roll back to 1.0.0').attributes('disabled')).toBeDefined()
+    unlocked = false
+    event('auth-state-changed')
+    await flushPromises()
+    expect(wrapper?.findComponent(PluginSettingsEditor).exists()).toBe(false)
+    const queries = calls('get_plugin_manager_snapshot').length
+    pending.resolve({ settings: settingsView(), restart_error: 'old failure' })
+    await flushPromises()
+    expect(wrapper?.text()).not.toContain('old failure')
+    expect(wrapper?.text()).not.toContain('Settings saved.')
+    expect(calls('get_plugin_manager_snapshot')).toHaveLength(queries)
+    expect(calls('save_config')).toHaveLength(0)
+    expect(calls('connect_mqtt')).toHaveLength(0)
+  })
+
+  it('closes idle settings before mutations and ignores busy callbacks from replaced editors', async () => {
+    snapshot.plugins = [{ ...structuredClone(installed), permissions: ['plugin_configuration'] }]
+    const value = controller()
+    await value.start()
+    value.openSettings(installed.plugin_id)
+    const firstKey = activeEditorKey(value)
+    value.setSettingsBusy(firstKey, false)
+    value.openSettings(installed.plugin_id)
+    const currentKey = activeEditorKey(value)
+    value.setSettingsBusy(firstKey, false)
+    expect(value.canManage.value).toBe(false)
+    value.setSettingsBusy(currentKey, false)
+    await value.setEnabled(installed.plugin_id, false)
+    expect(value.settingsEditor.value).toBeNull()
+    expect(native.invoke).toHaveBeenCalledWith('set_plugin_enabled', {
+      pluginId: installed.plugin_id,
+      enabled: false,
+    })
+  })
 })
+
+function settingsView(): PluginSettingsView {
+  return {
+    plugin_id: installed.plugin_id,
+    version: installed.version,
+    revision: 'settings-revision',
+    fields: [
+      {
+        key: 'token',
+        title: 'Token',
+        description: null,
+        type: 'string',
+        required: false,
+        secret: true,
+        enum: null,
+        minimum: null,
+        maximum: null,
+        min_length: null,
+        max_length: null,
+      },
+    ],
+    values: {},
+    secret_present: { token: true },
+  }
+}

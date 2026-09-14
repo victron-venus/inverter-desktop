@@ -6,8 +6,8 @@
 
 use super::protocol::{
     encode_host_frame, parse_worker_frame, validate_handshake, validate_plugin_id,
-    DashboardContribution, HostMessage, WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS,
-    MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    DashboardContribution, HostMessage, WorkerConfiguration, WorkerMessage, HOST_API_VERSION,
+    MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -90,6 +90,7 @@ pub struct WorkerSpec {
     pub plugin_id: String,
     pub executable: PathBuf,
     pub args: Vec<OsString>,
+    pub configuration: Option<WorkerConfiguration>,
 }
 
 struct WorkerEntry {
@@ -241,6 +242,13 @@ impl PluginHost {
             return Err(PluginError::HostStopped);
         }
         if !spec.executable.is_absolute() || validate_plugin_id(&spec.plugin_id).is_err() {
+            return Err(PluginError::InvalidWorker);
+        }
+        if spec
+            .configuration
+            .as_ref()
+            .is_some_and(|configuration| configuration.validate().is_err())
+        {
             return Err(PluginError::InvalidWorker);
         }
         let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
@@ -580,6 +588,10 @@ struct Pending {
 
 enum Outgoing {
     Control(Vec<u8>),
+    Configuration {
+        encoded: Vec<u8>,
+        deadline: Instant,
+    },
     Action {
         encoded: Vec<u8>,
         deadline: Instant,
@@ -606,6 +618,24 @@ async fn write_frames<W: AsyncWrite + Unpin>(
             message = outgoing.recv() => match message { Some(message) => message, None => return Ok(()) },
         };
         match message {
+            Outgoing::Configuration { encoded, deadline } => {
+                let authorized = {
+                    let guard = authority.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.enabled && guard.epoch == epoch
+                };
+                if !authorized || *stop.borrow() {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    return Err("worker_configuration_timeout");
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => return Ok(()),
+                    _ = time::sleep_until(deadline) => return Err("worker_configuration_timeout"),
+                    result = stdin.write_all(&encoded) => result.map_err(|_| "worker_write_failed")?,
+                }
+            }
             Outgoing::Control(bytes) => {
                 tokio::select! {
                     biased;
@@ -692,9 +722,26 @@ impl WorkerPipes {
     }
 
     fn send(&self, message: &HostMessage) -> Result<(), &'static str> {
+        if matches!(message, HostMessage::Configuration { .. }) {
+            return Err("configuration_requires_authorized_writer");
+        }
         let bytes = encode_host_frame(message).map_err(|_| "host_frame_invalid")?;
         self.writer
             .try_send(Outgoing::Control(bytes))
+            .map_err(|_| "worker_write_queue_full")
+    }
+
+    fn configure(
+        &self,
+        configuration: &WorkerConfiguration,
+        deadline: Instant,
+    ) -> Result<(), &'static str> {
+        let encoded = encode_host_frame(&HostMessage::Configuration {
+            configuration: configuration.clone(),
+        })
+        .map_err(|_| "host_configuration_invalid")?;
+        self.writer
+            .try_send(Outgoing::Configuration { encoded, deadline })
             .map_err(|_| "worker_write_queue_full")
     }
 }
@@ -873,6 +920,13 @@ fn fail_entry(entry: &WorkerEntry, code: &str) {
     });
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartupPhase {
+    Identity,
+    Configuration,
+    Running,
+}
+
 async fn run_generation(
     spec: &WorkerSpec,
     entry: &WorkerEntry,
@@ -891,7 +945,7 @@ async fn run_generation(
     }
     let generation = entry.snapshot().generation;
     let startup_deadline = Instant::now() + STARTUP_TIMEOUT;
-    let mut ready = false;
+    let mut startup = StartupPhase::Identity;
     let mut rate_window = Instant::now();
     let mut frame_count = 0;
     let mut contribution_count = 0;
@@ -906,7 +960,7 @@ async fn run_generation(
                 break Outcome::Exited(if exit.is_ok() { "worker_exited" } else { "worker_wait_failed" });
             }
             _ = ticks.tick() => {
-                if !ready && Instant::now() >= startup_deadline { break Outcome::Failed("worker_startup_timeout"); }
+                if startup != StartupPhase::Running && Instant::now() >= startup_deadline { break Outcome::Failed("worker_startup_timeout"); }
                 expire_pending(&mut pending, pipes);
             }
             frame = pipes.frames.recv() => {
@@ -919,14 +973,14 @@ async fn run_generation(
                 if frame_count > MAX_FRAMES_PER_SECOND || contribution_count > MAX_CONTRIBUTIONS_PER_SECOND {
                     break Outcome::Failed("worker_rate_limit");
                 }
-                match handle_frame(frame, spec, entry, &mut ready, &mut pending) {
+                match handle_frame(frame, spec, entry, &mut startup, &mut pending, pipes, startup_deadline) {
                     Ok(()) => {},
                     Err(outcome) => break outcome,
                 }
             }
             control = commands.recv() => {
                 match control {
-                    Some(control) => handle_control(control, entry, generation, ready, pipes, &mut pending),
+                    Some(control) => handle_control(control, entry, generation, startup == StartupPhase::Running, pipes, &mut pending),
                     None => break Outcome::Stopped,
                 }
             }
@@ -942,8 +996,10 @@ fn handle_frame(
     frame: Option<Result<WorkerMessage, &'static str>>,
     spec: &WorkerSpec,
     entry: &WorkerEntry,
-    ready: &mut bool,
+    startup: &mut StartupPhase,
     pending: &mut HashMap<String, Pending>,
+    pipes: &WorkerPipes,
+    startup_deadline: Instant,
 ) -> Result<(), Outcome> {
     let message = match frame {
         Some(Ok(message)) => message,
@@ -952,14 +1008,36 @@ fn handle_frame(
         }
         Some(Err(code)) => return Err(Outcome::Failed(code)),
     };
-    if !*ready {
-        validate_handshake(&spec.plugin_id, &message)
-            .map_err(|_| Outcome::Failed("worker_handshake_invalid"))?;
+    if *startup != StartupPhase::Running {
+        if Instant::now() >= startup_deadline {
+            return Err(Outcome::Failed("worker_startup_timeout"));
+        }
+        match *startup {
+            StartupPhase::Identity => validate_handshake(&spec.plugin_id, &message)
+                .map_err(|_| Outcome::Failed("worker_handshake_invalid"))?,
+            StartupPhase::Configuration => {
+                if !matches!(&message, WorkerMessage::ConfigurationReady { revision }
+                    if spec.configuration.as_ref().is_some_and(|configuration| &configuration.revision == revision))
+                {
+                    return Err(Outcome::Failed("worker_configuration_ack_invalid"));
+                }
+            }
+            StartupPhase::Running => unreachable!(),
+        }
         let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
         if !authority.enabled || authority.epoch != entry.epoch {
             return Err(Outcome::Stopped);
         }
-        *ready = true;
+        if *startup == StartupPhase::Identity {
+            if let Some(configuration) = &spec.configuration {
+                pipes
+                    .configure(configuration, startup_deadline)
+                    .map_err(Outcome::Failed)?;
+                *startup = StartupPhase::Configuration;
+                return Ok(());
+            }
+        }
+        *startup = StartupPhase::Running;
         {
             let mut snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             snapshot.state = WorkerState::Running;
@@ -1000,7 +1078,9 @@ fn handle_frame(
         }
         WorkerMessage::Event { .. } => { /* Reserved worker-scoped data; no arbitrary app event forwarding. */
         }
-        WorkerMessage::Ready { .. } => return Err(Outcome::Failed("worker_duplicate_handshake")),
+        WorkerMessage::Ready { .. } | WorkerMessage::ConfigurationReady { .. } => {
+            return Err(Outcome::Failed("worker_duplicate_handshake"));
+        }
     }
     drop(authority);
     if notify {

@@ -22,7 +22,10 @@ installing/updating, enabling/disabling, rolling back, and uninstalling them. Th
 [native package pipeline](docs/plugin-packages.md) verifies the selected archive
 before showing its identity, version, publisher, and declared capabilities. Only
 an explicit Install/Update action commits those reviewed bytes. Enabled installed
-workers can resume after authentication and stop on logout.
+workers can resume after authentication and stop on logout. Configuration-capable
+packages have a [typed settings editor](docs/plugin-settings.md) with isolated
+encrypted records and write-only secrets. Saving restarts enabled workers with
+acknowledged configuration; uninstall retains settings unless deletion is selected.
 
 **The current release publisher policy is empty, so package installation is
 disabled.** The manager reports this directly; it does not offer unsigned packages
