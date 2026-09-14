@@ -3,6 +3,14 @@ import { listen } from '@tauri-apps/api/event'
 import { computed, ref } from 'vue'
 import type { PluginManagerSnapshot, PluginPackagePreview } from './types'
 
+async function discardToken(token: string) {
+  try {
+    await invoke('discard_plugin_package', { token })
+  } catch {
+    // Revocation also expires native previews; teardown must remain best effort.
+  }
+}
+
 /** The config window reviews native-owned previews; no filesystem paths cross IPC. */
 export function createPluginManager(fallbackError: () => string) {
   const snapshot = ref<PluginManagerSnapshot | null>(null)
@@ -28,16 +36,10 @@ export function createPluginManager(fallbackError: () => string) {
   const canInstall = computed(() => canManage.value && snapshot.value?.installation_available)
 
   function message(value: unknown) {
-    const text = value instanceof Error ? value.message : typeof value === 'string' ? value : ''
+    let text = ''
+    if (value instanceof Error) text = value.message
+    else if (typeof value === 'string') text = value
     return text.slice(0, 512) || fallbackError()
-  }
-
-  async function discardToken(token: string) {
-    try {
-      await invoke('discard_plugin_package', { token })
-    } catch {
-      // Revocation also expires native previews; teardown must remain best effort.
-    }
   }
 
   function clearPreview() {
@@ -72,10 +74,10 @@ export function createPluginManager(fallbackError: () => string) {
       if (!value.plugins.some((plugin) => plugin.plugin_id === confirmRemoval.value)) {
         confirmRemoval.value = null
       }
-    } catch (failure) {
+    } catch (error_) {
       if (!current(session)) return
       connected.value = false
-      error.value = message(failure)
+      error.value = message(error_)
     } finally {
       if (current(session)) loading.value = false
     }
@@ -111,8 +113,8 @@ export function createPluginManager(fallbackError: () => string) {
       if (!current(session)) return
       authorized.value = status.unlocked === true
       await refresh()
-    } catch (failure) {
-      if (current(session)) error.value = message(failure)
+    } catch (error_) {
+      if (current(session)) error.value = message(error_)
     } finally {
       if (current(session)) loading.value = false
     }
@@ -149,10 +151,10 @@ export function createPluginManager(fallbackError: () => string) {
         if (!active || lifetime !== lifecycle) return
         await subscribe('plugin-host-update', () => void refresh(), lifetime)
         if (active && lifetime === lifecycle) await refreshSession()
-      } catch (failure) {
+      } catch (error_) {
         if (active && lifetime === lifecycle) {
           stop()
-          error.value = message(failure)
+          error.value = message(error_)
         }
       } finally {
         if (lifetime === lifecycle) startup = undefined
@@ -186,8 +188,8 @@ export function createPluginManager(fallbackError: () => string) {
       }
       preview.value = selected
       enableAfterInstall.value = true
-    } catch (failure) {
-      if (current(session)) error.value = message(failure)
+    } catch (error_) {
+      if (current(session)) error.value = message(error_)
     } finally {
       if (current(session)) busy.value = false
     }
@@ -204,9 +206,9 @@ export function createPluginManager(fallbackError: () => string) {
     try {
       await invoke(command, args)
       if (current(session)) await refresh()
-    } catch (failure) {
+    } catch (error_) {
       if (current(session)) {
-        error.value = message(failure)
+        error.value = message(error_)
         installFailed.value = installing
       }
     } finally {

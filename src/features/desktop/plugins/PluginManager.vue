@@ -6,12 +6,12 @@
       <p class="text-[11px] text-muted mt-1">{{ $t('plugins.manager.immediate') }}</p>
     </header>
 
-    <p v-if="loading" role="status" class="text-[12px] text-muted">
+    <output v-if="loading" class="text-[12px] text-muted">
       {{ $t('plugins.manager.loading') }}
-    </p>
-    <p v-if="busy" role="status" class="text-[12px] text-muted">
+    </output>
+    <output v-if="busy" class="text-[12px] text-muted">
       {{ $t('plugins.manager.working') }}
-    </p>
+    </output>
     <div
       v-if="error || snapshot?.error || (!loading && snapshot && !snapshot.ready)"
       class="flex flex-col items-start gap-2"
@@ -85,7 +85,7 @@
           <h3 class="font-semibold break-words min-w-0">{{ plugin.plugin_id }}</h3>
           <span class="text-muted">{{ plugin.version }}</span>
         </div>
-        <p role="status" class="text-[11px] text-muted">{{ stateLabel(plugin) }}</p>
+        <output class="text-[11px] text-muted">{{ stateLabel(plugin) }}</output>
         <p v-if="plugin.error" role="alert" class="text-[11px] text-consumption break-words">
           {{ plugin.error }}
         </p>

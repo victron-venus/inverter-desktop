@@ -256,13 +256,10 @@ class MobilePluginBoundaryTests(unittest.TestCase):
                         f"{prefix}lib/arm64-v8a/libinverter_dashboard_lib.so": payload
                     }
                     platform = "android"
-                with (
-                    self.subTest(command=command, suffix=suffix),
-                    self.assertRaisesRegex(ValueError, command),
-                ):
-                    boundary.verify_archive(
-                        package_fixture(root / f"app.{suffix}", entries), platform
-                    )
+                with self.subTest(command=command, suffix=suffix):
+                    archive = package_fixture(root / f"app.{suffix}", entries)
+                    with self.assertRaisesRegex(ValueError, command):
+                        boundary.verify_archive(archive, platform)
 
     def test_plugin_package_dependencies_are_rejected(self):
         """Package verification and installation must not enter mobile runtime code."""
