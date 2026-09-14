@@ -33,18 +33,70 @@ The completed resilience checklist is preserved in
 
 ## Delivery strategy and current checkpoint
 
-The first checkpoint establishes core/mobile build boundaries and separates core
-from desktop feature contributions. Desktop retains bundled HA/camera behavior
-during this compatibility stage. This is **not** completion of installable plugins. The second checkpoint adds
-a versioned worker protocol, real process supervision, and declarative dashboard
-contributions. Its shipped registry remains empty until package installation is
-implemented; legacy HA/camera features are still bundled.
+The first checkpoint established core/mobile build boundaries and separated core
+from desktop feature contributions. The second added a versioned worker protocol,
+real process supervision, and declarative dashboard contributions. The third
+implemented deterministic signed archives, publisher/content verification, and
+transactional native package APIs exercised with real workers.
 
-The next checkpoint implements the native package pipeline: deterministic signed
-archives, publisher and content verification, and transactional package lifecycle
-APIs exercised with real workers. It does not expose installation IPC or a plugin
-manager yet. Production publisher keys, application startup integration, settings,
-and migrated HA/camera packages remain separate delivery requirements.
+The current checkpoint connects the package pipeline to authenticated desktop
+startup, settings, and shutdown. The **Plugins** settings tab now reviews a
+natively selected archive, shows verified package metadata and capabilities, and
+commits the exact reviewed bytes after an explicit Install/Update action. Saved
+enabled packages may resume after successful authentication. An empty inventory
+or preserved legacy settings never imply installation.
+
+**The embedded production publisher policy is empty, so installation is disabled
+in the shipped configuration.** The UI reports this directly. Desktop still bundles
+its existing HA/camera implementations; they are not installed or removed through
+the manager. Production publisher provisioning, real worker distribution,
+HA/camera extraction, settings/secrets migration, and the remaining contribution
+services are separate, unfinished requirements.
+
+### Current checkpoint: application integration and management UI
+
+- [x] Open one private package store per application, retaining its exclusive
+      lease across authenticated sessions and releasing it after worker cleanup.
+- [x] Restore previously enabled packages only in the current authenticated
+      session; reverify each package, surface failures, and keep disabled packages
+      stopped. A queued restore must not undo an explicit disable/uninstall.
+- [x] Add settings-window-only lifecycle IPC. Select package files through a
+      native dialog; accept no webview-supplied archive or executable path or key.
+- [x] Keep one bounded, expiring native preview bound to its originating window
+      and authentication epoch. Verify target/API compatibility, show verified
+      identity, versions, target, publisher, and declared capabilities, and commit
+      the exact reviewed archive bytes. Invalidate stale or replaced consent.
+- [x] Add a desktop-only Plugins settings panel with inventory, runtime status,
+      install/update review, enable/disable, rollback, uninstall confirmation,
+      readable errors, and English/Russian messages.
+- [x] Report an empty publisher policy accurately; provide no unsigned, fixture
+      key, environment, or user-supplied trust fallback in application builds.
+- [x] Share native inventory and worker state across windows without reloading
+      core configuration or reconnecting MQTT/IGW during package operations.
+      Cache inventory metadata by revision and coalesce UI snapshot requests.
+- [x] Connect logout, expiry, policy-change, and normal-quit cleanup to the package
+      service: revoke previews and workers and retain the store lease until owned
+      operations and process cleanup finish.
+- [x] Exclude native management commands, frontend manager code/messages, package
+      store startup, and management routes from Android/iOS. Verify the frontend
+      boundary with mobile tests and the actual production module graph and JS.
+- [x] Exercise the initial native application service with real signed archives
+      and workers, including review/install file replacement, restoration, auth
+      races, cancellation, initialization/quit ordering, and empty trust.
+- [x] Verify review/install/update/enable/disable/rollback/uninstall UI workflows,
+      escaped metadata and errors, busy states, stale asynchronous responses,
+      listener cleanup, and bounded refreshes. Build both frontend profiles.
+- [x] Document the implemented checkpoint and remaining delivery limits.
+- [x] Complete the operation-activity/expiry regression and pass the full macOS
+      native/frontend suites, typecheck, formatting, lint, and strict Clippy after
+      the integration fixes. Keep target builds and hosted checks separate.
+- [x] Pass local native `cargo check --locked --all-features` for the iOS
+      simulator and Android aarch64 targets.
+- [x] Bind advertised actions to their original session and reject stale calls
+      before enqueueing to a replacement worker; pass the real-worker regression.
+- [ ] Verify the final Android APK/AAB and iOS IPA exclude the manager/native
+      commands and pass all required hosted checks on the current PR head.
+- [ ] Deliver the reviewed application/manager PR and merge after those checks pass.
 
 The intended package is a signed first-party `.idplugin` archive: a versioned
 manifest, a target-specific executable worker, and declarative UI contributions.
@@ -153,13 +205,14 @@ mobile gate fail. A successful desktop build is insufficient evidence.
       real multiwindow interaction during final operational acceptance.
 
 Acceptance for the runtime checkpoint: a separately built worker completes the
-lifecycle through the actual host. Its executable is selected by trusted native
-test/development code; there is no executable-path IPC or automatic package
-loading. Complete phase 4 acceptance also requires the remaining contribution
+lifecycle through the actual host. The original executable proof used trusted native test/development code. The
+application now constructs workers from verified installed packages and restores
+only previously enabled packages after authentication; there is still no
+executable-path IPC or automatic installation. Complete phase 4 acceptance also requires the remaining contribution
 surfaces and scoped host services above. A fake registry or statically linked
 feature implementation does not satisfy worker lifecycle verification.
 
-### 5. Installation, update, rollback, and removal — native API checkpoint
+### 5. Installation, update, rollback, and removal — application/UI checkpoint
 
 - [x] Implement a deterministic, bounded `.idplugin` format and a native packaging
       CLI that signs actual file inventories with an externally supplied key.
@@ -180,9 +233,10 @@ feature implementation does not satisfy worker lifecycle verification.
       unknown keys and never trust a key supplied by the package or webview.
 - [ ] Configure real production publisher keys and signing provenance in a
       reviewed release. Disposable fixture keys must never become shipped trust.
-- [ ] Add desktop install/enable/disable/update/uninstall UI with compatibility
-      errors, declared permissions, and restart requirements.
-- [ ] Connect the native package manager to authenticated application startup,
+- [x] Add desktop install/enable/disable/update/uninstall UI with verified review,
+      compatibility errors, declared capabilities, rollback target, and immediate
+      application of changes without an app restart.
+- [x] Connect the native package manager to authenticated application startup,
       settings, and shutdown without automatically installing legacy features.
 - [x] Separate installed package inventory from feature settings and secrets.
 - [x] Stop before removing package files: cancel actions, remove contributions,
@@ -195,8 +249,9 @@ feature implementation does not satisfy worker lifecycle verification.
 
 Acceptance: a clean core installation contains no HA/camera payloads. Installing
 or removing a package changes available features without reinstalling the app.
-The native APIs satisfy package lifecycle tests; full phase acceptance still
-requires application/UI integration, production trust, and migrated packages.
+Native lifecycle and desktop application/UI integration are implemented. Full
+phase acceptance still requires final integration checks, production trust and
+worker distribution, remaining host services, and migrated HA/camera packages.
 
 ### 6. Cameras package
 
@@ -335,8 +390,9 @@ requires application/UI integration, production trust, and migrated packages.
   rollback, interrupted work, disabled startup, and removal after process reaping.
 - The compiled publisher policy starts empty. No production key is invented or
   inferred from archive contents; configuring release trust remains unchecked.
-- The desktop application keeps its empty worker registry until application/UI
-  integration. HA/camera migration and final operational acceptance remain open.
+- At the native API checkpoint, desktop still kept an empty worker registry;
+  application/UI integration is recorded separately below. HA/camera migration and
+  final operational acceptance remain open.
 - Package verification: 19 tests passed with real Ed25519 signatures, canonical
   manifests, ZIP structure/CRC rejection, exact publisher scope, and file integrity.
 - Packaging: 11 local tests passed. The actual CLI produced byte-identical archives
@@ -348,7 +404,7 @@ requires application/UI integration, production trust, and migrated packages.
   corruption, initialization recovery, and file-count/disk quota preflight.
 - Integration: all 256 macOS Rust tests and strict all-targets clippy passed after
   integrating main `8c995d7` (Frigate progressive clip streaming). Hosted
-  Windows/Linux/Android/iOS gates remain required on the final PR head before merge.
+  Windows/Linux/Android/iOS gates were still required at that local validation stage.
 - Frontend/core: all 212 desktop tests and eight mobile tests passed, along with
   typecheck/build, formatting, and lint (existing lint warnings remain).
 - Mobile boundary verifier: all 20 fixtures passed, including the new package
@@ -365,6 +421,39 @@ requires application/UI integration, production trust, and migrated packages.
   instead of letting Windows verbatim-path joining normalize them first.
 - After the portability fixes, all 77 local plugin tests, strict all-targets
   clippy, formatting, and the independent real-CLI signature/archive checks passed.
+
+### Application and manager checkpoint
+
+- Baseline: merged native package PR #421, main `0c27c54`.
+- Branch: `feat/desktop-plugin-manager`, isolated from the canonical checkout.
+- Initial native validation: all 94 plugin tests passed, including application
+  service tests with actual signed archives and executable workers. This precedes
+  the final operation-activity/expiry regression and full native integration run.
+- Frontend: 35 focused tests passed (17 manager, 13 dashboard, five desktop
+  configuration). Coverage includes native selection cancellation, verified review,
+  explicit install/update, declared capabilities, enable/disable, named rollback,
+  concrete uninstall consent, auth/teardown races, and 100-event refresh bursts.
+- Eight mobile tests passed, including the empty manager contribution and absence
+  of its settings tab. Both frontend production builds passed; inspection of the
+  mobile receipt and generated JavaScript found no manager module, lifecycle IPC
+  names, or manager labels. Desktop output includes the manager.
+- Full local integration: all 276 macOS native tests and all 229 desktop frontend
+  tests passed. Strict Clippy, frontend typecheck, formatting, and Biome passed;
+  existing repository lint warnings/information remain. Native metadata caching
+  and one-in-flight UI refresh avoid repeated verification per worker event;
+  launch verification remains mandatory.
+- Browser visual smoke exercised the actual manager component with disposable
+  mocked native IPC: English/light verified update to 2.0.0 and disable, plus
+  Russian/dark empty-publisher policy with installation disabled. The fixture and
+  server were removed afterward. This does not test the real native file-dialog GUI.
+- Local iOS simulator and Android aarch64 native
+  `cargo check --locked --all-features` passed.
+- Final action/session fix: all 96 plugin tests passed, including a delayed
+  old-session crash action rejected before reaching the replacement worker;
+  a new-session echo action succeeded. The other 181 native tests are unchanged.
+- Hosted APK/AAB/IPA, exact-commit review/checks, and merge evidence remain pending. These local
+  results do not prove production publisher provisioning, migrated HA/camera
+  packages, physical inverter commands, or real-device behavior.
 
 ## Reference constraints
 

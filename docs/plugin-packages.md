@@ -1,21 +1,58 @@
 # Desktop plugin packages
 
-The native package pipeline builds, verifies, installs, updates, disables, rolls
-back, and removes signed desktop workers. It is a native API checkpoint: the
-application does not yet expose package-install IPC, a plugin manager, automatic
-package discovery, or installed HA/camera workers. The shipped worker registry
-remains empty and the legacy desktop features remain bundled.
+The desktop application now connects its signed package pipeline to settings,
+authentication, startup, and shutdown. **Configuration → Plugins** shows installed
+workers and supports native package selection, verified install/update review,
+enable/disable, version-specific rollback, and confirmed uninstall.
 
-Android and iOS compile neither this pipeline nor its publisher policy,
-cryptographic verifier, ZIP handling, or packaging tool. The existing native
-artifact gate also rejects the new desktop-only dependencies.
+The embedded production publisher policy is currently empty. The manager therefore
+shows **This build has no approved plugin publishers** and disables package
+selection and installation. This checkpoint provides no unsigned fallback or user
+trust override. Home Assistant and cameras remain bundled desktop features; they
+have not yet been extracted into packages and are not managed by this tab.
+
+Android and iOS compile neither the manager UI nor its native commands, package
+store startup, publisher policy, cryptographic verifier, ZIP handling, or packaging
+implementation. Mobile artifact gates reject these desktop-only surfaces.
+
+## Selecting and reviewing a package
+
+1. Open **Plugins** in desktop settings and choose a package through the native
+   file dialog. Cancelling the dialog changes nothing. Selection is available only
+   when the release policy contains approved publishers and the store is ready.
+2. The native service verifies publisher scope, signature, target/API compatibility,
+   archive structure, and the complete inventory. It retains the verified bytes
+   and returns an opaque review token; the webview cannot supply an archive path,
+   executable path, public key, or replacement archive contents.
+3. Review the plugin ID, proposed and installed versions, approved publisher key,
+   target, and declared capabilities. **Enable after installation** defaults to
+   selected and can be cleared. Capability declarations describe features; workers
+   still run with the user's OS account privileges.
+4. Choose **Install** or **Update** to consume the token and commit those exact
+   bytes. Replacing the original file after review cannot change the installation.
+   Changes apply immediately without the configuration Save button or an app
+   restart. Cancelling a review discards its token.
+
+At most one selection/review is pending in the application. Its token belongs to
+the originating settings window and authentication epoch and expires after five
+minutes. Replacement, cancellation, closing that window, logout, or authentication
+policy changes invalidate it. An install attempt consumes the review; an expired
+or failed attempt requires selecting and reviewing the package again.
+
+Installed cards show their version and running, starting, failed, installed, or
+disabled state. Rollback names the retained version. Uninstall requires an inline
+confirmation identifying the plugin and version, then stops its worker and removes
+owned package files. This UI does not yet edit plugin settings or secrets. Native
+failures are rendered as text in English/Russian UI; metadata never becomes HTML or
+executable frontend code.
 
 ## Package and signature contract
 
 An `.idplugin` file uses a strict, uncompressed ZIP layout. `manifest.json` comes
-first, followed by regular payload files in sorted portable-path order. Fixed ZIP
-timestamps and permissions make identical metadata, payload bytes, and signing
-keys produce identical archive bytes. No host filesystem timestamp enters the
+first; the producer writes regular payload files in sorted portable-path order.
+Fixed ZIP timestamps and permissions make identical metadata, payload bytes, and
+signing keys produce identical archive bytes. Sorting and fixed timestamp values
+are producer normalization, not additional verifier requirements. No host filesystem timestamp enters the
 package identity. The producer pins ZIP creator metadata to Unix on every desktop
 OS. The verifier also accepts DOS creator metadata with ordinary file attributes,
 including the regular Unix mode written by Windows ZIP tooling, while rejecting
@@ -90,7 +127,7 @@ plugin IDs that key may sign. Key rotation can retain the old and new key IDs
 for the same plugin during a release transition.
 
 The initial policy has no publishers. A maintainer must configure real publisher
-keys through a reviewed application release before shipping installation support.
+keys through a reviewed application release before enabling package installation.
 There is no trust-on-first-use, package-provided public key, webview override,
 environment override, or unsigned installation fallback. Fixture signing keys
 exist only in tests and are never added to this policy.
@@ -101,9 +138,27 @@ for one plugin cannot sign another plugin merely because the signature is valid.
 Changing or removing release trust must take effect when installed packages are
 reverified before a subsequent start.
 
-## Lifecycle requirements
+## Application and native lifecycle
 
-The native entry point is `PackageManager::open(root, target, trust, host)`.
+Tauri owns one desktop `PluginHost` and `PackageApplication`, shared by all
+windows. The application opens its private plugin store once under its local data
+directory. Only authenticated `config` windows may call manager snapshot, selection,
+review, install/update, enable/disable, rollback, or uninstall commands. Dashboard
+windows can read contributions and dispatch advertised actions, but cannot manage
+packages. File dialogs and trusted publisher configuration remain native-owned.
+The management IPC surface is:
+
+- `get_plugin_manager_snapshot`: authenticated inventory, runtime status,
+  initialization errors, and installation availability.
+- `preview_plugin_package`: takes no path argument; opens the native dialog and
+  returns `null` on cancellation or verified metadata with an opaque token.
+- `install_plugin_package({ token, enable })` and
+  `discard_plugin_package({ token })`: consume or discard the native-owned review.
+- `set_plugin_enabled({ pluginId, enabled })`,
+  `rollback_plugin_package({ pluginId })`, and
+  `uninstall_plugin_package({ pluginId })`: manage an installed identity.
+
+The underlying entry point is `PackageManager::open(root, target, trust, host)`.
 Its clones share one transaction mutex. A lifetime OS file lock excludes another
 manager/process from the same store until owned workers have been reaped. Call
 `close().await` to complete cleanup explicitly; if process cleanup cannot be
@@ -130,10 +185,32 @@ waits for termination and reaping before releasing its registry slot or deleting
 owned package files. The package manager has no MQTT/IGW handle and does not
 reconnect core telemetry.
 
-Opening a package store recovers its metadata and interrupted staging work; it
-does not execute previously enabled workers. Application startup/session/UI
-integration remains a later checkpoint. Plugin settings and secrets are not
-migrated by this package layer, and uninstall must leave unrelated data intact.
+Opening a package store recovers metadata and interrupted staging work without
+executing workers. A separate application restoration pass starts only packages
+already recorded as enabled, after successful authentication. Every launch
+rechecks the signed archive and installed payload. Disabled packages stay stopped;
+a queued restore cannot undo an explicit disable or uninstall. A failed restore
+is visible in the manager. Empty inventory and preserved HA/camera settings never
+cause automatic installation.
+
+Logout, policy changes, and session expiry revoke the old epoch, clear previews
+and contributions, and stop its workers. A later login may restore enabled packages
+as fresh processes in a new epoch; it never authorizes old queued actions or late
+results. Background expiry checks cover workers and pending package operations.
+The package-store lease survives ordinary authentication transitions. Normal quit
+waits for initialization, transactions, and process reaping before releasing the
+lease and permitting exit; repeated quit requests wait for the same cleanup.
+
+`plugin-host-update` signals changes without carrying worker data. Settings fetch
+an authenticated snapshot with at most one request in flight and one pending
+refresh. Native inventory metadata is cached by inventory/session revision;
+frequent worker updates do not rehash all files. Mutation/restoration/session
+changes invalidate that cache, and launch verification always reads and verifies
+the archive and payload again. Package operations do not reload core configuration
+or reconnect MQTT/IGW.
+
+Plugin settings and secrets are not migrated by this package layer, and uninstall
+must leave unrelated data intact.
 
 Ordinary caller cancellation does not abandon an in-progress transaction: an
 owned task finishes or restores its state while holding the store lease. Process
@@ -149,8 +226,15 @@ normal worker cleanup; this checkpoint does not adopt orphan processes.
 Tests use disposable signing keys, actual produced archives, and separately
 compiled fixture workers. They must establish deterministic packaging, signature
 and inventory rejection, installation, failed activation, rollback, cancellation,
-recovery, and removal. Mobile source/dependency/payload checks complement these
-desktop lifecycle tests.
+recovery, and removal. Application-service tests additionally cover file replacement
+after review, single-use/expired consent, closed windows, authentication races,
+enabled-only restoration, initialization/shutdown ordering, and empty release trust.
+Vue tests exercise actual review/management controls, escaped metadata, cancellation,
+busy states, listener cleanup, late responses, and burst refresh coalescing. Mobile
+source/dependency/payload checks complement these desktop lifecycle tests. The
+current checkpoint's local suite results, remaining target/artifact checks, and PR
+merge are tracked separately in [TODO.md](../TODO.md). Browser visual smoke uses
+mocked native IPC and does not establish native file-dialog GUI behavior.
 
 A verified package authenticates content and publisher scope. Its worker still
 runs with the user's OS privileges; this is not an OS sandbox. Permission

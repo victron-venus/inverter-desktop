@@ -18,6 +18,14 @@ CORE = (
 )
 
 
+def package_fixture(path, entries):
+    """Create a ZIP package fixture with exactly the supplied entries."""
+    with zipfile.ZipFile(path, "w") as archive:
+        for filename, payload in entries.items():
+            archive.writestr(filename, payload)
+    return path
+
+
 class MobileNativeBoundaryTests(unittest.TestCase):
     """Exercise rejection and acceptance using disposable native package fixtures."""
 
@@ -28,11 +36,7 @@ class MobileNativeBoundaryTests(unittest.TestCase):
 
     def archive(self, name, entries):
         """Create a ZIP package fixture with exactly the supplied entries."""
-        path = self.root / name
-        with zipfile.ZipFile(path, "w") as archive:
-            for filename, payload in entries.items():
-                archive.writestr(filename, payload)
-        return path
+        return package_fixture(self.root / name, entries)
 
     def test_passive_legacy_settings_are_allowed(self):
         """Retained configuration keys do not imply an active integration."""
@@ -221,6 +225,45 @@ class MobileNativeBoundaryTests(unittest.TestCase):
 class MobilePluginBoundaryTests(unittest.TestCase):
     """Keep the signed package ecosystem out of native mobile inputs."""
 
+    def test_plugin_manager_commands_are_rejected_in_every_mobile_package_format(self):
+        """Shared handler registration cannot leak manager actions into mobile apps."""
+        # TestCase exits this context even when a package assertion fails.
+        # pylint: disable-next=consider-using-with
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        # Keep the required manager surface explicit rather than deriving this
+        # fixture from the guard, so an omitted command fails the regression.
+        for command in (
+            "get_plugin_manager_snapshot",
+            "preview_plugin_package",
+            "install_plugin_package",
+            "discard_plugin_package",
+            "set_plugin_enabled",
+            "rollback_plugin_package",
+            "uninstall_plugin_package",
+        ):
+            payload = CORE + b"\x00" + command.encode()
+            for suffix, prefix in (("apk", ""), ("aab", "base/"), ("ipa", "")):
+                if suffix == "ipa":
+                    entries = {
+                        "Payload/Energy.app/Info.plist": plistlib.dumps(
+                            {"CFBundleExecutable": "Energy"}
+                        ),
+                        "Payload/Energy.app/Energy": payload,
+                    }
+                    platform = "ios"
+                else:
+                    entries = {
+                        f"{prefix}lib/arm64-v8a/libinverter_dashboard_lib.so": payload
+                    }
+                    platform = "android"
+                with (
+                    self.subTest(command=command, suffix=suffix),
+                    self.assertRaisesRegex(ValueError, command),
+                ):
+                    boundary.verify_archive(
+                        package_fixture(root / f"app.{suffix}", entries), platform
+                    )
+
     def test_plugin_package_dependencies_are_rejected(self):
         """Package verification and installation must not enter mobile runtime code."""
         for crate in ("ed25519-dalek", "curve25519-dalek", "zip"):
@@ -229,16 +272,20 @@ class MobilePluginBoundaryTests(unittest.TestCase):
                     f"inverter-dashboard v1.0.0\npackage-adapter v1.0.0\n{crate} v1.0.0"
                 )
 
-    def test_compiler_graph_rejects_embedded_plugin_publisher_policy(self):
-        """An embedded publisher file is part of the excluded desktop ecosystem."""
+    def test_compiler_graph_rejects_plugin_application_bridge_and_publisher_policy(self):
+        """Startup services and embedded policy must stay out even without handlers."""
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "library.d"
-            path.write_text(
-                "/target/lib.a: /checkout/src-tauri/src/lib.rs "
-                "/checkout/src-tauri/src/plugins/publishers.json\n"
-            )
-            with self.assertRaisesRegex(ValueError, "plugins"):
-                boundary.verify_depfile(path)
+            for source in ("application.rs", "bridge.rs", "publishers.json"):
+                path.write_text(
+                    "/target/lib.a: /checkout/src-tauri/src/lib.rs "
+                    f"/checkout/src-tauri/src/plugins/{source}\n"
+                )
+                with (
+                    self.subTest(source=source),
+                    self.assertRaisesRegex(ValueError, "plugins"),
+                ):
+                    boundary.verify_depfile(path)
 
 
 if __name__ == "__main__":

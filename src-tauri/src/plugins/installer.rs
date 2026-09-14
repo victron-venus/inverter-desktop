@@ -8,7 +8,7 @@
 use super::package::{
     read_regular_file, verify_archive_bytes, TrustStore, VerifiedPackage, MAX_ARCHIVE_BYTES,
 };
-use super::protocol::{validate_plugin_id, DESKTOP_TARGETS};
+use super::protocol::{validate_plugin_id, PluginManifest, DESKTOP_TARGETS};
 use super::runtime::{PluginError, PluginHost, WorkerSpec, WorkerState};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,21 @@ pub struct InstalledPlugin {
     pub rollback: Option<PackageVersion>,
     /// Desired state. Opening a store does not automatically launch workers.
     pub enabled: bool,
+}
+
+/// Metadata remains visible when installed bytes no longer verify. A manifest
+/// is exposed only after its archive and extracted inventory pass verification.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct InstalledPluginDetails {
+    pub record: InstalledPlugin,
+    pub manifest: Option<PluginManifest>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PluginRestoreResult {
+    pub plugin_id: String,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -178,6 +193,80 @@ impl PackageManager {
         Ok(self.read_state()?.plugins.into_values().collect())
     }
 
+    pub(crate) async fn list_details_in_epoch(
+        &self,
+        epoch: u64,
+    ) -> Result<Vec<InstalledPluginDetails>, String> {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            let mut details = Vec::new();
+            for record in manager.read_state()?.plugins.into_values() {
+                let (manifest, error) =
+                    match manager.verify_installed(&record.plugin_id, &record.active) {
+                        Ok(package) => (Some(package.manifest().clone()), None),
+                        Err(error) => (None, Some(error)),
+                    };
+                details.push(InstalledPluginDetails {
+                    record,
+                    manifest,
+                    error,
+                });
+            }
+            manager.check_epoch(epoch)?;
+            Ok(details)
+        })
+        .await
+        .map_err(|_| "package inspection task failed".to_string())?
+    }
+
+    /// Own the selected archive bytes for review. Installing this value never
+    /// reopens the selected path, even if its contents are replaced meanwhile.
+    pub(crate) async fn inspect_archive(
+        &self,
+        archive: PathBuf,
+        epoch: u64,
+    ) -> Result<VerifiedPackage, String> {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            let package = verify_archive_bytes(
+                read_regular_file(&archive, MAX_ARCHIVE_BYTES)?,
+                &manager.0.trust,
+                &manager.0.target,
+            )?;
+            manager.check_epoch(epoch)?;
+            Ok(package)
+        })
+        .await
+        .map_err(|_| "package inspection task failed".to_string())?
+    }
+
+    pub(crate) async fn install_verified_in_epoch(
+        &self,
+        package: VerifiedPackage,
+        enable: bool,
+        epoch: u64,
+    ) -> Result<InstalledPlugin, String> {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            // A VerifiedPackage may have been produced by another trust store.
+            // Its immutable bytes must still satisfy this manager's policy.
+            let package = verify_archive_bytes(
+                package.archive_bytes().to_vec(),
+                &manager.0.trust,
+                &manager.0.target,
+            )?;
+            manager.install_package_locked(package, enable, epoch).await
+        })
+        .await
+        .map_err(|_| "package installation task failed".to_string())?
+    }
+
     /// Verification happens before the working version is stopped. Installation
     /// can remain disabled; activation always requires a successful handshake.
     pub async fn install(&self, archive: PathBuf, enable: bool) -> Result<InstalledPlugin, String> {
@@ -189,27 +278,51 @@ impl PackageManager {
     }
 
     pub async fn enable(&self, plugin_id: &str) -> Result<InstalledPlugin, String> {
+        self.enable_in_epoch(plugin_id, self.0.host.authority_epoch())
+            .await
+    }
+
+    pub(crate) async fn enable_in_epoch(
+        &self,
+        plugin_id: &str,
+        epoch: u64,
+    ) -> Result<InstalledPlugin, String> {
         let manager = self.clone();
         let id = plugin_id.to_owned();
-        let epoch = self.0.host.authority_epoch();
         tokio::spawn(async move { manager.select_inner(&id, false, epoch).await })
             .await
             .map_err(|_| "package activation task failed".to_string())?
     }
 
     pub async fn rollback(&self, plugin_id: &str) -> Result<InstalledPlugin, String> {
+        self.rollback_in_epoch(plugin_id, self.0.host.authority_epoch())
+            .await
+    }
+
+    pub(crate) async fn rollback_in_epoch(
+        &self,
+        plugin_id: &str,
+        epoch: u64,
+    ) -> Result<InstalledPlugin, String> {
         let manager = self.clone();
         let id = plugin_id.to_owned();
-        let epoch = self.0.host.authority_epoch();
         tokio::spawn(async move { manager.select_inner(&id, true, epoch).await })
             .await
             .map_err(|_| "package rollback task failed".to_string())?
     }
 
     pub async fn disable(&self, plugin_id: &str) -> Result<InstalledPlugin, String> {
+        self.disable_in_epoch(plugin_id, self.0.host.authority_epoch())
+            .await
+    }
+
+    pub(crate) async fn disable_in_epoch(
+        &self,
+        plugin_id: &str,
+        epoch: u64,
+    ) -> Result<InstalledPlugin, String> {
         let manager = self.clone();
         let id = plugin_id.to_owned();
-        let epoch = self.0.host.authority_epoch();
         tokio::spawn(async move {
             let _operation = manager.0.operation.lock().await;
             manager.check_epoch(epoch)?;
@@ -235,9 +348,13 @@ impl PackageManager {
     /// Removes only package records/content. No legacy/core configuration or
     /// future plugin-owned settings namespace is deleted by this checkpoint.
     pub async fn remove(&self, plugin_id: &str) -> Result<(), String> {
+        self.remove_in_epoch(plugin_id, self.0.host.authority_epoch())
+            .await
+    }
+
+    pub(crate) async fn remove_in_epoch(&self, plugin_id: &str, epoch: u64) -> Result<(), String> {
         let manager = self.clone();
         let id = plugin_id.to_owned();
-        let epoch = self.0.host.authority_epoch();
         tokio::spawn(async move {
             let _operation = manager.0.operation.lock().await;
             manager.check_epoch(epoch)?;
@@ -255,6 +372,50 @@ impl PackageManager {
         })
         .await
         .map_err(|_| "package removal task failed".to_string())?
+    }
+
+    /// Explicit authenticated restoration; opening the store still never starts
+    /// a worker. Release the operation lock between identities so queued user
+    /// changes take precedence over the remainder of this bounded restore pass.
+    pub(crate) async fn restore_enabled_in_epoch(
+        &self,
+        epoch: u64,
+    ) -> Result<Vec<PluginRestoreResult>, String> {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let ids: Vec<_> = {
+                let _operation = manager.0.operation.lock().await;
+                manager.check_epoch(epoch)?;
+                manager
+                    .read_state()?
+                    .plugins
+                    .into_values()
+                    .filter(|record| record.enabled)
+                    .map(|record| record.plugin_id)
+                    .collect()
+            };
+            let mut results = Vec::new();
+            for id in ids {
+                let _operation = manager.0.operation.lock().await;
+                manager.check_epoch(epoch)?;
+                let Some(record) = manager.read_state()?.plugins.remove(&id) else {
+                    continue;
+                };
+                if !record.enabled {
+                    continue;
+                }
+                let error = manager.restore_one_locked(&record, epoch).await.err();
+                manager.check_epoch(epoch)?;
+                results.push(PluginRestoreResult {
+                    plugin_id: id,
+                    error,
+                });
+            }
+            manager.check_epoch(epoch)?;
+            Ok(results)
+        })
+        .await
+        .map_err(|_| "package restoration task failed".to_string())?
     }
 
     /// Explicitly stop owned workers and release the cross-process store lease.
@@ -311,10 +472,20 @@ impl PackageManager {
     ) -> Result<InstalledPlugin, String> {
         let _operation = self.0.operation.lock().await;
         self.check_epoch(epoch)?;
-        let original = self.read_state()?;
-        self.recover(&original)?;
         let bytes = read_regular_file(&archive, MAX_ARCHIVE_BYTES)?;
         let verified = verify_archive_bytes(bytes, &self.0.trust, &self.0.target)?;
+        self.install_package_locked(verified, enable, epoch).await
+    }
+
+    async fn install_package_locked(
+        &self,
+        verified: VerifiedPackage,
+        enable: bool,
+        epoch: u64,
+    ) -> Result<InstalledPlugin, String> {
+        self.check_epoch(epoch)?;
+        let original = self.read_state()?;
+        self.recover(&original)?;
         let id = verified.manifest().plugin_id.clone();
         let next = PackageVersion {
             version: verified.manifest().version.clone(),
@@ -363,6 +534,39 @@ impl PackageManager {
             enabled: enable,
         };
         self.activate_and_commit(original, record, epoch).await
+    }
+
+    async fn restore_one_locked(&self, record: &InstalledPlugin, epoch: u64) -> Result<(), String> {
+        let id = &record.plugin_id;
+        self.verify_installed(id, &record.active)?;
+        self.check_epoch(epoch)?;
+        let owns_version = self
+            .0
+            .owned
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            == Some(&record.active.sha256);
+        if owns_version
+            && self
+                .0
+                .host
+                .snapshots()
+                .iter()
+                .any(|snapshot| snapshot.plugin_id == *id && snapshot.state == WorkerState::Running)
+        {
+            // A user may have enabled this identity after the restore pass
+            // captured its list. Never replace that already healthy generation.
+            return Ok(());
+        }
+        self.stop_owned(id).await?;
+        if let Err(error) = self.launch(id, &record.active, epoch).await {
+            if let Err(cleanup_error) = self.stop_owned(id).await {
+                return Err(format!("{error}; {cleanup_error}"));
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     async fn select_inner(

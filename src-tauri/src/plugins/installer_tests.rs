@@ -41,10 +41,14 @@ fn key() -> SigningKey {
 }
 
 fn trust() -> TrustStore {
+    trust_for(&[PLUGIN])
+}
+
+fn trust_for(ids: &[&str]) -> TrustStore {
     TrustStore::new(vec![PublisherTrust::new(
         KEY_ID.into(),
         key().verifying_key().to_bytes(),
-        vec![PLUGIN.into()],
+        ids.iter().map(|id| (*id).into()).collect(),
     )
     .unwrap()])
     .unwrap()
@@ -101,13 +105,17 @@ fn fixture(mode: &str) -> PathBuf {
 }
 
 fn package(directory: &Path, version: &str, mode: &str) -> PathBuf {
+    package_for(directory, PLUGIN, version, mode)
+}
+
+fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf {
     let payload = directory.join(format!("source-{}", uuid::Uuid::new_v4()));
     create_private_directory(&payload).unwrap();
     let entrypoint = format!("worker{}", std::env::consts::EXE_SUFFIX);
     fs::copy(fixture(mode), payload.join(&entrypoint)).unwrap();
     let manifest = PluginManifest {
         schema_version: 1,
-        plugin_id: PLUGIN.into(),
+        plugin_id: id.into(),
         version: version.into(),
         host_api: "^1.0".into(),
         target: host_target(),
@@ -551,6 +559,347 @@ async fn queued_lifecycle_operations_cannot_cross_logout_and_relogin() {
         assert!(pending.await.unwrap().is_err());
         assert_eq!(manager.list().await.unwrap(), vec![original.clone()]);
     }
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn reviewed_archive_replacement_cannot_change_installed_bytes() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let epoch = host.authority_epoch();
+    let selected = package(&directory.0, "1.0.0", "normal");
+    let reviewed = manager
+        .inspect_archive(selected.clone(), epoch)
+        .await
+        .unwrap();
+    let reviewed_digest = reviewed.archive_sha256().to_owned();
+    let replacement = package(&directory.0, "2.0.0", "bad_identity");
+    fs::write(&selected, fs::read(replacement).unwrap()).unwrap();
+    let installed = manager
+        .install_verified_in_epoch(reviewed, true, epoch)
+        .await
+        .unwrap();
+    assert_eq!(installed.active.version, "1.0.0");
+    assert_eq!(installed.active.sha256, reviewed_digest);
+    wait_running(&host).await;
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["ok"],
+        true
+    );
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn verified_package_from_foreign_trust_cannot_bypass_manager_policy() {
+    let directory = TestDirectory::new();
+    let (reviewer, reviewer_host) = manager(&directory).await;
+    let reviewed = reviewer
+        .inspect_archive(
+            package(&directory.0, "1.0.0", "normal"),
+            reviewer_host.authority_epoch(),
+        )
+        .await
+        .unwrap();
+    let receiving_host = PluginHost::default();
+    let receiving_trust = TrustStore::new(vec![PublisherTrust::new(
+        KEY_ID.into(),
+        SigningKey::from_bytes(&[98; 32]).verifying_key().to_bytes(),
+        vec![PLUGIN.into()],
+    )
+    .unwrap()])
+    .unwrap();
+    let receiver = PackageManager::open(
+        directory.0.join("receiving-store"),
+        host_target(),
+        receiving_trust,
+        receiving_host.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(receiver
+        .install_verified_in_epoch(reviewed, true, receiving_host.authority_epoch())
+        .await
+        .is_err());
+    assert!(receiver.list().await.unwrap().is_empty());
+    assert_eq!(
+        fs::read_dir(receiver.0.root.join("staging"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert!(receiving_host.snapshots().is_empty());
+    receiver.close().await.unwrap();
+    reviewer.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn installed_details_keep_corrupt_and_untrusted_records_visible_and_removable() {
+    const OTHER: &str = "test.other";
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        trust_for(&[PLUGIN, OTHER]),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    let corrupt = manager
+        .install(package(&directory.0, "1.0.0", "normal"), false)
+        .await
+        .unwrap();
+    manager
+        .install(package_for(&directory.0, OTHER, "1.0.0", "normal"), false)
+        .await
+        .unwrap();
+    let archive = manager
+        .version_path(PLUGIN, &corrupt.active)
+        .join("archive.idplugin");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&archive, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(archive, b"corrupt").unwrap();
+    let details = manager
+        .list_details_in_epoch(host.authority_epoch())
+        .await
+        .unwrap();
+    assert_eq!(details.len(), 2);
+    let damaged = details
+        .iter()
+        .find(|item| item.record.plugin_id == PLUGIN)
+        .unwrap();
+    assert!(damaged.manifest.is_none());
+    assert!(damaged.error.is_some());
+    let valid = details
+        .iter()
+        .find(|item| item.record.plugin_id == OTHER)
+        .unwrap();
+    assert_eq!(valid.manifest.as_ref().unwrap().plugin_id, OTHER);
+    assert!(valid.error.is_none());
+    manager
+        .remove_in_epoch(PLUGIN, host.authority_epoch())
+        .await
+        .unwrap();
+    manager.close().await.unwrap();
+
+    let untrusted = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        TrustStore::new(Vec::new()).unwrap(),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    let details = untrusted
+        .list_details_in_epoch(host.authority_epoch())
+        .await
+        .unwrap();
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].record.plugin_id, OTHER);
+    assert!(details[0].manifest.is_none());
+    assert!(details[0].error.is_some());
+    untrusted
+        .remove_in_epoch(OTHER, host.authority_epoch())
+        .await
+        .unwrap();
+    assert!(untrusted.list().await.unwrap().is_empty());
+    untrusted.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_epoch_operations_reject_a_review_from_before_logout_and_relogin() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let original = manager
+        .install(package(&directory.0, "1.0.0", "normal"), false)
+        .await
+        .unwrap();
+    let epoch = host.authority_epoch();
+    let selected = package(&directory.0, "2.0.0", "normal");
+    let reviewed = manager
+        .inspect_archive(selected.clone(), epoch)
+        .await
+        .unwrap();
+    host.revoke();
+    host.resume();
+    assert!(manager.inspect_archive(selected, epoch).await.is_err());
+    assert!(manager
+        .install_verified_in_epoch(reviewed, true, epoch)
+        .await
+        .is_err());
+    assert!(manager.enable_in_epoch(PLUGIN, epoch).await.is_err());
+    assert!(manager.disable_in_epoch(PLUGIN, epoch).await.is_err());
+    assert!(manager.rollback_in_epoch(PLUGIN, epoch).await.is_err());
+    assert!(manager.remove_in_epoch(PLUGIN, epoch).await.is_err());
+    assert!(manager.list_details_in_epoch(epoch).await.is_err());
+    assert!(manager.restore_enabled_in_epoch(epoch).await.is_err());
+    assert_eq!(manager.list().await.unwrap(), vec![original]);
+    assert!(host.snapshots().is_empty());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn restoration_is_explicit_skips_disabled_and_isolates_failed_handshakes() {
+    const BAD: &str = "test.bad";
+    const DISABLED: &str = "test.disabled";
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        trust_for(&[PLUGIN, BAD, DISABLED]),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    manager
+        .install(package(&directory.0, "1.0.0", "normal"), true)
+        .await
+        .unwrap();
+    manager
+        .install(
+            package_for(&directory.0, BAD, "1.0.0", "bad_identity"),
+            false,
+        )
+        .await
+        .unwrap();
+    manager
+        .install(
+            package_for(&directory.0, DISABLED, "1.0.0", "normal"),
+            false,
+        )
+        .await
+        .unwrap();
+    // Simulate previously enabled inventory whose worker cannot handshake on
+    // this startup. Keep the signed archive intact and exercise a real process.
+    let mut desired = manager.read_state().unwrap();
+    desired.plugins.get_mut(BAD).unwrap().enabled = true;
+    manager.write_state(&desired).unwrap();
+    manager.close().await.unwrap();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        trust_for(&[PLUGIN, BAD, DISABLED]),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(host.snapshots().is_empty());
+    let results = manager
+        .restore_enabled_in_epoch(host.authority_epoch())
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results
+        .iter()
+        .find(|item| item.plugin_id == BAD)
+        .unwrap()
+        .error
+        .is_some());
+    assert!(results
+        .iter()
+        .find(|item| item.plugin_id == PLUGIN)
+        .unwrap()
+        .error
+        .is_none());
+    wait_running(&host).await;
+    assert_eq!(host.snapshots().len(), 1);
+    let pid = host
+        .action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap()["pid"]
+        .clone();
+    manager
+        .restore_enabled_in_epoch(host.authority_epoch())
+        .await
+        .unwrap();
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["pid"],
+        pid
+    );
+    assert_eq!(manager.read_state().unwrap().plugins, desired.plugins);
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_disable_wins_over_a_later_identity_in_a_restore_pass() {
+    const FIRST: &str = "test.first";
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        trust_for(&[PLUGIN, FIRST]),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    manager
+        .install(package_for(&directory.0, FIRST, "1.0.0", "no_hello"), false)
+        .await
+        .unwrap();
+    manager
+        .install(package(&directory.0, "1.0.0", "normal"), false)
+        .await
+        .unwrap();
+    let mut desired = manager.read_state().unwrap();
+    for record in desired.plugins.values_mut() {
+        record.enabled = true;
+    }
+    manager.write_state(&desired).unwrap();
+    let epoch = host.authority_epoch();
+    let restoring = manager.clone();
+    let restore = tokio::spawn(async move { restoring.restore_enabled_in_epoch(epoch).await });
+    time::timeout(Duration::from_secs(5), async {
+        while !host.snapshots().iter().any(|item| item.plugin_id == FIRST) {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    manager.disable_in_epoch(PLUGIN, epoch).await.unwrap();
+    let results = restore.await.unwrap().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].plugin_id, FIRST);
+    assert!(results[0].error.is_some());
+    assert!(!manager.read_state().unwrap().plugins[PLUGIN].enabled);
+    assert!(host.snapshots().is_empty());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn revocation_during_restoration_never_revives_a_worker_in_a_new_session() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    manager
+        .install(package(&directory.0, "1.0.0", "no_hello"), false)
+        .await
+        .unwrap();
+    let mut desired = manager.read_state().unwrap();
+    desired.plugins.get_mut(PLUGIN).unwrap().enabled = true;
+    manager.write_state(&desired).unwrap();
+    let epoch = host.authority_epoch();
+    let restoring = manager.clone();
+    let restore = tokio::spawn(async move { restoring.restore_enabled_in_epoch(epoch).await });
+    time::timeout(Duration::from_secs(5), async {
+        while host.snapshots().is_empty() {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    host.revoke();
+    host.resume();
+    assert!(restore.await.unwrap().is_err());
+    assert!(host.snapshots().is_empty());
+    assert_eq!(manager.read_state().unwrap().plugins, desired.plugins);
     manager.close().await.unwrap();
 }
 

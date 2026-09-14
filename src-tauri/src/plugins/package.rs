@@ -77,6 +77,10 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
+    pub fn is_empty(&self) -> bool {
+        self.publishers.is_empty()
+    }
+
     pub fn new(publishers: Vec<PublisherTrust>) -> Result<Self, String> {
         if publishers.len() > 128 {
             return Err("publisher trust store exceeds key limit".into());

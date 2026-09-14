@@ -518,3 +518,97 @@ async fn a_buffered_reply_cannot_cross_logout_and_a_new_login() {
     assert_eq!(action(&host, "echo").await.unwrap()["ok"], true);
     host.shutdown().await;
 }
+
+#[test]
+fn an_older_concurrent_resume_cannot_undo_a_newer_revocation() {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Barrier;
+
+    let first_revoked = Arc::new(Barrier::new(2));
+    let continue_first = Arc::new(Barrier::new(2));
+    let changed = Arc::new(AtomicUsize::new(0));
+    let host = PluginHost::new(Arc::new({
+        let first_revoked = first_revoked.clone();
+        let continue_first = continue_first.clone();
+        move || {
+            if changed.fetch_add(1, Ordering::AcqRel) == 0 {
+                // Pause after the authority lock is released but before the
+                // first revoke_epoch returns to its unlock continuation.
+                first_revoked.wait();
+                continue_first.wait();
+            }
+        }
+    }));
+    let older_host = host.clone();
+    let older = std::thread::spawn(move || {
+        let epoch = older_host.revoke_epoch();
+        (epoch, older_host.resume_in_epoch(epoch))
+    });
+    first_revoked.wait();
+    let newer_epoch = host.revoke_epoch();
+    continue_first.wait();
+    let (older_epoch, resumed) = older.join().unwrap();
+    assert_ne!(older_epoch, newer_epoch);
+    assert!(!resumed);
+    assert_eq!(host.authority_epoch(), newer_epoch);
+    assert!(!host.is_authorized_epoch(newer_epoch));
+
+    assert!(host.resume_in_epoch(newer_epoch));
+    assert!(!host.resume_in_epoch(older_epoch));
+    assert!(host.is_authorized_epoch(newer_epoch));
+}
+
+#[tokio::test]
+async fn an_old_session_action_cannot_reach_a_replacement_worker() {
+    let host = PluginHost::default();
+    host.start(spec("normal")).await.unwrap();
+    ready(&host).await;
+    let old_epoch = host.authority_epoch();
+    // Keep this caller unpolled until logout and a new login have replaced the
+    // worker. If dispatched, this advertised action would terminate that child.
+    let old_request = host.action_in_epoch(
+        TEST_PLUGIN,
+        "crash",
+        json!({}),
+        Duration::from_secs(2),
+        old_epoch,
+    );
+    let new_epoch = host.revoke_epoch();
+    assert!(host.resume_in_epoch(new_epoch));
+    host.wait_revoked().await;
+    host.start_in_epoch(spec("normal"), new_epoch)
+        .await
+        .unwrap();
+    let replacement = ready(&host).await;
+
+    assert_eq!(old_request.await.unwrap_err(), PluginError::Unavailable);
+    assert_eq!(
+        host.action_in_epoch(
+            TEST_PLUGIN,
+            "echo",
+            json!({}),
+            Duration::from_secs(2),
+            new_epoch,
+        )
+        .await
+        .unwrap()["ok"],
+        true
+    );
+    let after = host.snapshots().pop().unwrap();
+    assert_eq!(after.generation, replacement.generation);
+    assert_eq!(after.restart_count, replacement.restart_count);
+    assert_eq!(after.state, WorkerState::Running);
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_epoch_bound_resume_cannot_revive_a_shutdown_host() {
+    let host = PluginHost::default();
+    let epoch = host.revoke_epoch();
+    assert!(host.resume_in_epoch(epoch));
+    host.shutdown().await;
+    let stopped_epoch = host.authority_epoch();
+    assert!(!host.resume_in_epoch(stopped_epoch));
+    assert!(!host.resume_in_epoch(epoch));
+    assert!(!host.is_authorized_epoch(stopped_epoch));
+}

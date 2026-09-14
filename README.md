@@ -12,16 +12,24 @@
 Desktop and mobile application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
 Android and iOS contain the inverter core: telemetry, MQTT controls, Cerbo EV/water,
-charts, and core notifications. Home Assistant, cameras, and the planned installable
-plugin ecosystem are desktop-only. Implementation progress is tracked in
-[TODO.md](TODO.md), with the current build boundary documented in
+charts, and core notifications. Home Assistant, cameras, and the plugin ecosystem
+are desktop-only. Implementation progress is tracked in [TODO.md](TODO.md), with
+the build boundary documented in
 [desktop features and mobile core](docs/desktop-features-and-mobile-core.md).
-The desktop [worker host](docs/plugin-worker-protocol.md) supports versioned
-process communication and declarative dashboard contributions. Its initial
-registry is empty; package installation and HA/camera migration remain in progress.
-The native [package pipeline](docs/plugin-packages.md) adds signed archive creation,
-verification, and transactional lifecycle APIs. Desktop installation UI and
-production publisher provisioning remain separate roadmap items.
+
+Desktop settings now include a **Plugins** tab for reviewing signed packages,
+installing/updating, enabling/disabling, rolling back, and uninstalling them. The
+[native package pipeline](docs/plugin-packages.md) verifies the selected archive
+before showing its identity, version, publisher, and declared capabilities. Only
+an explicit Install/Update action commits those reviewed bytes. Enabled installed
+workers can resume after authentication and stop on logout.
+
+**The current release publisher policy is empty, so package installation is
+disabled.** The manager reports this directly; it does not offer unsigned packages
+or user-supplied trust. Production publisher provisioning remains a separate step.
+Home Assistant and cameras still come bundled with desktop and are not managed as
+packages yet. Their worker extraction and the remaining contribution services are
+still open; see the [worker protocol](docs/plugin-worker-protocol.md).
 
 | Surface                     | Recommended project                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ |
