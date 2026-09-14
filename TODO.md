@@ -201,15 +201,18 @@ playback. Keep this implementation separate from the current motion checkpoint.
 - [x] Extend Android/iOS source/dependency/asset checks; add no mobile media plugin
       route, window, package, worker, or optional integration implementation.
       Add independent new media-marker regressions for APK, AAB, and IPA payloads.
-- [ ] Finish current-head native/frontend checks, mobile target/artifact checks,
-      and exact-commit hosted CI before opening/merging this checkpoint's PR.
+- [x] Complete local native/frontend checks, both frontend builds, actual package
+      and native playback acceptance, formatting, and strict Clippy for both the
+      normal and opt-in smoke-feature builds.
+- [ ] Pass current mobile target/artifact checks, review, and exact-commit hosted
+      CI before merging [PR #426](https://github.com/victron-venus/inverter-desktop/pull/426).
 
 Direct Frigate is the scope of this checkpoint. HA proxy enrichment, snapshots,
 Kerberos/Ring, configuration migration, and removing bundled compatibility code
 remain later work. The legacy media command is not a safe lifecycle shortcut: it
 reads shared configuration and lacks plugin/generation ownership across downloads.
 
-Verified local baselines are 381 native tests, 295 frontend tests, and worker strict
+Final local checks passed 381 native tests, 295 frontend tests, and worker strict
 Clippy plus 17 unit and 10 actual subprocess/TCP tests. The worker release build,
 fresh advisory audit, real-binary package staging, and 19 packaging tests passed.
 Both explicitly selected release-worker/signed-package/Mosquitto tests passed
@@ -225,8 +228,9 @@ monitor work area, and showing a plugin window on macOS no longer makes it the
 key window. The [native smoke record](docs/native-plugin-media-smoke.md#recorded-macos-acceptance)
 details the evidence. Linux/Windows graphical playback remains pending; CI
 explicitly compiles/lints the opt-in example on Linux and runs its non-graphical
-`--help` on Linux and Windows. Final suite reruns, current mobile artifacts and
-exact-commit hosted delivery remain pending.
+`--help` on Linux and Windows. The explicit smoke input-policy test and all-targets
+Clippy with and without the smoke feature also passed. Current mobile artifacts
+and exact-commit hosted delivery remain pending in PR #426.
 
 ### Completed checkpoint: retained data inventory and cleanup
 
