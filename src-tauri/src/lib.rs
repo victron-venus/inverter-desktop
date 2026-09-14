@@ -21,6 +21,8 @@ mod gateway;
 mod ha_api;
 mod inverter_control;
 pub(crate) mod mqtt;
+#[cfg(desktop)]
+pub mod plugins;
 #[cfg(target_os = "macos")]
 mod tray_icon;
 
@@ -1817,6 +1819,8 @@ pub fn run() {
                 #[cfg(desktop)]
                 let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
                     release_info::get_release_info,
+                    plugins::bridge::get_plugin_snapshot,
+                    plugins::bridge::plugin_action,
                     get_state,
                     get_setpoint_override,
                     set_setpoint_override,
@@ -1895,6 +1899,8 @@ pub fn run() {
             true
         })
         .setup(|app| {
+            #[cfg(desktop)]
+            plugins::bridge::install(app.handle());
             // Start background HA polling
             #[cfg(desktop)]
             ha_session::start(app.handle().clone());
@@ -2210,8 +2216,12 @@ pub fn run() {
             info!("Setup block completed successfully.");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            #[cfg(desktop)]
+            plugins::bridge::on_run_event(_app, _event);
+        });
 }
 
 #[cfg(test)]

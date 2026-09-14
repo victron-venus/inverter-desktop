@@ -35,7 +35,10 @@ The completed resilience checklist is preserved in
 
 The first checkpoint establishes core/mobile build boundaries and separates core
 from desktop feature contributions. Desktop retains bundled HA/camera behavior
-during this compatibility stage. This is **not** completion of installable plugins.
+during this compatibility stage. This is **not** completion of installable plugins. The second checkpoint adds
+a versioned worker protocol, real process supervision, and declarative dashboard
+contributions. Its shipped registry remains empty until package installation is
+implemented; legacy HA/camera features are still bundled.
 
 The intended package is a signed first-party `.idplugin` archive: a versioned
 manifest, a target-specific executable worker, and declarative UI contributions.
@@ -113,27 +116,42 @@ their MQTT route. Desktop regression checks remain green.
 Acceptance: deliberately including a desktop module or native command makes a
 mobile gate fail. A successful desktop build is insufficient evidence.
 
-### 4. Versioned desktop host and worker protocol
+### 4. Versioned desktop host and worker protocol — runtime checkpoint implemented
 
-- [ ] Define host API version independently from app/package versions.
-- [ ] Specify manifest schema, stable ID, package version, host API range, target
-      triple, entrypoint, config schema, permissions, file sizes/digests, and signature.
-- [ ] Define request/response/events, correlation IDs, deadlines, maximum frame
+- [x] Define host API version independently from app/package versions.
+- [x] Specify manifest schema, stable ID, package version, host API range, target
+      triple, entrypoint, config schema, permissions, file sizes/digests, and
+      signature encoding. Package trust and cryptographic verification remain
+      phase 5 requirements.
+- [x] Define request/response/events, correlation IDs, deadlines, maximum frame
       sizes, cancellation, startup handshake, and error codes.
-- [ ] Implement desktop-only start/stop/restart supervision, exit monitoring,
-      bounded retries/backoff, resource limits, and deterministic app shutdown.
-- [ ] Render generic dashboard/settings/status/notification/media contributions;
-      keep HA entity types out of host contracts.
-- [ ] Authorize host operations by plugin identity and app session, with scoped
-      access to its own settings/secrets, permitted origins/topics, and owned files.
-- [ ] Keep inverter writes in core; grant neither arbitrary Tauri invocation nor
-      arbitrary inverter commands to workers by default.
-- [ ] Exercise a separate fixture worker through the actual protocol: start,
-      contribute, act, stop, crash, and recover without affecting core telemetry.
-- [ ] Verify multiple app windows neither duplicate workers nor bypass authority.
+- [x] Implement desktop-only start/stop/restart supervision, exit monitoring,
+      bounded retries/backoff, queue/process/message limits, and normal app shutdown.
+- [x] Render generic text, metric, status, and preset-action dashboard contributions
+      without HA entity types, executable UI, or remote navigation.
+- [ ] Extend contributions to settings, notifications, and owned media surfaces.
+- [x] Limit worker IPC to authenticated dashboard/settings windows and advertised
+      action parameters. Revoke old session epochs on logout/policy change/expiry;
+      reject stale queued writes, contributions, and action results after re-login.
+- [ ] Authorize scoped host services for plugin settings/secrets, permitted
+      origins/topics, and owned files. Manifest permission metadata alone grants
+      none of these services.
+- [x] Keep inverter writes in core; expose no arbitrary Tauri invocation or
+      core MQTT publishing operation to workers.
+- [x] Exercise a separately compiled fixture executable through actual pipes:
+      start, contribute, act, cancel, stop, crash, and recover. The standalone
+      host has no MQTT/IGW handles or core transport dependency.
+- [x] Share one native registry across windows; verify duplicate registration,
+      window authority, revocation, and repeated quit waiting for cleanup.
+- [ ] Verify installed-plugin recovery alongside active MQTT/IGW telemetry and
+      real multiwindow interaction during final operational acceptance.
 
-Acceptance: a separately built worker completes the lifecycle through the real
-host. A fake registry or statically linked crate does not satisfy this milestone.
+Acceptance for the runtime checkpoint: a separately built worker completes the
+lifecycle through the actual host. Its executable is selected by trusted native
+test/development code; there is no executable-path IPC or automatic package
+loading. Complete phase 4 acceptance also requires the remaining contribution
+surfaces and scoped host services above. A fake registry or statically linked
+feature implementation does not satisfy worker lifecycle verification.
 
 ### 5. Installation, update, rollback, and removal
 
@@ -260,6 +278,28 @@ or removing a package changes available features without reinstalling the app.
   by the extraction. Both frontend builds and all frontend tests passed again.
 - Remaining validation boundary: no physical inverter commands, installed HA/camera
   deployment, or real mobile device exercise was performed.
+
+### Worker host checkpoint
+
+- Baseline: merged boundary PR #411, main `563a6dd`.
+- Branch: `feat/desktop-plugin-worker`, isolated from the canonical checkout.
+- Protocol: eight isolated contract tests passed, including incompatible versions,
+  identities, unsafe metadata, unknown operations, and oversized/deep frames.
+- Runtime: 13 tests passed against the production host, including a separately
+  compiled Rust fixture and deterministic pipe-backpressure tests. Covered
+  cancellation/deadlines/revocation, late results, restart exhaustion, startup
+  failure, stderr draining, environment isolation, forced stop, and process reaping.
+- Frontend: all 212 tests and eight mobile tests passed. Both profile builds,
+  typechecks, formatting, and lint passed (repository lint retains warnings).
+- Full native integration: all 198 macOS Rust tests passed, including the
+  protocol/runtime/bridge checks, and strict clippy passed. iOS simulator and
+  Android aarch64 `cargo check --locked --all-features` passed. The existing
+  local HTTP fixture required localhost permission; no working service was used.
+- Mobile guards reject both worker IPC commands and the fixed host event;
+  all 18 packaged-verifier fixtures passed. Final Android/iOS archive checks
+  remain required in the PR quality gate before merge.
+- Scope: no installed plugin package, signature verification, HA/camera migration,
+  physical inverter write, or real-device deployment is claimed by this checkpoint.
 
 ## Reference constraints
 

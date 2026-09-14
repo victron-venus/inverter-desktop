@@ -1,4 +1,8 @@
 export default {
+  plugins: {
+    unavailable: 'Temporarily unavailable',
+    actionFailed: 'Unable to complete the action. Try again.',
+  },
   status: {
     haStale: 'Home Assistant offline — last known values',
     ha: 'HA',
