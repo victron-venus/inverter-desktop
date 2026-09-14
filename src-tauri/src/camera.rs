@@ -6,6 +6,20 @@ use std::time::Duration;
 use tauri::Manager;
 
 const CAMERA_CLIP_SUBDIR: &str = "inverter-desktop-camera";
+const CAMERA_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const CAMERA_READ_TIMEOUT: Duration = Duration::from_secs(60);
+const CAMERA_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const CAMERA_MAX_CLIP_BYTES: usize = 256 * 1024 * 1024;
+const CAMERA_ERROR_BODY_BYTES: usize = 8 * 1024;
+const CAMERA_MAX_ATTEMPTS: u32 = 8;
+const CAMERA_BACKOFF_MS: [u64; 7] = [1000, 2000, 3000, 4000, 5000, 5000, 5000];
+
+struct CameraDownloadPolicy<'a> {
+    max_attempts: u32,
+    backoff_ms: &'a [u64],
+    total_timeout: Duration,
+    max_clip_bytes: usize,
+}
 
 fn camera_clip_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let temp = app
@@ -74,6 +88,22 @@ fn format_camera_clip_http_error(
     } else {
         format!("Failed to download camera clip: HTTP {status} ({video_url}): {snippet}")
     }
+}
+
+async fn read_camera_error_body(response: &mut reqwest::Response) -> String {
+    let mut bytes = Vec::new();
+    while bytes.len() < CAMERA_ERROR_BODY_BYTES {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) | Err(_) => break,
+        };
+        let remaining = CAMERA_ERROR_BODY_BYTES - bytes.len();
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        if chunk.len() >= remaining {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Reqwest labels any failed body transfer as a decode error. Include the source
@@ -168,6 +198,183 @@ fn camera_media_extension(content_type: Option<&str>, video_url: &str) -> &'stat
     "mp4"
 }
 
+fn build_camera_http_client(
+    builder: reqwest::ClientBuilder,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> Result<reqwest::Client, String> {
+    builder
+        // A camera redirect must not carry HA credentials to another origin.
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(connect_timeout)
+        // Frigate streams generated clips without a Content-Length. A total
+        // request deadline can abort a healthy long download; fail only when
+        // the connection itself stops making progress.
+        .read_timeout(read_timeout)
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))
+}
+
+fn camera_retry_delay(policy: &CameraDownloadPolicy<'_>, attempt: u32) -> Duration {
+    let index = (attempt as usize).saturating_sub(1);
+    Duration::from_millis(
+        policy
+            .backoff_ms
+            .get(index)
+            .or_else(|| policy.backoff_ms.last())
+            .copied()
+            .unwrap_or_default(),
+    )
+}
+
+async fn fetch_camera_clip_with_policy(
+    client: &reqwest::Client,
+    video_url: &str,
+    auth: Option<&str>,
+    policy: CameraDownloadPolicy<'_>,
+) -> Result<(Vec<u8>, &'static str), String> {
+    let total_timeout = policy.total_timeout;
+    let operation = async {
+        let mut last_err = String::new();
+
+        'attempts: for attempt in 1..=policy.max_attempts {
+            let mut req = client.get(video_url);
+            if let Some(bearer) = auth {
+                req = req.header(reqwest::header::AUTHORIZATION, bearer);
+            }
+            let mut response = match req.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    last_err = format_camera_transfer_error(
+                        "Failed to download camera clip",
+                        error,
+                        video_url,
+                    );
+                    if attempt < policy.max_attempts {
+                        let delay = camera_retry_delay(&policy, attempt);
+                        warn!(
+                            "Camera clip download attempt {attempt}/{} failed (send/connect); retrying in {}ms: {last_err}",
+                            policy.max_attempts,
+                            delay.as_millis()
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    return Err(last_err);
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = read_camera_error_body(&mut response).await;
+                last_err = format_camera_clip_http_error(status, video_url, &body);
+                if attempt < policy.max_attempts && camera_clip_http_status_retryable(status) {
+                    let delay = camera_retry_delay(&policy, attempt);
+                    warn!(
+                        "Camera clip download attempt {attempt}/{} got HTTP {status}; retrying in {}ms url={video_url} body={}",
+                        policy.max_attempts,
+                        delay.as_millis(),
+                        short_http_body_snippet(&body)
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                return Err(last_err);
+            }
+
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let ext = camera_media_extension(content_type.as_deref(), video_url);
+            let version = response.version();
+            let content_length = response.content_length();
+            if content_length.is_some_and(|length| length > policy.max_clip_bytes as u64) {
+                return Err(format!(
+                    "Camera clip exceeds the {} byte limit ({video_url})",
+                    policy.max_clip_bytes
+                ));
+            }
+
+            let mut bytes = Vec::with_capacity(
+                content_length
+                    .and_then(|length| usize::try_from(length).ok())
+                    .unwrap_or_default()
+                    .min(policy.max_clip_bytes),
+            );
+            loop {
+                let chunk = match response.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(error) => {
+                        last_err = format_camera_transfer_error(
+                            "Failed to read camera clip body",
+                            error,
+                            video_url,
+                        );
+                        warn!(
+                            "Camera clip body transfer failed on attempt {attempt}/{} (status={status}, protocol={version:?}, content_length={content_length:?}, content_type={content_type:?}): {last_err}",
+                            policy.max_attempts
+                        );
+                        if attempt < policy.max_attempts {
+                            let delay = camera_retry_delay(&policy, attempt);
+                            warn!(
+                                "Camera clip download attempt {attempt}/{} failed reading body; retrying in {}ms url={video_url}",
+                                policy.max_attempts,
+                                delay.as_millis()
+                            );
+                            tokio::time::sleep(delay).await;
+                            continue 'attempts;
+                        }
+                        return Err(last_err);
+                    }
+                };
+                let next_size = bytes
+                    .len()
+                    .checked_add(chunk.len())
+                    .ok_or_else(|| format!("Camera clip size overflow ({video_url})"))?;
+                if next_size > policy.max_clip_bytes {
+                    return Err(format!(
+                        "Camera clip exceeds the {} byte limit ({video_url})",
+                        policy.max_clip_bytes
+                    ));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+
+            if bytes.is_empty() {
+                last_err = format!("Downloaded camera clip is empty ({video_url})");
+                if attempt < policy.max_attempts {
+                    let delay = camera_retry_delay(&policy, attempt);
+                    warn!(
+                        "Camera clip download attempt {attempt}/{} got empty body; retrying in {}ms url={video_url}",
+                        policy.max_attempts,
+                        delay.as_millis()
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                return Err(last_err);
+            }
+
+            if attempt > 1 {
+                info!(
+                    "Camera clip download succeeded on attempt {attempt}/{} url={video_url}",
+                    policy.max_attempts
+                );
+            }
+            return Ok((bytes, ext));
+        }
+
+        Err(last_err)
+    };
+
+    tokio::time::timeout(total_timeout, operation)
+        .await
+        .map_err(|_| format!("Camera clip download exceeded {total_timeout:?} ({video_url})"))?
+}
+
 pub(super) async fn download_camera_clip(
     app: &tauri::AppHandle,
     video_url: &str,
@@ -187,139 +394,338 @@ Expose ring-mqtt on the LAN and set ring_snapshot_url_template to an HTTP snapsh
         .map_err(|e| format!("Failed to create camera clip temp dir: {e}"))?;
     // Do not wipe the clip dir — other camera windows may still be playing.
 
-    let client = reqwest::Client::builder()
-        // A camera redirect must not carry HA credentials to another origin.
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = build_camera_http_client(
+        reqwest::Client::builder(),
+        CAMERA_CONNECT_TIMEOUT,
+        CAMERA_READ_TIMEOUT,
+    )?;
 
     let auth = camera_download_bearer_token(app, url_trim);
-
     // Frigate recording segments can take ~10s after `end`+`has_clip`; cover that
-    // window plus brief network blips. Kerberos URLs rarely hit these statuses.
-    const MAX_ATTEMPTS: u32 = 8;
-    const BACKOFF_MS: [u64; 7] = [1000, 2000, 3000, 4000, 5000, 5000, 5000];
-    let mut last_err = String::new();
+    // window plus brief network blips without allowing retries to run forever.
+    let (bytes, ext) = fetch_camera_clip_with_policy(
+        &client,
+        url_trim,
+        auth.as_deref(),
+        CameraDownloadPolicy {
+            max_attempts: CAMERA_MAX_ATTEMPTS,
+            backoff_ms: &CAMERA_BACKOFF_MS,
+            total_timeout: CAMERA_TOTAL_TIMEOUT,
+            max_clip_bytes: CAMERA_MAX_CLIP_BYTES,
+        },
+    )
+    .await?;
 
-    for attempt in 1..=MAX_ATTEMPTS {
-        let mut req = client.get(url_trim);
-        if let Some(ref bearer) = auth {
-            req = req.header(reqwest::header::AUTHORIZATION, bearer);
-        }
-        let response = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                last_err =
-                    format_camera_transfer_error("Failed to download camera clip", e, video_url);
-                if attempt < MAX_ATTEMPTS {
-                    let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                    warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed (send/connect); retrying in {delay}ms: {last_err}"
-                    );
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    continue;
-                }
-                return Err(last_err);
-            }
-        };
+    let file_name = format!("clip-{}.{ext}", uuid::Uuid::new_v4());
+    let dest = clip_dir.join(file_name);
+    std::fs::write(&dest, &bytes)
+        .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            last_err = format_camera_clip_http_error(status, video_url, &body);
-            if attempt < MAX_ATTEMPTS && camera_clip_http_status_retryable(status) {
-                let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                warn!(
-                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got HTTP {status}; retrying in {delay}ms url={video_url} body={}",
-                    short_http_body_snippet(&body)
-                );
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-                continue;
-            }
-            return Err(last_err);
-        }
-
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let ext = camera_media_extension(content_type.as_deref(), url_trim);
-        let version = response.version();
-        let content_length = response.content_length();
-
-        let bytes = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                last_err =
-                    format_camera_transfer_error("Failed to read camera clip body", e, video_url);
-                warn!(
-                    "Camera clip body transfer failed on attempt {attempt}/{MAX_ATTEMPTS} (status={status}, protocol={version:?}, content_length={content_length:?}, content_type={content_type:?}): {last_err}"
-                );
-                if attempt < MAX_ATTEMPTS {
-                    let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                    warn!(
-                        "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} failed reading body; retrying in {delay}ms url={video_url}"
-                    );
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    continue;
-                }
-                return Err(last_err);
-            }
-        };
-
-        if bytes.is_empty() {
-            last_err = format!("Downloaded camera clip is empty ({video_url})");
-            if attempt < MAX_ATTEMPTS {
-                let delay = BACKOFF_MS[(attempt as usize - 1).min(BACKOFF_MS.len() - 1)];
-                warn!(
-                    "Camera clip download attempt {attempt}/{MAX_ATTEMPTS} got empty body; retrying in {delay}ms url={video_url}"
-                );
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-                continue;
-            }
-            return Err(last_err);
-        }
-
-        if attempt > 1 {
-            info!(
-                "Camera clip download succeeded on attempt {attempt}/{MAX_ATTEMPTS} url={video_url}"
-            );
-        }
-
-        let file_name = format!("clip-{}.{ext}", uuid::Uuid::new_v4());
-        let dest = clip_dir.join(file_name);
-        std::fs::write(&dest, &bytes)
-            .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
-
-        return Ok(dest);
-    }
-
-    Err(last_err)
+    Ok(dest)
 }
 
 #[cfg(test)]
 mod camera_clip_download_tests {
     use super::*;
 
+    fn read_http_request(socket: &mut std::net::TcpStream) {
+        use std::io::Read;
+
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            socket.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+    }
+
     #[tokio::test]
-    async fn truncated_http_body_reports_cause_and_url_once() {
-        use std::io::{Read, Write};
+    async fn body_read_timeout_resets_while_streaming_makes_progress() {
+        use std::io::Write;
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
+            read_http_request(&mut socket);
             socket
-                .set_read_timeout(Some(Duration::from_secs(5)))
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\n",
+                )
                 .unwrap();
-            let mut request = Vec::new();
-            let mut byte = [0];
-            while !request.ends_with(b"\r\n\r\n") {
-                socket.read_exact(&mut byte).unwrap();
-                request.push(byte[0]);
+            socket.flush().unwrap();
+            for byte in b"clip" {
+                std::thread::sleep(Duration::from_millis(350));
+                socket.write_all(&[*byte]).unwrap();
+                socket.flush().unwrap();
             }
+        });
+        let client = build_camera_http_client(
+            reqwest::Client::builder().no_proxy(),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let (bytes, ext) = fetch_camera_clip_with_policy(
+            &client,
+            &url,
+            None,
+            CameraDownloadPolicy {
+                max_attempts: 1,
+                backoff_ms: &[],
+                total_timeout: Duration::from_secs(5),
+                max_clip_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes.as_slice(), b"clip");
+        assert_eq!(ext, "mp4");
+        assert!(started.elapsed() > Duration::from_secs(1));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_body_is_retried_and_the_next_response_succeeds() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for attempt in 1..=2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                read_http_request(&mut socket);
+                if attempt == 1 {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\n")
+                        .unwrap();
+                    socket.flush().unwrap();
+                    std::thread::sleep(Duration::from_millis(250));
+                } else {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\nclip")
+                        .unwrap();
+                }
+            }
+        });
+        let client = build_camera_http_client(
+            reqwest::Client::builder().no_proxy(),
+            Duration::from_secs(1),
+            Duration::from_millis(100),
+        )
+        .unwrap();
+        let (bytes, ext) = fetch_camera_clip_with_policy(
+            &client,
+            &url,
+            None,
+            CameraDownloadPolicy {
+                max_attempts: 2,
+                backoff_ms: &[200],
+                total_timeout: Duration::from_secs(5),
+                max_clip_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes.as_slice(), b"clip");
+        assert_eq!(ext, "mp4");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn overall_timeout_includes_retry_backoff() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            read_http_request(&mut socket);
+            socket
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+        let client = build_camera_http_client(
+            reqwest::Client::builder().no_proxy(),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let result = fetch_camera_clip_with_policy(
+            &client,
+            &url,
+            None,
+            CameraDownloadPolicy {
+                max_attempts: 2,
+                backoff_ms: &[5000],
+                total_timeout: Duration::from_millis(50),
+                max_clip_bytes: 1024,
+            },
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("the overall deadline must include retry backoff"),
+        };
+
+        assert!(error.contains("exceeded 50ms"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(error.matches(&url).count(), 1, "{error}");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn declared_oversized_body_is_rejected_without_retry() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            read_http_request(&mut socket);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+        let client = build_camera_http_client(
+            reqwest::Client::builder().no_proxy(),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let result = fetch_camera_clip_with_policy(
+            &client,
+            &url,
+            None,
+            CameraDownloadPolicy {
+                max_attempts: 2,
+                backoff_ms: &[5000],
+                total_timeout: Duration::from_secs(2),
+                max_clip_bytes: 4,
+            },
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a declared oversized body must be rejected"),
+        };
+
+        assert!(error.contains("exceeds the 4 byte limit"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(error.matches(&url).count(), 1, "{error}");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn progressive_body_still_has_an_overall_deadline() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/stream", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            read_http_request(&mut socket);
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            socket.flush().unwrap();
+            for _ in 0..100 {
+                std::thread::sleep(Duration::from_millis(40));
+                if socket.write_all(b"x").is_err() || socket.flush().is_err() {
+                    break;
+                }
+            }
+        });
+        let client = build_camera_http_client(
+            reqwest::Client::builder().no_proxy(),
+            Duration::from_secs(1),
+            Duration::from_millis(100),
+        )
+        .unwrap();
+        let result = fetch_camera_clip_with_policy(
+            &client,
+            &url,
+            None,
+            CameraDownloadPolicy {
+                max_attempts: 1,
+                backoff_ms: &[],
+                total_timeout: Duration::from_millis(150),
+                max_clip_bytes: 1024,
+            },
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("an endless progressive stream must time out"),
+        };
+
+        assert!(error.contains("exceeded 150ms"), "{error}");
+        assert_eq!(error.matches(&url).count(), 1, "{error}");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn body_size_limit_rejects_a_stream_without_content_length() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            read_http_request(&mut socket);
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\n12345",
+                )
+                .unwrap();
+        });
+        let client = build_camera_http_client(
+            reqwest::Client::builder().no_proxy(),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let result = fetch_camera_clip_with_policy(
+            &client,
+            &url,
+            None,
+            CameraDownloadPolicy {
+                max_attempts: 1,
+                backoff_ms: &[],
+                total_timeout: Duration::from_secs(5),
+                max_clip_bytes: 4,
+            },
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("an oversized camera body must be rejected"),
+        };
+
+        assert!(error.contains("exceeds the 4 byte limit"), "{error}");
+        assert_eq!(error.matches(&url).count(), 1, "{error}");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn truncated_http_body_reports_cause_and_url_once() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            read_http_request(&mut socket);
             socket
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nContent-Type: video/mp4\r\nConnection: close\r\n\r\npartial")
                 .unwrap();
