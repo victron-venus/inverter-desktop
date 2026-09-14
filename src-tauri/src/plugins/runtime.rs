@@ -11,7 +11,7 @@ use super::protocol::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -36,9 +36,59 @@ const RESTART_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_FRAMES_PER_SECOND: usize = 120;
 const MAX_CONTRIBUTIONS_PER_SECOND: usize = 10;
 const DEADLINE_TICK: Duration = Duration::from_millis(10);
+const NOTIFICATION_QUEUE_CAPACITY: usize = 16;
+const NOTIFICATIONS_PER_WORKER_PER_MINUTE: usize = 30;
+const NOTIFICATIONS_GLOBAL_PER_MINUTE: usize = 120;
+const NOTIFICATION_SEEN_CAPACITY: usize = 512;
+const NOTIFICATION_DEDUP_TTL: Duration = Duration::from_secs(10 * 60);
+const NOTIFICATION_DELIVERY_TTL: Duration = Duration::from_secs(30);
 
 type ChangeCallback = Arc<dyn Fn() + Send + Sync>;
 type ActionReply = oneshot::Sender<Result<Value, PluginError>>;
+
+/// Native delivery only. Never serialize notification content into app snapshots.
+pub(crate) struct DesktopNotification {
+    pub plugin_id: String,
+    pub id: String,
+    pub title: String,
+    pub body: String,
+}
+
+struct QueuedNotification {
+    notification: DesktopNotification,
+    generation: u64,
+    created: Instant,
+}
+
+struct NotificationRate {
+    window: Instant,
+    count: usize,
+}
+
+impl Default for NotificationRate {
+    fn default() -> Self {
+        Self {
+            window: Instant::now(),
+            count: 0,
+        }
+    }
+}
+
+impl NotificationRate {
+    fn refresh(&mut self) {
+        if self.window.elapsed() >= Duration::from_secs(60) {
+            self.window = Instant::now();
+            self.count = 0;
+        }
+    }
+}
+
+#[derive(Default)]
+struct NotificationState {
+    pending: VecDeque<QueuedNotification>,
+    seen: VecDeque<(String, Instant)>,
+    rate: NotificationRate,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +141,8 @@ pub struct WorkerSpec {
     pub executable: PathBuf,
     pub args: Vec<OsString>,
     pub configuration: Option<WorkerConfiguration>,
+    /// Granted only from the installed package's freshly verified manifest.
+    pub desktop_notifications: bool,
 }
 
 struct WorkerEntry {
@@ -103,6 +155,8 @@ struct WorkerEntry {
     done: watch::Receiver<bool>,
     reaped: AtomicBool,
     changed: ChangeCallback,
+    notifications: Mutex<NotificationState>,
+    notification_rate: Arc<Mutex<NotificationRate>>,
 }
 
 impl WorkerEntry {
@@ -119,8 +173,65 @@ impl WorkerEntry {
     }
 
     fn update(&self, update: impl FnOnce(&mut PluginSnapshot)) {
-        update(&mut self.snapshot.lock().unwrap_or_else(|e| e.into_inner()));
+        {
+            let mut snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            update(&mut snapshot);
+            if snapshot.state != WorkerState::Running {
+                self.notifications
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .clear();
+            }
+        }
         (self.changed)();
+    }
+
+    /// Called with the authority guard held. Bounds and deduplication are local
+    /// to this worker registration; automatic restarts retain its recent IDs.
+    fn queue_notification(&self, notification: DesktopNotification) -> bool {
+        let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if snapshot.state != WorkerState::Running
+            || *self.stop.borrow()
+            || self.reaped.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let mut state = self.notifications.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        state
+            .seen
+            .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DEDUP_TTL);
+        state
+            .pending
+            .retain(|queued| now.duration_since(queued.created) < NOTIFICATION_DELIVERY_TTL);
+        state.rate.refresh();
+        if state.seen.iter().any(|(id, _)| id == &notification.id)
+            || state.pending.len() >= NOTIFICATION_QUEUE_CAPACITY
+            || state.rate.count >= NOTIFICATIONS_PER_WORKER_PER_MINUTE
+        {
+            return false;
+        }
+        let mut global = self
+            .notification_rate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        global.refresh();
+        if global.count >= NOTIFICATIONS_GLOBAL_PER_MINUTE {
+            return false;
+        }
+        global.count += 1;
+        state.rate.count += 1;
+        if state.seen.len() >= NOTIFICATION_SEEN_CAPACITY {
+            state.seen.pop_front();
+        }
+        state.seen.push_back((notification.id.clone(), now));
+        state.pending.push_back(QueuedNotification {
+            notification,
+            generation: snapshot.generation,
+            created: now,
+        });
+        true
     }
 }
 
@@ -135,6 +246,7 @@ struct HostInner {
     stopped: AtomicBool,
     next_request: AtomicU64,
     changed: ChangeCallback,
+    notification_rate: Arc<Mutex<NotificationRate>>,
 }
 
 impl Drop for HostInner {
@@ -172,6 +284,7 @@ impl PluginHost {
             stopped: AtomicBool::new(false),
             next_request: AtomicU64::new(1),
             changed,
+            notification_rate: Arc::new(Mutex::new(NotificationRate::default())),
         }))
     }
 
@@ -215,6 +328,72 @@ impl PluginHost {
             .collect();
         snapshots.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
         snapshots
+    }
+
+    /// A cheap scheduling hint only; dispatch still checks authority and state.
+    pub(crate) fn has_pending_notifications(&self) -> bool {
+        self.0
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|entry| {
+                !entry
+                    .notifications
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .is_empty()
+            })
+    }
+
+    /// Deliver at most sixteen queued notifications per registered worker (128
+    /// globally). The callback runs synchronously under authority and worker
+    /// state guards: it must not reenter this host/auth or defer delivery.
+    pub(crate) fn dispatch_notifications(
+        &self,
+        mut deliver: impl FnMut(&DesktopNotification),
+    ) -> usize {
+        let entries: Vec<_> = self
+            .0
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        let mut delivered = 0;
+        for entry in entries {
+            for _ in 0..NOTIFICATION_QUEUE_CAPACITY {
+                // Release authority between submissions so a slow native
+                // notification service does not turn a batch into one lock hold.
+                let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+                let snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(queued) = entry
+                    .notifications
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .pop_front()
+                else {
+                    break;
+                };
+                if self.0.stopped.load(Ordering::Acquire)
+                    || !authority.enabled
+                    || authority.epoch != entry.epoch
+                    || *entry.stop.borrow()
+                    || entry.reaped.load(Ordering::Acquire)
+                    || snapshot.state != WorkerState::Running
+                    || snapshot.generation != queued.generation
+                    || queued.created.elapsed() >= NOTIFICATION_DELIVERY_TTL
+                {
+                    continue;
+                }
+                deliver(&queued.notification);
+                delivered += 1;
+            }
+        }
+        delivered
     }
 
     /// Register a worker exactly once and begin its bounded startup/restart lifecycle.
@@ -275,6 +454,8 @@ impl PluginHost {
             epoch: authority.epoch,
             done,
             reaped: AtomicBool::new(true),
+            notifications: Mutex::new(NotificationState::default()),
+            notification_rate: self.0.notification_rate.clone(),
         });
         {
             let mut entries = self.0.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -406,7 +587,10 @@ impl PluginHost {
 
     pub async fn stop(&self, plugin_id: &str) -> Result<(), PluginError> {
         let entry = self.entry(plugin_id)?;
-        let _ = entry.stop.send(true);
+        {
+            let _authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = entry.stop.send(true);
+        }
         wait_stopped(&entry).await;
         if !entry.reaped.load(Ordering::Acquire) {
             return Err(PluginError::WorkerError);
@@ -418,7 +602,10 @@ impl PluginHost {
     /// A concurrent replacement must never be removed on behalf of an old entry.
     pub async fn remove(&self, plugin_id: &str) -> Result<(), PluginError> {
         let entry = self.entry(plugin_id)?;
-        let _ = entry.stop.send(true);
+        {
+            let _authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = entry.stop.send(true);
+        }
         wait_stopped(&entry).await;
         if !entry.reaped.load(Ordering::Acquire) {
             return Err(PluginError::WorkerError);
@@ -463,6 +650,12 @@ impl PluginHost {
             let mut snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             snapshot.state = WorkerState::Stopped;
             snapshot.contributions.clear();
+            entry
+                .notifications
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pending
+                .clear();
         }
         drop(authority);
         (self.0.changed)();
@@ -1053,6 +1246,17 @@ fn handle_frame(
     }
     let mut notify = false;
     match message {
+        WorkerMessage::Notification { id, title, body } => {
+            if !spec.desktop_notifications {
+                return Err(Outcome::Failed("worker_notification_unauthorized"));
+            }
+            notify = entry.queue_notification(DesktopNotification {
+                plugin_id: spec.plugin_id.clone(),
+                id,
+                title,
+                body,
+            });
+        }
         WorkerMessage::Contributions { items } => {
             entry
                 .snapshot

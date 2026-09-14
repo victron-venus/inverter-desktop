@@ -133,6 +133,11 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
             "server":{"type":"string"}, "token":{"type":"string","writeOnly":true}
         }});
     }
+    if mode == "notifications_authorized" {
+        manifest
+            .permissions
+            .push(PluginPermission::DesktopNotifications);
+    }
     let bytes = build_package(manifest, &payload, KEY_ID, &key()).unwrap();
     let archive = directory.join(format!("archive-{}.idplugin", uuid::Uuid::new_v4()));
     fs::write(&archive, bytes).unwrap();
@@ -175,6 +180,70 @@ fn worker_configuration(revision: &str) -> WorkerConfiguration {
         values: json!({"server":"https://plugin.example"}),
         secrets: [("token".into(), "fixture-secret".into())].into(),
     }
+}
+
+#[tokio::test]
+async fn notifications_require_the_freshly_verified_package_permission() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    manager
+        .install(
+            package(&directory.0, "1.0.0", "notifications_actions"),
+            true,
+        )
+        .await
+        .unwrap();
+    wait_running(&host).await;
+    assert!(host
+        .action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .is_err());
+    time::timeout(Duration::from_secs(5), async {
+        while !host
+            .snapshots()
+            .iter()
+            .any(|snapshot| snapshot.state == WorkerState::Failed)
+        {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        host.snapshots()[0].last_error.as_deref(),
+        Some("worker_notification_unauthorized")
+    );
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("ungranted package notification")),
+        0
+    );
+    manager.disable(PLUGIN).await.unwrap();
+    manager
+        .install(
+            package(&directory.0, "1.1.0", "notifications_authorized"),
+            true,
+        )
+        .await
+        .unwrap();
+    wait_running(&host).await;
+    host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap();
+    let mut delivered = Vec::new();
+    assert_eq!(
+        host.dispatch_notifications(|item| delivered.push(item.plugin_id.clone())),
+        16
+    );
+    assert!(delivered.iter().all(|id| id == PLUGIN));
+    host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap();
+    manager.remove(PLUGIN).await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("uninstalled package notification")),
+        0
+    );
+    manager.close().await.unwrap();
 }
 
 // Poll the public operation once so its owned task exists, then let that task

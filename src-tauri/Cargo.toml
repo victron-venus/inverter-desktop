@@ -65,12 +65,14 @@ tempfile = "3"
 futures-util = "0.3"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-window-state = "2"
+notify-rust = "4.18"
 image = { version = "0.25", default-features = false, features = ["png"] }
 keyring = "4.1"
 auto-launch = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ab_glyph = "0.2"
+mac-notification-sys = "0.6.15"
 
 [target.'cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))'.dependencies]
 libc = "0.2"

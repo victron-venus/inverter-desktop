@@ -20,6 +20,7 @@
   "permissionConfiguration": "Настройки плагина",
   "permissionHttp": "Сетевые подключения HTTP",
   "permissionMqtt": "Сетевые подключения MQTT",
+  "permissionNotifications": "Уведомления на компьютере",
   "enableAfterInstall": "Включить после установки",
   "install": "Установить",
   "update": "Обновить плагин",

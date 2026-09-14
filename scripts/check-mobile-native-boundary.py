@@ -59,10 +59,12 @@ FORBIDDEN_COMMANDS = (
     "rollback_plugin_package",
 )
 FORBIDDEN_PROTOCOLS = (
-    "ha-filtered-update", "camera-event", "frigate/events", "plugin-host-update"
+    "ha-filtered-update", "camera-event", "frigate/events", "plugin-host-update",
+    "inverter-desktop.frigate", "inverter-frigate-worker",
 )
 FORBIDDEN_CRATES = {
-    "tokio-tungstenite", "tungstenite", "ed25519-dalek", "curve25519-dalek", "zip"
+    "tokio-tungstenite", "tungstenite", "ed25519-dalek", "curve25519-dalek", "zip",
+    "inverter-frigate-worker", "notify-rust", "mac-notification-sys",
 }
 REQUIRED_CORE_COMMANDS = (
     "perform_action",
@@ -72,8 +74,19 @@ REQUIRED_CORE_COMMANDS = (
 )
 FORBIDDEN_SOURCES = re.compile(
     r"/src-tauri/src/(?:ha_api(?:\.rs|/)|ha_session\.rs|camera(?:\.rs|/)"
-    r"|mqtt/camera_events\.rs|plugins/|desktop/)"
+    r"|mqtt/camera_events\.rs|plugins/|desktop/)|/desktop-plugins/"
 )
+
+
+def verify_archive_assets(archive):
+    """Reject external worker payloads even when the main native library is clean."""
+    for name in archive.namelist():
+        portable = name.replace("\\", "/").lower()
+        parts = portable.split("/")
+        if (portable.endswith(".idplugin") or "desktop-plugins" in parts
+                or any(part in ("inverter-frigate-worker", "inverter-frigate-worker.exe")
+                       for part in parts)):
+            raise ValueError(f"Desktop plugin asset in mobile package: {name}")
 
 
 def verify_dependency_tree(tree):
@@ -150,6 +163,7 @@ def verify_android_archive(archive, path):
 def verify_archive(path, platform):
     """Inspect packaged app code without extracting or executing any payload."""
     with zipfile.ZipFile(path) as archive:
+        verify_archive_assets(archive)
         if platform == "ios":
             return verify_ios_archive(archive, path)
         return verify_android_archive(archive, path)

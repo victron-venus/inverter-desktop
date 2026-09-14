@@ -8,6 +8,7 @@
 pub(crate) mod application;
 pub(crate) mod bridge;
 pub mod installer;
+mod native_notifications;
 pub mod package;
 pub mod packaging;
 pub mod protocol;
@@ -15,3 +16,6 @@ pub mod publishers;
 pub mod runtime;
 pub(crate) mod settings;
 pub(crate) mod settings_store;
+
+#[cfg(test)]
+mod frigate_integration_tests;

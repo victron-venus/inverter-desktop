@@ -21,11 +21,17 @@ fn contribute() {
     );
 }
 
+fn notification(id: &str) {
+    emit(&format!(
+        "{{\"type\":\"notification\",\"id\":\"{id}\",\"title\":\"Private camera title\",\"body\":\"Private camera body\"}}"
+    ));
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| {
         let executable = std::env::current_exe().unwrap();
         let stem = executable.file_stem().unwrap().to_string_lossy();
-        if stem.starts_with("configuration") {
+        if stem.starts_with("configuration") || stem.starts_with("notifications") {
             stem.into_owned()
         } else {
             "normal".into()
@@ -34,6 +40,7 @@ fn main() {
     let mut cancellations = 0;
     let mut configuration_revision = String::new();
     let mut configuration_secret_matches = false;
+    let mut notification_sequence = 0;
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = line.unwrap();
@@ -50,7 +57,13 @@ fn main() {
                 };
                 let version = if mode == "bad_version" { 999 } else { 1 };
                 let api = field(&line, "host_api_version");
+                if mode == "notifications_before_ready" {
+                    notification("premature");
+                }
                 emit(&format!("{{\"type\":\"ready\",\"protocol_version\":{version},\"host_api_version\":\"{api}\",\"plugin_id\":\"{id}\"}}"));
+                if mode == "configuration_early_notification" {
+                    notification("before-configuration-ack");
+                }
                 if mode == "oversize" {
                     print!("{}", "x".repeat(70_000));
                     io::stdout().flush().unwrap();
@@ -59,6 +72,19 @@ fn main() {
                 }
                 if !mode.starts_with("configuration") || mode == "configuration_early_data" {
                     contribute();
+                }
+                if mode == "notifications" {
+                    notification("motion-1");
+                    notification("motion-1");
+                    notification("motion-2");
+                }
+                if mode == "notifications_oversize" {
+                    emit(&format!("{{\"type\":\"notification\",\"id\":\"large\",\"title\":\"{}\",\"body\":\"Body\"}}", "x".repeat(129)));
+                }
+                if mode == "notifications_flood" {
+                    for index in 0..200 {
+                        notification(&format!("flood-{index}"));
+                    }
                 }
                 if mode == "crash_always" {
                     std::process::exit(17);
@@ -102,9 +128,27 @@ fn main() {
                     emit(&ack);
                 }
                 contribute();
+                if mode == "configuration_notifications" {
+                    notification("configured-motion");
+                }
             }
             "action" => {
                 let request_id = field(&line, "request_id");
+                if field(&line, "action_id") == "echo" {
+                    if mode == "notifications" {
+                        notification("motion-1");
+                        notification("motion-2");
+                    }
+                    if matches!(
+                        mode.as_str(),
+                        "notifications_actions" | "notifications_authorized"
+                    ) {
+                        for _ in 0..20 {
+                            notification(&format!("motion-{notification_sequence}"));
+                            notification_sequence += 1;
+                        }
+                    }
+                }
                 let value = match field(&line, "action_id") {
                     "hold" => continue,
                     "crash" => std::process::exit(23),

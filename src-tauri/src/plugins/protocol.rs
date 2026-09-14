@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.1.0";
+pub const HOST_API_VERSION: &str = "1.2.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -20,6 +20,8 @@ pub const MAX_ACTION_RESULT_BYTES: usize = 16 * 1024;
 pub const MAX_ACTION_DEADLINE_MS: u64 = 60_000;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
+pub const MAX_NOTIFICATION_TITLE_BYTES: usize = 128;
+pub const MAX_NOTIFICATION_BODY_BYTES: usize = 1024;
 const MAX_JSON_DEPTH: usize = 8;
 const MAX_JSON_NODES: usize = 512;
 const MAX_INVENTORY_FILES: usize = 128;
@@ -72,6 +74,11 @@ pub enum WorkerMessage {
     /// Replaces this worker's entire contribution snapshot.
     Contributions {
         items: Vec<DashboardContribution>,
+    },
+    Notification {
+        id: String,
+        title: String,
+        body: String,
     },
     ActionResult {
         request_id: String,
@@ -191,6 +198,7 @@ pub struct PluginManifest {
 pub enum PluginPermission {
     DashboardContributions,
     PluginConfiguration,
+    DesktopNotifications,
     NetworkHttp,
     NetworkMqtt,
 }
@@ -432,6 +440,11 @@ pub fn validate_worker_message(message: &WorkerMessage) -> Result<(), String> {
             token(revision, "configuration revision")?
         }
         WorkerMessage::Contributions { items } => validate_contributions(items)?,
+        WorkerMessage::Notification { id, title, body } => {
+            token(id, "notification id")?;
+            label(title, "notification title", MAX_NOTIFICATION_TITLE_BYTES)?;
+            label(body, "notification body", MAX_NOTIFICATION_BODY_BYTES)?;
+        }
         WorkerMessage::ActionResult { request_id, value } => {
             token(request_id, "request_id")?;
             bounded_json(value, MAX_ACTION_RESULT_BYTES)?;
@@ -896,6 +909,35 @@ mod tests {
             .permissions
             .push(PluginPermission::DashboardContributions);
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn notifications_are_bounded_plain_text_without_additional_host_operations() {
+        let valid = json!({"type":"notification","id":"motion-1:front","title":"Motion","body":"Person detected"});
+        assert!(parse_worker_frame(&serde_json::to_vec(&valid).unwrap()).is_ok());
+        for (field, value) in [
+            ("id", "../outside".to_owned()),
+            ("id", "x".repeat(129)),
+            ("title", "x".repeat(MAX_NOTIFICATION_TITLE_BYTES + 1)),
+            ("title", "é".repeat(65)),
+            ("title", " ".to_owned()),
+            ("body", "x".repeat(MAX_NOTIFICATION_BODY_BYTES + 1)),
+            ("body", "line\nbreak".to_owned()),
+            ("body", "\0".to_owned()),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value.into();
+            assert!(parse_worker_frame(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
+        for field in ["url", "html", "command", "icon", "actions"] {
+            let mut invalid = valid.clone();
+            invalid[field] = "untrusted host operation".into();
+            assert!(parse_worker_frame(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
+        assert_eq!(
+            serde_json::to_string(&PluginPermission::DesktopNotifications).unwrap(),
+            "\"desktop_notifications\""
+        );
     }
 
     #[test]

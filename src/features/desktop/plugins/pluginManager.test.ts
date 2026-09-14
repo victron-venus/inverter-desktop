@@ -167,6 +167,21 @@ afterEach(() => {
 })
 
 describe('desktop plugin manager', () => {
+  it.each([
+    ['en', 'Desktop notifications'],
+    ['ru', 'Уведомления на компьютере'],
+  ])('labels notification capability before installation in %s', async (locale, label) => {
+    selection = { ...selected, permissions: ['desktop_notifications'] }
+    await openManager(locale)
+    await button(locale === 'en' ? 'Choose plugin package…' : 'Выбрать пакет плагина…').trigger(
+      'click'
+    )
+    await flushPromises()
+    expect(wrapper?.text()).toContain(label)
+    expect(wrapper?.text()).not.toContain('desktop_notifications')
+    expect(calls('install_plugin_package')).toHaveLength(0)
+  })
+
   it('shows the actual empty publisher policy and does not offer installation', async () => {
     snapshot.installation_available = false
     await openManager()

@@ -1,0 +1,25 @@
+[package]
+name = "inverter-frigate-worker"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Standalone desktop Frigate motion notification worker"
+
+[workspace]
+
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
+rumqttc = { package = "rumqttc-v4-next", version = "=0.33.2" }
+rustls = "=0.23.45"
+rustls-native-certs = "=0.8.4"
+semver = "=1.0.28"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+tokio = { version = "=1.53.1", features = ["rt", "macros", "sync", "time", "net"] }
+uuid = { version = "=1.26.1", features = ["v4"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
