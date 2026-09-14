@@ -1,16 +1,23 @@
 mod app_visibility;
 mod auth;
+#[cfg(desktop)]
 mod camera;
 mod config_backup;
 mod config_store;
+#[cfg(desktop)]
 mod ha_session;
+#[cfg(test)]
+#[path = "../mobile_build.rs"]
+mod mobile_build;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_credentials;
 mod release_info;
+#[cfg(desktop)]
 use camera::download_camera_clip;
 #[cfg(desktop)]
 use camera::{is_camera_video_label, remove_camera_clip_file};
 mod gateway;
+#[cfg(desktop)]
 mod ha_api;
 mod inverter_control;
 pub(crate) mod mqtt;
@@ -35,6 +42,7 @@ use config_store::{load_config, save_config_encrypted};
 
 const DEFAULT_MQTT_HOST: &str = "Cerbo";
 const DEFAULT_MQTT_PORT: u16 = 1883;
+#[cfg(desktop)]
 const DEFAULT_HA_PORT: u16 = 8123;
 #[cfg(desktop)]
 const ABOUT_WINDOW_W: f64 = 380.0;
@@ -42,13 +50,16 @@ const ABOUT_WINDOW_W: f64 = 380.0;
 const ABOUT_WINDOW_H: f64 = 320.0;
 const CONFIG_WINDOW_W: f64 = 850.0;
 const CONFIG_WINDOW_H: f64 = 700.0;
+#[cfg(desktop)]
 const CAMERA_VIDEO_WINDOW_W: f64 = 330.0;
 /// Exact 16:9 of W so object-contain fills without letterbox (round(330*9/16)=186).
+#[cfg(desktop)]
 const CAMERA_VIDEO_WINDOW_H: f64 = 186.0;
 /// Logical-pixel gap between stacked camera clip windows (0 = flush/seam). Also used as edge inset.
 #[cfg(desktop)]
 const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 0.0;
 /// Window label prefix for ephemeral camera clip WebviewWindows (`camera-video-<uuid>`).
+#[cfg(desktop)]
 const CAMERA_VIDEO_LABEL_PREFIX: &str = "camera-video-";
 
 #[cfg(desktop)]
@@ -59,6 +70,7 @@ use tauri_plugin_store::StoreExt;
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
+#[cfg(desktop)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct DiscoveredEntity {
     entity_id: String,
@@ -72,7 +84,9 @@ struct MqttState(Arc<Mutex<Option<MqttClient>>>);
 struct GatewayState(Arc<Mutex<Option<GatewayClient>>>);
 #[derive(Default)]
 struct InverterLifecycle(Mutex<()>);
+#[cfg(desktop)]
 struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
+#[cfg(desktop)]
 pub(crate) struct HaEntityStates(pub(crate) Arc<Mutex<HashMap<String, ha_api::HaEntityEntry>>>);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -383,6 +397,8 @@ async fn perform_action(
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
 ) -> Result<(), String> {
+    #[cfg(mobile)]
+    let _ = app;
     info!("perform_action: action={}, payload={}", action, payload);
 
     // Water control goes only through dbus-pump's writable /Mode via the GX
@@ -400,105 +416,121 @@ async fn perform_action(
         };
     }
 
-    let config = load_config(&app)?;
+    #[cfg(mobile)]
+    if payload
+        .get("entity")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|entity| !inverter_control::is_flag(entity))
+    {
+        return Err("This control is unavailable in the mobile core".into());
+    }
 
-    let entity_id = payload.get("entity").and_then(|v| v.as_str());
+    #[cfg(desktop)]
+    {
+        let config = load_config(&app)?;
 
-    // HA REST is for home devices (garage, recliner, laundry, EV, covers, …).
-    // Inverter-control flags always go to Cerbo MQTT — ha_use_direct_api does
-    // not apply to them (inverter-control no longer reads HA for those 7).
-    let ha_direct =
-        config.ha_use_direct_api && config.ha_url.is_some() && config.ha_longlived_token.is_some();
-    if ha_api::should_use_rest(entity_id, ha_direct) {
-        if let Some(entity) = entity_id {
-            let domain = entity.split('.').next().unwrap_or("");
-            // For switch/input_boolean/light entities, always prefer HA API
-            let client = ha_api::HaApiClient::new(
-                config.ha_url.as_deref().unwrap_or(""),
-                config.ha_port,
-                config.ha_longlived_token.as_deref().unwrap_or(""),
-            )
-            .await?;
+        let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
-            match domain {
-                "cover" => {
-                    let position = payload
-                        .get("position")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u8;
-                    client.set_cover_position(entity, position).await?;
-                }
-                "media_player" => {
-                    let mp_action = payload
-                        .get("mp_action")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("toggle");
-                    match mp_action {
-                        "play" => client.media_player_play(entity).await?,
-                        "pause" => client.media_player_pause(entity).await?,
-                        "stop" => client.media_player_stop(entity).await?,
-                        _ => {
-                            // toggle: on/off
-                            let states = client.get_states().await?;
-                            let state = states.iter().find(|s| s.entity_id == entity);
-                            if let Some(s) = state {
+        // HA REST is for home devices (garage, recliner, laundry, EV, covers, …).
+        // Inverter-control flags always go to Cerbo MQTT — ha_use_direct_api does
+        // not apply to them (inverter-control no longer reads HA for those 7).
+        let ha_direct = config.ha_use_direct_api
+            && config.ha_url.is_some()
+            && config.ha_longlived_token.is_some();
+        if ha_api::should_use_rest(entity_id, ha_direct) {
+            if let Some(entity) = entity_id {
+                let domain = entity.split('.').next().unwrap_or("");
+                // For switch/input_boolean/light entities, always prefer HA API
+                let client = ha_api::HaApiClient::new(
+                    config.ha_url.as_deref().unwrap_or(""),
+                    config.ha_port,
+                    config.ha_longlived_token.as_deref().unwrap_or(""),
+                )
+                .await?;
+
+                match domain {
+                    "cover" => {
+                        let position = payload
+                            .get("position")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u8;
+                        client.set_cover_position(entity, position).await?;
+                    }
+                    "media_player" => {
+                        let mp_action = payload
+                            .get("mp_action")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("toggle");
+                        match mp_action {
+                            "play" => client.media_player_play(entity).await?,
+                            "pause" => client.media_player_pause(entity).await?,
+                            "stop" => client.media_player_stop(entity).await?,
+                            _ => {
+                                // toggle: on/off
+                                let states = client.get_states().await?;
+                                let state = states.iter().find(|s| s.entity_id == entity);
+                                if let Some(s) = state {
+                                    if s.state == "on" {
+                                        client.turn_off(entity).await?
+                                    } else {
+                                        client.turn_on(entity).await?
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "number" => {
+                        let value = payload.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        client
+                            .call_service(
+                                entity,
+                                "number",
+                                "set_value",
+                                serde_json::json!({ "value": value }),
+                            )
+                            .await?;
+                    }
+                    "scene" => {
+                        client.scene_activate(entity).await?;
+                    }
+                    "button" => {
+                        client
+                            .call_service(entity, "button", "press", serde_json::json!({}))
+                            .await?;
+                    }
+                    _ => {
+                        let states = client.get_states().await?;
+                        let state = states.iter().find(|s| s.entity_id == entity);
+                        match state {
+                            Some(s) => {
                                 if s.state == "on" {
                                     client.turn_off(entity).await?
                                 } else {
                                     client.turn_on(entity).await?
                                 }
                             }
-                        }
-                    }
-                }
-                "number" => {
-                    let value = payload.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    client
-                        .call_service(
-                            entity,
-                            "number",
-                            "set_value",
-                            serde_json::json!({ "value": value }),
-                        )
-                        .await?;
-                }
-                "scene" => {
-                    client.scene_activate(entity).await?;
-                }
-                "button" => {
-                    client
-                        .call_service(entity, "button", "press", serde_json::json!({}))
-                        .await?;
-                }
-                _ => {
-                    let states = client.get_states().await?;
-                    let state = states.iter().find(|s| s.entity_id == entity);
-                    match state {
-                        Some(s) => {
-                            if s.state == "on" {
-                                client.turn_off(entity).await?
-                            } else {
-                                client.turn_on(entity).await?
+                            None => {
+                                // Entity not found in HA, fallback to MQTT
+                                log::warn!(
+                                    "Entity {} not found in HA, falling back to MQTT",
+                                    entity
+                                );
+                                let mqtt_client = mqtt_client
+                                    .0
+                                    .lock()
+                                    .map_err(|e| format!("Lock error: {}", e))?;
+                                let c = mqtt_client
+                                    .as_ref()
+                                    .ok_or_else(|| "MQTT client not connected".to_string())?;
+                                c.publish_command(&action, payload.clone())
+                                    .map_err(|e| format!("MQTT error: {}", e))?;
+                                return Ok(());
                             }
                         }
-                        None => {
-                            // Entity not found in HA, fallback to MQTT
-                            log::warn!("Entity {} not found in HA, falling back to MQTT", entity);
-                            let mqtt_client = mqtt_client
-                                .0
-                                .lock()
-                                .map_err(|e| format!("Lock error: {}", e))?;
-                            let c = mqtt_client
-                                .as_ref()
-                                .ok_or_else(|| "MQTT client not connected".to_string())?;
-                            c.publish_command(&action, payload.clone())
-                                .map_err(|e| format!("MQTT error: {}", e))?;
-                            return Ok(());
-                        }
                     }
                 }
+                return Ok(());
             }
-            return Ok(());
         }
     }
 
@@ -517,6 +549,7 @@ async fn perform_action(
 }
 
 /// Build HA WebSocket URL from config, handling host:port format properly.
+#[cfg(desktop)]
 fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
     let url = ha_url.trim();
 
@@ -587,11 +620,13 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
         .map_err(|e| format!("Failed to build store: {}", e))?;
 
     let had_saved_config = store.get("config").is_some();
+    #[cfg(desktop)]
     let is_first_run = !had_saved_config;
 
     // Persist only real migrations / backfills for existing installs — never burn first-run.
     let mut persist = false;
 
+    #[cfg(desktop)]
     if is_first_run {
         info!("Config: First run detected. Checking environment variables for seeding...");
         // Auto-fill from env ONLY on first run (in-memory; wizard must save).
@@ -664,6 +699,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
     }
 
     // Default values if missing (backward compatibility)
+    #[cfg(desktop)]
     if config.ha_port.is_none() {
         config.ha_port = Some(DEFAULT_HA_PORT);
         if had_saved_config {
@@ -676,6 +712,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
             persist = true;
         }
     }
+    #[cfg(desktop)]
     if config.mqtt_ha_port.is_none() {
         config.mqtt_ha_port = Some(DEFAULT_MQTT_PORT);
         if had_saved_config {
@@ -705,7 +742,9 @@ async fn save_config(app: tauri::AppHandle, mut config: FullConfig) -> Result<()
     config.setup_completed = true;
     save_config_encrypted(&app, &config)?;
     // Fixed / newly configured entity IDs should be polled again without app restart.
+    #[cfg(desktop)]
     ha_api::clear_entity_skip_list();
+    #[cfg(desktop)]
     ha_api::notify_config_changed();
     auth::revoke_if_policy_changed(&app, &previous, &config)?;
     Ok(())
@@ -757,7 +796,9 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
     let previous = load_config(&app)?;
     let config = config_backup::restore(&content, &previous)?;
     save_config_encrypted(&app, &config)?;
+    #[cfg(desktop)]
     ha_api::clear_entity_skip_list();
+    #[cfg(desktop)]
     ha_api::notify_config_changed();
     info!("Config restored from {}", path.display());
     Ok(true)
@@ -819,6 +860,9 @@ async fn acknowledge_victron_banner(
     gateway::acknowledge_all_notifications_http(&auth).await
 }
 
+// Tauri decodes IPC arguments before Rust applies cfg to parameters. Separate
+// platform wrappers keep camera arguments out of mobile's actual command API.
+#[cfg(desktop)]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn connect_mqtt(
@@ -833,6 +877,82 @@ async fn connect_mqtt(
     evcharger_instance: Option<u32>,
     ev_instance: Option<u32>,
     camera_topic: Option<String>,
+    app: tauri::AppHandle,
+    mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
+    lifecycle: State<'_, InverterLifecycle>,
+) -> Result<(), String> {
+    connect_mqtt_impl(
+        host,
+        port,
+        username,
+        password,
+        portal_id,
+        water_tank_instance,
+        water_pump_instance,
+        water_valve_instance,
+        evcharger_instance,
+        ev_instance,
+        camera_topic,
+        app,
+        mqtt_client,
+        gateway_client,
+        lifecycle,
+    )
+    .await
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn connect_mqtt(
+    host: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<String>,
+    portal_id: Option<String>,
+    water_tank_instance: Option<u32>,
+    water_pump_instance: Option<u32>,
+    water_valve_instance: Option<u32>,
+    evcharger_instance: Option<u32>,
+    ev_instance: Option<u32>,
+    app: tauri::AppHandle,
+    mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
+    lifecycle: State<'_, InverterLifecycle>,
+) -> Result<(), String> {
+    connect_mqtt_impl(
+        host,
+        port,
+        username,
+        password,
+        portal_id,
+        water_tank_instance,
+        water_pump_instance,
+        water_valve_instance,
+        evcharger_instance,
+        ev_instance,
+        app,
+        mqtt_client,
+        gateway_client,
+        lifecycle,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn connect_mqtt_impl(
+    host: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<String>,
+    portal_id: Option<String>,
+    water_tank_instance: Option<u32>,
+    water_pump_instance: Option<u32>,
+    water_valve_instance: Option<u32>,
+    evcharger_instance: Option<u32>,
+    ev_instance: Option<u32>,
+    #[cfg(desktop)] camera_topic: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
@@ -870,6 +990,7 @@ async fn connect_mqtt(
         password,
         "inverter-dashboard-desktop".to_string(),
     );
+    #[cfg(desktop)]
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
@@ -879,6 +1000,7 @@ async fn connect_mqtt(
         water_valve_instance,
     )));
     client.set_ev_instances(Some((ev_instance, evcharger_instance)));
+    #[cfg(desktop)]
     client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
     let mut client_guard = mqtt_client
@@ -961,6 +1083,7 @@ async fn test_mqtt_connection(
     .map_err(|e| format!("MQTT probe join error: {e}"))?
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn test_ha_connection(url: String, port: Option<u16>, token: String) -> Result<(), String> {
     let client = ha_api::HaApiClient::new(&url, port, &token).await?;
@@ -1031,6 +1154,7 @@ async fn test_gateway_connection(
     })
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn get_ha_appliance_states(
     url: String,
@@ -1062,6 +1186,7 @@ async fn get_ha_appliance_states(
     client.get_entities(&entity_ids).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn get_ha_entity_states(
     url: String,
@@ -1074,6 +1199,7 @@ async fn get_ha_entity_states(
     client.get_entities(&ids).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn discover_ha_entities(
     url: String,
@@ -1109,6 +1235,7 @@ async fn discover_ha_entities(
     Ok(result)
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn set_cover_position(
     url: String,
@@ -1152,6 +1279,7 @@ async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(desktop)]
 fn percent_encode_query(input: &str) -> String {
     let mut out = String::with_capacity(input.len() * 3);
     for b in input.bytes() {
@@ -1361,6 +1489,7 @@ fn reflow_camera_video_windows(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn open_camera_video_window(
     app: tauri::AppHandle,
@@ -1450,14 +1579,11 @@ async fn open_camera_video_window(
             }
         });
     }
-    #[cfg(not(desktop))]
-    {
-        let _ = (window, clip_path);
-    }
 
     Ok(())
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn close_camera_video_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
@@ -1517,6 +1643,7 @@ async fn get_auto_start() -> Result<bool, String> {
     Ok(false)
 }
 
+#[cfg(desktop)]
 use std::collections::HashMap;
 
 #[tauri::command]
@@ -1536,12 +1663,9 @@ async fn send_notification(
 }
 
 #[tauri::command]
-fn set_window_hidden(
-    hidden: bool,
-    app: tauri::AppHandle,
-    mqtt_client: State<'_, MqttState>,
-    ha_entity_states: State<'_, HaEntityStates>,
-) {
+fn set_window_hidden(hidden: bool, app: tauri::AppHandle, mqtt_client: State<'_, MqttState>) {
+    #[cfg(mobile)]
+    let _ = app;
     app_visibility::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
     if !hidden {
         if let Ok(guard) = mqtt_client.0.lock() {
@@ -1551,10 +1675,12 @@ fn set_window_hidden(
         }
         // Sensors are omitted from live ha-filtered ticks; force a full snapshot
         // (incl. sensors) whenever the window is shown again.
-        ha_api::force_emit_ha_filtered(&app, &ha_entity_states.0);
+        #[cfg(desktop)]
+        ha_api::force_emit_ha_filtered(&app, &app.state::<HaEntityStates>().0);
     }
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_api::HaFilteredData {
     let guard = match entity_states.0.lock() {
@@ -1564,6 +1690,7 @@ fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_a
     ha_api::compute_filtered_data(&guard)
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn get_ha_connection_status() -> bool {
     ha_api::connection_status()
@@ -1572,6 +1699,7 @@ fn get_ha_connection_status() -> bool {
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
+#[cfg(desktop)]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn connect_ha_mqtt(
@@ -1602,8 +1730,10 @@ async fn connect_ha_mqtt(
         password,
         "inverter-dashboard-desktop-ha".to_string(),
     );
+    #[cfg(desktop)]
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app.clone());
+    #[cfg(desktop)]
     client.set_camera_topic(camera_topic);
     client.set_frigate_base_url(frigate_base_url);
     client.set_ring_snapshot_url_template(ring_snapshot_url_template);
@@ -1617,6 +1747,7 @@ async fn connect_ha_mqtt(
     Ok(())
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn disconnect_ha_mqtt(mqtt_client: State<'_, HaMqttState>) -> Result<(), String> {
     let mut client_guard = mqtt_client
@@ -1632,9 +1763,11 @@ async fn disconnect_ha_mqtt(mqtt_client: State<'_, HaMqttState>) -> Result<(), S
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mqtt_state = MqttState(Arc::new(Mutex::new(None)));
+    #[cfg(desktop)]
     let ha_mqtt_state = HaMqttState(Arc::new(Mutex::new(None)));
     let gateway_state = GatewayState(Arc::new(Mutex::new(None)));
 
+    #[cfg(desktop)]
     let ha_entity_states = HaEntityStates(Arc::new(Mutex::new(HashMap::new())));
 
     let builder = tauri::Builder::default()
@@ -1652,10 +1785,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(mqtt_state)
-        .manage(ha_mqtt_state)
         .manage(gateway_state)
-        .manage(InverterLifecycle::default())
-        .manage(ha_entity_states);
+        .manage(InverterLifecycle::default());
+
+    #[cfg(desktop)]
+    let builder = builder.manage(ha_mqtt_state).manage(ha_entity_states);
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.plugin(mobile_credentials::init());
@@ -1680,6 +1814,7 @@ pub fn run() {
                         return true;
                     }
                 }
+                #[cfg(desktop)]
                 let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
                     release_info::get_release_info,
                     get_state,
@@ -1720,6 +1855,36 @@ pub fn run() {
                     get_ha_filtered_data,
                     get_ha_connection_status
                 ];
+                #[cfg(mobile)]
+                let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                    release_info::get_release_info,
+                    get_state,
+                    get_setpoint_override,
+                    set_setpoint_override,
+                    disconnect_inverter,
+                    perform_action,
+                    connect_mqtt,
+                    connect_gateway,
+                    acknowledge_victron_banner,
+                    get_config,
+                    save_config,
+                    backup_config,
+                    restore_config,
+                    test_mqtt_connection,
+                    test_gateway_connection,
+                    open_config_window,
+                    close_config_window,
+                    set_auto_start,
+                    get_auto_start,
+                    auth::auth_status,
+                    auth::auth_logout,
+                    auth::auth_login,
+                    auth::auth_check,
+                    auth::auth_biometric_available,
+                    auth::auth_biometric,
+                    send_notification,
+                    set_window_hidden,
+                ];
                 let resolver = invoke.resolver.clone();
                 let handled = handler(invoke);
                 if !handled {
@@ -1731,6 +1896,7 @@ pub fn run() {
         })
         .setup(|app| {
             // Start background HA polling
+            #[cfg(desktop)]
             ha_session::start(app.handle().clone());
 
             #[cfg(desktop)]
@@ -2078,6 +2244,37 @@ mod dashboard_control_config_tests {
         );
         assert_eq!(saved["ha_entities"], config["ha_entities"]);
         saved
+    }
+
+    #[test]
+    fn legacy_desktop_settings_survive_core_config_roundtrip() {
+        // Mobile excludes integration implementations, but encrypted settings
+        // remain portable. Saving a core setting must not erase dormant data.
+        let mut saved = serde_json::to_value(FullConfig::default()).unwrap();
+        let legacy = json!({
+            "ha_url": "https://ha.example.invalid",
+            "ha_longlived_token": "test-only-token",
+            "ha_use_direct_api": true,
+            "mqtt_ha_host": "camera-broker.example.invalid",
+            "mqtt_ha_port": 1884,
+            "camera_enabled": true,
+            "camera_topic": "frigate/events",
+            "frigate_base_url": "https://clips.example.invalid",
+            "ring_snapshot_url_template": "https://clips.example.invalid/{device_id}.jpg",
+            "ha_appliance_entities": {"washer": "sensor.washer"},
+            "ha_entities": [{"id": "guest", "label": "Guest", "entity": "switch.guest", "domain": "switch", "enabled": true}],
+            "header_toggles_config": [{"id": "feed", "label": "No feed", "entity": "input_boolean.no_feed", "state_key": "no_feed"}]
+        });
+        for (key, value) in legacy.as_object().unwrap() {
+            saved[key] = value.clone();
+        }
+        let mut config: FullConfig = serde_json::from_value(saved).unwrap();
+        config.mqtt_host = "new-cerbo".into();
+        let updated = serde_json::to_value(config).unwrap();
+        assert_eq!(updated["mqtt_host"], "new-cerbo");
+        for (key, value) in legacy.as_object().unwrap() {
+            assert_eq!(&updated[key], value, "legacy key {key} was changed");
+        }
     }
 
     #[test]

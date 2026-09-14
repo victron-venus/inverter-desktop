@@ -16,12 +16,11 @@
           :controlStates="headerControlStates"
           :isDark="isDark"
           :showHeaderToggles="appConfig?.show_header_toggles !== false"
-          :showCameraToggle="showCameraToggle"
-          :cameraEnabled="!!appConfig?.camera_enabled"
           @send="send"
           @toggle-theme="toggleTheme"
-          @toggle-camera="toggleCamera"
-        />
+        >
+          <template #actions><DashboardFeatureActions @error="showError" /></template>
+        </AppHeader>
       </div>
 
       <!-- Dashboard Content: Grid and Panels -->
@@ -59,7 +58,6 @@
           </div>
           <div class="md:col-span-4">
             <SidePanel
-              :features="state.features"
               :showEv="appConfig?.show_ev !== false"
               :evSectionVisible="evSectionVisible"
               :carSoc="evSoc"
@@ -71,36 +69,16 @@
               :waterLevel="waterLevel"
               :waterPumpMode="waterPumpMode"
               :waterValveMode="waterValveMode"
-              :washerActive="washerActive"
-              :washerRemainingTime="washerRemainingTime"
-              :dryerActive="dryerActive"
-              :dryerRemainingTime="dryerRemainingTime"
-              :washerStartEntity="washerStartEntity"
-              :washerPauseEntity="washerPauseEntity"
-              :dryerStartEntity="dryerStartEntity"
-              :dryerPauseEntity="dryerPauseEntity"
-              :dishwasherActive="dishwasherActive"
-              :dishwasherRemainingTime="dishwasherRemainingTime"
               :homeButtons="homeButtons"
               :buttonStates="homeButtonStates"
-              :haConnected="haConnected"
-              :haSensors="haSensors"
-              :haNumbers="haNumbers"
-              :haCovers="haCovers"
-              :haMediaPlayers="haMediaPlayers"
-              :haScenes="haScenes"
-              :haWeather="haWeather"
-              :showWasher="appConfig?.show_washer !== false"
-              :showDryer="appConfig?.show_dryer !== false"
-              :showDishwasher="appConfig?.show_dishwasher !== false"
+              :controlsConnected="controlsConnected"
+              :getControlLabel="features.getControlLabel"
+              :getControlIcon="features.getControlIcon"
               :showHomeSection="appConfig?.show_home_section !== false"
-              :appConfig="appConfig"
               @send="send"
-              @number-set="onNumberSet"
-              @cover-position="onCoverPosition"
-              @media-control="onMediaControl"
-              @scene-activate="onSceneActivate"
-            />
+            >
+              <DashboardFeaturePanels @send="send" />
+            </SidePanel>
           </div>
         </div>
 
@@ -117,15 +95,15 @@
 
       <!-- Bottom Status Bar: Classic dot layout -->
       <StatusBar
-        :haEnabled="haEnabled"
-        :haConnected="haConnected"
         :mqttConnected="mqttConnected"
         :dataSource="dataSource"
-        :haMqttConnected="haMqttConnected"
         :uptime="state.uptime"
         :appVersion="appVersion"
         :stateVersion="state.version"
-      />
+      >
+        <template #leading><DashboardFeatureStatus /></template>
+        <template #connections><DashboardConnectionStatus /></template>
+      </StatusBar>
 
       <ConsoleLog v-if="appConfig?.show_console !== false" :lines="state.console || []" />
 
@@ -173,13 +151,18 @@ import StatusBar from './components/StatusBar.vue'
 import { checkForUpdates } from './composables/useAutoUpdate'
 import { addHistoryPoint, useChart } from './composables/useChart'
 import { notify, useConnection } from './composables/useConnection'
-import { useHA } from './composables/useHA'
+import {
+  useDashboardFeatures,
+  DashboardFeaturePanels,
+  DashboardFeatureActions,
+  DashboardFeatureStatus,
+  DashboardConnectionStatus,
+} from '@features'
 import { sendControlAction, useDashboardControls } from './composables/useDashboardControls'
 import { useInverterVisibility } from './composables/useInverterVisibility'
 import { useMQTTState } from './composables/useMQTTState'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
-import { isHaCameraMqttConfigured } from './connectionPolicy'
 import { getAppConfig, needsSetup } from './config'
 import type { AppConfig } from './config'
 import { logger } from './logger'
@@ -189,41 +172,17 @@ const {
   state,
   mqttConnected,
   dataSource,
-  haMqttConnected,
   appConfig,
   connectMqtt,
   ensureNotificationPermission,
-  toggleCameraMotion,
   cleanup: cleanupConnection,
 } = useConnection()
-const {
-  haEnabled,
-  haConnected,
-  haEntityStates,
-  haEntityAttributes,
-  haSensors,
-  haNumbers,
-  haCovers,
-  haMediaPlayers,
-  haScenes,
-  haWeather,
-  washerActive,
-  washerRemainingTime,
-  dryerActive,
-  dryerRemainingTime,
-  washerStartEntity,
-  washerPauseEntity,
-  dryerStartEntity,
-  dryerPauseEntity,
-  dishwasherActive,
-  dishwasherRemainingTime,
-  initHa,
-  cleanupHa,
-  setHaWindowHidden,
-  getHaControlState,
-} = useHA()
-const { headerControls, headerControlStates, homeButtons, homeButtonStates } =
-  useDashboardControls(getHaControlState)
+const features = useDashboardFeatures()
+const { controlsConnected } = features
+const { headerControls, headerControlStates, homeButtons, homeButtonStates } = useDashboardControls(
+  features.getControlState,
+  features.allowHomeControls
+)
 const { setInverterWindowHidden, cleanupInverterVisibility } = useInverterVisibility()
 const {
   waterLevel,
@@ -239,16 +198,6 @@ const {
   acloads,
 } = useMQTTState()
 const { isDark, toggleTheme } = useTheme()
-const showCameraToggle = computed(() => isHaCameraMqttConfigured(appConfig.value))
-
-async function toggleCamera() {
-  try {
-    await toggleCameraMotion()
-  } catch (e) {
-    logger.error('Failed to toggle camera motion:', e)
-    showError(`Failed to toggle camera: ${e?.toString() || e}`)
-  }
-}
 const { chartOption, forceUpdateChart, setChartPaused } = useChart(isDark)
 const isWindowHidden = ref(false)
 
@@ -273,7 +222,7 @@ async function handleSetupComplete(cfg: AppConfig) {
   showSetupWizard.value = false
   appConfig.value = cfg
   await connectMqtt()
-  await initHa()
+  await features.init()
 }
 
 function onContextMenu(e: MouseEvent) {
@@ -301,22 +250,6 @@ async function send(action: string, payload: Record<string, unknown> = {}) {
     logger.error('Action failed:', action, payload, e)
     showError(`Failed: ${e?.toString() || e}`)
   }
-}
-
-async function onNumberSet(entityId: string, value: number) {
-  await send('number_set', { entity: entityId, value })
-}
-
-async function onCoverPosition(entityId: string, position: number) {
-  await send('set_cover_position', { entity: entityId, position })
-}
-
-async function onMediaControl(entityId: string, action: string) {
-  await send('media_player', { entity: entityId, mp_action: action })
-}
-
-async function onSceneActivate(entityId: string) {
-  await send('scene_activate', { entity: entityId })
 }
 
 const isInverterOff = computed(() => {
@@ -464,18 +397,12 @@ onMounted(async () => {
     showSetupWizard.value = true
   }
 
-  // Defer MQTT/HA until setup wizard completes
+  // Defer connections until setup wizard completes
   if (!showSetupWizard.value) {
     await connectMqtt()
-    await initHa()
+    await features.init()
   }
-  initSystemNotifications(
-    haEntityStates,
-    haEntityAttributes,
-    evChargingKw,
-    waterValveState,
-    pumpSwitchState
-  )
+  initSystemNotifications(evChargingKw, waterValveState, pumpSwitchState)
 
   document.addEventListener('click', onDocumentClick)
 
@@ -494,13 +421,13 @@ onMounted(async () => {
     isWindowHidden.value = true
     setChartPaused(true)
     void setInverterWindowHidden(true)
-    void setHaWindowHidden(true)
+    void features.setWindowHidden(true)
   })
   const unlistenShown = await listen('window-shown', () => {
     isWindowHidden.value = false
     setChartPaused(false)
     void setInverterWindowHidden(false)
-    void setHaWindowHidden(false)
+    void features.setWindowHidden(false)
   })
 
   unlistenWindowEvents = () => {
@@ -512,7 +439,7 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
   cleanupConnection()
-  cleanupHa()
+  features.cleanup()
   cleanupInverterVisibility()
   if (unlistenConfig) unlistenConfig()
   if (unlistenWindowEvents) unlistenWindowEvents()

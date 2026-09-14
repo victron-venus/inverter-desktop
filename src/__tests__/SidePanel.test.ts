@@ -18,28 +18,6 @@ const baseProps = {
   pumpSwitch: false,
   homeButtons: [],
   buttonStates: {},
-  haSensors: [{ entity_id: 'sensor.temp', name: 'Temp', state: '23', unit: '°C' }],
-  haNumbers: [
-    { entity_id: 'number.limit', name: 'Limit', value: 50, min: 0, max: 100, step: 1, unit: '%' },
-  ],
-  haCovers: [],
-  haMediaPlayers: [],
-  haScenes: [],
-  haWeather: null,
-  appConfig: {
-    show_ha_sensors: true,
-    show_ha_numbers: true,
-    show_ha_covers: true,
-    show_ha_media: true,
-    show_ha_scenes: true,
-    show_ha_weather: true,
-    show_ev: true,
-    show_washer: true,
-    show_dryer: true,
-    show_dishwasher: true,
-    show_home_section: true,
-    show_console: true,
-  },
 }
 
 describe('SidePanel', () => {
@@ -136,158 +114,15 @@ describe('SidePanel', () => {
     })
     expect(wrapper.text()).not.toContain('Btn')
   })
-
-  it('shows sensors header but collapsed by default', () => {
-    const wrapper = mount(SidePanel, { props: baseProps })
-    expect(wrapper.text()).toContain('sections.sensors')
-    expect(wrapper.text()).not.toContain('23°C')
-  })
-
-  it('expands sensors on header click', async () => {
-    const wrapper = mount(SidePanel, { props: baseProps })
-    const headers = wrapper.findAll('.classic-header')
-    const sensorsHeader = headers.find((h) => h.text().includes('sections.sensors'))
-    await sensorsHeader?.trigger('click')
-    expect(wrapper.text()).toContain('23°C')
-  })
-
-  it('shows covers collapsed, expands on click', async () => {
-    const wrapper = mount(SidePanel, {
-      props: {
-        ...baseProps,
-        haCovers: [{ entity_id: 'cover.blind1', name: 'Living Room', position: 75 }],
-      },
-    })
-    expect(wrapper.text()).toContain('sections.covers')
-    expect(wrapper.text()).not.toContain('75%')
-    const headers = wrapper.findAll('.classic-header')
-    const coversHeader = headers.find((h) => h.text().includes('sections.covers'))
-    await coversHeader?.trigger('click')
-    expect(wrapper.text()).toContain('75%')
-  })
-
-  it('shows media collapsed, expands on click', async () => {
-    const wrapper = mount(SidePanel, {
-      props: {
-        ...baseProps,
-        haMediaPlayers: [
-          { entity_id: 'media_player.tv', name: 'Living Room TV', state: 'playing' },
-        ],
-      },
-    })
-    expect(wrapper.text()).toContain('sections.media')
-    expect(wrapper.text()).not.toContain('playing')
-    const headers = wrapper.findAll('.classic-header')
-    const mediaHeader = headers.find((h) => h.text().includes('sections.media'))
-    await mediaHeader?.trigger('click')
-    expect(wrapper.text()).toContain('playing')
-  })
-
-  it('shows scenes collapsed, expands on click', async () => {
-    const wrapper = mount(SidePanel, {
-      props: {
-        ...baseProps,
-        haScenes: [{ entity_id: 'scene.movie', name: 'Movie Night' }],
-      },
-    })
-    expect(wrapper.text()).toContain('sections.scenes')
-    expect(wrapper.text()).not.toContain('Movie Night')
-    const headers = wrapper.findAll('.classic-header')
-    const scenesHeader = headers.find((h) => h.text().includes('sections.scenes'))
-    await scenesHeader?.trigger('click')
-    expect(wrapper.text()).toContain('Movie Night')
-  })
-
-  it('shows weather when provided', () => {
-    const wrapper = mount(SidePanel, {
-      props: {
-        ...baseProps,
-        haWeather: {
-          entity_id: 'weather.home',
-          name: 'Home Weather',
-          state: 'sunny',
-          temperature: 22,
-          unit: '°C',
-          forecast: [{ datetime: '2024-01-02', temperature: 24, condition: 'cloudy' }],
-        },
-      },
-    })
-    expect(wrapper.text()).toContain('Home Weather')
-    expect(wrapper.text()).toContain('22°C')
-    expect(wrapper.text()).toContain('sunny')
-  })
-
-  it('hides weather when show_ha_weather false', () => {
-    const wrapper = mount(SidePanel, {
-      props: {
-        ...baseProps,
-        haWeather: {
-          entity_id: 'weather.home',
-          name: 'Home Weather',
-          state: 'sunny',
-          temperature: 22,
-          unit: '°C',
-          forecast: [],
-        },
-        appConfig: { ...(baseProps.appConfig as Record<string, boolean>), show_ha_weather: false },
-      },
-    })
-    expect(wrapper.text()).not.toContain('Home Weather')
-  })
 })
 
-describe('HA offline controls', () => {
-  it('disables HA actions during grace while retaining the last visible values', async () => {
+describe('core controls without optional connections', () => {
+  it('keeps inverter controls usable while external controls are disconnected', async () => {
     const wrapper = mount(SidePanel, {
       props: {
         ...baseProps,
-        haConnected: false,
+        controlsConnected: false,
         showHomeSection: true,
-        homeButtons: [
-          { id: 'lamp', label: 'Lamp', entity: 'switch.lamp' },
-          { id: 'only_charging', label: 'Only charging', entity: 'input_boolean.only_charging' },
-        ],
-        buttonStates: { lamp: 'on', only_charging: 'off' },
-        haCovers: [{ entity_id: 'cover.blind', name: 'Blind', position: 50, state: 'open' }],
-        haMediaPlayers: [{ entity_id: 'media_player.tv', name: 'TV', state: 'playing' }],
-        haScenes: [{ entity_id: 'scene.evening', name: 'Evening' }],
-      },
-    })
-    for (const key of ['numbers', 'covers', 'media', 'scenes']) {
-      const header = wrapper
-        .findAll('.classic-header')
-        .find((entry) => entry.text().includes(`sections.${key}`))
-      await header?.trigger('click')
-    }
-    expect(wrapper.text()).toContain('status.haStale')
-    expect(wrapper.text()).toContain('50%')
-    for (const slider of wrapper.findAll('input[type="range"]')) {
-      expect(slider.attributes('disabled')).toBeDefined()
-    }
-    const homeButtons = wrapper.findAll('button.classic-btn-tile')
-    expect(homeButtons[0].attributes('disabled')).toBeDefined()
-    expect(homeButtons[1].attributes('disabled')).toBeUndefined()
-    const play = wrapper.findAll('button').find((button) => button.text() === '▶')
-    if (!play) throw new Error('Play control was not rendered')
-    expect(play.attributes('disabled')).toBeDefined()
-    await play.trigger('click')
-    expect(wrapper.emitted('media-control')).toBeUndefined()
-    await wrapper.setProps({ haConnected: true })
-    expect(play.attributes('disabled')).toBeUndefined()
-    wrapper.unmount()
-  })
-})
-
-describe('inverter controls with HA disabled', () => {
-  it('keeps MQTT home controls visible and usable without a stale HA warning', async () => {
-    const wrapper = mount(SidePanel, {
-      props: {
-        ...baseProps,
-        features: { ha: false },
-        haConnected: false,
-        showHomeSection: true,
-        haSensors: [],
-        haNumbers: [],
         homeButtons: [
           { id: 'limit', label: 'Export limit', entity: 'no_feed' },
           { id: 'lamp', label: 'Lamp', entity: 'switch.lamp' },
@@ -295,12 +130,11 @@ describe('inverter controls with HA disabled', () => {
         buttonStates: { limit: 'on' },
       },
     })
-    expect(wrapper.text()).not.toContain('status.haStale')
     const buttons = wrapper.findAll('button.classic-btn-tile')
-    expect(buttons).toHaveLength(1)
     expect(buttons[0].attributes('disabled')).toBeUndefined()
+    expect(buttons[1].attributes('disabled')).toBeDefined()
     await buttons[0].trigger('click')
     expect(wrapper.emitted('send')).toEqual([['toggle', { entity: 'no_feed' }]])
-    wrapper.unmount()
+    expect(wrapper.text()).not.toContain('status.haStale')
   })
 })

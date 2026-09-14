@@ -1,0 +1,106 @@
+import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+import { build } from 'vite'
+import {
+  assertMobileModuleGraph,
+  frontendProfileAudit,
+  resolveFrontendProfile,
+} from './frontend-profile.mjs'
+
+test('native mobile targets cannot select desktop assets, including armv7 Android', () => {
+  for (const platform of ['android', 'androideabi', 'ios']) {
+    assert.equal(resolveFrontendProfile({ TAURI_ENV_PLATFORM: platform }), 'mobile')
+    assert.throws(() =>
+      resolveFrontendProfile({ TAURI_ENV_PLATFORM: platform, INVERTER_BUILD_PROFILE: 'desktop' })
+    )
+  }
+  for (const triple of [
+    'aarch64-apple-ios',
+    'aarch64-apple-ios-sim',
+    'aarch64-linux-android',
+    'armv7-linux-androideabi',
+  ]) {
+    assert.equal(resolveFrontendProfile({ CARGO_BUILD_TARGET: triple }), 'mobile')
+    assert.throws(() =>
+      resolveFrontendProfile({ TAURI_ENV_TARGET_TRIPLE: triple, INVERTER_BUILD_PROFILE: 'desktop' })
+    )
+  }
+})
+
+test('standalone builds choose explicitly; invalid or conflicting target hints fail', () => {
+  assert.equal(resolveFrontendProfile({}), 'desktop')
+  assert.equal(resolveFrontendProfile({ INVERTER_BUILD_PROFILE: 'mobile' }), 'mobile')
+  assert.equal(resolveFrontendProfile({ TAURI_ENV_PLATFORM: 'darwin' }), 'desktop')
+  assert.throws(() => resolveFrontendProfile({ INVERTER_BUILD_PROFILE: 'full' }))
+  assert.throws(() => resolveFrontendProfile({ TAURI_ENV_PLATFORM: 'typo' }))
+  assert.throws(() =>
+    resolveFrontendProfile({
+      TAURI_ENV_PLATFORM: 'ios',
+      CARGO_BUILD_TARGET: 'x86_64-unknown-linux-gnu',
+    })
+  )
+  assert.throws(() =>
+    resolveFrontendProfile({ TAURI_ENV_PLATFORM: 'windows', INVERTER_BUILD_PROFILE: 'mobile' })
+  )
+})
+
+test('audit accepts shared core but rejects desktop implementation and translations', () => {
+  assert.doesNotThrow(() =>
+    assertMobileModuleGraph(['src/main.ts', 'src/features/mobile.ts', 'src/inverterControl.ts'])
+  )
+  for (const id of [
+    'src/features/desktop/ha/session.ts',
+    'src/features/desktop.ts',
+    'src/features/messages.desktop.ts',
+    'src/composables/useHA.ts',
+    'src/CameraVideo.vue',
+    'src/plugins/manager.ts',
+  ]) {
+    assert.throws(() => assertMobileModuleGraph(['src/main.ts', id]), /Desktop feature modules/)
+  }
+})
+
+test('real bundler graph rejects a desktop import even behind an unused runtime branch', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'inverter-mobile-graph-'))
+  try {
+    await mkdir(path.join(root, 'src/features/desktop'), { recursive: true })
+    await writeFile(
+      path.join(root, 'index.html'),
+      '<script type="module" src="/src/main.ts"></script>'
+    )
+    await writeFile(
+      path.join(root, 'src/features/desktop/feature.ts'),
+      'export const feature = "desktop-only"'
+    )
+    await writeFile(
+      path.join(root, 'src/main.ts'),
+      'import { feature } from "./features/desktop/feature"; if (false) console.log(feature)'
+    )
+    await assert.rejects(
+      build({
+        root,
+        configFile: false,
+        logLevel: 'silent',
+        plugins: [frontendProfileAudit(root, 'mobile')],
+        build: { write: false },
+      }),
+      /Desktop feature modules/
+    )
+    await writeFile(path.join(root, 'src/main.ts'), 'console.log("core")')
+    const result = await build({
+      root,
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [frontendProfileAudit(root, 'mobile')],
+      build: { write: false },
+    })
+    const receipt = result.output.find((item) => item.fileName === 'build-profile.json')
+    assert.equal(JSON.parse(receipt.source).profile, 'mobile')
+    assert.deepEqual(JSON.parse(receipt.source).modules, ['src/main.ts'])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

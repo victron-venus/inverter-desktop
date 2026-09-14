@@ -1,3 +1,4 @@
+import { featureConnection } from '@features'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type Event } from '@tauri-apps/api/event'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
@@ -20,7 +21,6 @@ import {
   type BannerNotification,
   clearBanner,
   dataSource,
-  haMqttConnected,
   type InverterState,
   mqttConnected,
   refreshTelemetryQuality,
@@ -70,7 +70,6 @@ function mqttConnectArgs(config: AppConfig) {
     waterValveInstance: config.water_valve_instance ?? null,
     evchargerInstance: config.evcharger_instance ?? 40,
     evInstance: config.ev_instance ?? 22,
-    cameraTopic: null,
   }
 }
 
@@ -117,7 +116,6 @@ export function useConnection() {
     return operation
   }
   let mqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
-  let haMqttOfflineTimer: ReturnType<typeof setTimeout> | null = null
 
   let processStateCount = 0
   let processStateLastLogMs = 0
@@ -252,19 +250,6 @@ export function useConnection() {
         }
       })
 
-      await listenForSession<{ video_url: string; agent_name?: string }>(
-        'camera-event',
-        (event) => {
-          if (!appConfig.value?.camera_enabled) return
-          const payload = event.payload
-          if (!payload?.video_url) return
-          void invoke('open_camera_video_window', {
-            videoUrl: payload.video_url,
-            agentName: payload.agent_name ?? null,
-          }).catch((e) => logger.warn('Failed to open camera video window:', e))
-        }
-      )
-
       await listenForSession<{ title: string; body: string }>('notification', (event) => {
         addNotification(event.payload.title, event.payload.body)
       })
@@ -335,27 +320,8 @@ export function useConnection() {
       }
 
       if (current !== session) return
-      await syncHaMqttFromConfig(config)
+      await featureConnection.connect(config)
       if (current !== session) return
-
-      // Listen for HA MQTT connection status changes
-      await listenForSession<boolean>('ha-mqtt-connection-status', (event) => {
-        if (event.payload) {
-          if (haMqttOfflineTimer) {
-            clearTimeout(haMqttOfflineTimer)
-            haMqttOfflineTimer = null
-          }
-          haMqttConnected.value = true
-        } else if (!haMqttOfflineTimer) {
-          haMqttOfflineTimer = setTimeout(() => {
-            haMqttOfflineTimer = null
-            haMqttConnected.value = false
-            if (appConfig.value?.camera_enabled && appConfig.value?.mqtt_ha_host?.trim()) {
-              reconnectHaMqttAfterDelay()
-            }
-          }, MQTT_OFFLINE_DELAY_MS)
-        }
-      })
 
       // Auto-reconnect on wake (network change, IP renewal after sleep)
       await listenForSession('window-focused', () => {
@@ -388,7 +354,6 @@ export function useConnection() {
   }
 
   let mqttReconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let haMqttReconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   async function failoverToIgw() {
     const current = session
@@ -463,79 +428,6 @@ export function useConnection() {
     }, delay)
   }
 
-  async function connectHaMqtt(config: AppConfig) {
-    await invoke('connect_ha_mqtt', {
-      host: config.mqtt_ha_host,
-      port: config.mqtt_ha_port,
-      username: config.mqtt_ha_login || null,
-      password: config.mqtt_ha_password || null,
-      cameraTopic: config.camera_topic || null,
-      frigateBaseUrl: config.frigate_base_url || null,
-      ringSnapshotUrlTemplate: config.ring_snapshot_url_template || null,
-    })
-    haMqttConnected.value = true
-  }
-
-  async function disconnectHaMqtt() {
-    if (haMqttReconnectTimer) {
-      clearTimeout(haMqttReconnectTimer)
-      haMqttReconnectTimer = null
-    }
-    if (haMqttOfflineTimer) {
-      clearTimeout(haMqttOfflineTimer)
-      haMqttOfflineTimer = null
-    }
-    try {
-      await invoke('disconnect_ha_mqtt')
-    } catch (e) {
-      logger.warn('disconnect_ha_mqtt failed:', e)
-    }
-    haMqttConnected.value = null
-  }
-
-  /** Connect or disconnect HA MQTT camera client from current config. */
-  async function syncHaMqttFromConfig(config: AppConfig) {
-    if (config.camera_enabled && config.mqtt_ha_host?.trim() && config.mqtt_ha_port) {
-      try {
-        await connectHaMqtt(config)
-        logger.log('Connected to HA MQTT broker for cameras')
-        notify('Home Assistant', 'Connected to HA MQTT')
-      } catch (e) {
-        haMqttConnected.value = false
-        logger.error('Failed to connect to HA MQTT:', e)
-      }
-    } else {
-      await disconnectHaMqtt()
-    }
-  }
-
-  async function toggleCameraMotion() {
-    const config = await getAppConfig()
-    const next = !config.camera_enabled
-    config.camera_enabled = next
-    await invoke('save_config', { config })
-    appConfig.value = { ...config }
-    await syncHaMqttFromConfig(config)
-    return next
-  }
-
-  function reconnectHaMqttAfterDelay(delay = 2000) {
-    if (haMqttReconnectTimer) clearTimeout(haMqttReconnectTimer)
-    haMqttReconnectTimer = setTimeout(async () => {
-      haMqttReconnectTimer = null
-      try {
-        const config = await getAppConfig()
-        if (config.camera_enabled && config.mqtt_ha_host?.trim()) {
-          await connectHaMqtt(config)
-          logger.log('HA MQTT reconnected')
-        }
-      } catch (e) {
-        logger.error('HA MQTT reconnect failed:', e)
-        haMqttConnected.value = false
-      }
-    }, delay)
-  }
-
   function cleanup() {
     if (freshnessTimer) clearInterval(freshnessTimer)
     freshnessTimer = null
@@ -550,31 +442,21 @@ export function useConnection() {
       clearTimeout(mqttReconnectTimer)
       mqttReconnectTimer = null
     }
-    if (haMqttReconnectTimer) {
-      clearTimeout(haMqttReconnectTimer)
-      haMqttReconnectTimer = null
-    }
     if (mqttOfflineTimer) {
       clearTimeout(mqttOfflineTimer)
       mqttOfflineTimer = null
     }
-    if (haMqttOfflineTimer) {
-      clearTimeout(haMqttOfflineTimer)
-      haMqttOfflineTimer = null
-    }
+    featureConnection.cleanup()
   }
 
   return {
     state,
     mqttConnected,
     dataSource,
-    haMqttConnected,
     appConfig,
     connectMqtt,
     send,
     ensureNotificationPermission,
-    toggleCameraMotion,
-    syncHaMqttFromConfig,
     cleanup,
   }
 }

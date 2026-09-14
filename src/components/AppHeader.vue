@@ -39,17 +39,7 @@
       </template>
     </div>
 
-    <UiButton
-      v-if="showCameraToggle"
-      class="min-w-[22px] !px-1.5 shrink-0"
-      toggle
-      :active="cameraEnabled"
-      :title="$t('actions.cameraMotion')"
-      @click="$emit('toggle-camera')"
-    >
-      <Camera v-if="cameraEnabled" :size="11" />
-      <CameraOff v-else :size="11" />
-    </UiButton>
+    <slot name="actions" />
 
     <UiButton
       class="min-w-[22px] !px-1.5 shrink-0"
@@ -64,8 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { Camera, CameraOff, FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
-import { useI18n } from 'vue-i18n'
+import { FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
 import UiButton from './UiButton.vue'
 import type { DashboardControl } from '../inverterControl'
 
@@ -77,17 +66,12 @@ defineProps<{
   controlStates: Record<string, string> | undefined
   isDark: boolean
   showHeaderToggles?: boolean
-  showCameraToggle?: boolean
-  cameraEnabled?: boolean
 }>()
 
 defineEmits<{
   send: [action: string, payload?: Record<string, unknown>]
   'toggle-theme': []
-  'toggle-camera': []
 }>()
-
-const { t: $t } = useI18n()
 
 function isToggleUnavailable(state: string | undefined): boolean {
   return state === 'unavailable'
