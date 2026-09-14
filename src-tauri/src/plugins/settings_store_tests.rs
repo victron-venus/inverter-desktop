@@ -3,7 +3,6 @@ use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const PLUGIN: &str = "test.settings";
-const KEY: [u8; 32] = [7; 32];
 const SECRET: &str = "private-token-must-not-appear-in-files-or-errors";
 
 fn fixture() -> (tempfile::TempDir, SettingsStore) {
@@ -20,9 +19,10 @@ fn fixture() -> (tempfile::TempDir, SettingsStore) {
     // Mirror the package manager's private store, independently of tempfile's
     // parent permissions and the user's process umask.
     builder.create(&package_root).unwrap();
+    let key: [u8; 32] = rand::rng().random();
     let store = SettingsStore::new(
         package_root.canonicalize().unwrap(),
-        Arc::new(|| Ok(KEY.to_vec())),
+        Arc::new(move || Ok(key.to_vec())),
     );
     (directory, store)
 }
@@ -102,7 +102,7 @@ fn encrypted_round_trip_preserves_unknown_values_and_ever_secret_fields() {
     }
     assert!(encrypted.starts_with(MAGIC));
     assert!(store.read(PLUGIN).unwrap() == original);
-    let reopened = SettingsStore::new(store.root.clone(), Arc::new(|| Ok(KEY.to_vec())));
+    let reopened = SettingsStore::new(store.root.clone(), store.key_provider.clone());
     reopened.recover().unwrap();
     assert!(reopened.read(PLUGIN).unwrap() == original);
 }
@@ -128,7 +128,9 @@ fn changed_writes_preserve_supplied_revision_and_use_fresh_nonces() {
 fn wrong_key_and_cross_plugin_ciphertext_substitution_are_rejected() {
     let (_directory, store) = fixture();
     save(&store, PLUGIN, &data());
-    let wrong = SettingsStore::new(store.root.clone(), Arc::new(|| Ok(vec![8; 32])));
+    let mut wrong_key = store.key().unwrap();
+    wrong_key[0] ^= 1;
+    let wrong = SettingsStore::new(store.root.clone(), Arc::new(move || Ok(wrong_key.clone())));
     assert!(wrong.read(PLUGIN).is_err());
     let other = "other.settings";
     let bytes = fs::read(store.record_path(PLUGIN).unwrap()).unwrap();
@@ -168,7 +170,7 @@ fn malformed_authenticated_plaintext_never_echoes_secret_values_in_errors() {
         format!(r#"{{"revision":"0","values":{{}},"secrets":"{SECRET}","secret_fields":[]}}"#);
     private_file(
         &store.record_path(PLUGIN).unwrap(),
-        &encrypt(PLUGIN, invalid.as_bytes(), &KEY).unwrap(),
+        &encrypt(PLUGIN, invalid.as_bytes(), &store.key().unwrap()).unwrap(),
     );
     let error = match store.read(PLUGIN) {
         Ok(_) => panic!("malformed settings must fail"),
@@ -208,7 +210,12 @@ fn oversized_plaintext_ciphertext_and_decrypted_content_are_bounded() {
     let path = store.record_path(PLUGIN).unwrap();
     private_file(&path, &vec![0; MAX_SETTINGS_FILE_BYTES + 1]);
     assert!(store.read(PLUGIN).is_err());
-    let large = encrypt(PLUGIN, &vec![b' '; MAX_SETTINGS_PLAINTEXT_BYTES + 1], &KEY).unwrap();
+    let large = encrypt(
+        PLUGIN,
+        &vec![b' '; MAX_SETTINGS_PLAINTEXT_BYTES + 1],
+        &store.key().unwrap(),
+    )
+    .unwrap();
     fs::write(&path, large).unwrap();
     assert!(store.read(PLUGIN).is_err());
 }
@@ -227,7 +234,9 @@ fn failed_key_access_leaks_no_provider_error_and_preserves_previous_bytes() {
     assert_eq!(error, "Plugin settings key is unavailable");
     assert_eq!(fs::read(path).unwrap(), before);
     assert!(store.scan().unwrap().pending.is_empty());
-    let short = SettingsStore::new(store.root.clone(), Arc::new(|| Ok(vec![7; 31])));
+    let mut short_key = store.key().unwrap();
+    short_key.truncate(31);
+    let short = SettingsStore::new(store.root.clone(), Arc::new(move || Ok(short_key.clone())));
     assert!(short.read(PLUGIN).is_err());
 }
 

@@ -425,6 +425,11 @@ fn settings_schema() -> Value {
     },"required":["token"]})
 }
 
+fn settings_test_key() -> SettingsKeyProvider {
+    let key = rand::random::<[u8; 32]>();
+    Arc::new(move || Ok(key.to_vec()))
+}
+
 async fn settings_application(
     directory: &Path,
     key: SettingsKeyProvider,
@@ -468,7 +473,7 @@ async fn save_fixture_settings(
 async fn settings_save_keeps_disabled_workers_stopped_and_restarts_enabled_workers() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let (service, host, epoch) = settings_application(&root, Arc::new(|| Ok(vec![67; 32]))).await;
+    let (service, host, epoch) = settings_application(&root, settings_test_key()).await;
     install(
         &service,
         configured_archive(&root, "1.0.0", Some(settings_schema()), "configuration"),
@@ -537,7 +542,7 @@ async fn settings_save_keeps_disabled_workers_stopped_and_restarts_enabled_worke
 async fn stale_settings_and_package_revisions_cannot_overwrite_current_values() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let (service, _, epoch) = settings_application(&root, Arc::new(|| Ok(vec![68; 32]))).await;
+    let (service, _, epoch) = settings_application(&root, settings_test_key()).await;
     install(
         &service,
         configured_archive(&root, "1.0.0", Some(settings_schema()), "configuration"),
@@ -586,7 +591,7 @@ async fn stale_settings_and_package_revisions_cannot_overwrite_current_values() 
 async fn uninstall_retains_settings_unless_explicitly_deleted() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let (service, _, epoch) = settings_application(&root, Arc::new(|| Ok(vec![69; 32]))).await;
+    let (service, _, epoch) = settings_application(&root, settings_test_key()).await;
     let path = configured_archive(&root, "1.0.0", Some(settings_schema()), "configuration");
     install(&service, path.clone(), epoch, false).await;
     let initial = settings_view(&service, epoch).await;
@@ -637,13 +642,14 @@ async fn saved_settings_survive_restart_failure_and_enabled_intent_is_preserved(
     let fail_at = Arc::new(AtomicUsize::new(usize::MAX));
     let key_calls = calls.clone();
     let key_failure = fail_at.clone();
+    let test_key = rand::random::<[u8; 32]>();
     let (service, host, epoch) = settings_application(
         &root,
         Arc::new(move || {
             if key_calls.fetch_add(1, Ordering::SeqCst) >= key_failure.load(Ordering::SeqCst) {
                 Err("provider unavailable".into())
             } else {
-                Ok(vec![70; 32])
+                Ok(test_key.to_vec())
             }
         }),
     )
