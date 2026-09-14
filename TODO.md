@@ -93,7 +93,7 @@ not invoke desktop commands or subscribe to feature events.
 Acceptance: real iOS/Android targets compile with core commands only; flags retain
 their MQTT route. Desktop regression checks remain green.
 
-### 3. Platform builds and regression gates — in progress
+### 3. Platform builds and regression gates — implemented and verified
 
 - [x] Select frontend platform from explicit intent and Tauri target environment,
       never host OS; reject conflicting desktop/mobile overrides.
@@ -102,11 +102,11 @@ their MQTT route. Desktop regression checks remain green.
       release builds, and Play builds.
 - [x] Verify the actual frontend module graph; fail mobile builds that include
       desktop implementation instead of relying on minified-string searches.
-- [ ] Check actual native compilation inputs, dependencies, commands, and packaged
+- [x] Check actual native compilation inputs, dependencies, commands, and packaged
       libraries alongside target builds and capability checks.
 - [x] Cover absent features, preserved core controls, and cross-platform saved
       configuration round trips.
-- [ ] Run frontend tests/typecheck/build/format, Rust tests/clippy/format,
+- [x] Run frontend tests/typecheck/build/format, Rust tests/clippy/format,
       release contracts, and Android/iOS CI on the integration commit.
 
 Acceptance: deliberately including a desktop module or native command makes a
@@ -204,7 +204,7 @@ or removing a package changes available features without reinstalling the app.
 
 - [ ] Verify desktop core / core+HA / core+cameras / both using actual installed
       files and behavior, including clean profiles.
-- [ ] Inspect final APK/AAB/IPA files and native libraries for feature absence;
+- [x] Inspect final APK/AAB/IPA files and native libraries for feature absence;
       module-graph checks complement packaged-artifact inspection.
 - [ ] Test app updates with installed plugins, incompatible API versions,
       interrupted updates, rollback, and offline startup.
@@ -229,27 +229,31 @@ or removing a package changes available features without reinstalling the app.
   `pnpm build:mobile` passed Vue typecheck/build and emitted a core-only source
   graph in `dist/build-profile.json`.
 - Native artifact verifier: 17 fixture tests passed, including rejection of
-  arbitrary Cargo manifests and option-like targets; real mobile archives remain
-  subject to their build/upload gates.
+  arbitrary Cargo manifests and option-like targets. Real mobile archives also
+  passed the build/upload gates recorded below.
 - Local integration: 192 desktop/core frontend tests and 7 mobile tests passed;
   both profile typechecks/builds and formatting passed. Rust: 171 full-suite tests,
   5 final auth-focused tests, clippy, and iOS simulator/Android aarch64
   `cargo check --locked --all-features` passed. Lint completed with warnings.
 - Release helper: all four iOS build-order/failure fixtures passed after updating
   their expected command to `build:mobile`; 12 version/native-package tests passed.
-  The complete local release contract suite also passed all 178 tests.
-  Hosted integration and mobile artifact gates are still pending.
-- Hosted iOS at `c805d833`: the native release, IPA packaging, and packaged
-  exclusion verifier passed in
-  [Quality gate run 34802901966](https://github.com/victron-venus/inverter-desktop/actions/runs/34802901966).
-  Android packaging and the final reviewed integration head remain pending.
+  After integrating main `8ecb573` (release tooling PR #410) without application
+  changes, the complete local release contract suite passed all 180 tests.
+- Hosted integration at `2b1bd9e6`: all checks passed, including `CI gate`,
+  SonarCloud, CodeQL, frontend/Rust tests, and dependency checks.
+  [Quality gate run 34803663596](https://github.com/victron-venus/inverter-desktop/actions/runs/34803663596)
+  built the iOS IPA and universal Android APK/AAB, verified Android native
+  alignment, and inspected each package for desktop feature absence.
+  Verified targets: `aarch64-apple-ios`, `aarch64-linux-android`,
+  `armv7-linux-androideabi`, `i686-linux-android`, and `x86_64-linux-android`.
+  The PR requires the same gates on its final merged-base/documentation head
+  before merging to main.
 - Review fixes: desktop fields emit model updates into the existing reactive
   draft; tests cover real settings save/reset and both defaults import orders.
   Data-only defaults remove a configuration/UI initialization cycle introduced
   by the extraction. Both frontend builds and all frontend tests passed again.
 - Remaining validation boundary: no physical inverter commands, installed HA/camera
   deployment, or real mobile device exercise was performed.
-- Append PR links and final hosted gate results here.
 
 ## Reference constraints
 
