@@ -100,7 +100,8 @@ manager/process from the same store until owned workers have been reaped. Call
 `close().await` to complete cleanup explicitly; if process cleanup cannot be
 confirmed, the lease must remain held until the hosting process exits.
 
-The store uses an ownership marker, a bounded `state.json` inventory, private
+The store uses an atomically created `store-v1/` ownership directory, a bounded
+`state.json` inventory, private
 staging directories, and content-addressed package versions. Each immutable
 version retains its verified archive and extracted payload. At most eight plugins,
 two retained versions per plugin after recovery, 512 MiB of total store data, and

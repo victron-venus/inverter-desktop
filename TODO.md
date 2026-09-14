@@ -346,12 +346,15 @@ requires application/UI integration, production trust, and migrated packages.
 - Native lifecycle: 21 focused tests passed, including real cross-process locking,
   failed activation and rollback, authentication epochs, caller cancellation,
   corruption, initialization recovery, and file-count/disk quota preflight.
-- Integration: the initial full macOS suite passed 245 tests; final integration
-  checks and hosted Windows/Linux/Android/iOS gates remain required before merge.
+- Integration: all 256 macOS Rust tests and strict all-targets clippy passed after
+  integrating main `8c995d7` (Frigate progressive clip streaming). Hosted
+  Windows/Linux/Android/iOS gates remain required on the final PR head before merge.
 - Frontend/core: all 212 desktop tests and eight mobile tests passed, along with
   typecheck/build, formatting, and lint (existing lint warnings remain).
 - Mobile boundary verifier: all 20 fixtures passed, including the new package
   dependency and embedded publisher-policy rejection checks.
+- Mobile compilation: iOS simulator and Android aarch64
+  `cargo check --locked --all-features` passed; both frontend profile builds passed.
 
 ## Reference constraints
 
