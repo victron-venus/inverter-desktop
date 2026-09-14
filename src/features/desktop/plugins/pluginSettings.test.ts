@@ -215,7 +215,7 @@ describe('desktop plugin settings', () => {
     const alert = mounted.find('[role="alert"]').text()
     expect(alert).toContain('<script>bad ••••</script>')
     expect(alert).not.toContain('replacement-token')
-    expect(alert.length).toBe(512)
+    expect(alert).toHaveLength(512)
     expect(mounted.find('script').exists()).toBe(false)
     expect((mounted.find('input[name="token"]').element as HTMLInputElement).value).toBe('')
     expect((mounted.find('input[name="host"]').element as HTMLInputElement).value).toBe(

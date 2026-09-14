@@ -82,6 +82,9 @@ legacy configuration migration, and feature extraction remain unfinished.
       storage, schema/application integration, protocol/lifecycle, UI, and mobile
       boundaries. Address the review findings with focused regressions.
 
+- [x] Update rustls to 0.23.45 and its required crypto dependencies for
+      RUSTSEC-2026-0285; preserve advisory enforcement and verify Cargo Deny.
+
 Local validation: 323 macOS native tests and strict Clippy, 252 frontend tests, 8 mobile frontend
 checks, 4 build-profile checks, and 22 native mobile-boundary tests passed. Both
 frontend production builds passed; final desktop output is restored. Hosted
