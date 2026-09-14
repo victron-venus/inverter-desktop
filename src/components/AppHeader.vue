@@ -6,7 +6,7 @@
         size="sm"
         toggle
         :active="dryRun"
-        @click="$emit('send', 'dry_run')"
+        @click="$emit('send', 'dry_run', { value: !dryRun })"
       >
         <FlaskConical :size="10" /> DRY
       </UiButton>

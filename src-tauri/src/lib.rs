@@ -25,7 +25,7 @@ extern "C" {
 
 use gateway::GatewayClient;
 use log::{info, warn};
-use mqtt::{HeaderToggle, InverterState, MqttClient};
+use mqtt::{HeaderToggle, InverterState, MqttClient, SetpointOverrideStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 #[cfg(desktop)]
@@ -322,6 +322,57 @@ fn get_state(
         Ok(client.get_state())
     } else {
         Err("MQTT client not connected".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_setpoint_override(
+    mqtt_client: State<'_, MqttState>,
+) -> Result<SetpointOverrideStatus, String> {
+    let guard = mqtt_client.0.lock().map_err(|e| e.to_string())?;
+    Ok(guard
+        .as_ref()
+        .and_then(MqttClient::setpoint_override_status)
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+async fn set_setpoint_override(
+    value: Option<i32>,
+    mqtt_client: State<'_, MqttState>,
+) -> Result<SetpointOverrideStatus, String> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let shared_state = {
+        let guard = mqtt_client.0.lock().map_err(|e| e.to_string())?;
+        let client = guard
+            .as_ref()
+            .ok_or("Connect to Cerbo MQTT to change the override")?;
+        client.request_setpoint_override(value, &request_id)?;
+        client.state.clone()
+    };
+    // Confirm daemon acceptance instead of presenting MQTT enqueue as success.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let status = shared_state
+            .lock()
+            .map_err(|e| e.to_string())?
+            .setpoint_override
+            .clone();
+        if let Some(status) =
+            status.filter(|s| s.request_id.as_deref() == Some(request_id.as_str()))
+        {
+            if let Some(error) = status.last_error.as_ref() {
+                return Err(error.clone());
+            }
+            return Ok(status);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(
+                "Cerbo has not confirmed the override. Check its connection and current status."
+                    .into(),
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
 
@@ -1632,6 +1683,8 @@ pub fn run() {
                 let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
                     release_info::get_release_info,
                     get_state,
+                    get_setpoint_override,
+                    set_setpoint_override,
                     disconnect_inverter,
                     perform_action,
                     connect_mqtt,
