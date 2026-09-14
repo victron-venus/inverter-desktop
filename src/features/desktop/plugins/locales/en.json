@@ -21,6 +21,7 @@
   "permissionHttp": "HTTP network connections",
   "permissionMqtt": "MQTT network connections",
   "permissionNotifications": "Desktop notifications",
+  "permissionVideo": "Download and play camera clips",
   "enableAfterInstall": "Enable after installation",
   "install": "Install",
   "update": "Update",

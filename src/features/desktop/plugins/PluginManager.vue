@@ -217,6 +217,7 @@ const permissionKeys: Record<string, string> = {
   network_http: 'plugins.manager.permissionHttp',
   network_mqtt: 'plugins.manager.permissionMqtt',
   desktop_notifications: 'plugins.manager.permissionNotifications',
+  http_video: 'plugins.manager.permissionVideo',
 }
 function permissionLabel(permission: string) {
   const key = permissionKeys[permission]

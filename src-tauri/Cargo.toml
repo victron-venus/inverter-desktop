@@ -20,6 +20,15 @@ readme = "../README.md"
 name = "inverter_dashboard_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Explicit native-only smoke executable; production entry never invokes it.
+native-media-smoke = ["tauri/custom-protocol"]
+
+[[example]]
+name = "plugin-media-smoke"
+path = "examples/plugin-media-smoke.rs"
+required-features = ["native-media-smoke"]
+
 [profile.release]
 lto = true
 codegen-units = 1

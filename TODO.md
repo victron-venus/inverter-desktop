@@ -44,8 +44,11 @@ application integration and the package manager. [PR #423](https://github.com/vi
 added isolated encrypted settings, a declarative editor, and verified worker
 startup configuration on main. Both checkpoints passed hosted mobile artifact
 checks. [PR #424](https://github.com/victron-venus/inverter-desktop/pull/424) adds
-inventory and cleanup for retained plugin data on main. The current implementation
-iteration adds a real Frigate motion worker.
+inventory and cleanup for retained plugin data on main. [PR #425](https://github.com/victron-venus/inverter-desktop/pull/425)
+completed the standalone Frigate motion worker on main at `5254610`, with all
+hosted worker/host/security/mobile artifact checks passing for
+[the final PR head](https://github.com/victron-venus/inverter-desktop/commit/ed3aadd5f27260c6e4334c018d016d36f2154837).
+The current implementation iteration adds completed clips and owned video windows.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -53,7 +56,7 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
-### Current checkpoint: Frigate motion worker and native notifications
+### Completed checkpoint: Frigate motion worker and native notifications
 
 This iteration delivers a separately built first-party worker for Frigate MQTT
 motion-start notifications and connection status. It does not claim camera feature
@@ -117,7 +120,7 @@ and both builds; final output is desktop. Packaging/mobile Python suites passed
 Independent reviews found and fixed strict Shutdown decoding, notification-service
 liveness, UI signal coalescing, and repeated macOS backend initialization. All
 regressions passed. Final-head hosted worker/host/security/mobile artifact checks
-and PR review/merge remain delivery gates. Local native collection is not proof
+and review passed, and PR #425 merged into main. Local native collection is not proof
 of OS display; TLS process checks cover ClientHello/no plaintext fallback, not a
 complete certificate-trust/hostname fixture. No physical camera or inverter command
 was exercised. The PR records final hosted status separately from this completed
@@ -130,63 +133,104 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Next checkpoint: completed Frigate clips in owned desktop windows
+### In progress: completed Frigate clips in owned desktop windows
 
 Deliver one actual feature slice: Frigate `end` with boolean `has_clip: true`
 opens its downloaded MP4 in a plugin-owned window. Reuse the existing complete-
 download-before-playback behavior; incremental HTTP receipt is not streaming
 playback. Keep this implementation separate from the current motion checkpoint.
 
-- [ ] Add optional direct `frigate_base_url` configuration; no base URL means
+- [x] Add optional direct `frigate_base_url` configuration; no base URL means
       motion notifications continue and clip handling remains inactive. Preserve
       explicit ports and reverse-proxy path prefixes; encode event IDs as one
       URL path segment and reject unsupported URL forms.
-- [ ] Parse completed events with separate ten-minute ID history and 45-second
+- [x] Parse completed events with separate ten-minute ID history and 45-second
       camera cooldown. A start notification must not consume a later clip; clip
       notification IDs need a distinct namespace. Do not reject long recordings
       using the motion parser's start-time freshness cutoff.
-- [ ] Preserve the existing clip-available notification and automatic opening
+- [x] Implement the existing clip-available notification and automatic opening
       after complete download. Record dedupe when the event is admitted, matching
       current behavior, and keep MQTT polling responsive during downloads.
-- [ ] Add a versioned, permission-checked HTTP-video operation and native media
+- [x] Add a versioned, permission-checked HTTP-video operation and native media
       ownership keyed by plugin, authentication epoch, worker generation, and
       opaque media ID. Use a fresh revocable instance identity for every spawn:
       generation numbers alone can repeat after removal and registration. Workers
       never choose host paths or native window routes.
-- [ ] Extract reusable HTTP transfer policy without importing core HA credential
-      lookup. Bind allowed HTTP(S) origins and any optional credentials explicitly
-      to the installed plugin's configuration; keep URLs and tokens out of logs.
-- [ ] Preserve eight attempts, retry delays 1/2/3/4/5/5/5 seconds, 15-second connect,
+- [x] Extract reusable HTTP transfer policy without importing core HA credential
+      lookup. Bind allowed HTTP(S) origins and path prefixes to the installed
+      plugin's non-secret configuration; accept no HTTP credentials or injected
+      headers in this slice and keep URLs out of logs.
+- [x] Preserve eight attempts, retry delays 1/2/3/4/5/5/5 seconds, 15-second connect,
       60-second idle-read, ten-minute overall deadline, 256 MiB limit, and no
       redirects. Retry empty/progressive-body failures and currently retryable
       HTTP statuses; reject oversized bodies immediately.
-- [ ] Bound concurrent transfers, queued requests, windows, and aggregate media
+- [x] Bound concurrent transfers, queued requests, windows, and aggregate media
       storage. Write private host-owned files, clean partial writes and startup
       leftovers, and avoid holding runtime/auth locks during HTTP or disk I/O.
-- [ ] Cancel downloads, revoke media access, and close owned windows on disable,
+- [x] Cancel downloads, revoke media access, and close owned windows on disable,
       settings restart, crash/restart, update, rollback, logout/expiry, uninstall,
       and app shutdown. Reject late completion before window creation and clean
       files if window construction fails.
-- [ ] Serve completed files through an opaque, requesting-window-bound media
+- [x] Serve completed files through an opaque, requesting-window-bound media
       route with bounded byte-range responses. Do not broaden the existing global
       temporary-directory asset scope or reuse URL-based webview media IPC.
-- [ ] Reuse the built-in player and 330x186 unfocused borderless windows, top-right
+- [x] Implement the built-in player and 330x186 unfocused borderless windows, top-right
       stacking/reflow, muted autoplay, and close-on-completion. Each clip gets its
       own window; closing one must preserve sibling media and core telemetry.
-- [ ] Extend the signed-worker/Mosquitto acceptance with an isolated HTTP fixture:
-      start then end, duplicate clips, long events, delayed recording availability,
-      progressive/stalled/truncated/oversized bodies, invalid URLs, revocation near
-      completion, settings changes, and uninstall with owned media.
-- [ ] Verify actual native playback, focus, window stacking, user close, and
-      cleanup separately from backend fixtures. Keep testing isolated from the
-      bundled camera subscription to avoid duplicate handling.
-- [ ] Extend Android/iOS source/dependency/asset checks; add no mobile media plugin
+- [x] Exercise the actual release worker in a signed package with private Mosquitto
+      and HTTP fixtures: start then end with an old recording timestamp, duplicate
+      clips, exact URL prefix and ranges, settings restart, disable with ready media,
+      revocation during a stalled body, and uninstall. Keep an independent core
+      MQTT telemetry connection alive across those lifecycle operations. Native
+      window creation/destruction is simulated in this backend acceptance test.
+- [x] Cover transfer failures and service bounds separately with HTTP/service tests:
+      delayed availability, empty/truncated bodies, progressive receipt, idle stalls,
+      oversized bodies, redirects, total deadline, cancellation, byte ranges,
+      storage/queue/window limits, orphan recovery, and failed cleanup retries.
+- [x] Add component tests for opaque IDs, exact window ownership, muted inline
+      autoplay, owned close/drag commands, safe errors, and legacy-path rejection.
+- [x] Add an explicit, feature-gated [native media smoke harness](docs/native-plugin-media-smoke.md)
+      that uses isolated fixture grants and never starts normal authentication,
+      keychain/configuration, core MQTT, or bundled cameras. Its temporary package
+      manager has empty trust and no installed workers.
+- [x] Verify actual macOS playback, focus, window stacking, user close, lease
+      revocation, automatic close at video end, and complete cleanup in the
+      isolated native harness, separately from backend fixtures.
+- [ ] Run graphical playback/window acceptance on Linux and Windows. Their CI
+      compilation and non-graphical `--help` checks do not establish playback.
+- [x] Extend Android/iOS source/dependency/asset checks; add no mobile media plugin
       route, window, package, worker, or optional integration implementation.
+      Add independent new media-marker regressions for APK, AAB, and IPA payloads.
+- [x] Complete local native/frontend checks, both frontend builds, actual package
+      and native playback acceptance, formatting, and strict Clippy for both the
+      normal and opt-in smoke-feature builds.
+- [ ] Pass current mobile target/artifact checks, review, and exact-commit hosted
+      CI before merging [PR #426](https://github.com/victron-venus/inverter-desktop/pull/426).
 
 Direct Frigate is the scope of this checkpoint. HA proxy enrichment, snapshots,
 Kerberos/Ring, configuration migration, and removing bundled compatibility code
 remain later work. The legacy media command is not a safe lifecycle shortcut: it
 reads shared configuration and lacks plugin/generation ownership across downloads.
+
+Final local checks passed 381 native tests, 295 frontend tests, and worker strict
+Clippy plus 17 unit and 10 actual subprocess/TCP tests. The worker release build,
+fresh advisory audit, real-binary package staging, and 19 packaging tests passed.
+Both explicitly selected release-worker/signed-package/Mosquitto tests passed
+(motion and clips, 2/2); they use simulated native windows and do not prove decoding
+or native focus/stacking. The mobile boundary verifier now passes 26 Python tests,
+including every new media marker in APK/AAB/IPA fixtures, with Pylint 10/10.
+The macOS native smoke passed with exit code 0 and complete cleanup: a 24-second
+640x360 H.264 fixture decoded through the actual player, two 330x186 windows stayed
+unfocused and nonoverlapping, the focused anchor was preserved, and owned close,
+revocation, video-end close, bounded range reads and wrong-window rejection passed.
+The test exposed two production bugs that are now fixed: placement uses the
+monitor work area, and showing a plugin window on macOS no longer makes it the
+key window. The [native smoke record](docs/native-plugin-media-smoke.md#recorded-macos-acceptance)
+details the evidence. Linux/Windows graphical playback remains pending; CI
+explicitly compiles/lints the opt-in example on Linux and runs its non-graphical
+`--help` on Linux and Windows. The explicit smoke input-policy test and all-targets
+Clippy with and without the smoke feature also passed. Current mobile artifacts
+and exact-commit hosted delivery remain pending in PR #426.
 
 ### Completed checkpoint: retained data inventory and cleanup
 

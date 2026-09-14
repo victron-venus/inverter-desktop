@@ -108,6 +108,7 @@ enum StoreStatus {
 
 struct ApplicationInner {
     host: PluginHost,
+    media: Option<super::media::MediaService>,
     target: String,
     installation_available: bool,
     store: Mutex<StoreStatus>,
@@ -125,14 +126,26 @@ struct ApplicationInner {
 pub(crate) struct PackageApplication(Arc<ApplicationInner>);
 
 impl PackageApplication {
+    #[cfg(test)]
     pub(crate) fn new(
         host: PluginHost,
         target: String,
         installation_available: bool,
         changed: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
+        Self::new_with_media(host, target, installation_available, changed, None)
+    }
+
+    pub(crate) fn new_with_media(
+        host: PluginHost,
+        target: String,
+        installation_available: bool,
+        changed: Arc<dyn Fn() + Send + Sync>,
+        media: Option<super::media::MediaService>,
+    ) -> Self {
         Self(Arc::new(ApplicationInner {
             host,
+            media,
             target,
             installation_available,
             store: Mutex::new(StoreStatus::Opening),
@@ -172,6 +185,7 @@ impl PackageApplication {
             let root = root?;
             let trust = trust?;
             let parent = root.parent().ok_or("Invalid plugin store parent")?;
+            let media_root = parent.join("desktop-plugin-media");
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             let settings = SettingsStore::new(root.clone(), key);
             let worker_settings = settings.clone();
@@ -188,6 +202,11 @@ impl PackageApplication {
             )
             .await?;
             settings.recover()?;
+            if let Some(media) = &self.0.media {
+                // The package-manager lease owns this sibling store's lifetime.
+                // It must be drained before that lease is released during close.
+                media.initialize(media_root).await?;
+            }
             Ok::<_, String>((manager, settings))
         }
         .await;
@@ -810,7 +829,12 @@ impl PackageApplication {
         // Failed initialization owns no store lease. Successful initialization
         // must finish before close can release its lease and allow app exit.
         if let Ok(manager) = self.wait_manager().await {
+            if let Some(media) = &self.0.media {
+                media.shutdown().await?;
+            }
             manager.close().await?;
+        } else if let Some(media) = &self.0.media {
+            media.shutdown().await?;
         }
         self.0.host.shutdown().await;
         Ok(())

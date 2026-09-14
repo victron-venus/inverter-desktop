@@ -1,16 +1,18 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.frigate",
-  "version": "0.1.0",
-  "host_api": "^1.2",
+  "version": "0.2.0",
+  "host_api": "^1.3",
   "target": "TARGET",
   "entrypoint": "bin/inverter-frigate-worker",
   "permissions": [
     "dashboard_contributions",
     "plugin_configuration",
     "network_mqtt",
-    "desktop_notifications"
+    "desktop_notifications",
+    "http_video"
   ],
+  "http_video": { "base_url_setting": "frigate_base_url" },
   "config_schema": {
     "type": "object",
     "additionalProperties": false,
@@ -43,6 +45,12 @@
         "minLength": 1,
         "maxLength": 256,
         "default": "frigate/events"
+      },
+      "frigate_base_url": {
+        "type": "string",
+        "title": "Frigate HTTP address",
+        "description": "Optional direct HTTP(S) address for completed clips, including any port or path prefix. Leave blank for motion notifications only. Credentials, queries and fragments are not supported.",
+        "maxLength": 2048
       },
       "mqtt_username": {
         "type": "string",

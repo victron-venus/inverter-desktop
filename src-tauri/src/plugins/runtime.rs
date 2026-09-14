@@ -4,10 +4,11 @@
 //! authorization belong to the signed package layer; the webview cannot start
 //! an executable. Workers receive no inherited environment or core service handles.
 
+use super::generation::{GenerationLease, RevokeOnDrop};
 use super::protocol::{
     encode_host_frame, parse_worker_frame, validate_handshake, validate_plugin_id,
-    DashboardContribution, HostMessage, WorkerConfiguration, WorkerMessage, HOST_API_VERSION,
-    MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    DashboardContribution, HostMessage, HttpVideoGrant, WorkerConfiguration, WorkerMessage,
+    HOST_API_VERSION, MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -42,6 +43,26 @@ const NOTIFICATIONS_GLOBAL_PER_MINUTE: usize = 120;
 const NOTIFICATION_SEEN_CAPACITY: usize = 512;
 const NOTIFICATION_DEDUP_TTL: Duration = Duration::from_secs(10 * 60);
 const NOTIFICATION_DELIVERY_TTL: Duration = Duration::from_secs(30);
+
+const HTTP_VIDEO_QUEUE_CAPACITY: usize = 4;
+const HTTP_VIDEO_COOLDOWN: Duration = Duration::from_secs(45);
+
+/// Native ownership only: URLs/titles never enter public worker snapshots.
+pub(crate) struct QueuedHttpVideo {
+    pub lease: GenerationLease,
+    pub grant: HttpVideoGrant,
+    pub id: String,
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Default)]
+struct HttpVideoState {
+    pending: VecDeque<(QueuedHttpVideo, Instant)>,
+    seen: VecDeque<(String, Instant)>,
+    titles: VecDeque<(String, Instant)>,
+    rate: NotificationRate,
+}
 
 type ChangeCallback = Arc<dyn Fn() + Send + Sync>;
 type ActionReply = oneshot::Sender<Result<Value, PluginError>>;
@@ -143,6 +164,7 @@ pub struct WorkerSpec {
     pub configuration: Option<WorkerConfiguration>,
     /// Granted only from the installed package's freshly verified manifest.
     pub desktop_notifications: bool,
+    pub http_video: Option<HttpVideoGrant>,
 }
 
 struct WorkerEntry {
@@ -157,9 +179,84 @@ struct WorkerEntry {
     changed: ChangeCallback,
     notifications: Mutex<NotificationState>,
     notification_rate: Arc<Mutex<NotificationRate>>,
+    generation_lease: Mutex<Option<GenerationLease>>,
+    http_videos: Mutex<HttpVideoState>,
 }
 
 impl WorkerEntry {
+    fn revoke_generation(&self) {
+        if let Some(lease) = self
+            .generation_lease
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            lease.revoke();
+        }
+        self.http_videos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .clear();
+    }
+
+    /// Called under authority; this only validates and enqueues native data.
+    fn queue_http_video(
+        &self,
+        grant: &HttpVideoGrant,
+        id: String,
+        url: String,
+        title: String,
+    ) -> bool {
+        let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if snapshot.state != WorkerState::Running
+            || *self.stop.borrow()
+            || self.reaped.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let lease = self
+            .generation_lease
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(lease) = lease.filter(GenerationLease::is_active) else {
+            return false;
+        };
+        let mut state = self.http_videos.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        state
+            .pending
+            .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DELIVERY_TTL);
+        state
+            .seen
+            .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DEDUP_TTL);
+        state
+            .titles
+            .retain(|(_, created)| now.duration_since(*created) < HTTP_VIDEO_COOLDOWN);
+        state.rate.refresh();
+        if state.pending.len() >= HTTP_VIDEO_QUEUE_CAPACITY
+            || state.seen.len() >= NOTIFICATION_SEEN_CAPACITY
+            || state.seen.iter().any(|(seen, _)| seen == &id)
+            || state.titles.iter().any(|(seen, _)| seen == &title)
+            || state.rate.count >= NOTIFICATIONS_PER_WORKER_PER_MINUTE
+        {
+            return false;
+        }
+        state.rate.count += 1;
+        let request = QueuedHttpVideo {
+            lease,
+            grant: grant.clone(),
+            id,
+            url,
+            title,
+        };
+        state.seen.push_back((request.id.clone(), now));
+        state.titles.push_back((request.title.clone(), now));
+        state.pending.push_back((request, now));
+        true
+    }
+
     fn authorized(&self) -> bool {
         let authority = self.authority.lock().unwrap_or_else(|e| e.into_inner());
         authority.enabled && authority.epoch == self.epoch
@@ -258,6 +355,7 @@ impl Drop for HostInner {
             .unwrap_or_else(|e| e.into_inner())
             .values()
         {
+            entry.revoke_generation();
             let _ = entry.stop.send(true);
         }
     }
@@ -396,6 +494,59 @@ impl PluginHost {
         delivered
     }
 
+    /// Cheap scheduling hint, without configuration/auth disk reads.
+    pub(crate) fn has_pending_http_videos(&self) -> bool {
+        self.0
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|entry| {
+                !entry
+                    .http_videos
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .is_empty()
+            })
+    }
+
+    /// Drain at most four items per registered worker. Callers perform live app
+    /// authentication first and retain/recheck the returned lease throughout I/O.
+    pub(crate) fn take_http_video_requests(&self) -> Vec<QueuedHttpVideo> {
+        let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        let mut requests = Vec::new();
+        let entries = self.0.entries.lock().unwrap_or_else(|e| e.into_inner());
+        for entry in entries.values() {
+            let snapshot = entry.snapshot();
+            let instance = entry
+                .generation_lease
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(GenerationLease::instance_id);
+            let mut state = entry.http_videos.lock().unwrap_or_else(|e| e.into_inner());
+            while let Some((request, created)) = state.pending.pop_front() {
+                if !self.0.stopped.load(Ordering::Acquire)
+                    && authority.enabled
+                    && authority.epoch == entry.epoch
+                    && !*entry.stop.borrow()
+                    && !entry.reaped.load(Ordering::Acquire)
+                    && snapshot.state == WorkerState::Running
+                    && request.lease.is_active()
+                    && request.lease.generation() == snapshot.generation
+                    && request.lease.epoch() == authority.epoch
+                    && request.lease.plugin_id() == snapshot.plugin_id
+                    && Some(request.lease.instance_id()) == instance
+                    && created.elapsed() < NOTIFICATION_DELIVERY_TTL
+                {
+                    requests.push(request);
+                }
+            }
+        }
+        requests
+    }
+
     /// Register a worker exactly once and begin its bounded startup/restart lifecycle.
     /// The returned snapshot is `starting`; readiness is signalled through snapshots.
     pub async fn start(&self, spec: WorkerSpec) -> Result<PluginSnapshot, PluginError> {
@@ -421,6 +572,9 @@ impl PluginHost {
             return Err(PluginError::HostStopped);
         }
         if !spec.executable.is_absolute() || validate_plugin_id(&spec.plugin_id).is_err() {
+            return Err(PluginError::InvalidWorker);
+        }
+        if spec.http_video.is_some() && spec.configuration.is_none() {
             return Err(PluginError::InvalidWorker);
         }
         if spec
@@ -455,6 +609,8 @@ impl PluginHost {
             done,
             reaped: AtomicBool::new(true),
             notifications: Mutex::new(NotificationState::default()),
+            generation_lease: Mutex::new(None),
+            http_videos: Mutex::new(HttpVideoState::default()),
             notification_rate: self.0.notification_rate.clone(),
         });
         {
@@ -589,6 +745,7 @@ impl PluginHost {
         let entry = self.entry(plugin_id)?;
         {
             let _authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+            entry.revoke_generation();
             let _ = entry.stop.send(true);
         }
         wait_stopped(&entry).await;
@@ -604,6 +761,7 @@ impl PluginHost {
         let entry = self.entry(plugin_id)?;
         {
             let _authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+            entry.revoke_generation();
             let _ = entry.stop.send(true);
         }
         wait_stopped(&entry).await;
@@ -646,6 +804,7 @@ impl PluginHost {
             .cloned()
             .collect();
         for entry in entries {
+            entry.revoke_generation();
             let _ = entry.stop.send(true);
             let mut snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             snapshot.state = WorkerState::Stopped;
@@ -974,9 +1133,9 @@ fn spawn_generation(
     spec: &WorkerSpec,
     entry: &WorkerEntry,
     restart_count: u32,
-) -> Result<Option<Child>, &'static str> {
+) -> Result<Option<(Child, RevokeOnDrop)>, &'static str> {
     let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
-    if !authority.enabled || authority.epoch != entry.epoch {
+    if !authority.enabled || authority.epoch != entry.epoch || *entry.stop.borrow() {
         return Ok(None);
     }
     {
@@ -999,10 +1158,20 @@ fn spawn_generation(
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "worker_spawn_failed")?;
+    let lease = GenerationLease::new(
+        spec.plugin_id.clone(),
+        entry.epoch,
+        entry.snapshot().generation,
+    );
+    let generation_guard = RevokeOnDrop(lease.clone());
+    *entry
+        .generation_lease
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(lease);
     entry.reaped.store(false, Ordering::Release);
     drop(authority);
     (entry.changed)();
-    Ok(Some(child))
+    Ok(Some((child, generation_guard)))
 }
 
 async fn supervise(
@@ -1016,8 +1185,8 @@ async fn supervise(
         if *stop.borrow() || !entry.authorized() {
             break;
         }
-        let mut child = match spawn_generation(&spec, &entry, restart_count) {
-            Ok(Some(child)) => child,
+        let (mut child, _generation_guard) = match spawn_generation(&spec, &entry, restart_count) {
+            Ok(Some(generation)) => generation,
             Ok(None) => break,
             Err(code) => {
                 fail_entry(&entry, code);
@@ -1025,6 +1194,7 @@ async fn supervise(
             }
         };
         let Some(mut pipes) = WorkerPipes::new(&mut child, &entry, stop.clone()) else {
+            entry.revoke_generation();
             entry
                 .reaped
                 .store(terminate(&mut child, None).await, Ordering::Release);
@@ -1040,6 +1210,7 @@ async fn supervise(
             &mut stop,
         )
         .await;
+        entry.revoke_generation();
         // Remove stale contributions before awaiting grace, cancellation, or restart backoff.
         entry.update(|snapshot| {
             snapshot.contributions.clear();
@@ -1106,6 +1277,7 @@ impl Outcome {
 }
 
 fn fail_entry(entry: &WorkerEntry, code: &str) {
+    entry.revoke_generation();
     entry.update(|snapshot| {
         snapshot.state = WorkerState::Failed;
         snapshot.last_error = Some(code.to_owned());
@@ -1246,6 +1418,24 @@ fn handle_frame(
     }
     let mut notify = false;
     match message {
+        WorkerMessage::HttpVideo { id, url, title } => {
+            let grant = spec
+                .http_video
+                .as_ref()
+                .ok_or(Outcome::Failed("worker_http_video_unauthorized"))?;
+            grant
+                .validate_url(&url)
+                .map_err(|_| Outcome::Failed("worker_http_video_url_invalid"))?;
+            notify = entry.queue_http_video(grant, id.clone(), url, title.clone());
+            if notify && spec.desktop_notifications {
+                entry.queue_notification(DesktopNotification {
+                    plugin_id: spec.plugin_id.clone(),
+                    id,
+                    title,
+                    body: "Camera motion clip available".into(),
+                });
+            }
+        }
         WorkerMessage::Notification { id, title, body } => {
             if !spec.desktop_notifications {
                 return Err(Outcome::Failed("worker_notification_unauthorized"));

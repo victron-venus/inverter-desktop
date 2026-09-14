@@ -38,6 +38,7 @@ fn unsigned_manifest() -> PluginManifest {
         entrypoint: "bin/worker".into(),
         config_schema: json!({"type":"object","properties":{"zone":{"type":"string"}}}),
         permissions: vec![PluginPermission::DashboardContributions],
+        http_video: None,
         inventory: vec![InventoryEntry {
             path: "bin/worker".into(),
             size: WORKER.len() as u64,

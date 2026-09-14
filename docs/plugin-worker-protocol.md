@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.2.0**, independently of the application version. The
+The current host API is **1.3.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -61,7 +61,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.2.0",
+  "host_api_version": "1.3.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -73,7 +73,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.2.0",
+  "host_api_version": "1.3.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -115,7 +115,7 @@ startup deadline covers both steps. Early contributions, missing/mismatched or
 duplicate acknowledgments fail that generation. Packages without configuration
 permission receive no configuration frame and complete startup after `ready`.
 Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
-are incompatible with a 1.2 host. The wire protocol and manifest remain version 1.
+are incompatible with a 1.3 host. The wire protocol and manifest remain version 1.
 A configured worker should declare an API requirement such as `^1.1`.
 
 The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
@@ -228,6 +228,87 @@ outside the worker lifecycle contract. Native submission failures are not retrie
 
 No plugin notification IPC or worker dependency is added to Android/iOS. Core
 inverter notifications continue using their existing platform integration.
+
+## Owned HTTP video (host API 1.3)
+
+A package may declare `http_video` and `plugin_configuration`, with a matching
+manifest declaration referencing one non-secret configuration field:
+
+```json
+{ "http_video": { "base_url_setting": "frigate_base_url" } }
+```
+
+The host derives an immutable grant from the same verified startup configuration
+sent to that worker. An absent or blank base disables video requests while other
+configured features can continue. A configured base must use HTTP(S), with no
+userinfo, query, fragment, traversal, ambiguous encoded separators, or control
+characters. Explicit ports and reverse-proxy prefixes are preserved. Invalid
+candidate settings are rejected before an existing worker is stopped.
+
+After configuration acknowledgment, the worker can submit:
+
+```json
+{
+  "type": "http_video",
+  "id": "frigate-clip-event-hash",
+  "url": "http://frigate.example:5000/proxy/api/events/event-id/clip.mp4",
+  "title": "Frigate Front camera motion detected"
+}
+```
+
+IDs follow the bounded token grammar, titles use the notification plain-text
+128-byte limit, and URLs are bounded to 2,048 bytes. The request must remain in
+the configured origin and base path. The worker supplies no filesystem path,
+window route, request headers, cookies, HA token, or core settings reference.
+Downloads do not follow redirects or inherit the core HA credential lookup.
+HTTP credentials and custom headers are outside this direct-URL contract.
+
+Each worker has four pending requests, thirty admissions per minute, a ten-minute
+512-ID history, and a 45-second title cooldown. Pending requests expire after
+thirty seconds. The service independently bounds its queue to eight, transfers
+to two, and active/download-reserved windows to eight. It reserves up to 256 MiB
+per transfer within a 512 MiB media budget; completed smaller files release the
+unused reservation. Valid excess traffic is dropped without failing the worker.
+With `desktop_notifications`, admission also queues the existing bounded native
+clip-available notification. HTTP or display failure can still follow admission.
+
+The direct download policy retains eight attempts with 1/2/3/4/5/5/5-second retry
+delays, a 15-second connect timeout, 60-second idle-read timeout, ten-minute overall
+deadline, and 256 MiB per-file limit. Retryable responses include 400, 404, 408,
+425, 429, and 5xx; empty or interrupted bodies can retry. Oversized responses fail
+immediately. Playback begins only after the complete download succeeds.
+Already-started disk operations are awaited before file cleanup, including after
+cancellation; the network/retry deadline is not a forced interruption of filesystem I/O.
+
+Each launch receives a fresh native instance identity and cancellation lease;
+plugin ID, session epoch, and displayed generation alone are insufficient because
+generation counters can repeat after registration. Disable, replacement, settings
+restart, crash/restart, logout/expiry, uninstall, and shutdown revoke the original
+lease. Long HTTP/disk operations never hold host authority locks. Cancellation
+immediately denies media access and schedules owned-window destruction and file
+cleanup. Native visibility is asynchronous, so already submitted display work can
+briefly outlive its check; it cannot restore the revoked media authority.
+
+Files live in a private sibling `desktop-plugin-media` directory under the package
+manager's lifetime lease. The host creates hidden 330x186 windows, verifies their
+ownership again before showing them, and waits for actual destruction acknowledgments
+before releasing window slots. Failed native cleanup retains ownership and makes
+shutdown fail visibly; a subsequent quit can retry. Closing one window does not
+retire sibling media or reconnect core telemetry.
+
+The player receives an opaque UUID through the `plugin-media` scheme. Requests are
+bound to the exact requesting webview label and original running instance, with
+live authentication checks before and after disk reads. No global temporary asset
+scope is added. GET/HEAD support standard single byte ranges, at most 1 MiB per
+range and four owned response buffers. Full GET for larger files is rejected;
+native playback acceptance must establish range behavior on each supported webview.
+Core window-targeting permissions are absent: close and drag use commands that
+operate only on their native invoking window. Android/iOS include none of these
+commands, routes, windows, workers, or media services.
+
+The [native media smoke harness](native-plugin-media-smoke.md) exercises actual
+desktop webview playback separately from the signed-worker/MQTT and HTTP-service
+fixtures. It is an explicit feature-only example, not a production startup mode.
 
 ## Actions, cancellation, and results
 
@@ -361,7 +442,7 @@ are unsupported. The package settings service further compiles the bounded
 It does not fetch external schemas or migrate legacy feature configuration.
 
 The permission vocabulary is `dashboard_contributions`,
-`plugin_configuration`, `desktop_notifications`, `network_http`, and `network_mqtt`. Duplicate and
+`plugin_configuration`, `desktop_notifications`, `http_video`, `network_http`, and `network_mqtt`. Duplicate and
 unknown permissions are rejected. These names declare feature requirements;
 they do not grant Tauri commands, access to core MQTT controls, or operating
 system isolation. Access to a network MQTT service from a native worker must
@@ -420,13 +501,15 @@ preview token. The management frontend coalesces snapshot requests and the nativ
 service caches inventory metadata by revision. Configuration-capable packages also
 use a native-validated declarative settings editor with isolated encrypted storage
 and startup configuration delivery. Worker-driven settings contributions, request-time
-secret access and scoped network/media host services remain future work. Native
+secret access and general network/media host services remain future work. Scoped
+HTTP video uses the owned transfer and window contract above. Native
 desktop notifications use the permission and delivery contract above. The first
 [Frigate worker](../desktop-plugins/frigate/README.md) owns its MQTT connection;
 `network_mqtt` is a declaration, not an OS firewall or a core MQTT host service.
 
 Normal application exit waits for package initialization and transactions, stops
-and reaps workers, and releases the package-store lease before permitting exit.
+and reaps workers, drains owned media/windows, and releases the package-store lease
+before permitting exit.
 Repeated quit requests continue waiting for the same cleanup. Shutdown also
 prevents subsequent registration and actions. Runtime policy caps registered
 workers, in-flight actions, pipe queues, startup time, message/update rates,

@@ -27,6 +27,12 @@ fn notification(id: &str) {
     ));
 }
 
+fn http_video(id: &str, title: &str, url: &str) {
+    emit(&format!(
+        "{{\"type\":\"http_video\",\"id\":\"{id}\",\"url\":\"{url}\",\"title\":\"{title}\"}}"
+    ));
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| {
         let executable = std::env::current_exe().unwrap();
@@ -61,6 +67,13 @@ fn main() {
                     notification("premature");
                 }
                 emit(&format!("{{\"type\":\"ready\",\"protocol_version\":{version},\"host_api_version\":\"{api}\",\"plugin_id\":\"{id}\"}}"));
+                if mode == "configuration_early_video" {
+                    http_video(
+                        "early",
+                        "Private camera",
+                        "https://video.test/base/api/events/one/clip.mp4",
+                    );
+                }
                 if mode == "configuration_early_notification" {
                     notification("before-configuration-ack");
                 }
@@ -128,6 +141,14 @@ fn main() {
                     emit(&ack);
                 }
                 contribute();
+                if mode.starts_with("configuration_video") {
+                    let url = if mode == "configuration_video_bad_url" {
+                        "https://other.test/base/clip.mp4"
+                    } else {
+                        "https://video.test/base/api/events/one/clip.mp4"
+                    };
+                    http_video("clip-1", "Private camera", url);
+                }
                 if mode == "configuration_notifications" {
                     notification("configured-motion");
                 }
@@ -135,6 +156,27 @@ fn main() {
             "action" => {
                 let request_id = field(&line, "request_id");
                 if field(&line, "action_id") == "echo" {
+                    if mode == "configuration_video" {
+                        http_video(
+                            "clip-1",
+                            "Different camera",
+                            "https://video.test/base/api/events/one/clip.mp4",
+                        );
+                        http_video(
+                            "clip-2",
+                            "Private camera",
+                            "https://video.test/base/api/events/two/clip.mp4",
+                        );
+                    }
+                    if mode == "configuration_video_burst" {
+                        for index in 0..10 {
+                            http_video(
+                                &format!("clip-{index}"),
+                                &format!("Camera {index}"),
+                                "https://video.test/base/clip.mp4",
+                            );
+                        }
+                    }
                     if mode == "notifications" {
                         notification("motion-1");
                         notification("motion-2");

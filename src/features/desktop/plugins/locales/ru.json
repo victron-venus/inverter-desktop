@@ -21,6 +21,7 @@
   "permissionHttp": "Сетевые подключения HTTP",
   "permissionMqtt": "Сетевые подключения MQTT",
   "permissionNotifications": "Уведомления на компьютере",
+  "permissionVideo": "Загрузка и воспроизведение клипов камер",
   "enableAfterInstall": "Включить после установки",
   "install": "Установить",
   "update": "Обновить плагин",

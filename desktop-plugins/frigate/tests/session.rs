@@ -49,15 +49,23 @@ impl Worker {
     }
 
     fn hello(&mut self) {
-        self.send(json!({"type":"hello","protocol_version":1,"host_api_version":"1.2.0","plugin_id":"inverter-desktop.frigate"}));
+        self.hello_with_api("1.2.0");
+    }
+
+    fn hello_with_api(&mut self, api: &str) {
+        self.send(json!({"type":"hello","protocol_version":1,"host_api_version":api,"plugin_id":"inverter-desktop.frigate"}));
         assert_eq!(
             self.frame(),
-            json!({"type":"ready","protocol_version":1,"host_api_version":"1.2.0","plugin_id":"inverter-desktop.frigate"})
+            json!({"type":"ready","protocol_version":1,"host_api_version":api,"plugin_id":"inverter-desktop.frigate"})
         );
     }
 
     fn configure(&mut self, port: u16) {
-        self.send(configuration(port));
+        self.configure_frame(configuration(port));
+    }
+
+    fn configure_frame(&mut self, frame: Value) {
+        self.send(frame);
         assert_eq!(
             self.frame(),
             json!({"type":"configuration_ready","revision":"fixture-1"})
@@ -187,13 +195,23 @@ fn subscribe(listener: &TcpListener) -> TcpStream {
 }
 
 fn publish(stream: &mut TcpStream, id: &str, camera: &str, retain: bool) {
+    publish_event(
+        stream,
+        json!({"type":"new","after":{"id":id,"camera":camera}}),
+        retain,
+    );
+}
+
+fn completed(id: &str, camera: &str) -> Value {
+    json!({"type":"end","after":{"id":id,"camera":camera,"has_clip":true,"start_time":1}})
+}
+
+fn publish_event(stream: &mut TcpStream, event: Value, retain: bool) {
     let topic = b"frigate/events";
     let mut payload = Vec::new();
     payload.extend_from_slice(&(topic.len() as u16).to_be_bytes());
     payload.extend_from_slice(topic);
-    payload.extend_from_slice(
-        &serde_json::to_vec(&json!({"type":"new","after":{"id":id,"camera":camera}})).unwrap(),
-    );
+    payload.extend_from_slice(&serde_json::to_vec(&event).unwrap());
     let mut bytes = vec![if retain { 0x31 } else { 0x30 }];
     let mut length = payload.len();
     loop {
@@ -209,6 +227,142 @@ fn publish(stream: &mut TcpStream, id: &str, camera: &str, retain: bool) {
     }
     bytes.extend_from_slice(&payload);
     stream.write_all(&bytes).unwrap();
+}
+
+#[test]
+fn completed_event_requests_host_video_without_worker_http_or_a_duplicate_notification() {
+    let broker = listener();
+    let http = listener();
+    let mut worker = Worker::start();
+    worker.hello_with_api("1.3.0");
+    let mut frame = configuration(broker.local_addr().unwrap().port());
+    let base = format!(
+        "http://127.0.0.1:{}/prefix",
+        http.local_addr().unwrap().port()
+    );
+    frame["configuration"]["values"]["frigate_base_url"] = json!(base);
+    worker.configure_frame(frame);
+    let mut stream = subscribe(&broker);
+    worker.status("Connected");
+    publish(&mut stream, "event ?#é", "front", false);
+    let motion = worker.frame();
+    assert_eq!(motion["type"], "notification");
+    publish_event(&mut stream, completed("event ?#é", "front"), true);
+    publish_event(&mut stream, completed("event ?#é", "front"), false);
+    let clip = worker.frame();
+    assert_eq!(clip["type"], "http_video");
+    assert_eq!(clip["title"], motion["title"]);
+    assert!(clip["id"].as_str().unwrap().starts_with("frigate-clip-"));
+    assert_ne!(clip["id"], motion["id"]);
+    assert_eq!(
+        clip["url"],
+        format!("{base}/api/events/event%20%3F%23%C3%A9/clip.mp4")
+    );
+    assert!(clip.get("body").is_none());
+    publish_event(&mut stream, completed("event ?#é", "other"), false);
+    publish_event(&mut stream, completed("sibling", "front"), false);
+    publish_event(&mut stream, completed("different", "back"), false);
+    assert_eq!(
+        worker.frame()["title"],
+        "Frigate Back camera motion detected"
+    );
+    assert!(worker
+        .frames
+        .recv_timeout(Duration::from_millis(100))
+        .is_err());
+    assert!(matches!(http.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock));
+    worker.shutdown();
+}
+
+#[test]
+fn missing_base_or_host_api_12_keeps_the_session_motion_only() {
+    for (api, base) in [
+        ("1.3.0", None),
+        ("1.3.0", Some("")),
+        ("1.2.0", Some("http://frigate.local:5000")),
+    ] {
+        let broker = listener();
+        let mut worker = Worker::start();
+        worker.hello_with_api(api);
+        let mut frame = configuration(broker.local_addr().unwrap().port());
+        if let Some(base) = base {
+            frame["configuration"]["values"]["frigate_base_url"] = json!(base);
+        }
+        worker.configure_frame(frame);
+        let mut stream = subscribe(&broker);
+        worker.status("Connected");
+        publish_event(&mut stream, completed("event", "front"), false);
+        publish(&mut stream, "event", "front", false);
+        assert_eq!(worker.frame()["type"], "notification");
+        assert!(worker
+            .frames
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+        worker.shutdown();
+    }
+}
+
+#[test]
+fn completed_clip_history_survives_broker_reconnect() {
+    let broker = listener();
+    let mut worker = Worker::start();
+    worker.hello_with_api("1.3.0");
+    let mut frame = configuration(broker.local_addr().unwrap().port());
+    frame["configuration"]["values"]["frigate_base_url"] = json!("http://frigate.local");
+    worker.configure_frame(frame);
+    let mut first = subscribe(&broker);
+    worker.status("Connected");
+    publish_event(&mut first, completed("original", "front"), false);
+    assert_eq!(worker.frame()["type"], "http_video");
+    drop(first);
+    worker.status("Disconnected");
+    worker.status("Connecting");
+    let mut second = subscribe(&broker);
+    worker.status("Connected");
+    publish_event(&mut second, completed("original", "other"), false);
+    publish_event(&mut second, completed("new", "back"), false);
+    let clip = worker.frame();
+    assert_eq!(clip["type"], "http_video");
+    assert_eq!(clip["title"], "Frigate Back camera motion detected");
+    assert!(worker
+        .frames
+        .recv_timeout(Duration::from_millis(100))
+        .is_err());
+    worker.shutdown();
+}
+
+#[test]
+fn invalid_media_configuration_fails_before_network_and_never_echoes_url_credentials() {
+    for base in [
+        "https://user:private-token@frigate.local",
+        "http://frigate.local?token=private",
+        "http://frigate.local/a/../b",
+        "http://frigate.local/a%2fb",
+    ] {
+        let broker = listener();
+        let mut worker = Worker::start();
+        worker.hello_with_api("1.3.0");
+        let mut frame = configuration(broker.local_addr().unwrap().port());
+        frame["configuration"]["values"]["frigate_base_url"] = json!(base);
+        worker.send(frame);
+        worker.exit(false);
+        let mut errors = String::new();
+        worker
+            .child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut errors)
+            .unwrap();
+        assert_eq!(errors, "Frigate worker session failed\n");
+        assert!(worker
+            .frames
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+        assert!(
+            matches!(broker.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock)
+        );
+    }
 }
 
 #[test]

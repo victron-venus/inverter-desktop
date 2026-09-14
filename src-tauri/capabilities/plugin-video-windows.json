@@ -1,0 +1,7 @@
+{
+  "identifier": "plugin-video-windows",
+  "description": "Owned desktop plugin video windows",
+  "platforms": ["linux", "macOS", "windows"],
+  "windows": ["plugin-video-*"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

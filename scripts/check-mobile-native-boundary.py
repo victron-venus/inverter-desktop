@@ -44,6 +44,8 @@ FORBIDDEN_COMMANDS = (
     "set_cover_position",
     "open_camera_video_window",
     "close_camera_video_window",
+    "close_plugin_video_window",
+    "drag_plugin_video_window",
     "get_plugin_snapshot",
     "plugin_action",
     "get_plugin_manager_snapshot",
@@ -61,6 +63,7 @@ FORBIDDEN_COMMANDS = (
 FORBIDDEN_PROTOCOLS = (
     "ha-filtered-update", "camera-event", "frigate/events", "plugin-host-update",
     "inverter-desktop.frigate", "inverter-frigate-worker",
+    "plugin-media", "plugin-video-", "desktop-plugin-media",
 )
 FORBIDDEN_CRATES = {
     "tokio-tungstenite", "tungstenite", "ed25519-dalek", "curve25519-dalek", "zip",

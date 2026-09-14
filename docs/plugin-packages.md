@@ -94,18 +94,27 @@ files, missing files, or incorrect lengths/digests is rejected.
 ## Frigate worker package
 
 The first real feature payload is the separately built
-[Frigate motion worker](../desktop-plugins/frigate/README.md). Its manifest declares
-configuration, dashboard status, MQTT networking, and native desktop notifications.
+[Frigate worker](../desktop-plugins/frigate/README.md). Version 0.2.0 declares
+configuration, dashboard status, MQTT networking, native desktop notifications,
+and scoped HTTP video under host API 1.3. A nonempty direct Frigate base URL enables
+completed-clip requests; the host owns their download, private files, and windows.
 The staging helper verifies a target-specific native executable header and copies
 only that worker into the payload. It does not execute the binary, generate keys,
 install anything, or modify publisher policy. Compiler provenance and runtime
 library compatibility still require target builds and execution checks.
 
-A dedicated acceptance test packages the actual executable with a disposable
-fixture key and exercises it through the application service against a private
-Mosquitto broker. This does not provision production trust or replace the bundled
-camera feature. Frigate snapshots/clips, media ownership, other camera adapters,
-and legacy configuration migration remain unfinished.
+Two dedicated acceptance tests package the actual executable with a disposable
+fixture key and exercise it through the application service against a private
+Mosquitto broker. The clip fixture adds a private HTTP origin, owned range reads,
+and lifecycle cleanup through a simulated native window adapter. HTTP transfer
+failures and resource limits have separate service tests; neither test suite
+proves native decoding or window behavior. The opt-in
+[native media smoke harness](native-plugin-media-smoke.md) covers that separate
+boundary; local macOS playback/window acceptance passed, while Linux and Windows
+graphical acceptance remains pending. This does not provision production trust
+or replace the bundled camera feature; current acceptance results stay in TODO.md. Frigate snapshots,
+optional HA proxy access, other camera adapters, and legacy configuration
+migration remain unfinished.
 
 ## Producing an archive
 
@@ -282,9 +291,10 @@ A verified package authenticates content and publisher scope. Its worker still
 runs with the user's OS privileges; this is not an OS sandbox. Permission
 metadata alone does not grant host services. This checkpoint implements scoped
 native settings and startup configuration for `plugin_configuration`, plus bounded
-notifications for `desktop_notifications`. Scoped network host services, request-time
-secret access, and media services remain unfinished. Frigate opens its own MQTT
-connection and has no access to the core MQTT client through this protocol.
+notifications for `desktop_notifications` and owned direct clips for `http_video`.
+General network host services and request-time secret access remain unfinished.
+Frigate opens its own MQTT connection and has no access to the core MQTT client
+through this protocol.
 The remaining contribution services and HA/camera parity work stay in
 [TODO.md](../TODO.md).
 

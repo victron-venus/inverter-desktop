@@ -892,6 +892,10 @@ impl PackageManager {
         } else {
             None
         };
+        super::protocol::HttpVideoGrant::from_manifest_configuration(
+            manifest,
+            configuration.as_ref(),
+        )?;
         self.check_epoch(epoch)?;
         Ok(configuration)
     }
@@ -915,6 +919,10 @@ impl PackageManager {
         {
             return Err("plugin configuration permission changed".into());
         }
+        let http_video = super::protocol::HttpVideoGrant::from_manifest_configuration(
+            package.manifest(),
+            configuration.as_ref(),
+        )?;
         let executable = self
             .version_path(id, version)
             .join("payload")
@@ -927,6 +935,7 @@ impl PackageManager {
                     executable,
                     args: Vec::new(),
                     configuration,
+                    http_video,
                     desktop_notifications: package
                         .manifest()
                         .permissions
