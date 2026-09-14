@@ -29,6 +29,7 @@
         </button>
 
         <UiButton variant="primary" size="lg" class="w-full" @click="closeWindow"> Close </UiButton>
+        <PrivacyLink class="mt-4" />
       </div>
     </div>
   </ErrorBoundary>
@@ -38,6 +39,7 @@
 import { ref } from 'vue'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import UiButton from './components/UiButton.vue'
+import PrivacyLink from './components/PrivacyLink.vue'
 import { useReleaseVersion } from './composables/useReleaseVersion'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'

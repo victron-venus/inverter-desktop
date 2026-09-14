@@ -42,6 +42,17 @@
     <slot name="actions" />
 
     <UiButton
+      class="shrink-0"
+      :class="isMobileApp ? '!h-11 !min-w-11' : 'min-w-[22px] !px-1.5'"
+      variant="ghost"
+      aria-label="Settings"
+      title="Settings"
+      @click="$emit('open-config')"
+    >
+      <Settings :size="isMobileApp ? 18 : 12" />
+    </UiButton>
+
+    <UiButton
       class="min-w-[22px] !px-1.5 shrink-0"
       variant="ghost"
       :title="isDark ? 'Light mode' : 'Dark mode'"
@@ -54,7 +65,8 @@
 </template>
 
 <script setup lang="ts">
-import { FlaskConical, Zap, Sun, Moon } from '@lucide/vue'
+import { FlaskConical, Zap, Sun, Moon, Settings } from '@lucide/vue'
+import { isMobileApp } from '@features'
 import UiButton from './UiButton.vue'
 import type { DashboardControl } from '../inverterControl'
 
@@ -71,6 +83,7 @@ defineProps<{
 defineEmits<{
   send: [action: string, payload?: Record<string, unknown>]
   'toggle-theme': []
+  'open-config': []
 }>()
 
 function isToggleUnavailable(state: string | undefined): boolean {

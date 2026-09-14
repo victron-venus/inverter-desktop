@@ -20,6 +20,7 @@ export function useConfigForm() {
       if (!config.color_scheme) config.color_scheme = 'dark'
       // Ensure new boolean fields have defaults if missing from store
       const boolDefaults: Record<string, boolean> = {
+        mqtt_tls: false,
         show_console: true,
         show_advanced_settings: false,
         gateway_enabled: false,

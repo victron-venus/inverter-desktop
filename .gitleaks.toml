@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Disposable localhost key used only by the MQTT TLS regression tests"
+paths = ['''^src-tauri/src/mqtt/testdata/localhost-key\.pem$''']

@@ -17,6 +17,7 @@ use camera_events::{
 };
 mod cerbo;
 mod lifecycle;
+mod security;
 use lifecycle::{CancelOnDrop, Shutdown, StateEmitter};
 
 const MQTT_KEEP_ALIVE_SECS: u64 = 60;
@@ -44,7 +45,9 @@ pub fn test_mqtt_connection(
     port: u16,
     username: Option<&str>,
     password: Option<&str>,
+    tls: bool,
 ) -> Result<(), String> {
+    let transport = security::transport(tls, username, password)?;
     let host = host.trim();
     if host.is_empty() {
         return Err("MQTT host is required".into());
@@ -74,6 +77,7 @@ pub fn test_mqtt_connection(
             port,
             user_owned.as_deref(),
             pass_owned.as_deref(),
+            transport,
         );
         let _ = tx.send(result);
     });
@@ -88,12 +92,14 @@ fn probe_mqtt_connack(
     port: u16,
     username: Option<&str>,
     password: Option<&str>,
+    transport: rumqttc::Transport,
 ) -> Result<(), String> {
     let client_id = format!(
         "inverter-desktop-probe-{:06x}",
         rand::random::<u32>() & 0xFF_FFFF
     );
     let mut opts = MqttOptions::new(&client_id, (host.to_string(), port));
+    opts.set_transport(transport);
     opts.set_keep_alive(10u16);
     if let (Some(u), Some(p)) = (username, password) {
         if !u.is_empty() && !p.is_empty() {
@@ -964,6 +970,7 @@ pub struct MqttClient {
     port: u16,
     username: Option<String>,
     password: Option<String>,
+    transport: rumqttc::Transport,
     app_handle: Option<tauri::AppHandle>,
     /// Shared so runtime inverter/portal discovery updates W/ ack topics.
     portal_id: Arc<Mutex<Option<String>>>,
@@ -1316,6 +1323,7 @@ impl MqttClient {
             port,
             username,
             password,
+            transport: rumqttc::Transport::tcp(),
             app_handle: None,
             portal_id: Arc::new(Mutex::new(None)),
             water_instances: None,
@@ -1412,6 +1420,13 @@ impl MqttClient {
             .emit(&self.app_handle, &self.get_state(), force);
     }
 
+    /// Apply the inverter MQTT policy before starting any network operation.
+    pub fn configure_transport(&mut self, tls: bool) -> Result<(), String> {
+        self.transport =
+            security::transport(tls, self.username.as_deref(), self.password.as_deref())?;
+        Ok(())
+    }
+
     pub fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.stop();
         self.shutdown = Arc::new(Shutdown::new());
@@ -1422,6 +1437,7 @@ impl MqttClient {
         let port = self.port;
         let username = self.username.clone();
         let password = self.password.clone();
+        let transport = self.transport.clone();
         let client_id = self.client_id.clone();
 
         let state = self.state.clone();
@@ -1461,6 +1477,7 @@ impl MqttClient {
                         port,
                         &username,
                         &password,
+                        transport.clone(),
                         &client_id,
                         state.clone(),
                         app_handle.clone(),
@@ -1530,6 +1547,7 @@ impl MqttClient {
         port: u16,
         username: &Option<String>,
         password: &Option<String>,
+        transport: rumqttc::Transport,
         client_id: &str,
         state: Arc<Mutex<InverterState>>,
         app_handle: Option<tauri::AppHandle>,
@@ -1559,6 +1577,7 @@ impl MqttClient {
         // stale broker session cannot kick this client off the broker.
         let client_id = format!("{}-{:06x}", client_id, rand::random::<u32>() & 0xFF_FFFF);
         let mut mqttoptions = MqttOptions::new(&client_id, (host.to_string(), port));
+        mqttoptions.set_transport(transport);
         mqttoptions.set_keep_alive(keepalive_secs as u16);
 
         if let (Some(u), Some(p)) = (username, password) {

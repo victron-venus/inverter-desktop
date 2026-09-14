@@ -16,6 +16,50 @@ use tauri::{AppHandle, Emitter};
 
 const POLL_INTERVAL_SECS: u64 = 2;
 
+/// Gateway credentials are intended for the public HTTPS endpoint, not its HTTP origin.
+pub(crate) fn validate_base_url(input: &str) -> Result<String, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("Gateway URL is required".into());
+    }
+    let url = reqwest::Url::parse(input).map_err(|_| {
+        "Enter the gateway's full HTTPS URL, for example https://gateway.example.com"
+    })?;
+    if url.scheme() != "https" || url.host_str().is_none() {
+        return Err(
+            "Remote Gateway requires HTTPS to protect access credentials. Use its HTTPS endpoint (for example a Cloudflare Tunnel hostname), not the HTTP origin."
+                .into(),
+        );
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(
+            "Gateway URL must not contain a username or password; use the credential fields".into(),
+        );
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(
+            "Gateway URL must be a base HTTPS URL without a query string or fragment".into(),
+        );
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
+fn http_client_builder() -> Result<reqwest::ClientBuilder, String> {
+    Ok(reqwest::Client::builder()
+        .use_preconfigured_tls(crate::tls::client_config()?)
+        .https_only(true)
+        // Reqwest strips standard Authorization on redirects, but not CF Access headers.
+        // Even same-origin redirects should be fixed in the configured base URL.
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(25)))
+}
+
+pub(crate) fn http_client() -> Result<reqwest::Client, String> {
+    http_client_builder()?
+        .build()
+        .map_err(|e| format!("gateway http client: {e}"))
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GatewaySnapshot {
     #[serde(default)]
@@ -461,7 +505,8 @@ async fn fetch_snapshot(
     access_secret: &str,
     api_token: &str,
 ) -> Result<GatewaySnapshot, String> {
-    let url = format!("{}/v1/snapshot", base.trim_end_matches('/'));
+    let base = validate_base_url(base)?;
+    let url = format!("{base}/v1/snapshot");
     let mut req = client
         .get(&url)
         .header("CF-Access-Client-Id", access_id)
@@ -496,15 +541,9 @@ async fn post_command(
     name: &str,
     body: Value,
 ) -> Result<(), String> {
-    let url = format!(
-        "{}/v1/commands/{}",
-        base.trim_end_matches('/'),
-        name.trim_matches('/')
-    );
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(25))
-        .build()
-        .map_err(|e| format!("gateway http client: {e}"))?;
+    let base = validate_base_url(base)?;
+    let url = format!("{}/v1/commands/{}", base, name.trim_matches('/'));
+    let client = http_client()?;
     let mut req = client
         .post(&url)
         .header("CF-Access-Client-Id", access_id)
@@ -571,10 +610,7 @@ pub fn start_gateway_client(
     access_client_secret: String,
     api_token: String,
 ) -> Result<GatewayClient, String> {
-    let base = url.trim().trim_end_matches('/').to_string();
-    if base.is_empty() {
-        return Err("Gateway URL is required".into());
-    }
+    let base = validate_base_url(&url)?;
     if access_client_id.trim().is_empty() || access_client_secret.trim().is_empty() {
         return Err("Cloudflare Access Client ID and Secret are required".into());
     }
@@ -592,10 +628,7 @@ pub fn start_gateway_client(
     let base_poll = base.clone();
 
     let handle = tauri::async_runtime::spawn(async move {
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(25))
-            .build()
-        {
+        let client = match http_client() {
             Ok(c) => c,
             Err(e) => {
                 warn!("gateway http client: {e}");
@@ -676,6 +709,133 @@ pub(crate) fn idle_test_client() -> GatewayClient {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn gateway_url_requires_https_and_separate_credentials() {
+        assert_eq!(
+            validate_base_url("  https://gateway.example.com:8443/inverter///  ").unwrap(),
+            "https://gateway.example.com:8443/inverter"
+        );
+        assert_eq!(
+            validate_base_url("https://gateway.example.com").unwrap(),
+            "https://gateway.example.com"
+        );
+        for input in [
+            "",
+            "gateway.example.com",
+            "http://gateway.example.com",
+            "http://localhost:8080",
+            "file:///tmp/gateway",
+            "https://user:secret@gateway.example.com",
+            "https://gateway.example.com?token=secret",
+            "https://gateway.example.com#fragment",
+        ] {
+            assert!(
+                validate_base_url(input).is_err(),
+                "accepted unsafe gateway URL"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn all_gateway_operations_reject_http_before_sending_credentials() {
+        let client = http_client().unwrap();
+        let url = "http://127.0.0.1:1";
+        assert!(fetch_snapshot(&client, url, "id", "secret", "token")
+            .await
+            .unwrap_err()
+            .contains("requires HTTPS"));
+        assert!(
+            post_command(url, "id", "secret", "token", "test", json!({}))
+                .await
+                .unwrap_err()
+                .contains("requires HTTPS")
+        );
+        assert!(crate::test_gateway_connection(
+            url.into(),
+            "id".into(),
+            "secret".into(),
+            Some("token".into())
+        )
+        .await
+        .err()
+        .unwrap()
+        .contains("requires HTTPS"));
+        // The client also refuses an HTTP URL if a future caller misses URL validation.
+        assert!(client.get(url).send().await.unwrap_err().is_builder());
+    }
+
+    #[tokio::test]
+    async fn redirects_never_forward_gateway_credentials_or_commands() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        // Only this test disables HTTPS, to inspect real redirect behaviour with local
+        // HTTP fixtures. It retains the exact production redirect policy.
+        let client = http_client_builder()
+            .unwrap()
+            .https_only(false)
+            .no_proxy()
+            .build()
+            .unwrap();
+        for (method, status) in [
+            (reqwest::Method::GET, 302),
+            (reqwest::Method::POST, 307),
+            (reqwest::Method::POST, 308),
+        ] {
+            let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+            destination.set_nonblocking(true).unwrap();
+            let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+            origin.set_nonblocking(true).unwrap();
+            let origin_url = format!("http://{}/v1/snapshot", origin.local_addr().unwrap());
+            let redirect_url = format!("http://{}/credentials", destination.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match origin.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "gateway test request timed out"
+                            );
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("gateway test accept failed: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let size = stream.read(&mut buf).unwrap();
+                    assert_ne!(size, 0);
+                    request.extend_from_slice(&buf[..size]);
+                }
+                write!(stream, "HTTP/1.1 {status} Redirect\r\nLocation: {redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                String::from_utf8(request).unwrap()
+            });
+            let response = client
+                .request(method, &origin_url)
+                .header("CF-Access-Client-Id", "test-client")
+                .header("CF-Access-Client-Secret", "test-secret")
+                .bearer_auth("test-token")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            let request = server.join().unwrap().to_ascii_lowercase();
+            assert!(request.contains("cf-access-client-secret: test-secret"));
+            assert!(request.contains("authorization: bearer test-token"));
+            assert_eq!(
+                destination.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+    }
 
     #[test]
     fn stopping_idle_client_sets_shutdown_and_is_idempotent() {

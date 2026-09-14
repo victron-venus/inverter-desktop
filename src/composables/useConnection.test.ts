@@ -79,6 +79,55 @@ async function connectAndDisable() {
 }
 
 describe('inverter transport configuration lifecycle', () => {
+  it('passes explicit TLS to both reachability probes and live/recovery connections', async () => {
+    boundary.getConfig.mockResolvedValue({
+      ...configured(),
+      mqtt_tls: true,
+      mqtt_port: 8883,
+      mqtt_login: 'user',
+      mqtt_password: 'test-password',
+      gateway_enabled: true,
+      gateway_url: 'https://gateway.example',
+      gateway_access_client_id: 'id',
+      gateway_access_client_secret: 'test',
+    })
+    await connection.connectMqtt()
+    expect(boundary.invoke).toHaveBeenCalledWith(
+      'test_mqtt_connection',
+      expect.objectContaining({
+        tls: true,
+        port: 8883,
+        username: 'user',
+        password: 'test-password',
+      })
+    )
+    expect(boundary.invoke).toHaveBeenCalledWith(
+      'connect_mqtt',
+      expect.objectContaining({ tls: true })
+    )
+  })
+
+  it('keeps old anonymous configurations on TCP and does not infer TLS from port 8883', async () => {
+    const legacy = { ...configured(), mqtt_port: 8883, mqtt_tls: undefined }
+    boundary.getConfig.mockResolvedValue(legacy)
+    await connection.connectMqtt()
+    expect(boundary.invoke).toHaveBeenCalledWith(
+      'connect_mqtt',
+      expect.objectContaining({ tls: false, port: 8883 })
+    )
+  })
+
+  it('clears old telemetry when TLS policy changes on the same endpoint', async () => {
+    await connection.connectMqtt()
+    expect(state.value.gt).toBe(123)
+    boundary.invoke.mockImplementation(async (name: string) =>
+      name === 'get_state' ? {} : undefined
+    )
+    boundary.getConfig.mockResolvedValue({ ...configured(), mqtt_tls: true })
+    await connection.connectMqtt()
+    expect(state.value.gt).toBeUndefined()
+  })
+
   it('disconnects both inverter transports, clears telemetry and rejects late events', async () => {
     await connectAndDisable()
     expect(boundary.invoke).toHaveBeenCalledWith('disconnect_inverter', undefined)

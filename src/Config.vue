@@ -2,7 +2,10 @@
   <ErrorBoundary>
     <div class="app-shell h-screen flex flex-col select-none overflow-hidden">
       <!-- macOS style titlebar (simulated) -->
-      <div class="config-titlebar h-[36px] flex items-center justify-between px-3">
+      <div
+        class="config-titlebar flex items-center justify-between px-3 shrink-0"
+        :class="isMobileApp ? 'h-14' : 'h-[36px]'"
+      >
         <div class="flex items-center gap-2">
           <Settings :size="14" class="text-muted" />
           <span class="text-[12px] font-semibold tracking-tight text-main">Configuration</span>
@@ -31,6 +34,8 @@
           <button
             type="button"
             @click="handleClose"
+            aria-label="Close settings"
+            :class="{ '!h-11 !w-11': isMobileApp }"
             class="p-1 rounded-md hover:bg-consumption hover:text-white transition-colors text-muted hover:text-main"
           >
             <X :size="12" />
@@ -39,16 +44,22 @@
       </div>
 
       <!-- Main Layout -->
-      <div class="flex-1 flex overflow-hidden">
+      <div class="flex-1 flex overflow-hidden min-h-0" :class="{ 'flex-col': isMobileApp }">
         <!-- Sidebar -->
-        <div class="config-sidebar w-[160px] p-1.5 flex flex-col gap-0.5">
+        <div
+          class="config-sidebar p-1.5 flex gap-0.5 shrink-0"
+          :class="isMobileApp ? 'overflow-x-auto' : 'w-[160px] flex-col'"
+        >
           <button
             type="button"
             v-for="s in sections"
             :key="s.id"
             @click="activeTab = s.id"
             class="config-nav-item"
-            :class="activeTab === s.id ? 'config-nav-item-active' : ''"
+            :class="{
+              'config-nav-item-active': activeTab === s.id,
+              'shrink-0 whitespace-nowrap !min-h-11': isMobileApp,
+            }"
           >
             <component :is="s.icon" :size="14" />
             {{ s.label }}
@@ -56,7 +67,10 @@
         </div>
 
         <!-- Content Area -->
-        <div class="flex-1 overflow-y-auto p-5 bg-[#f7f7f8] dark:bg-[#121214]">
+        <div
+          class="flex-1 min-w-0 overflow-y-auto bg-[#f7f7f8] dark:bg-[#121214]"
+          :class="isMobileApp ? 'p-3' : 'p-5'"
+        >
           <div class="max-w-xl mx-auto flex flex-col gap-6">
             <!-- MQTT Section -->
             <div v-if="activeTab === 'mqtt'" class="flex flex-col gap-4">
@@ -105,6 +119,14 @@
                   />
                 </div>
               </div>
+
+              <label class="flex items-center gap-2 text-[12px]">
+                <input id="mqtt_tls" v-model="config.mqtt_tls" type="checkbox" />
+                TLS encrypted connection
+              </label>
+              <p class="text-[11px] text-muted">
+                TLS is required when using a username or password.
+              </p>
 
               <div class="flex flex-col gap-1">
                 <label for="portal_id" class="classic-label px-1">VRM Portal ID</label>
@@ -662,6 +684,8 @@
 
       <FeatureDiscoveryDialog :controls="controls" />
 
+      <div class="px-3 py-2 shrink-0"><PrivacyLink /></div>
+
       <!-- Toast Notification -->
       <div
         v-if="message"
@@ -686,6 +710,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import UiButton from './components/UiButton.vue'
+import PrivacyLink from './components/PrivacyLink.vue'
 import type { InverterState } from './composables/useInverterState'
 import { logger } from './logger'
 
@@ -713,6 +738,7 @@ import {
   featureConfigSections,
   useConfigControls,
   prepareFeatureConfig,
+  isMobileApp,
 } from '@features'
 import { useConfigForm } from './composables/useConfigForm'
 import type { AppConfig } from './config'
@@ -788,6 +814,7 @@ function ingestDiscovered(list: DiscoveredInst[] | null | undefined) {
 }
 
 let unlistenMqttState: UnlistenFn | null = null
+let disposed = false
 
 const sections = [
   { id: 'mqtt', label: 'MQTT Broker', icon: Wifi },
@@ -842,15 +869,22 @@ async function testGatewayConnection() {
 }
 
 async function handleSave() {
+  if (!config.gateway_enabled && !config.mqtt_tls && (config.mqtt_login || config.mqtt_password)) {
+    message.value = 'Enable TLS before using an MQTT username or password'
+    messageType.value = 'error'
+    return
+  }
   prepareFeatureConfig(config)
   const savedControls = controls.getSavedControls()
   if (!(await saveConfig(savedControls.home, savedControls.header, savedControls.editableHeader)))
     return
   // Apply auto-start setting
-  try {
-    await invoke('set_auto_start', { enable: config.auto_start ?? false })
-  } catch (e) {
-    logger.warn('Failed to set auto-start:', e)
+  if (!isMobileApp) {
+    try {
+      await invoke('set_auto_start', { enable: config.auto_start ?? false })
+    } catch (e) {
+      logger.warn('Failed to set auto-start:', e)
+    }
   }
   await emit('config-saved', { color_scheme: config.color_scheme })
   message.value = 'Settings saved successfully'
@@ -900,6 +934,16 @@ async function handleRestore() {
 }
 
 async function handleClose() {
+  if (isMobileApp) {
+    try {
+      await invoke('close_config_window')
+    } catch (error) {
+      logger.error('Could not close settings:', error)
+      message.value = 'Could not return to the dashboard. Try again.'
+      messageType.value = 'error'
+    }
+    return
+  }
   try {
     const win = getCurrentWindow()
     await win.close()
@@ -958,24 +1002,30 @@ onMounted(async () => {
   try {
     globalThis.addEventListener('keydown', handleKeyDown)
     const cfg = await loadConfig()
+    if (disposed) return
     loadFromConfig(cfg)
     // Re-apply after loading to be absolutely sure
     applyTheme(cfg.color_scheme)
     try {
       const st = await invoke<InverterState>('get_state')
+      if (disposed) return
       ingestDiscovered(st.discovered_water_ev ?? undefined)
     } catch (e) {
       logger.warn('get_state for water/EV discovery failed:', e)
     }
-    unlistenMqttState = await listen<InverterState>('mqtt-state-update', (event) => {
-      ingestDiscovered(event.payload?.discovered_water_ev ?? undefined)
+    if (disposed) return
+    const unlisten = await listen<InverterState>('mqtt-state-update', (event) => {
+      if (!disposed) ingestDiscovered(event.payload?.discovered_water_ev ?? undefined)
     })
+    if (disposed) unlisten()
+    else unlistenMqttState = unlisten
   } catch (err) {
     logger.error('Config init failed:', err)
   }
 })
 
 onUnmounted(() => {
+  disposed = true
   globalThis.removeEventListener('keydown', handleKeyDown)
   if (unlistenMqttState) {
     unlistenMqttState()

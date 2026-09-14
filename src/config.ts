@@ -9,6 +9,8 @@ const DEFAULT_MQTT_HOST = 'Cerbo'
 export interface AppConfig {
   mqtt_host: string
   mqtt_port: number
+  /** TLS with certificate/hostname validation; false permits anonymous LAN MQTT only. */
+  mqtt_tls?: boolean
   mqtt_login?: string | null
   mqtt_password?: string | null
   mqtt_ha_host?: string
@@ -125,6 +127,7 @@ const SHOW_DEFAULTS = {
 const defaultConfig: AppConfig = {
   mqtt_host: DEFAULT_MQTT_HOST,
   mqtt_port: 1883,
+  mqtt_tls: false,
   mqtt_login: null,
   mqtt_password: null,
   header_toggles_config: undefined,

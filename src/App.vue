@@ -18,6 +18,7 @@
           :showHeaderToggles="appConfig?.show_header_toggles !== false"
           @send="send"
           @toggle-theme="toggleTheme"
+          @open-config="openConfig"
         >
           <template #actions><DashboardFeatureActions @error="showError" /></template>
         </AppHeader>
@@ -133,7 +134,7 @@
 <script setup lang="ts">
 import { useReleaseVersion } from './composables/useReleaseVersion'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { listen, type Event, type UnlistenFn } from '@tauri-apps/api/event'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import SetupWizard from './components/SetupWizard.vue'
@@ -206,8 +207,21 @@ const contextMenu = ref({ show: false, x: 0, y: 0 })
 const showSetupWizard = ref(false)
 const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
-let unlistenConfig: (() => void) | null = null
-let unlistenWindowEvents: (() => void) | null = null
+const unlisteners: UnlistenFn[] = []
+let disposed = false
+let configRevision = 0
+
+async function listenWhileMounted<T>(name: string, callback: (event: Event<T>) => void) {
+  const unlisten = await listen<T>(name, (event) => {
+    if (!disposed) callback(event)
+  })
+  if (disposed) {
+    unlisten()
+    return false
+  }
+  unlisteners.push(unlisten)
+  return true
+}
 
 function clearMessage() {
   message.value = ''
@@ -219,10 +233,11 @@ function showError(msg: string) {
   setTimeout(clearMessage, 3000)
 }
 async function handleSetupComplete(cfg: AppConfig) {
+  if (disposed) return
   showSetupWizard.value = false
   appConfig.value = cfg
   await connectMqtt()
-  await features.init()
+  if (!disposed) await features.init()
 }
 
 function onContextMenu(e: MouseEvent) {
@@ -378,7 +393,24 @@ watch(
 )
 
 onMounted(async () => {
+  // Settings can be saved while the initial permission/config/MQTT probe awaits.
+  // Subscribe first so useConnection can cancel that older startup session.
+  if (
+    !(await listenWhileMounted<{ color_scheme?: string }>('config-saved', async (event) => {
+      configRevision += 1
+      const scheme = event.payload.color_scheme
+      if (scheme) {
+        isDark.value = scheme !== 'light'
+        document.documentElement.classList.toggle('dark', isDark.value)
+        localStorage.setItem('theme', scheme)
+      }
+      await connectMqtt()
+    }))
+  )
+    return
+  const startupRevision = configRevision
   await ensureNotificationPermission()
+  if (disposed) return
   notify('Inverter Desktop', 'App started')
 
   // Load configuration first to check auth status
@@ -386,62 +418,54 @@ onMounted(async () => {
   if (!cfg) {
     try {
       cfg = await getAppConfig()
-      appConfig.value = cfg
+      if (disposed) return
+      if (startupRevision === configRevision) appConfig.value = cfg
     } catch (e) {
       logger.warn('Failed to load config for auth check:', e)
     }
   }
 
-  // First-run setup before connecting
-  if (needsSetup(cfg)) {
-    showSetupWizard.value = true
+  if (disposed) return
+  // A save already started the newer session; an older config read must not
+  // supersede it or reopen first-run setup after that save completed setup.
+  if (startupRevision === configRevision) {
+    showSetupWizard.value = needsSetup(cfg)
+    if (!showSetupWizard.value) await connectMqtt()
   }
 
-  // Defer connections until setup wizard completes
-  if (!showSetupWizard.value) {
-    await connectMqtt()
-    await features.init()
-  }
+  if (disposed) return
+  if (!showSetupWizard.value) await features.init()
+  if (disposed) return
   initSystemNotifications(evChargingKw, waterValveState, pumpSwitchState)
 
   document.addEventListener('click', onDocumentClick)
 
-  unlistenConfig = await listen<{ color_scheme?: string }>('config-saved', async (event) => {
-    const scheme = event.payload.color_scheme
-    if (scheme) {
-      isDark.value = scheme !== 'light'
-      document.documentElement.classList.toggle('dark', isDark.value)
-      localStorage.setItem('theme', scheme)
-    }
-    await connectMqtt()
-  })
-
   // Pause updates and charts when window is minimized/closed to tray
-  const unlistenHidden = await listen('window-hidden', () => {
-    isWindowHidden.value = true
-    setChartPaused(true)
-    void setInverterWindowHidden(true)
-    void features.setWindowHidden(true)
-  })
-  const unlistenShown = await listen('window-shown', () => {
+  if (
+    !(await listenWhileMounted('window-hidden', () => {
+      isWindowHidden.value = true
+      setChartPaused(true)
+      void setInverterWindowHidden(true)
+      void features.setWindowHidden(true)
+    }))
+  )
+    return
+  await listenWhileMounted('window-shown', () => {
     isWindowHidden.value = false
     setChartPaused(false)
     void setInverterWindowHidden(false)
     void features.setWindowHidden(false)
   })
-
-  unlistenWindowEvents = () => {
-    unlistenHidden()
-    unlistenShown()
-  }
 })
 
 onUnmounted(() => {
+  disposed = true
   document.removeEventListener('click', onDocumentClick)
   cleanupConnection()
   features.cleanup()
   cleanupInverterVisibility()
-  if (unlistenConfig) unlistenConfig()
-  if (unlistenWindowEvents) unlistenWindowEvents()
+  unlisteners.forEach((unlisten) => {
+    unlisten()
+  })
 })
 </script>
