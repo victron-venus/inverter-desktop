@@ -311,6 +311,21 @@ impl PluginHost {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, PluginError> {
+        let epoch = self.authority_epoch();
+        self.action_in_epoch(plugin_id, action_id, params, timeout, epoch)
+            .await
+    }
+
+    /// Enqueue only in the session that authorized the caller, even if a newer
+    /// session has already registered a replacement for the same plugin ID.
+    pub async fn action_in_epoch(
+        &self,
+        plugin_id: &str,
+        action_id: &str,
+        params: Value,
+        timeout: Duration,
+        epoch: u64,
+    ) -> Result<Value, PluginError> {
         if self.0.stopped.load(Ordering::Acquire) {
             return Err(PluginError::HostStopped);
         }
@@ -342,7 +357,10 @@ impl PluginHost {
         let deadline = Instant::now() + timeout;
         {
             let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
-            if !authority.enabled || authority.epoch != entry.epoch {
+            if self.0.stopped.load(Ordering::Acquire) {
+                return Err(PluginError::HostStopped);
+            }
+            if !authority.enabled || authority.epoch != epoch || entry.epoch != epoch {
                 return Err(PluginError::Unavailable);
             }
             entry
@@ -414,9 +432,16 @@ impl PluginHost {
     /// Revoke synchronously before publishing an application logout or policy change.
     /// Old generations stay unauthorized even if a later login resumes the host.
     pub fn revoke(&self) {
+        self.revoke_epoch();
+    }
+
+    /// Return this revocation's exact epoch, even if another session changes
+    /// authority before this caller can perform its follow-up work.
+    pub(crate) fn revoke_epoch(&self) -> u64 {
         let mut authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
         authority.enabled = false;
         authority.epoch = authority.epoch.wrapping_add(1);
+        let epoch = authority.epoch;
         let entries: Vec<_> = self
             .0
             .entries
@@ -433,6 +458,7 @@ impl PluginHost {
         }
         drop(authority);
         (self.0.changed)();
+        epoch
     }
 
     /// Resume native registration after a newly authorized session, without restarting workers.
@@ -441,6 +467,17 @@ impl PluginHost {
         if !self.0.stopped.load(Ordering::Acquire) {
             authority.enabled = true;
         }
+    }
+
+    /// Resume only the session transition that captured `epoch`; an older
+    /// unlock continuation must never undo a newer logout or terminal shutdown.
+    pub(crate) fn resume_in_epoch(&self, epoch: u64) -> bool {
+        let mut authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        if self.0.stopped.load(Ordering::Acquire) || authority.epoch != epoch {
+            return false;
+        }
+        authority.enabled = true;
+        true
     }
 
     /// Stop and reap registered children; later explicit starts remain possible after resume.

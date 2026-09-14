@@ -226,10 +226,11 @@ The manifest contract defines package identity and compatibility:
 ```
 
 The example digest and file size are illustrative metadata, not a usable
-package. The current native development launcher selects an executable through
-a trusted `WorkerSpec`; it does not load packages or enforce manifest permissions.
-The manifest parser is available for subsequent package handling, which must
-validate identity and compatibility before launching an installed worker.
+package. A native development launcher can select a fixture executable through
+trusted `WorkerSpec`. Application package selection instead goes through the
+[verified preview and installation pipeline](plugin-packages.md); only that native
+pipeline derives a worker executable from a verified installed package. Manifest
+parsing by itself neither loads a package nor enforces its permission declarations.
 
 Manifest parsing rejects unknown fields and permissions. The version
 must be semantic version syntax; the host API requirement must match the
@@ -288,10 +289,14 @@ references, and signature encoding without claiming signature verification.
 
 ## Application lifecycle and authority
 
-Tauri owns one desktop `PluginHost`, shared by all windows. The shipped app
-registers no workers automatically and exposes no executable-path or start-worker
-IPC. `WorkerSpec` is a trusted native API, exercised by a separately compiled
-fixture executable. The package manager constructs it only after package
+Tauri owns one desktop `PluginHost` and application package service, shared by all
+windows. A clean profile starts with no package workers. The current embedded
+publisher policy is empty, so installation is disabled. After authentication, the
+application may restore packages already recorded as enabled, verifying their
+archives and installed payloads before starting fresh workers. Disabled packages
+stay stopped; legacy HA/camera settings never imply installation. There is no
+executable-path or start-worker IPC. `WorkerSpec` is a trusted native API, exercised
+by a separately compiled fixture executable. The package manager constructs it only after package
 verification; a manually constructed spec itself is not a package trust decision.
 
 Only authenticated `main` and `config` windows can call `get_plugin_snapshot` or
@@ -300,17 +305,23 @@ exact advertised parameters; it cannot select a core Tauri or MQTT command.
 The host rechecks the process generation, current session epoch, and deadline
 before dispatch. A logout or authentication-policy change synchronously revokes
 the old epoch, clears contributions, and stops its workers. Logging in again
-does not restart those workers or authorize their delayed responses. Background
-session expiry is checked at one-second intervals while workers are active;
-each IPC call independently requires a current session.
+can restore enabled packages in a new epoch, but cannot revive old processes or
+authorize their delayed responses. Background session expiry is checked at
+one-second intervals while workers or package operations are active; each IPC
+call independently requires a current session.
 
 The fixed `plugin-host-update` event contains no worker data. The app coalesces
 updates to at most 20 refresh signals per second, and windows retrieve an
 authorized snapshot. The desktop dashboard renders text, metrics, status, and
-preset actions; an empty host renders no plugin panel. Settings, media, and
-notification services remain later contribution surfaces.
+preset actions; an empty host renders no plugin panel. The desktop Plugins settings tab manages package lifecycle through separate
+settings-window-only IPC, including native selection and a single-use verified
+preview token. The management frontend coalesces snapshot requests and the native
+service caches inventory metadata by revision. Plugin-provided settings, media,
+and notification services remain later contribution surfaces; package management
+does not implement those services.
 
-Normal application exit first stops and reaps workers, then permits exit.
+Normal application exit waits for package initialization and transactions, stops
+and reaps workers, and releases the package-store lease before permitting exit.
 Repeated quit requests continue waiting for the same cleanup. Shutdown also
 prevents subsequent registration and actions. Runtime policy caps registered
 workers, in-flight actions, pipe queues, startup time, message/update rates,

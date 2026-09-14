@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import {
   featureConnection,
+  FeaturePluginManager,
+  featurePluginManagerTabId,
   featureSetupAvailable,
   getFeatureView,
   useDashboardFeatures,
@@ -82,6 +84,10 @@ beforeEach(() => {
 describe('mobile build feature boundary', () => {
   it('uses the mobile port with no feature routes or transport calls', async () => {
     expect(featureSetupAvailable).toBe(false)
+    expect(featurePluginManagerTabId).toBeUndefined()
+    const manager = mount(FeaturePluginManager)
+    expect(manager.text()).toBe('')
+    manager.unmount()
     expect(getFeatureView('/camera-video')).toBeUndefined()
     await featureConnection.connect(config)
     featureConnection.cleanup()
@@ -189,6 +195,8 @@ describe('mobile build feature boundary', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Cerbo Devices')
     expect(wrapper.text()).not.toContain('Home Assistant')
+    expect(wrapper.text()).not.toContain('Plugins')
+    expect(wrapper.text()).not.toContain('plugins.manager')
     expect(wrapper.find('#ha_url').exists()).toBe(false)
     const devicesTab = wrapper.findAll('button').find((entry) => entry.text() === 'Cerbo Devices')!
     await devicesTab.trigger('click')

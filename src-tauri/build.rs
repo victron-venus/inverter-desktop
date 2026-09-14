@@ -14,6 +14,9 @@ fn main() {
     let frontend_receipt = root.join("dist/build-profile.json");
     println!("cargo:rerun-if-changed={}", frontend_receipt.display());
     let target = env::var("TARGET").unwrap_or_default();
+    if !target.contains("android") && !target.contains("apple-ios") {
+        println!("cargo:rustc-env=INVERTER_DESKTOP_TARGET={target}");
+    }
     let profile = env::var("PROFILE").unwrap_or_default();
     let receipt = std::fs::read_to_string(&frontend_receipt).ok();
     mobile_build::validate_frontend(&target, &profile, receipt.as_deref())

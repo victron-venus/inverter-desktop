@@ -1,15 +1,19 @@
 //! App session and window authority around the desktop worker host.
 
+use super::application::{ManagerSnapshot, PackageApplication, PackagePreview};
+use super::publishers::embedded_trust;
 use super::runtime::{PluginHost, PluginSnapshot, WorkerState};
 use crate::auth;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager, State};
 
 pub(crate) struct DesktopPlugins {
     host: PluginHost,
+    packages: PackageApplication,
+    session_gate: Mutex<()>,
     exit: ExitGate,
 }
 
@@ -41,7 +45,164 @@ fn require_access(
     if !trusted_window(window.label()) || state.exit.started.load(Ordering::Acquire) {
         return Err("Plugin access is unavailable".into());
     }
-    auth::require_session(app).inspect_err(|_| state.host.revoke())
+    auth::require_session(app).inspect_err(|_| authentication_changed(app))
+}
+
+fn management_window(label: &str) -> bool {
+    label == "config"
+}
+
+fn management_epoch(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    state: &DesktopPlugins,
+) -> Result<u64, String> {
+    let epoch = state.host.authority_epoch();
+    require_access(app, window, state)?;
+    if !management_window(window.label()) {
+        return Err("Packages can only be managed from the settings window".into());
+    }
+    if !state.host.is_authorized_epoch(epoch) {
+        return Err("Plugin session changed".into());
+    }
+    Ok(epoch)
+}
+
+fn finish_management(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    state: &DesktopPlugins,
+    epoch: u64,
+) -> Result<(), String> {
+    if management_epoch(app, window, state)? != epoch {
+        return Err("Plugin session changed".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn get_plugin_manager_snapshot(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<ManagerSnapshot, String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    let snapshot = state.packages.snapshot(epoch).await?;
+    finish_management(&app, &window, &state, epoch)?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub(crate) async fn preview_plugin_package(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<Option<PackagePreview>, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+    let epoch = management_epoch(&app, &window, &state)?;
+    let token = state.packages.begin_selection(window.label(), epoch)?;
+    let result = async {
+        let (selected, result) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("Select a signed desktop plugin package")
+            .add_filter("Inverter Desktop plugin", &["idplugin"])
+            .pick_file(move |file| {
+                let _ = selected.send(file);
+            });
+        let file = result
+            .await
+            .map_err(|_| "Package file selection was interrupted")?;
+        finish_management(&app, &window, &state, epoch)?;
+        match file {
+            None => Ok(None),
+            Some(FilePath::Path(path)) => state
+                .packages
+                .finish_selection(&token, window.label(), epoch, path)
+                .await
+                .map(Some),
+            Some(_) => Err("Select a local plugin package file".into()),
+        }
+    }
+    .await;
+    if !matches!(result, Ok(Some(_))) {
+        state.packages.discard(&token, window.label(), epoch);
+    }
+    let preview = result?;
+    if let Err(error) = finish_management(&app, &window, &state, epoch) {
+        state.packages.discard(&token, window.label(), epoch);
+        return Err(error);
+    }
+    Ok(preview)
+}
+
+#[tauri::command]
+pub(crate) fn discard_plugin_package(
+    token: String,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    state.packages.discard(&token, window.label(), epoch);
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn install_plugin_package(
+    token: String,
+    enable: bool,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    state
+        .packages
+        .install_review(&token, window.label(), epoch, enable)
+        .await?;
+    finish_management(&app, &window, &state, epoch)
+}
+
+#[tauri::command]
+pub(crate) async fn set_plugin_enabled(
+    plugin_id: String,
+    enabled: bool,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    state
+        .packages
+        .set_enabled(&plugin_id, enabled, epoch)
+        .await?;
+    finish_management(&app, &window, &state, epoch)
+}
+
+#[tauri::command]
+pub(crate) async fn rollback_plugin_package(
+    plugin_id: String,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    state.packages.rollback(&plugin_id, epoch).await?;
+    finish_management(&app, &window, &state, epoch)
+}
+
+#[tauri::command]
+pub(crate) async fn uninstall_plugin_package(
+    plugin_id: String,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    state.packages.uninstall(&plugin_id, epoch).await?;
+    finish_management(&app, &window, &state, epoch)
 }
 
 #[tauri::command]
@@ -63,11 +224,17 @@ pub(crate) async fn plugin_action(
     window: tauri::WebviewWindow,
     state: State<'_, DesktopPlugins>,
 ) -> Result<Value, String> {
-    require_access(&app, &window, &state)?;
     let epoch = state.host.authority_epoch();
+    require_access(&app, &window, &state)?;
     let result = state
         .host
-        .action(&plugin_id, &action_id, params, Duration::from_secs(5))
+        .action_in_epoch(
+            &plugin_id,
+            &action_id,
+            params,
+            Duration::from_secs(5),
+            epoch,
+        )
         .await
         .map_err(|error| error.to_string())?;
     require_access(&app, &window, &state)?;
@@ -83,9 +250,27 @@ pub(crate) fn install(app: &tauri::AppHandle) {
     let host = PluginHost::new(Arc::new(move || {
         notify.notify_one();
     }));
+    let trust = embedded_trust();
+    let notify = changes.clone();
+    let packages = PackageApplication::new(
+        host.clone(),
+        env!("INVERTER_DESKTOP_TARGET").into(),
+        trust.as_ref().is_ok_and(|trust| !trust.is_empty()),
+        Arc::new(move || notify.notify_one()),
+    );
+    let root = app
+        .path()
+        .app_local_data_dir()
+        .map(|path| path.join("plugins"))
+        .map_err(|error| error.to_string());
     app.manage(DesktopPlugins {
         host,
+        packages: packages.clone(),
+        session_gate: Mutex::new(()),
         exit: ExitGate::default(),
+    });
+    tauri::async_runtime::spawn(async move {
+        packages.initialize(root, trust).await;
     });
     forward_changes(app.clone(), changes);
     authentication_changed(app);
@@ -124,14 +309,16 @@ fn watch_session_expiry(app: tauri::AppHandle) {
             if state.exit.started.load(Ordering::Acquire) {
                 break;
             }
+            state.packages.expire_preview();
             let active = state.host.snapshots().iter().any(|worker| {
                 matches!(
                     worker.state,
                     WorkerState::Starting | WorkerState::Running | WorkerState::Restarting
                 )
             });
-            if active && auth::require_session(&app).is_err() {
-                state.host.revoke();
+            if (active || state.packages.has_session_work()) && auth::require_session(&app).is_err()
+            {
+                authentication_changed(&app);
                 let _ = app.emit("auth-state-changed", ());
             }
         }
@@ -140,11 +327,24 @@ fn watch_session_expiry(app: tauri::AppHandle) {
 
 pub(crate) fn authentication_changed(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<DesktopPlugins>() {
+        // Sample the live policy/session under the same gate as the transition.
+        // A delayed login notification cannot replay an old `unlocked` value
+        // after a completed logout notification.
+        let _transition = state
+            .session_gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         // Revoke synchronously before the frontend receives auth-state-changed.
         // Resume never revives the previous epoch's processes or queued actions.
-        state.host.revoke();
-        if !state.exit.started.load(Ordering::Acquire) && auth::require_session(app).is_ok() {
-            state.host.resume();
+        let unlocked =
+            !state.exit.started.load(Ordering::Acquire) && auth::require_session(app).is_ok();
+        if let Some(epoch) = state.packages.session_changed(unlocked) {
+            let packages = state.packages.clone();
+            tauri::async_runtime::spawn(async move {
+                // Errors remain visible in the manager snapshot. A revoked
+                // restoration is expected when logout or quit wins the race.
+                let _ = packages.restore(epoch).await;
+            });
         }
     }
 }
@@ -159,11 +359,20 @@ pub(crate) fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
             api.prevent_exit();
         }
         if cleanup {
-            state.host.revoke();
-            let host = state.host.clone();
+            state.packages.begin_shutdown();
+            let packages = state.packages.clone();
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                host.shutdown().await;
+                if let Err(error) = packages.close().await {
+                    log::error!("Plugin cleanup could not complete: {error}");
+                    // Keep the application and lease alive; a later quit may
+                    // retry cleanup, but no new package work is admitted.
+                    app.state::<DesktopPlugins>()
+                        .exit
+                        .started
+                        .store(false, Ordering::Release);
+                    return;
+                }
                 app.state::<DesktopPlugins>()
                     .exit
                     .finished
@@ -171,14 +380,21 @@ pub(crate) fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
                 app.exit(code.unwrap_or(0));
             });
         }
+    } else if let tauri::RunEvent::WindowEvent {
+        label,
+        event: tauri::WindowEvent::Destroyed,
+        ..
+    } = event
+    {
+        state.packages.window_closed(&label);
     } else if matches!(event, tauri::RunEvent::Exit) {
-        state.host.revoke();
+        state.packages.begin_shutdown();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{trusted_window, ExitGate, Ordering};
+    use super::{management_window, trusted_window, ExitGate, Ordering};
 
     #[test]
     fn repeated_quit_waits_until_worker_cleanup_finishes() {
@@ -201,6 +417,21 @@ mod tests {
             "main/other",
         ] {
             assert!(!trusted_window(label), "{label}");
+        }
+    }
+
+    #[test]
+    fn only_settings_can_manage_packages() {
+        assert!(management_window("config"));
+        for label in [
+            "main",
+            "about",
+            "camera-video-123",
+            "plugin-custom",
+            "",
+            "config/other",
+        ] {
+            assert!(!management_window(label));
         }
     }
 }

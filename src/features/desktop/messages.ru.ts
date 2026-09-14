@@ -1,5 +1,8 @@
+import pluginManagerMessages from './plugins/locales/ru.json'
+
 export default {
   plugins: {
+    manager: pluginManagerMessages,
     unavailable: 'Временно недоступно',
     actionFailed: 'Не удалось выполнить действие. Попробуйте ещё раз.',
   },

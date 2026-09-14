@@ -1,22 +1,25 @@
 # Desktop features and the mobile core
 
 Android and iOS ship the inverter core only. Home Assistant integration, cameras,
-and future package installation are exclusive to desktop. The core retains
+and package management are exclusive to desktop. The core retains
 Victron/Cerbo telemetry, MQTT/IGW selection, MQTT inverter-control flags, battery/
 solar/grid statistics, EV and water/pump controls, authentication, notifications,
 configuration, and app updates.
 Grid submeter telemetry and daemon setpoint override also remain core features;
 the packaged native check requires the override commands on both mobile platforms.
 
-This implementation checkpoint separates feature source code and enforces mobile
-exclusion. Desktop still bundles its existing HA/camera implementations. It does
-not yet offer independently installable packages. A desktop worker host now supplies
-versioned process communication, session-aware supervision, and generic dashboard
-contributions; see the [worker protocol](plugin-worker-protocol.md). The shipped
-host starts empty. The [native package pipeline](plugin-packages.md) supplies
-signed archive verification and lifecycle APIs; application/UI integration,
-production publisher keys, HA/camera migration, and the remaining contribution
-surfaces are tracked in [TODO](../TODO.md).
+The current checkpoint connects the desktop worker host and signed package
+pipeline to application authentication, startup, settings, and shutdown. The
+**Plugins** settings tab reviews a natively selected package before installation,
+and manages installed workers. The embedded publisher policy is currently empty,
+so installation is disabled and a clean profile has no plugin workers. Existing
+HA/camera implementations remain bundled; the manager does not move, disable, or
+uninstall those legacy features. Production trust, HA/camera extraction, and the
+remaining contribution services stay in [TODO](../TODO.md).
+
+See the [worker protocol](plugin-worker-protocol.md) for process communication and
+[plugin packages](plugin-packages.md) for the review, installation, and session
+lifecycle contracts.
 
 ## Frontend composition
 
@@ -25,7 +28,9 @@ surfaces are tracked in [TODO](../TODO.md).
 `@feature-messages` to the corresponding translation composition. The desktop port
 supplies feature panels, settings, setup, status, camera routes, and lifecycle.
 The fixed mobile composition supplies empty contributions without importing those
-implementations; it contains no plugin manager or package loader.
+implementations. `FeaturePluginManager` resolves to the desktop manager component
+only on desktop; mobile resolves it to an empty component, has no manager tab ID
+or label, and imports no manager controller, translations, or package loader.
 
 `@feature-defaults` resolves directly to the platform's data-only defaults module.
 Core configuration must not import the UI contribution entry point: that would
@@ -49,14 +54,18 @@ managed feature state, command registrations, and authorization entries only
 under `cfg(desktop)`. Camera MQTT parsing is separated into
 `src-tauri/src/mqtt/camera_events.rs`. WebSocket and package verification/storage
 dependencies are target-scoped. The embedded publisher policy and all package
-source files are excluded from mobile compilation.
+source files are excluded from mobile compilation. `application.rs` and the native
+manager commands are also desktop-only; mobile never opens a package store or
+restores package workers.
 Shared HTTP, MQTT, authentication, and notification dependencies remain in core.
 
 Mobile registers the core commands and rejects non-core control targets. The
 seven daemon flag keys and legacy `input_boolean.<flag>` aliases retain the MQTT
 normalization path. No mobile feature startup task or placeholder HA/camera command
 is registered. Camera windows have desktop-only capabilities; mobile configuration
-has no camera asset scope.
+has no camera asset scope. Management commands are absent from mobile handlers,
+not registered as no-ops. The artifact verifier rejects their command markers as
+well as package source, dependencies, and publisher policy.
 
 ## Build and verification commands
 

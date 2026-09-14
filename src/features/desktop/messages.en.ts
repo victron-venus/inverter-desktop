@@ -1,5 +1,8 @@
+import pluginManagerMessages from './plugins/locales/en.json'
+
 export default {
   plugins: {
+    manager: pluginManagerMessages,
     unavailable: 'Temporarily unavailable',
     actionFailed: 'Unable to complete the action. Try again.',
   },
