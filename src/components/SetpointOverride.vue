@@ -14,9 +14,9 @@
     >
       <SlidersHorizontal :size="11" aria-hidden="true" />
     </button>
-    <span v-if="active" class="text-[9px] text-accent tabular whitespace-nowrap" role="status">
+    <output v-if="active" class="text-[9px] text-accent tabular whitespace-nowrap">
       {{ status.value }} W · 2s
-    </span>
+    </output>
     <span
       v-if="error && !opened"
       class="text-[9px] text-consumption truncate max-w-28"
@@ -29,11 +29,11 @@
 
   <Teleport to="body">
     <div v-if="opened" class="override-backdrop">
-      <section
+      <dialog
         :id="dialogId"
         ref="dialog"
         class="classic-card override-dialog"
-        role="dialog"
+        open
         aria-modal="true"
         :aria-labelledby="`${dialogId}-title`"
         :aria-describedby="`${dialogId}-help`"
@@ -86,7 +86,7 @@
             </UiButton>
           </div>
         </form>
-      </section>
+      </dialog>
     </div>
   </Teleport>
 </template>
@@ -120,7 +120,7 @@ const error = computed(
 )
 const trigger = ref<HTMLButtonElement>()
 const input = ref<HTMLInputElement>()
-const dialog = ref<HTMLElement>()
+const dialog = ref<HTMLDialogElement>()
 let unlisten: UnlistenFn | undefined
 let disposed = false
 let eventRevision = 0
@@ -276,8 +276,11 @@ onUnmounted(() => {
 }
 
 .override-dialog {
+  position: relative;
   width: min(100%, 340px);
+  margin: 0;
   padding: 1rem;
+  color: inherit;
   box-shadow: var(--shadow-elevated);
 }
 </style>

@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { applyInverterState, state } from '../composables/useInverterState'
 
 describe('applyInverterState merge', () => {
+  beforeEach(() => {
+    state.value = { booleans: {}, features: {}, ui_config: {} }
+  })
+
   it('replaces backup status so null power never retains an old sample', () => {
     const backup = {
       enabled: true,
@@ -26,10 +30,6 @@ describe('applyInverterState merge', () => {
     applyInverterState({ grid_backup: null })
     expect(state.value.grid_backup).toBeUndefined()
     expect(state.value.grid_using_backup).toBe(false)
-  })
-
-  beforeEach(() => {
-    state.value = { booleans: {}, features: {}, ui_config: {} }
   })
 
   it('JSON null does not overwrite an existing number', () => {
