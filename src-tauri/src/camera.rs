@@ -8,14 +8,12 @@ use tauri::Manager;
 const CAMERA_CLIP_SUBDIR: &str = "inverter-desktop-camera";
 const CAMERA_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const CAMERA_READ_TIMEOUT: Duration = Duration::from_secs(60);
-const CAMERA_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 const CAMERA_MAX_ATTEMPTS: u32 = 8;
 const CAMERA_BACKOFF_MS: [u64; 7] = [1000, 2000, 3000, 4000, 5000, 5000, 5000];
 
 struct CameraDownloadPolicy<'a> {
     max_attempts: u32,
     backoff_ms: &'a [u64],
-    overall_timeout: Duration,
 }
 
 fn camera_clip_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -213,7 +211,7 @@ async fn fetch_camera_clip_with_policy(
     video_url: &str,
     auth: Option<&str>,
     policy: CameraDownloadPolicy<'_>,
-) -> Result<(Vec<u8>, &'static str), String> {
+) -> Result<(impl AsRef<[u8]>, &'static str), String> {
     let operation = async {
         let mut last_err = String::new();
 
@@ -318,20 +316,13 @@ async fn fetch_camera_clip_with_policy(
                     policy.max_attempts
                 );
             }
-            return Ok((bytes.to_vec(), ext));
+            return Ok((bytes, ext));
         }
 
         Err(last_err)
     };
 
-    tokio::time::timeout(policy.overall_timeout, operation)
-        .await
-        .unwrap_or_else(|_| {
-            Err(format!(
-                "Camera clip download timed out after {:?} ({video_url})",
-                policy.overall_timeout
-            ))
-        })
+    operation.await
 }
 
 pub(super) async fn download_camera_clip(
@@ -369,14 +360,13 @@ Expose ring-mqtt on the LAN and set ring_snapshot_url_template to an HTTP snapsh
         CameraDownloadPolicy {
             max_attempts: CAMERA_MAX_ATTEMPTS,
             backoff_ms: &CAMERA_BACKOFF_MS,
-            overall_timeout: CAMERA_DOWNLOAD_TIMEOUT,
         },
     )
     .await?;
 
     let file_name = format!("clip-{}.{ext}", uuid::Uuid::new_v4());
     let dest = clip_dir.join(file_name);
-    std::fs::write(&dest, &bytes)
+    std::fs::write(&dest, bytes.as_ref())
         .map_err(|e| format!("Failed to write camera clip to temp file: {e}"))?;
 
     Ok(dest)
@@ -428,10 +418,20 @@ mod camera_clip_download_tests {
         )
         .unwrap();
         let started = std::time::Instant::now();
-        let response = client.get(&url).send().await.unwrap();
-        let bytes = response.bytes().await.unwrap();
+        let (bytes, ext) = fetch_camera_clip_with_policy(
+            &client,
+            &url,
+            None,
+            CameraDownloadPolicy {
+                max_attempts: 1,
+                backoff_ms: &[],
+            },
+        )
+        .await
+        .unwrap();
 
         assert_eq!(bytes.as_ref(), b"clip");
+        assert_eq!(ext, "mp4");
         assert!(started.elapsed() > Duration::from_secs(1));
         server.join().unwrap();
     }
@@ -472,52 +472,13 @@ mod camera_clip_download_tests {
             CameraDownloadPolicy {
                 max_attempts: 2,
                 backoff_ms: &[200],
-                overall_timeout: Duration::from_secs(2),
             },
         )
         .await
         .unwrap();
 
-        assert_eq!(bytes, b"clip");
+        assert_eq!(bytes.as_ref(), b"clip");
         assert_eq!(ext, "mp4");
-        server.join().unwrap();
-    }
-
-    #[tokio::test]
-    async fn overall_timeout_includes_retry_backoff() {
-        use std::io::Write;
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/clip.mp4", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            read_http_request(&mut socket);
-            socket
-                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                .unwrap();
-        });
-        let client = build_camera_http_client(
-            reqwest::Client::builder().no_proxy(),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-        .unwrap();
-        let started = std::time::Instant::now();
-        let error = fetch_camera_clip_with_policy(
-            &client,
-            &url,
-            None,
-            CameraDownloadPolicy {
-                max_attempts: 2,
-                backoff_ms: &[5000],
-                overall_timeout: Duration::from_millis(50),
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(error.contains("timed out after 50ms"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(1));
         server.join().unwrap();
     }
 
