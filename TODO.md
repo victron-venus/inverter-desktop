@@ -48,7 +48,10 @@ inventory and cleanup for retained plugin data on main. [PR #425](https://github
 completed the standalone Frigate motion worker on main at `5254610`, with all
 hosted worker/host/security/mobile artifact checks passing for
 [the final PR head](https://github.com/victron-venus/inverter-desktop/commit/ed3aadd5f27260c6e4334c018d016d36f2154837).
-The current implementation iteration adds completed clips and owned video windows.
+[PR #426](https://github.com/victron-venus/inverter-desktop/pull/426) completed direct
+Frigate clips and owned video windows on main, with macOS native playback and all
+hosted checks passing. The current iteration adds an independent read-only HA
+worker and reuses only bounded process transport across the separate packages.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -133,7 +136,81 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### In progress: completed Frigate clips in owned desktop windows
+### Next iteration: standalone Home Assistant read-only worker
+
+Implement the first independently installable HA slice: connection status and
+live state for an explicit, bounded list of entities. Preserve the bundled HA
+integration until its remaining UI/service/configuration behavior has package
+parity. Core inverter-control flags and transports never depend on this worker.
+
+- [x] Extract only the common bounded stdio framing/output primitives into a
+      desktop worker library. Keep identity, configuration validation, and network
+      behavior in each worker; preserve Frigate handshake/EOF/backpressure behavior.
+- [x] Add a separate `inverter-desktop.home-assistant` worker, package manifest,
+      independent locked build, and explicit HTTP(S) base URL configuration.
+      Deliver its HA token only through the encrypted plugin-secret mechanism.
+- [x] Support a bounded explicit entity watch list and render plain-text/metric
+      dashboard contributions with connection and unavailable states. Treat HA
+      text as data and limit all frames, state fields, maps, queues, and rates.
+- [x] Acknowledge validated configuration before any network request. Implement
+      authenticated initial state plus WebSocket state changes, heartbeat,
+      bounded reconnect, cancellation, and token rejection without logging secrets.
+- [x] Reconcile initial reads and live updates without overwriting a newer live
+      state with an older REST response. Keep subscription/output backpressure
+      from growing memory or blocking heartbeat/shutdown indefinitely.
+- [x] Limit this slice to reads. Add no HA service invocation, arbitrary HTTP
+      proxy, core MQTT subscription/publish, inverter flag alias, or core config
+      lookup. Preserve actual HA entity IDs even when their names resemble flags.
+- [x] Verify URL prefix/port/TLS behavior and no redirects/credential forwarding;
+      use an explicit read-only fake HA server for process and installed-package
+      acceptance. Never connect to a user's production HA during these fixtures.
+- [x] Exercise the actual executable through pipes: configuration before network,
+      auth success/rejection, initial/live/unavailable states, reconnect, malformed
+      and oversized traffic, stalled peers, output pressure, EOF, and shutdown.
+- [x] Exercise a real signed HA worker package and temporary HA fixture through
+      install, settings restart, disable, logout, and uninstall, while an
+      independent core telemetry connection remains usable. Disposable keys only.
+- [x] Extend package staging, independent mobile source/module/dependency/archive
+      guards, and Linux/macOS/Windows build/test/lint/audit CI for both workers and
+      the shared worker library. Keep Android/iOS entirely outside this ecosystem.
+- [x] Rebuild the real Frigate worker after extraction and rerun its unit/process
+      and signed-package MQTT/clip acceptance; common transport reuse must preserve
+      existing behavior rather than rely only on compilation.
+- [x] Complete independent reviews, serialized local verification, English docs
+      and checklist updates. Add a simultaneous HA-on/core-off regression.
+- [ ] Pass final-head hosted checks and resolve review comments, then merge the
+      separate HA worker PR and synchronize canonical main after PR #426.
+
+Local checks now pass strict all-target Clippy and 14 HA unit tests, 16 actual
+subprocess/network scenarios, and three macOS TLS subprocess tests. TLS establishes
+untrusted-certificate rejection, authenticated WSS with a child-only temporary CA,
+and continued HTTPS OS-verifier rejection of that CA. Successful selected HTTPS
+reads with the fixture CA are Linux-specific CI coverage, not a local macOS claim.
+Shared transport passes seven tests; Frigate passes 15 unit and ten process tests
+after extraction. All three independent advisory audits pass without exceptions.
+The frontend passes five build-profile checks (including real imports outside
+`src`), eight mobile tests, typecheck, formatting, lint and both production builds.
+The retained packaging suite passes 27 tests and mobile payload checks pass 29.
+Native host Clippy and its 381-test default suite pass; the three external-package
+tests also pass when selected explicitly with actual release workers (3 passed,
+0 ignored). The HA fixture uses
+the real `do_not_supply_charger` MQTT flag, alternates both boolean values, and
+reads an HA `input_boolean.do_not_supply_charger` literally without core aliasing.
+The simultaneous collision probe confirms HA remains on while core is off.
+Both real release workers and native-header staging pass, including the retained
+Frigate staging CLI. The installed-package fixtures verify HA settings restart,
+disable, logout and uninstall alongside an independent core MQTT connection,
+and preserve Frigate motion/clip behavior after transport extraction. Hosted
+checks and reviewed PR delivery remain pending; these results do not claim a
+production HA installation.
+
+The production publisher policy stays empty and this iteration creates no
+production keys or application-signing prerequisite. HA services, full legacy feature extraction,
+configuration migration, and Linux/Windows native camera playback remain tracked
+work. Kerberos producer URL/auth/origin requirements still need source or runtime
+evidence; the inspected tracked repositories currently establish consumers only.
+
+### Completed checkpoint: Frigate clips in owned desktop windows
 
 Deliver one actual feature slice: Frigate `end` with boolean `has_clip: true`
 opens its downloaded MP4 in a plugin-owned window. Reuse the existing complete-
@@ -204,7 +281,7 @@ playback. Keep this implementation separate from the current motion checkpoint.
 - [x] Complete local native/frontend checks, both frontend builds, actual package
       and native playback acceptance, formatting, and strict Clippy for both the
       normal and opt-in smoke-feature builds.
-- [ ] Pass current mobile target/artifact checks, review, and exact-commit hosted
+- [x] Pass current mobile target/artifact checks, review, and exact-commit hosted
       CI before merging [PR #426](https://github.com/victron-venus/inverter-desktop/pull/426).
 
 Direct Frigate is the scope of this checkpoint. HA proxy enrichment, snapshots,
@@ -229,8 +306,10 @@ key window. The [native smoke record](docs/native-plugin-media-smoke.md#recorded
 details the evidence. Linux/Windows graphical playback remains pending; CI
 explicitly compiles/lints the opt-in example on Linux and runs its non-graphical
 `--help` on Linux and Windows. The explicit smoke input-policy test and all-targets
-Clippy with and without the smoke feature also passed. Current mobile artifacts
-and exact-commit hosted delivery remain pending in PR #426.
+Clippy with and without the smoke feature also passed. All hosted checks passed
+at [the tested head](https://github.com/victron-venus/inverter-desktop/commit/fc340fef7803bab1eb34dfc24f1f747f9aba6e13),
+including Android/iOS packaged boundaries and Linux/macOS/Windows worker checks.
+PR #426 was squash-merged as [the main checkpoint](https://github.com/victron-venus/inverter-desktop/commit/3173bc078394a3eb1c6d771b79b6cf58be027331).
 
 ### Completed checkpoint: retained data inventory and cleanup
 
@@ -449,7 +528,8 @@ mobile gate fail. A successful desktop build is insufficient evidence.
 - [x] Add declarative installed-package settings with validated secret handling.
 - [x] Extend contributions to native desktop notifications with verified permission,
       bounded queues/rates, and generation/session-aware OS submission.
-- [ ] Add owned media surfaces with lifecycle cleanup and scoped access.
+- [x] Add owned media surfaces with lifecycle cleanup and scoped access.
+      Frigate HTTP video and owned windows passed the PR #426 checkpoint.
 - [x] Limit worker IPC to authenticated dashboard/settings windows and advertised
       action parameters. Revoke old session epochs on logout/policy change/expiry;
       reject stale queued writes, contributions, and action results after re-login.

@@ -39,6 +39,11 @@ starts their extraction with an independent MQTT connection, native motion
 notifications, and direct completed-clip requests handled by owned native media
 services. Clip/window acceptance is tracked separately from source implementation.
 Snapshots, optional HA proxy support, other camera adapters, and migration remain.
+A separately built [Home Assistant worker](desktop-plugins/home-assistant/README.md)
+adds authenticated connection status and read-only state cards for a configured
+entity list. It owns its REST/WebSocket connection and receives an isolated
+plugin token. HA service controls, legacy UI parity, and migration remain tracked
+work; core inverter-control buttons continue to use MQTT independently.
 See the [worker protocol](docs/plugin-worker-protocol.md) and
 TODO for the remaining work and validation boundaries.
 

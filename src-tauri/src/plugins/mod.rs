@@ -25,3 +25,5 @@ pub(crate) mod settings_store;
 
 #[cfg(test)]
 mod frigate_integration_tests;
+#[cfg(test)]
+mod home_assistant_integration_tests;

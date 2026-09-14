@@ -63,12 +63,17 @@ FORBIDDEN_COMMANDS = (
 FORBIDDEN_PROTOCOLS = (
     "ha-filtered-update", "camera-event", "frigate/events", "plugin-host-update",
     "inverter-desktop.frigate", "inverter-frigate-worker",
+    "inverter-desktop.home-assistant", "inverter-home-assistant-worker",
+    "inverter-worker-protocol", "inverter_worker_protocol",
     "plugin-media", "plugin-video-", "desktop-plugin-media",
 )
 FORBIDDEN_CRATES = {
     "tokio-tungstenite", "tungstenite", "ed25519-dalek", "curve25519-dalek", "zip",
     "inverter-frigate-worker", "notify-rust", "mac-notification-sys",
+    "inverter-home-assistant-worker", "inverter-worker-protocol",
 }
+WORKER_BINARIES = {"inverter-frigate-worker", "inverter-home-assistant-worker"}
+WORKER_MANIFESTS = {"frigate-manifest.json", "home-assistant-manifest.json"}
 REQUIRED_CORE_COMMANDS = (
     "perform_action",
     "connect_mqtt",
@@ -87,7 +92,7 @@ def verify_archive_assets(archive):
         portable = name.replace("\\", "/").lower()
         parts = portable.split("/")
         if (portable.endswith(".idplugin") or "desktop-plugins" in parts
-                or any(part in ("inverter-frigate-worker", "inverter-frigate-worker.exe")
+                or any(part.removesuffix(".exe") in WORKER_BINARIES or part in WORKER_MANIFESTS
                        for part in parts)):
             raise ValueError(f"Desktop plugin asset in mobile package: {name}")
 

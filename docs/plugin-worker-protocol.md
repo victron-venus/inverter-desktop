@@ -506,6 +506,12 @@ HTTP video uses the owned transfer and window contract above. Native
 desktop notifications use the permission and delivery contract above. The first
 [Frigate worker](../desktop-plugins/frigate/README.md) owns its MQTT connection;
 `network_mqtt` is a declaration, not an OS firewall or a core MQTT host service.
+The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md)
+owns its authenticated REST/WebSocket connection and emits only declarative
+connection/entity cards. Its `network_http` declaration similarly grants no
+generic host proxy and provides no OS sandbox. Both workers reuse a small bounded
+stdio library, while identity negotiation, configuration and network behavior
+stay feature-owned. Their crates, binaries and manifests are excluded from mobile.
 
 Normal application exit waits for package initialization and transactions, stops
 and reaps workers, drains owned media/windows, and releases the package-store lease

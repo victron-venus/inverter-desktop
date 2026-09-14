@@ -26,16 +26,16 @@ const TOPIC: &str = "integration/frigate/events";
 const NEXT_TOPIC: &str = "integration/frigate/updated";
 const WAIT: Duration = Duration::from_secs(15);
 
-struct Broker {
+pub(super) struct Broker {
     executable: PathBuf,
     config: PathBuf,
     log: PathBuf,
-    port: u16,
+    pub(super) port: u16,
     child: Option<Child>,
 }
 
 impl Broker {
-    async fn new(root: &Path) -> Self {
+    pub(super) async fn new(root: &Path) -> Self {
         // These paths are test-only inputs. Neither is consulted by production
         // startup, installation, publisher policy, or webview IPC.
         let executable = required_file("MOSQUITTO_BIN");
@@ -98,7 +98,7 @@ impl Broker {
         }
     }
 
-    async fn publish(&self, topic: &str, payload: Value) {
+    pub(super) async fn publish(&self, topic: &str, payload: Value) {
         self.publish_bytes(topic, &serde_json::to_vec(&payload).unwrap(), false)
             .await;
     }
@@ -137,7 +137,7 @@ impl Drop for Broker {
     }
 }
 
-fn required_file(name: &str) -> PathBuf {
+pub(super) fn required_file(name: &str) -> PathBuf {
     let value = std::env::var_os(name).unwrap_or_else(|| {
         panic!("{name} must name an explicit fixture executable; this test never silently skips")
     });

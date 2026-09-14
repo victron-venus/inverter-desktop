@@ -58,6 +58,10 @@ source files are excluded from mobile compilation. `application.rs` and the nati
 manager commands are also desktop-only; mobile never opens a package store or
 restores package workers.
 Shared HTTP, MQTT, authentication, and notification dependencies remain in core.
+The standalone Frigate and Home Assistant workers and their shared stdio library
+have independent Cargo workspaces with desktop-only dependencies and explicit
+mobile build rejection. Their crates and fixed package manifests are also
+forbidden in mobile dependency graphs and packaged assets.
 
 Owned plugin video also stays behind that desktop boundary: generation leases,
 HTTP downloads, private media files, the `plugin-media` scheme, and
@@ -93,7 +97,9 @@ Play jobs also select the mobile profile.
 
 Vite examines its actual source module graph and emits `dist/build-profile.json`.
 The mobile build fails if a desktop implementation enters that graph, including a
-static import hidden behind an unused runtime branch. A native mobile release
+static import hidden behind an unused runtime branch. The audit includes worker
+modules and package metadata under `desktop-plugins/` and `scripts/plugins/`, so
+moving an accidental import outside `src` cannot bypass it. A native mobile release
 also requires a valid mobile graph receipt, preventing a raw Cargo build from
 embedding stale desktop assets.
 

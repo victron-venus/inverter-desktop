@@ -9,6 +9,7 @@ description = "Standalone desktop Frigate motion notification and completed clip
 [workspace]
 
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
+inverter-worker-protocol = { path = "../worker-protocol" }
 rumqttc = { package = "rumqttc-v4-next", version = "=0.33.2" }
 percent-encoding = "=2.3.2"
 rustls = "=0.23.45"

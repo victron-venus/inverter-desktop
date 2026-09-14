@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "plugin_id": "inverter-desktop.home-assistant",
+  "version": "0.1.0",
+  "host_api": "^1.3",
+  "target": "TARGET",
+  "entrypoint": "bin/inverter-home-assistant-worker",
+  "permissions": ["dashboard_contributions", "plugin_configuration", "network_http"],
+  "config_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ha_base_url", "ha_token"],
+    "properties": {
+      "ha_base_url": {
+        "type": "string",
+        "title": "Home Assistant address",
+        "description": "Complete HTTP(S) address, including any port or path prefix. Credentials, query strings and fragments are not supported.",
+        "minLength": 1,
+        "maxLength": 2048
+      },
+      "watch_entities": {
+        "type": "string",
+        "title": "Entities to watch",
+        "description": "Up to 32 entity IDs separated by commas or newlines. Leave blank to show connection status only.",
+        "maxLength": 4096,
+        "default": ""
+      },
+      "ha_token": {
+        "type": "string",
+        "title": "Home Assistant token",
+        "description": "Required token for this plugin. The worker only reads, but the token retains its Home Assistant account permissions.",
+        "writeOnly": true,
+        "minLength": 1,
+        "maxLength": 4096
+      }
+    }
+  },
+  "inventory": [],
+  "signature": null
+}
