@@ -12,7 +12,10 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts/check-mobile-native-boun
 SPEC = importlib.util.spec_from_file_location("mobile_native_boundary", SCRIPT)
 boundary = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(boundary)
-CORE = b"native-code\x00perform_action\x00connect_mqtt\x00ha_url\x00camera_enabled"
+CORE = (
+    b"native-code\x00perform_action\x00connect_mqtt\x00get_setpoint_override"
+    b"\x00set_setpoint_override\x00ha_url\x00camera_enabled"
+)
 
 
 class MobileNativeBoundaryTests(unittest.TestCase):
@@ -42,6 +45,21 @@ class MobileNativeBoundaryTests(unittest.TestCase):
             with (
                 self.subTest(command=command),
                 self.assertRaisesRegex(ValueError, command),
+            ):
+                boundary.verify_native_payload(payload, "mobile")
+
+    def test_missing_core_handler_is_rejected(self):
+        """Core controls must remain registered when desktop handlers are removed."""
+        for command in (
+            "perform_action",
+            "connect_mqtt",
+            "get_setpoint_override",
+            "set_setpoint_override",
+        ):
+            payload = CORE.replace(command.encode(), b"missing_handler")
+            with (
+                self.subTest(command=command),
+                self.assertRaisesRegex(ValueError, "Cannot identify"),
             ):
                 boundary.verify_native_payload(payload, "mobile")
 

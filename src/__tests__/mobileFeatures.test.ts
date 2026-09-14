@@ -9,6 +9,7 @@ import {
 } from '@features'
 import Config from '../Config.vue'
 import AppHeader from '../components/AppHeader.vue'
+import StatCards from '../components/StatCards.vue'
 import SetupWizard from '../components/SetupWizard.vue'
 import { useDashboardControls, sendControlAction } from '../composables/useDashboardControls'
 import { useConnection } from '../composables/useConnection'
@@ -115,7 +116,52 @@ describe('mobile build feature boundary', () => {
       action: 'toggle',
       payload: { entity: 'no_feed' },
     })
+    const dryRunButton = wrapper.findAll('button').find((entry) => entry.text() === 'DRY')!
+    await dryRunButton.trigger('click')
+    expect(invoke).toHaveBeenCalledWith('perform_action', {
+      action: 'dry_run',
+      payload: { value: true },
+    })
     wrapper.unmount()
+  })
+
+  it('starts and stops the core setpoint override from mobile StatCards without optional services', async () => {
+    let override: number | null = null
+    invoke.mockImplementation(async (command: string, args?: { value: number | null }) => {
+      if (command === 'set_setpoint_override') override = args!.value
+      return { value: override, last_error: null }
+    })
+    const wrapper = mount(StatCards, {
+      props: { mpptTotal: 0, pvInvertersTotal: 0, setpoint: 125 },
+      global: { ...globalOptions, stubs: { Teleport: true } },
+    })
+    try {
+      await flushPromises()
+      expect(featureSetupAvailable).toBe(false)
+      expect(listen).toHaveBeenCalledWith('setpoint-override-update', expect.any(Function))
+      expect(invoke).toHaveBeenCalledWith('get_setpoint_override')
+      await wrapper.find('button[aria-label="Setpoint override"]').trigger('click')
+      expect((wrapper.find('dialog input').element as HTMLInputElement).value).toBe('125')
+      await wrapper.find('dialog input').setValue('-250')
+      await wrapper.find('dialog form').trigger('submit')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('set_setpoint_override', { value: -250 })
+      expect(wrapper.find('output').text()).toContain('-250 W')
+      await wrapper.find('button[aria-label="Setpoint override"]').trigger('click')
+      const stop = wrapper.findAll('button').find((button) => button.text() === 'Stop override')!
+      await stop.trigger('click')
+      await flushPromises()
+      expect(invoke).toHaveBeenCalledWith('set_setpoint_override', { value: null })
+      expect(wrapper.find('output').exists()).toBe(false)
+      expect(
+        invoke.mock.calls.every(([command]) =>
+          ['get_setpoint_override', 'set_setpoint_override'].includes(command)
+        )
+      ).toBe(true)
+      expect(listen.mock.calls.every(([name]) => name === 'setpoint-override-update')).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('starts the shared connection without optional-service commands or listeners', async () => {

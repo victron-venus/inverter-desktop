@@ -12,7 +12,8 @@ The completed resilience checklist is preserved in
 
 - **Core on every platform:** Victron/Cerbo telemetry, MQTT and IGW source
   selection, inverter-control MQTT flags and dashboard controls, batteries, solar,
-  grid, daily statistics, Cerbo EV/charger and water/pump controls, authentication,
+  grid/submeter telemetry, daemon setpoint override, daily statistics,
+  Cerbo EV/charger and water/pump controls, authentication,
   core notifications, configuration, and app updates.
 - **Desktop plugins:** Home Assistant and cameras. Inverter controls must never
   require HA. Direct Frigate/Kerberos/Ring MQTT camera use must not require HA;
@@ -228,12 +229,12 @@ or removing a package changes available features without reinstalling the app.
   actual Vite build that deliberately imports forbidden desktop code. The real
   `pnpm build:mobile` passed Vue typecheck/build and emitted a core-only source
   graph in `dist/build-profile.json`.
-- Native artifact verifier: 17 fixture tests passed, including rejection of
-  arbitrary Cargo manifests and option-like targets. Real mobile archives also
+- Native artifact verifier: 18 fixture tests passed, including rejection of
+  arbitrary Cargo manifests, option-like targets, and missing core commands. Real mobile archives also
   passed the build/upload gates recorded below.
-- Local integration: 192 desktop/core frontend tests and 7 mobile tests passed;
-  both profile typechecks/builds and formatting passed. Rust: 171 full-suite tests,
-  5 final auth-focused tests, clippy, and iOS simulator/Android aarch64
+- Local integration: 199 desktop/core frontend tests and 8 mobile tests passed;
+  both profile typechecks/builds and formatting passed. Rust: 175 full-suite tests,
+  clippy, and iOS simulator/Android aarch64
   `cargo check --locked --all-features` passed. Lint completed with warnings.
 - Release helper: all four iOS build-order/failure fixtures passed after updating
   their expected command to `build:mobile`; 12 version/native-package tests passed.
@@ -246,8 +247,13 @@ or removing a package changes available features without reinstalling the app.
   alignment, and inspected each package for desktop feature absence.
   Verified targets: `aarch64-apple-ios`, `aarch64-linux-android`,
   `armv7-linux-androideabi`, `i686-linux-android`, and `x86_64-linux-android`.
-  The PR requires the same gates on its final merged-base/documentation head
-  before merging to main.
+  The PR requires the same gates on its final integration head before merging
+  to main, including the additional core-command checks described below.
+- Main integration at `0b0ae9d` (PR #409): grid submeter telemetry and daemon
+  setpoint override remain shared core. Both override commands are registered
+  in mobile handlers and covered by authentication checks. The mobile widget
+  test covers start/stop and readback; packaged native verification now rejects
+  missing override commands as well as forbidden HA/camera implementation.
 - Review fixes: desktop fields emit model updates into the existing reactive
   draft; tests cover real settings save/reset and both defaults import orders.
   Data-only defaults remove a configuration/UI initialization cycle introduced

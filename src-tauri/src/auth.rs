@@ -210,6 +210,8 @@ mod tests {
             "backup_config",
             "restore_config",
             "perform_action",
+            "get_setpoint_override",
+            "set_setpoint_override",
             "set_cover_position",
             "connect_mqtt",
             "connect_gateway",

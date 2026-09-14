@@ -37,7 +37,8 @@ fi
 
 echo ""
 echo "===> Building Tauri application..."
-pnpm run tauri build -- --verbose
+# This script installs the macOS app directly; disk images are release artifacts.
+pnpm run tauri build --bundles app --verbose
 
 echo "===> Killing running instances of '${APP_NAME}'..."
 pkill -f "${APP_NAME}" 2>/dev/null && echo "  ✓ Killed" || echo "  (not running)"
@@ -57,7 +58,6 @@ if [ -d "$APP_BUNDLE" ]; then
   echo "  ✓ Installed to /Applications/${APP_NAME}.app"
 else
   echo "  ✗ Bundle not found at ${APP_BUNDLE}"
-  echo "    DMG available at: ${BUNDLE_DIR}/dmg/"
   exit 1
 fi
 
@@ -65,7 +65,6 @@ echo ""
 echo "========================================"
 echo "  Build complete!"
 echo "  App:  /Applications/${APP_NAME}.app"
-echo "  DMG:  ${BUNDLE_DIR}/dmg/"
 echo "========================================"
 
 open -a "${APP_NAME}"

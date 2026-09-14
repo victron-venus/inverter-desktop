@@ -119,6 +119,18 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
     let g2 = path_num(&snap.system, "0/Ac/Grid/L2/Power");
     st.g1 = g1;
     st.g2 = g2;
+    // Present null values explicitly invalidate a phase; absent paths remain
+    // partial snapshots and must not invalidate unrelated dashboard fields.
+    st.grid_l1_available = snap
+        .system
+        .get("0/Ac/Grid/L1/Power")
+        .filter(|value| value.is_null() || num(value).is_some())
+        .map(|_| g1.is_some());
+    st.grid_l2_available = snap
+        .system
+        .get("0/Ac/Grid/L2/Power")
+        .filter(|value| value.is_null() || num(value).is_some())
+        .map(|_| g2.is_some());
     st.gt = match (g1, g2) {
         (Some(a), Some(b)) => Some(a + b),
         (Some(a), None) | (None, Some(a)) => Some(a),

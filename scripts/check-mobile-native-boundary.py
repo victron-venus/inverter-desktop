@@ -47,6 +47,12 @@ FORBIDDEN_COMMANDS = (
 )
 FORBIDDEN_PROTOCOLS = ("ha-filtered-update", "camera-event", "frigate/events")
 FORBIDDEN_CRATES = {"tokio-tungstenite", "tungstenite"}
+REQUIRED_CORE_COMMANDS = (
+    "perform_action",
+    "connect_mqtt",
+    "get_setpoint_override",
+    "set_setpoint_override",
+)
 FORBIDDEN_SOURCES = re.compile(
     r"/src-tauri/src/(?:ha_api(?:\.rs|/)|ha_session\.rs|camera(?:\.rs|/)"
     r"|mqtt/camera_events\.rs|plugins/|desktop/)"
@@ -79,7 +85,7 @@ def verify_depfile(path):
 
 def verify_native_payload(payload, label):
     """Reject registered feature commands/protocols and require the core handler."""
-    for command in ("perform_action", "connect_mqtt"):
+    for command in REQUIRED_CORE_COMMANDS:
         if command.encode() not in payload:
             raise ValueError(f"Cannot identify inverter core commands in {label}")
     for marker in FORBIDDEN_COMMANDS + FORBIDDEN_PROTOCOLS:

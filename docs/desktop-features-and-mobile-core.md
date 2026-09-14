@@ -5,6 +5,8 @@ and future package installation are exclusive to desktop. The core retains
 Victron/Cerbo telemetry, MQTT/IGW selection, MQTT inverter-control flags, battery/
 solar/grid statistics, EV and water/pump controls, authentication, notifications,
 configuration, and app updates.
+Grid submeter telemetry and daemon setpoint override also remain core features;
+the packaged native check requires the override commands on both mobile platforms.
 
 This implementation checkpoint separates feature source code and enforces mobile
 exclusion. Desktop still bundles its existing HA/camera implementations. It does

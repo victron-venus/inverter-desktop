@@ -173,6 +173,16 @@ impl MqttClient {
             .as_f64()
     }
 
+    /// Missing/malformed envelopes are not source invalidation. An explicit
+    /// {"value": null} is authoritative and must clear the previous phase.
+    fn parse_cerbo_grid_sample(payload: &str) -> Option<Option<f64>> {
+        let envelope = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+        match envelope.get("value")? {
+            serde_json::Value::Null => Some(None),
+            value => value.as_f64().map(Some),
+        }
+    }
+
     /// /TimeToGo arrives in seconds (null when idle -> parse_cerbo_value
     /// already yields None). Format like the inverter-control daemon does.
     pub(crate) fn format_time_to_go(secs: f64) -> Option<String> {
@@ -369,8 +379,20 @@ impl MqttClient {
                 entry.touch();
                 let s = &mut entry.data;
                 match path {
-                    "Ac/Grid/L1/Power" => s.g1 = val,
-                    "Ac/Grid/L2/Power" => s.g2 = val,
+                    "Ac/Grid/L1/Power" => {
+                        let Some(sample) = Self::parse_cerbo_grid_sample(payload) else {
+                            return false;
+                        };
+                        s.g1 = sample;
+                        s.g1_seen = true;
+                    }
+                    "Ac/Grid/L2/Power" => {
+                        let Some(sample) = Self::parse_cerbo_grid_sample(payload) else {
+                            return false;
+                        };
+                        s.g2 = sample;
+                        s.g2_seen = true;
+                    }
                     "Ac/Consumption/L1/Power" => s.t1 = val,
                     "Ac/Consumption/L2/Power" => s.t2 = val,
                     _ => return false,
@@ -588,20 +610,19 @@ impl MqttClient {
         // Prefer systemcalc grid/consumption (same paths as inverter-control).
         if let Some(entry) = devices.system.values().next() {
             let s = &entry.data;
-            if let Some(g1) = s.g1 {
-                st.g1 = Some(g1);
+            if s.g1_seen {
+                st.g1 = s.g1;
+                st.grid_l1_available = Some(s.g1.is_some());
             }
-            if let Some(g2) = s.g2 {
-                st.g2 = Some(g2);
+            if s.g2_seen {
+                st.g2 = s.g2;
+                st.grid_l2_available = Some(s.g2.is_some());
             }
             if let Some(t1) = s.t1 {
                 st.t1 = Some(t1);
             }
             if let Some(t2) = s.t2 {
                 st.t2 = Some(t2);
-            }
-            if let (Some(g1), Some(g2)) = (st.g1, st.g2) {
-                st.gt = Some(g1 + g2);
             }
             match (st.t1, st.t2) {
                 (Some(t1), Some(t2)) => st.tt = Some(t1 + t2),
@@ -614,14 +635,16 @@ impl MqttClient {
         if let Some(entry) = devices.vebus.values().next() {
             let v = &entry.data;
             // Grid from vebus only when systemcalc has not filled it.
-            if st.g1.is_none() {
+            if st.g1.is_none() && st.grid_l1_available != Some(false) {
                 if let Some(l1) = v.l1_power {
                     st.g1 = Some(l1);
+                    st.grid_l1_available = Some(true);
                 }
             }
-            if st.g2.is_none() {
+            if st.g2.is_none() && st.grid_l2_available != Some(false) {
                 if let Some(l2) = v.l2_power {
                     st.g2 = Some(l2);
+                    st.grid_l2_available = Some(true);
                 }
             }
             if st.gt.is_none() {
@@ -638,6 +661,15 @@ impl MqttClient {
             if let Some(ref mode) = v.inverter_state {
                 st.inverter_state = Some(mode.clone());
             }
+        }
+        if st.grid_l1_available.is_some() || st.grid_l2_available.is_some() {
+            // Sum only presently available phases. In particular, a current
+            // single-phase fallback must not include a cached meter L2 value.
+            st.gt = match (st.g1, st.g2) {
+                (Some(a), Some(b)) => Some(a + b),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            };
         }
         if !devices.acloads.is_empty() {
             // Stable instance-id keys for watts; names live in load_names so
@@ -701,6 +733,57 @@ impl MqttClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_grid_null_clears_cached_phase_but_malformed_samples_do_not() {
+        let mut devices = CerboDevices::default();
+        let mut state = InverterState::default();
+        for (path, payload) in [
+            ("Ac/Grid/L1/Power", r#"{"value":-743}"#),
+            ("Ac/Grid/L2/Power", r#"{"value":-7}"#),
+        ] {
+            assert!(MqttClient::apply_device_message(
+                &mut devices,
+                "system",
+                0,
+                path,
+                payload
+            ));
+        }
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.gt, Some(-750.0));
+        for payload in ["broken", r#"{}"#, r#"{"value":"invalid"}"#] {
+            assert!(!MqttClient::apply_device_message(
+                &mut devices,
+                "system",
+                0,
+                "Ac/Grid/L2/Power",
+                payload
+            ));
+        }
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.g2, Some(-7.0));
+        assert!(MqttClient::apply_device_message(
+            &mut devices,
+            "system",
+            0,
+            "Ac/Grid/L2/Power",
+            r#"{"value":null}"#
+        ));
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.g2, None);
+        assert_eq!(state.grid_l2_available, Some(false));
+        assert_eq!(state.gt, Some(-743.0));
+        assert!(MqttClient::apply_device_message(
+            &mut devices,
+            "system",
+            0,
+            "Ac/Grid/L1/Power",
+            r#"{"value":null}"#
+        ));
+        MqttClient::apply_cerbo_to_state(&devices, &mut state);
+        assert_eq!(state.gt, None);
+    }
 
     fn bat(name: &str, amps: f64) -> Battery {
         Battery {

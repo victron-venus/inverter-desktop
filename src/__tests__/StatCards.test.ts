@@ -1,9 +1,14 @@
-import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { enableAutoUnmount, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import StatCards from '../components/StatCards.vue'
 
+enableAutoUnmount(afterEach)
+afterEach(() => vi.useRealTimers())
+vi.mock('../components/SetpointOverride.vue', () => ({ default: { template: '<span />' } }))
+
 const baseProps = {
+  gridBackupObservedAt: Date.now() / 1000,
   gt: 1200,
   g1: 600,
   g2: 600,
@@ -22,6 +27,76 @@ const baseProps = {
 }
 
 describe('StatCards sticky hold', () => {
+  const gridBackup = {
+    enabled: true,
+    available: true,
+    service: 'com.victronenergy.acload.example',
+    device_instance: 78,
+    name: 'Home',
+    power: -750,
+    measurement_time: 1000,
+    age_seconds: 1,
+  }
+
+  it('expires backup readiness when daemon stops despite other MQTT updates', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(StatCards, {
+      props: {
+        ...baseProps,
+        gridBackup,
+        gridUsingBackup: true,
+        gridBackupObservedAt: Date.now() / 1000,
+      },
+    })
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· -750W')
+    expect(wrapper.get('[data-testid="grid-backup"]').classes()).toContain('text-accent')
+    await vi.advanceTimersByTimeAsync(31000)
+    await wrapper.setProps({ gt: 200 })
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· —')
+    expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('stale')
+  })
+
+  it('shows only the selected submeter next to Grid, preserving primary totals', () => {
+    const wrapper = mount(StatCards, { props: { ...baseProps, gridBackup } })
+    const card = wrapper.find('.metric-card')
+    expect(card.find('.classic-stat-label').text().replace(/\s+/g, ' ')).toBe('Grid · -750W')
+    expect(card.text()).not.toContain('Home')
+    expect(card.find('.classic-stat-value').text()).toBe('1.2kW')
+    expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('ready')
+  })
+
+  it('clears unavailable submeter power and shows recovery including zero', async () => {
+    const wrapper = mount(StatCards, { props: { ...baseProps, gridBackup } })
+    await wrapper.setProps({ gridBackup: { ...gridBackup, available: false, power: null } })
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· —')
+    await wrapper.setProps({ gridBackup: { ...gridBackup, power: 0 }, gridUsingBackup: true })
+    expect(wrapper.get('[data-testid="grid-backup"]').text()).toBe('· 0W')
+    expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('supplying')
+  })
+
+  it('shows a detected submeter with backup disabled and removes a cleared selection', async () => {
+    const wrapper = mount(StatCards, {
+      props: { ...baseProps, gridBackup: { ...gridBackup, enabled: false } },
+    })
+    expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('disabled')
+    await wrapper.setProps({ gridBackup: { ...gridBackup, service: null } })
+    expect(wrapper.find('[data-testid="grid-backup"]').exists()).toBe(false)
+  })
+
+  it('does not invent a submeter when no selection is published', () => {
+    expect(
+      mount(StatCards, { props: baseProps }).find('[data-testid="grid-backup"]').exists()
+    ).toBe(false)
+  })
+
+  it('clears an explicitly unavailable phase rather than holding its old watts', async () => {
+    const wrapper = mount(StatCards, { props: baseProps })
+    await wrapper.setProps({ g2: undefined, gridL2Available: false, gt: 600 })
+    expect(wrapper.find('.classic-stat-meta').text()).toBe('600W · —')
+    await wrapper.setProps({ g1: undefined, gt: undefined, gridL1Available: false })
+    expect(wrapper.find('.classic-stat-value').text()).toBe('—')
+  })
+
   it('holds last-known battery metrics when props go nullish', async () => {
     const wrapper = mount(StatCards, { props: baseProps })
     expect(wrapper.text()).toContain('87%')
