@@ -29,9 +29,20 @@
       <p v-if="snapshot.ready && !snapshot.installation_available" class="text-[12px] text-muted">
         {{ $t('plugins.manager.noPublishers') }}
       </p>
-      <UiButton class="self-start" :disabled="!canInstall" @click="pickPackage">
-        {{ $t('plugins.manager.choosePackage') }}
-      </UiButton>
+      <div class="flex flex-wrap gap-2">
+        <UiButton :disabled="!canInstall" @click="pickPackage">
+          {{ $t('plugins.manager.choosePackage') }}
+        </UiButton>
+        <UiButton :disabled="!canManage" @click="openRetainedData">
+          {{ $t('plugins.manager.storedData') }}
+        </UiButton>
+      </div>
+
+      <RetainedPluginData
+        v-if="retainedDataOpened"
+        :controller="retainedData"
+        :disabled="!canManage"
+      />
 
       <section v-if="preview" class="classic-card p-3 flex flex-col gap-3">
         <h3 class="classic-subsection-title">{{ $t('plugins.manager.reviewPackage') }}</h3>
@@ -165,6 +176,7 @@ import { onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UiButton from '../../../components/UiButton.vue'
 import PluginSettingsEditor from './PluginSettingsEditor.vue'
+import RetainedPluginData from './RetainedPluginData.vue'
 import { createPluginManager } from './usePluginManager'
 import type { ManagedPlugin } from './types'
 
@@ -177,6 +189,8 @@ const {
   confirmRemoval,
   deleteSettings,
   settingsEditor,
+  retainedData,
+  retainedDataOpened,
   working: busy,
   loading,
   error,
@@ -195,6 +209,7 @@ const {
   setSettingsBusy,
   closeSettings,
   settingsSaved,
+  openRetainedData,
 } = manager
 const permissionKeys: Record<string, string> = {
   dashboard_contributions: 'plugins.manager.permissionDashboard',

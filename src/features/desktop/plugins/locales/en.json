@@ -54,5 +54,17 @@
   "reloadSettings": "Reload saved settings",
   "deleteSettings": "Also delete this plugin’s settings and secrets",
   "retainSettings": "Settings and secrets are kept for a later installation unless you choose to delete them.",
-  "invalidSetting": "Check the value for {field}."
+  "invalidSetting": "Check the value for {field}.",
+  "storedData": "Stored plugin data",
+  "storedDataHelp": "Manage saved settings and secrets without opening their contents. Unidentified records cannot be matched to a removed plugin.",
+  "storedDataUsage": "{used} of {limit} bytes used; up to {records} records.",
+  "storedDataPending": "Storage usage also includes pending writes.",
+  "noStoredData": "No stored data records.",
+  "unidentifiedData": "Unidentified stored data",
+  "dataBytes": "{bytes} bytes",
+  "installedDataProtected": "An installed plugin uses this data. Uninstall the plugin before deleting its data.",
+  "deleteStoredData": "Delete stored data…",
+  "confirmDeleteData": "Permanently delete stored data record {record} ({bytes} bytes)? Its settings and secrets cannot be recovered.",
+  "deleteDataPermanently": "Permanently delete data",
+  "closeStoredData": "Close stored data"
 }

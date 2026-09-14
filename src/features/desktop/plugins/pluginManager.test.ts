@@ -7,6 +7,7 @@ import en from '../messages.en'
 import ru from '../messages.ru'
 import PluginManager from './PluginManager.vue'
 import PluginSettingsEditor from './PluginSettingsEditor.vue'
+import RetainedPluginData from './RetainedPluginData.vue'
 import { createPluginManager } from './usePluginManager'
 import type {
   ManagedPlugin,
@@ -14,6 +15,7 @@ import type {
   PluginPackagePreview,
   PluginSettingsSaveResult,
   PluginSettingsView,
+  RetainedPluginDataSnapshot,
 } from './types'
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), emit: vi.fn() }))
@@ -121,6 +123,7 @@ beforeEach(() => {
     error: null,
     installation_available: true,
     target: selected.target,
+    data_revision: '0',
     plugins: [],
   }
   selection = structuredClone(selected)
@@ -576,7 +579,184 @@ describe('desktop plugin manager', () => {
       enabled: false,
     })
   })
+
+  it('does not scan retained data on startup or worker updates and scans on explicit open', async () => {
+    handlers.set('get_retained_plugin_data', retainedView)
+    await openManager()
+    for (let index = 0; index < 100; index += 1) event('plugin-host-update')
+    await flushPromises()
+    expect(calls('get_retained_plugin_data')).toHaveLength(0)
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    expect(wrapper?.findComponent(RetainedPluginData).exists()).toBe(true)
+    expect(calls('get_retained_plugin_data')).toHaveLength(1)
+    for (let index = 0; index < 100; index += 1) event('plugin-host-update')
+    await flushPromises()
+    expect(calls('get_retained_plugin_data')).toHaveLength(1)
+  })
+
+  it('locks package and editor actions during retained deletion and clears the panel on logout', async () => {
+    snapshot.plugins = [{ ...structuredClone(installed), permissions: ['plugin_configuration'] }]
+    handlers.set('get_retained_plugin_data', retainedView)
+    const pending = deferred<void>()
+    handlers.set('delete_retained_plugin_data', () => pending.promise)
+    await openManager()
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    await button('Delete stored data…').trigger('click')
+    await button('Permanently delete data').trigger('click')
+    expect(button('Choose plugin package…').attributes('disabled')).toBeDefined()
+    expect(button('Settings').attributes('disabled')).toBeDefined()
+    expect(button('Uninstall…').attributes('disabled')).toBeDefined()
+    unlocked = false
+    event('auth-state-changed')
+    await flushPromises()
+    expect(wrapper?.findComponent(RetainedPluginData).exists()).toBe(false)
+    pending.reject(new Error('stale deletion error'))
+    await flushPromises()
+    expect(wrapper?.text()).not.toContain('stale deletion error')
+    expect(calls('get_retained_plugin_data')).toHaveLength(1)
+  })
+
+  it('refreshes retained ownership after uninstall without scanning for unrelated worker changes', async () => {
+    snapshot.plugins = [structuredClone(installed)]
+    let data = retainedView()
+    data.records[0].plugin_id = installed.plugin_id
+    handlers.set('get_retained_plugin_data', () => structuredClone(data))
+    handlers.set('uninstall_plugin_package', () => {
+      snapshot.plugins = []
+      snapshot.data_revision = '1'
+      data = retainedView()
+    })
+    await openManager()
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    expect(button('Delete stored data…').attributes('disabled')).toBeDefined()
+    await button('Uninstall…').trigger('click')
+    await button('Uninstall plugin').trigger('click')
+    await flushPromises()
+    expect(calls('get_retained_plugin_data')).toHaveLength(2)
+    expect(wrapper?.text()).toContain('Unidentified stored data')
+    expect(button('Delete stored data…').attributes('disabled')).toBeUndefined()
+  })
+
+  it.each([true, false])(
+    'restores an open inventory after setting enabled=%s advances the native data revision',
+    async (enabled) => {
+      snapshot.plugins = [{ ...structuredClone(installed), enabled: !enabled }]
+      handlers.set('get_retained_plugin_data', retainedView)
+      handlers.set('set_plugin_enabled', () => {
+        snapshot.plugins[0].enabled = enabled
+        snapshot.data_revision = '1'
+      })
+      await openManager()
+      await button('Stored plugin data').trigger('click')
+      await flushPromises()
+      expect(calls('get_retained_plugin_data')).toHaveLength(1)
+      await button(enabled ? 'Enable' : 'Disable').trigger('click')
+      await flushPromises()
+      expect(calls('get_retained_plugin_data')).toHaveLength(2)
+      expect(wrapper?.text()).toContain('Unidentified stored data')
+      expect(button('Delete stored data…').attributes('disabled')).toBeUndefined()
+      expect(button('Stored plugin data').attributes('disabled')).toBeUndefined()
+      event('plugin-host-update')
+      await flushPromises()
+      expect(calls('get_retained_plugin_data')).toHaveLength(2)
+    }
+  )
+
+  it('invalidates stale deletion consent when a package becomes installed elsewhere', async () => {
+    const data = retainedView()
+    handlers.set('get_retained_plugin_data', () => structuredClone(data))
+    await openManager()
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    await button('Delete stored data…').trigger('click')
+    snapshot.plugins = [structuredClone(installed)]
+    data.records[0].plugin_id = installed.plugin_id
+    snapshot.data_revision = '1'
+    event('plugin-host-update')
+    await flushPromises()
+    expect(wrapper?.text()).not.toContain('Its settings and secrets cannot be recovered.')
+    expect(button('Delete stored data…').attributes('disabled')).toBeDefined()
+    expect(calls('get_retained_plugin_data')).toHaveLength(2)
+    expect(calls('delete_retained_plugin_data')).toHaveLength(0)
+  })
+
+  it('keeps settings editing and retained data separate and reloads only on the next explicit open', async () => {
+    snapshot.plugins = [{ ...structuredClone(installed), permissions: ['plugin_configuration'] }]
+    handlers.set('get_retained_plugin_data', retainedView)
+    handlers.set('get_plugin_settings', settingsView)
+    handlers.set('save_plugin_settings', () => ({ settings: settingsView(), restart_error: null }))
+    await openManager()
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    await button('Settings').trigger('click')
+    await flushPromises()
+    expect(wrapper?.findComponent(RetainedPluginData).exists()).toBe(false)
+    await managerWrapper().find('form').trigger('submit')
+    await flushPromises()
+    expect(calls('get_retained_plugin_data')).toHaveLength(1)
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    expect(wrapper?.findComponent(PluginSettingsEditor).exists()).toBe(false)
+    expect(calls('get_retained_plugin_data')).toHaveLength(2)
+  })
+
+  it('invalidates orphan deletion consent after data changes in another window without package changes', async () => {
+    let data = retainedView()
+    handlers.set('get_retained_plugin_data', () => structuredClone(data))
+    await openManager()
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    await button('Delete stored data…').trigger('click')
+    expect(wrapper?.text()).toContain('Its settings and secrets cannot be recovered.')
+    data = { ...data, records: [], total_bytes: 0 }
+    snapshot.data_revision = '1'
+    event('plugin-host-update')
+    await flushPromises()
+    expect(wrapper?.text()).toContain('No stored data records.')
+    expect(wrapper?.text()).not.toContain('Its settings and secrets cannot be recovered.')
+    expect(calls('get_retained_plugin_data')).toHaveLength(2)
+    expect(calls('delete_retained_plugin_data')).toHaveLength(0)
+    for (let index = 0; index < 100; index += 1) event('plugin-host-update')
+    await flushPromises()
+    expect(calls('get_retained_plugin_data')).toHaveLength(2)
+  })
+
+  it('refreshes once when successful deletion is broadcast before its IPC promise resolves', async () => {
+    let data = retainedView()
+    const pending = deferred<void>()
+    handlers.set('get_retained_plugin_data', () => structuredClone(data))
+    handlers.set('delete_retained_plugin_data', () => pending.promise)
+    await openManager()
+    await button('Stored plugin data').trigger('click')
+    await flushPromises()
+    await button('Delete stored data…').trigger('click')
+    await button('Permanently delete data').trigger('click')
+    data = { ...data, records: [], total_bytes: 0 }
+    snapshot.data_revision = '1'
+    event('plugin-host-update')
+    await flushPromises()
+    expect(calls('get_retained_plugin_data')).toHaveLength(1)
+    expect(button('Stored plugin data').attributes('disabled')).toBeDefined()
+    pending.resolve()
+    await flushPromises()
+    expect(calls('get_retained_plugin_data')).toHaveLength(2)
+    expect(wrapper?.text()).toContain('No stored data records.')
+    expect(button('Stored plugin data').attributes('disabled')).toBeUndefined()
+    expect(wrapper?.find('[role="alert"]').exists()).toBe(false)
+  })
 })
+
+function retainedView(): RetainedPluginDataSnapshot {
+  return {
+    records: [{ record_id: 'a'.repeat(64), revision: 'b'.repeat(64), bytes: 128, plugin_id: null }],
+    total_bytes: 128,
+    max_records: 128,
+    max_bytes: 8_388_608,
+  }
+}
 
 function settingsView(): PluginSettingsView {
   return {

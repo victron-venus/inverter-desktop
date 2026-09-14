@@ -44,6 +44,7 @@ export interface PluginManagerSnapshot {
   error: string | null
   installation_available: boolean
   target: string
+  data_revision: string
   plugins: ManagedPlugin[]
 }
 
@@ -87,4 +88,18 @@ export interface PluginSettingsView {
 export interface PluginSettingsSaveResult {
   settings: PluginSettingsView
   restart_error: string | null
+}
+
+export interface RetainedPluginDataRecord {
+  record_id: string
+  revision: string
+  bytes: number
+  plugin_id: string | null
+}
+
+export interface RetainedPluginDataSnapshot {
+  records: RetainedPluginDataRecord[]
+  total_bytes: number
+  max_records: number
+  max_bytes: number
 }

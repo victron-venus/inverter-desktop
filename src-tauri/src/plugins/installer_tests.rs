@@ -177,6 +177,322 @@ fn worker_configuration(revision: &str) -> WorkerConfiguration {
     }
 }
 
+// Poll the public operation once so its owned task exists, then let that task
+// reach the held operation lock on these tests' single-thread Tokio runtime.
+async fn queue_operation<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>) {
+    std::future::poll_fn(|context| {
+        assert!(operation.as_mut().poll(context).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    tokio::task::yield_now().await;
+}
+
+#[tokio::test]
+async fn retained_data_protects_running_disabled_and_broken_installed_packages() {
+    const DISABLED: &str = "test.disabled";
+    const BROKEN: &str = "test.broken";
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        trust_for(&[PLUGIN, DISABLED, BROKEN]),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    manager
+        .install(package(&directory.0, "1.0.0", "normal"), true)
+        .await
+        .unwrap();
+    manager
+        .install(
+            package_for(&directory.0, DISABLED, "1.0.0", "normal"),
+            false,
+        )
+        .await
+        .unwrap();
+    let broken = manager
+        .install(package_for(&directory.0, BROKEN, "1.0.0", "normal"), false)
+        .await
+        .unwrap();
+    let archive = manager
+        .version_path(BROKEN, &broken.active)
+        .join("archive.idplugin");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&archive, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(archive, b"broken installed archive").unwrap();
+    assert!(manager.verify_installed(BROKEN, &broken.active).is_err());
+    wait_running(&host).await;
+    let generation = host.snapshots()[0].generation;
+    let before = fs::read(manager.0.root.join("state.json")).unwrap();
+    let epoch = host.authority_epoch();
+    let ids = manager
+        .read_retained_data_in_epoch(epoch, |ids| Ok(ids.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        ids,
+        BTreeSet::from([PLUGIN.to_owned(), DISABLED.to_owned(), BROKEN.to_owned()])
+    );
+    let cleaned = Arc::new(AtomicBool::new(false));
+    for id in &ids {
+        let cleaned = cleaned.clone();
+        let error = manager
+            .remove_retained_data_in_epoch(
+                &SettingsStore::record_id(id).unwrap(),
+                epoch,
+                Box::new(move || {
+                    cleaned.store(true, Ordering::SeqCst);
+                    Ok(())
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, "plugin data belongs to an installed package");
+    }
+    assert!(!cleaned.load(Ordering::SeqCst));
+    let flag = cleaned.clone();
+    manager
+        .remove_retained_data_in_epoch(
+            &SettingsStore::record_id("test.uninstalled").unwrap(),
+            epoch,
+            Box::new(move || {
+                flag.store(true, Ordering::SeqCst);
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(cleaned.load(Ordering::SeqCst));
+    assert_eq!(fs::read(manager.0.root.join("state.json")).unwrap(), before);
+    assert_eq!(host.snapshots().len(), 1);
+    assert_eq!(host.snapshots()[0].generation, generation);
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["ok"],
+        true
+    );
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn retained_data_serializes_with_installation_and_uninstall() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let archive = package(&directory.0, "1.0.0", "normal");
+    let epoch = host.authority_epoch();
+    let record_id = SettingsStore::record_id(PLUGIN).unwrap();
+    let cleaned = Arc::new(AtomicBool::new(false));
+    let lock = manager.0.operation.lock().await;
+    let mut install = Box::pin(manager.install(archive, false));
+    queue_operation(install.as_mut()).await;
+    let mut read = Box::pin(manager.read_retained_data_in_epoch(epoch, |ids| Ok(ids.clone())));
+    queue_operation(read.as_mut()).await;
+    let flag = cleaned.clone();
+    let mut cleanup = Box::pin(manager.remove_retained_data_in_epoch(
+        &record_id,
+        epoch,
+        Box::new(move || {
+            flag.store(true, Ordering::SeqCst);
+            Ok(())
+        }),
+    ));
+    queue_operation(cleanup.as_mut()).await;
+    drop(lock);
+    install.await.unwrap();
+    assert_eq!(read.await.unwrap(), BTreeSet::from([PLUGIN.to_owned()]));
+    assert_eq!(
+        cleanup.await.unwrap_err(),
+        "plugin data belongs to an installed package"
+    );
+    assert!(!cleaned.load(Ordering::SeqCst));
+
+    let lock = manager.0.operation.lock().await;
+    let mut uninstall = Box::pin(manager.remove_in_epoch(PLUGIN, epoch));
+    queue_operation(uninstall.as_mut()).await;
+    let mut read = Box::pin(manager.read_retained_data_in_epoch(epoch, |ids| Ok(ids.clone())));
+    queue_operation(read.as_mut()).await;
+    let flag = cleaned.clone();
+    let mut cleanup = Box::pin(manager.remove_retained_data_in_epoch(
+        &record_id,
+        epoch,
+        Box::new(move || {
+            flag.store(true, Ordering::SeqCst);
+            Ok(())
+        }),
+    ));
+    queue_operation(cleanup.as_mut()).await;
+    drop(lock);
+    uninstall.await.unwrap();
+    assert!(read.await.unwrap().is_empty());
+    cleanup.await.unwrap();
+    assert!(cleaned.load(Ordering::SeqCst));
+    assert!(manager.list().await.unwrap().is_empty());
+    assert!(host.snapshots().is_empty());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn retained_data_rejects_stale_queued_operations_and_revoked_read_results() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let epoch = host.authority_epoch();
+    let record_id = SettingsStore::record_id(PLUGIN).unwrap();
+    let lock = manager.0.operation.lock().await;
+    let (read_sent, read_called) = tokio::sync::oneshot::channel();
+    let mut read = Box::pin(manager.read_retained_data_in_epoch(epoch, move |_| {
+        let _ = read_sent.send(());
+        Ok(())
+    }));
+    queue_operation(read.as_mut()).await;
+    let (cleanup_sent, cleanup_called) = tokio::sync::oneshot::channel();
+    let mut cleanup = Box::pin(manager.remove_retained_data_in_epoch(
+        &record_id,
+        epoch,
+        Box::new(move || {
+            let _ = cleanup_sent.send(());
+            Ok(())
+        }),
+    ));
+    queue_operation(cleanup.as_mut()).await;
+    host.revoke();
+    host.resume();
+    drop(lock);
+    assert!(read.await.unwrap_err().contains("authorization"));
+    assert!(cleanup.await.unwrap_err().contains("authorization"));
+    assert!(read_called.await.is_err());
+    assert!(cleanup_called.await.is_err());
+
+    let revoker = host.clone();
+    let error = manager
+        .read_retained_data_in_epoch(host.authority_epoch(), move |_| {
+            revoker.revoke();
+            revoker.resume();
+            Ok("result from an expired session")
+        })
+        .await
+        .unwrap_err();
+    assert!(error.contains("authorization"));
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn retained_data_owned_operations_survive_caller_cancellation_but_not_revocation() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let record_id = SettingsStore::record_id(PLUGIN).unwrap();
+    for revoke in [false, true] {
+        let epoch = host.authority_epoch();
+        let lock = manager.0.operation.lock().await;
+        let (read_sent, read_called) = tokio::sync::oneshot::channel();
+        let mut read = Box::pin(manager.read_retained_data_in_epoch(epoch, move |_| {
+            let _ = read_sent.send(());
+            Ok(())
+        }));
+        queue_operation(read.as_mut()).await;
+        let (cleanup_sent, cleanup_called) = tokio::sync::oneshot::channel();
+        let mut cleanup = Box::pin(manager.remove_retained_data_in_epoch(
+            &record_id,
+            epoch,
+            Box::new(move || {
+                let _ = cleanup_sent.send(());
+                Ok(())
+            }),
+        ));
+        queue_operation(cleanup.as_mut()).await;
+        drop(read);
+        drop(cleanup);
+        if revoke {
+            host.revoke();
+            host.resume();
+        }
+        drop(lock);
+        let read = time::timeout(Duration::from_secs(2), read_called)
+            .await
+            .unwrap();
+        let cleanup = time::timeout(Duration::from_secs(2), cleanup_called)
+            .await
+            .unwrap();
+        assert_eq!(read.is_err(), revoke);
+        assert_eq!(cleanup.is_err(), revoke);
+    }
+    assert!(manager.list().await.unwrap().is_empty());
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn retained_data_rejects_noncanonical_ids_and_preserves_cleanup_errors() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let epoch = host.authority_epoch();
+    for id in [
+        String::new(),
+        "A".repeat(64),
+        "g".repeat(64),
+        "a".repeat(63),
+        "a".repeat(65),
+        format!("{}.enc", "a".repeat(64)),
+        format!("../{}", "a".repeat(64)),
+    ] {
+        let (sent, called) = tokio::sync::oneshot::channel();
+        let error = manager
+            .remove_retained_data_in_epoch(
+                &id,
+                epoch,
+                Box::new(move || {
+                    let _ = sent.send(());
+                    Ok(())
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, "invalid retained plugin data identity");
+        assert!(called.await.is_err());
+    }
+    let record_id = SettingsStore::record_id(PLUGIN).unwrap();
+    assert_eq!(
+        manager
+            .remove_retained_data_in_epoch(
+                &record_id,
+                epoch,
+                Box::new(|| Err("reviewed ciphertext changed".into())),
+            )
+            .await
+            .unwrap_err(),
+        "reviewed ciphertext changed"
+    );
+    manager.close().await.unwrap();
+    assert_eq!(
+        manager
+            .read_retained_data_in_epoch(epoch, |_| Ok(()))
+            .await
+            .unwrap_err(),
+        "package store is closed"
+    );
+    let (sent, called) = tokio::sync::oneshot::channel();
+    assert_eq!(
+        manager
+            .remove_retained_data_in_epoch(
+                &record_id,
+                epoch,
+                Box::new(move || {
+                    let _ = sent.send(());
+                    Ok(())
+                }),
+            )
+            .await
+            .unwrap_err(),
+        "package store is closed"
+    );
+    assert!(called.await.is_err());
+}
+
 #[tokio::test]
 async fn settings_are_scoped_to_verified_permission_and_restart_only_enabled_workers() {
     let directory = TestDirectory::new();

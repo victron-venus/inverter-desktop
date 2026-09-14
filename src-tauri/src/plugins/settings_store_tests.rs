@@ -78,6 +78,14 @@ fn missing_reads_and_recovery_do_not_create_directories_or_request_a_key() {
     );
     assert!(!root.exists());
     assert!(store.read(PLUGIN).unwrap() == SettingsData::default());
+    let inventory = store.inventory().unwrap();
+    assert!(inventory.records.is_empty());
+    assert_eq!(inventory.total_bytes, 0);
+    assert_eq!(inventory.max_records, 64);
+    assert_eq!(inventory.max_bytes, 8 * 1024 * 1024);
+    let record_id = SettingsStore::record_id(PLUGIN).unwrap();
+    let revision = format!("{:x}", Sha256::digest([]));
+    assert!(store.remove_record(&record_id, &revision).is_err());
     store.recover().unwrap();
     store.remove(PLUGIN).unwrap();
     assert!(!root.exists());
@@ -463,4 +471,271 @@ fn settings_directories_and_files_are_private_and_nonprivate_inputs_fail() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     fs::set_permissions(&store.directory, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(store.read(PLUGIN).is_err());
+}
+
+#[test]
+fn inventory_is_sorted_redacted_and_read_only_without_a_key() {
+    let (_directory, store) = fixture();
+    save(&store, PLUGIN, &data());
+    let encrypted = fs::read(store.record_path(PLUGIN).unwrap()).unwrap();
+    let invalid = b"corrupt retained ciphertext";
+    private_file(&store.record_path("unknown.owner").unwrap(), invalid);
+    private_file(&store.record_path("empty.owner").unwrap(), b"");
+    let prepared = store.prepare_write(PLUGIN, &data()).unwrap();
+    let pending = prepared.pending.as_ref().unwrap();
+    let pending_bytes = fs::read(pending).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let unavailable = SettingsStore::new(
+        store.root.clone(),
+        Arc::new({
+            let calls = calls.clone();
+            move || {
+                calls.fetch_add(1, Ordering::AcqRel);
+                Err(SECRET.into())
+            }
+        }),
+    );
+    let inventory = unavailable.inventory().unwrap();
+    let mut expected = vec![
+        SettingsRecord {
+            record_id: SettingsStore::record_id(PLUGIN).unwrap(),
+            revision: format!("{:x}", Sha256::digest(&encrypted)),
+            bytes: encrypted.len() as u64,
+        },
+        SettingsRecord {
+            record_id: SettingsStore::record_id("unknown.owner").unwrap(),
+            revision: format!("{:x}", Sha256::digest(invalid)),
+            bytes: invalid.len() as u64,
+        },
+        SettingsRecord {
+            record_id: SettingsStore::record_id("empty.owner").unwrap(),
+            revision: format!("{:x}", Sha256::digest([])),
+            bytes: 0,
+        },
+    ];
+    expected.sort_by(|left, right| left.record_id.cmp(&right.record_id));
+    assert_eq!(inventory.records, expected);
+    assert_eq!(
+        inventory.total_bytes,
+        (encrypted.len() + invalid.len() + pending_bytes.len()) as u64
+    );
+    let exposed = format!("{inventory:?}");
+    for hidden in [SECRET, "broker.example", "unknown.owner", "removed_secret"] {
+        assert!(!exposed.contains(hidden));
+    }
+    assert_eq!(unavailable.inventory().unwrap(), inventory);
+    assert_eq!(fs::read(pending).unwrap(), pending_bytes);
+    assert_eq!(
+        fs::read(store.record_path(PLUGIN).unwrap()).unwrap(),
+        encrypted
+    );
+    assert_eq!(calls.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn corrupt_and_empty_unknown_records_can_be_removed_without_a_key() {
+    let (_directory, store) = fixture();
+    store.ensure_directory().unwrap();
+    let invalid = [b"broken envelope".as_slice(), b"IDSET\x01", b""];
+    for (index, bytes) in invalid.iter().enumerate() {
+        private_file(
+            &store
+                .record_path(&format!("unknown.owner-{index}"))
+                .unwrap(),
+            bytes,
+        );
+    }
+    let unavailable = SettingsStore::new(
+        store.root.clone(),
+        Arc::new(|| panic!("retained cleanup must not request a key")),
+    );
+    let inventory = unavailable.inventory().unwrap();
+    assert_eq!(inventory.records.len(), 3);
+    for record in inventory.records {
+        unavailable
+            .remove_record(&record.record_id, &record.revision)
+            .unwrap();
+        assert!(unavailable
+            .remove_record(&record.record_id, &record.revision)
+            .is_err());
+    }
+    assert!(unavailable.inventory().unwrap().records.is_empty());
+    assert_eq!(unavailable.inventory().unwrap().total_bytes, 0);
+}
+
+#[test]
+fn retained_deletion_requires_the_current_ciphertext_revision() {
+    let (_directory, store) = fixture();
+    save(&store, PLUGIN, &data());
+    let path = store.record_path(PLUGIN).unwrap();
+    let original = store.inventory().unwrap().records.remove(0);
+    save(&store, PLUGIN, &data());
+    let updated = fs::read(&path).unwrap();
+    assert!(store
+        .remove_record(&original.record_id, &original.revision)
+        .unwrap_err()
+        .contains("refresh"));
+    assert_eq!(fs::read(&path).unwrap(), updated);
+    let current = store.inventory().unwrap().records.remove(0);
+    assert_ne!(current.revision, original.revision);
+    let mut wrong_revision = current.revision.clone().into_bytes();
+    wrong_revision[0] = if wrong_revision[0] == b'a' {
+        b'b'
+    } else {
+        b'a'
+    };
+    let wrong_revision = String::from_utf8(wrong_revision).unwrap();
+    assert!(store
+        .remove_record(&current.record_id, &wrong_revision)
+        .is_err());
+    assert_eq!(fs::read(&path).unwrap(), updated);
+    store
+        .remove_record(&current.record_id, &current.revision)
+        .unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
+fn retained_record_tokens_reject_paths_extensions_and_noncanonical_hashes() {
+    let (_directory, store) = fixture();
+    save(&store, PLUGIN, &data());
+    let path = store.record_path(PLUGIN).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    let record = store.inventory().unwrap().records.remove(0);
+    for invalid in [
+        String::new(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "g".repeat(64),
+        "é".repeat(32),
+        format!("{}.enc", record.record_id),
+        format!("../{}", record.record_id),
+        format!("..\\{}", record.record_id),
+        format!("{PENDING_PREFIX}{}", uuid::Uuid::new_v4()),
+    ] {
+        assert!(store.remove_record(&invalid, &record.revision).is_err());
+        assert!(store.remove_record(&record.record_id, &invalid).is_err());
+    }
+    assert_eq!(fs::read(path).unwrap(), bytes);
+    let record_id = SettingsStore::record_id("con.example").unwrap();
+    assert_eq!(record_id, format!("{:x}", Sha256::digest(b"con.example")));
+    for invalid in ["../outside", "Test.invalid", "test/other", "test\\other"] {
+        assert!(SettingsStore::record_id(invalid).is_err());
+    }
+}
+
+#[test]
+fn retained_cleanup_recovers_capacity_at_the_record_limit() {
+    let (_directory, store) = fixture();
+    store.ensure_directory().unwrap();
+    for index in 0..MAX_SETTINGS_RECORDS {
+        private_file(
+            &store
+                .record_path(&format!("unknown.owner-{index}"))
+                .unwrap(),
+            b"corrupt",
+        );
+    }
+    let inventory = store.inventory().unwrap();
+    assert_eq!(inventory.records.len(), inventory.max_records);
+    assert_eq!(
+        inventory.total_bytes,
+        (MAX_SETTINGS_RECORDS * b"corrupt".len()) as u64
+    );
+    assert!(store.prepare_write(PLUGIN, &data()).is_err());
+    let unavailable = SettingsStore::new(
+        store.root.clone(),
+        Arc::new(|| panic!("quota cleanup must not request a key")),
+    );
+    let removed = &inventory.records[0];
+    unavailable
+        .remove_record(&removed.record_id, &removed.revision)
+        .unwrap();
+    save(&store, PLUGIN, &data());
+    assert_eq!(
+        store.inventory().unwrap().records.len(),
+        MAX_SETTINGS_RECORDS
+    );
+    assert!(store.read(PLUGIN).is_ok());
+}
+
+#[test]
+fn retained_inventory_and_cleanup_reject_unsafe_directory_entries() {
+    let (_directory, store) = fixture();
+    save(&store, PLUGIN, &data());
+    let path = store.record_path(PLUGIN).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    let record = store.inventory().unwrap().records.remove(0);
+    let unknown = store.directory.join("unexpected.json");
+    private_file(&unknown, b"unrelated");
+    assert!(store.inventory().is_err());
+    // An unrelated entry cannot block cleanup of previously reviewed bytes.
+    store
+        .remove_record(&record.record_id, &record.revision)
+        .unwrap();
+    assert!(!path.exists());
+    assert_eq!(fs::read(&unknown).unwrap(), b"unrelated");
+    fs::remove_file(unknown).unwrap();
+    private_file(&path, &vec![0; MAX_SETTINGS_FILE_BYTES + 1]);
+    assert!(store.inventory().is_err());
+    assert!(store
+        .remove_record(&record.record_id, &record.revision)
+        .is_err());
+    assert_eq!(
+        fs::metadata(&path).unwrap().len(),
+        (MAX_SETTINGS_FILE_BYTES + 1) as u64
+    );
+    fs::remove_file(&path).unwrap();
+    let external_directory = tempfile::tempdir().unwrap();
+    let external = external_directory.path().join("keep");
+    private_file(&external, &bytes);
+    fs::hard_link(&external, &path).unwrap();
+    assert!(store.inventory().is_err());
+    assert!(store
+        .remove_record(&record.record_id, &record.revision)
+        .is_err());
+    assert_eq!(fs::read(external).unwrap(), bytes);
+    assert!(path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_inventory_and_cleanup_reject_symlinks_and_nonprivate_entries() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let (_directory, store) = fixture();
+    save(&store, PLUGIN, &data());
+    let path = store.record_path(PLUGIN).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    let record = store.inventory().unwrap().records.remove(0);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(store.inventory().is_err());
+    assert!(store
+        .remove_record(&record.record_id, &record.revision)
+        .is_err());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(&store.directory, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(store.inventory().is_err());
+    assert!(store
+        .remove_record(&record.record_id, &record.revision)
+        .is_err());
+    fs::set_permissions(&store.directory, fs::Permissions::from_mode(0o700)).unwrap();
+    let external_directory = tempfile::tempdir().unwrap();
+    let external = external_directory.path().join("keep");
+    private_file(&external, &bytes);
+    fs::remove_file(&path).unwrap();
+    symlink(&external, &path).unwrap();
+    assert!(store.inventory().is_err());
+    assert!(store
+        .remove_record(&record.record_id, &record.revision)
+        .is_err());
+    assert_eq!(fs::read(&external).unwrap(), bytes);
+    fs::remove_file(&path).unwrap();
+    fs::remove_dir(&store.directory).unwrap();
+    symlink(external_directory.path(), &store.directory).unwrap();
+    assert!(store.inventory().is_err());
+    assert!(store
+        .remove_record(&record.record_id, &record.revision)
+        .is_err());
+    assert_eq!(fs::read(external).unwrap(), bytes);
 }

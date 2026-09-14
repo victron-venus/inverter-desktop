@@ -12,7 +12,7 @@ use super::protocol::{
     validate_plugin_id, PluginManifest, PluginPermission, WorkerConfiguration, DESKTOP_TARGETS,
 };
 use super::runtime::{PluginError, PluginHost, WorkerSpec, WorkerState};
-use super::settings_store::MAX_SETTINGS_FILE_BYTES;
+use super::settings_store::{SettingsStore, MAX_SETTINGS_FILE_BYTES};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -422,6 +422,64 @@ impl PackageManager {
         })
         .await
         .map_err(|_| "package removal task failed".to_string())?
+    }
+
+    /// Identify retained data against the current installed inventory, including
+    /// disabled packages and packages whose payload no longer verifies.
+    pub(crate) async fn read_retained_data_in_epoch<R, F>(
+        &self,
+        epoch: u64,
+        read: F,
+    ) -> Result<R, String>
+    where
+        F: FnOnce(&BTreeSet<String>) -> Result<R, String> + Send + 'static,
+        R: Send + 'static,
+    {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            let installed = manager.read_state()?.plugins.into_keys().collect();
+            let result = read(&installed)?;
+            manager.check_epoch(epoch)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| "retained plugin data read task failed".to_string())?
+    }
+
+    /// Delete only data that has no installed owner. The native callback checks
+    /// the reviewed ciphertext revision and removes its exact bounded record.
+    pub(crate) async fn remove_retained_data_in_epoch(
+        &self,
+        record_id: &str,
+        epoch: u64,
+        cleanup: SettingsCommit,
+    ) -> Result<(), String> {
+        let manager = self.clone();
+        let record_id = record_id.to_owned();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            if record_id.len() != 64
+                || !record_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err("invalid retained plugin data identity".into());
+            }
+            // Package verification must not weaken ownership protection: a
+            // disabled or corrupt installed package still owns its settings.
+            for id in manager.read_state()?.plugins.keys() {
+                if SettingsStore::record_id(id)? == record_id {
+                    return Err("plugin data belongs to an installed package".into());
+                }
+            }
+            manager.0.host.commit_in_epoch(epoch, cleanup)?;
+            manager.check_epoch(epoch)
+        })
+        .await
+        .map_err(|_| "retained plugin data removal task failed".to_string())?
     }
 
     pub(crate) async fn read_settings_in_epoch<R, F>(

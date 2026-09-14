@@ -1,6 +1,8 @@
 //! App session and window authority around the desktop worker host.
 
-use super::application::{ManagerSnapshot, PackageApplication, PackagePreview, SettingsSaveResult};
+use super::application::{
+    ManagerSnapshot, PackageApplication, PackagePreview, RetainedPluginData, SettingsSaveResult,
+};
 use super::publishers::embedded_trust;
 use super::runtime::{PluginHost, PluginSnapshot, WorkerState};
 use super::settings::PluginSettingsView;
@@ -222,6 +224,34 @@ pub(crate) async fn get_plugin_settings(
     let settings = state.packages.get_settings(&plugin_id, epoch).await?;
     finish_management(&app, &window, &state, epoch)?;
     Ok(settings)
+}
+
+#[tauri::command]
+pub(crate) async fn get_retained_plugin_data(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<RetainedPluginData, String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    let data = state.packages.retained_data(epoch).await?;
+    finish_management(&app, &window, &state, epoch)?;
+    Ok(data)
+}
+
+#[tauri::command]
+pub(crate) async fn delete_retained_plugin_data(
+    record_id: String,
+    revision: String,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    state
+        .packages
+        .delete_retained_data(&record_id, &revision, epoch)
+        .await?;
+    finish_management(&app, &window, &state, epoch)
 }
 
 #[tauri::command]
