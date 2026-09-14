@@ -23,6 +23,7 @@ from version_plan import (
     projected_value,
     sync_versions,
 )
+from version_receipt import verify_current_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -96,6 +97,41 @@ class ReleaseVersionTests(unittest.TestCase):
         with patch.object(checker.subprocess, "check_output", return_value="b" * 40):
             with self.assertRaises(ValueError):
                 checker.check_release_version(self.root, self.base, "stable")
+
+    def test_windows_checkout_preserves_receipted_cargo_inputs(self):
+        """Keep Cargo input hashes stable through Windows checkout and Tauri LF writes."""
+        shutil.copy2(ROOT / ".gitattributes", self.root / ".gitattributes")
+        commands = (
+            ["git", "init", "-q"],
+            ["git", "config", "core.autocrlf", "true"],
+            ["git", "add", "."],
+        )
+        for command in commands:
+            subprocess.run(command, cwd=self.root, check=True, capture_output=True)
+        cargo_paths = ("src-tauri/Cargo.toml", "src-tauri/Cargo.lock")
+        for name in cargo_paths:
+            (self.root / name).unlink()
+        subprocess.run(
+            ["git", "checkout-index", "--all", "--force"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
+        for name in cargo_paths:
+            self.assertNotIn(b"\r\n", (self.root / name).read_bytes(), name)
+
+        evidence = sync_versions(self.root, self.policy, self.plan())
+        for name in cargo_paths:
+            path = self.root / name
+            # Tauri serializes Cargo.toml to LF even on Windows. Match that
+            # boundary here without compiling a platform application in a unit test.
+            path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+        verify_current_inputs(self.root, evidence)
+
+        manifest = self.root / "src-tauri/Cargo.toml"
+        manifest.write_bytes(manifest.read_bytes() + b"# unrelated build mutation\n")
+        with self.assertRaisesRegex(ValueError, "Build input changed after version sync"):
+            verify_current_inputs(self.root, evidence)
 
     def test_ios_package_keeps_numeric_versions_and_full_candidate_identity(self):
         """Inspect the plist and embedded identity in an actual IPA archive."""
