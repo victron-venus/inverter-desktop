@@ -26,6 +26,9 @@ workers can resume after authentication and stop on logout. Configuration-capabl
 packages have a [typed settings editor](docs/plugin-settings.md) with isolated
 encrypted records and write-only secrets. Saving restarts enabled workers with
 acknowledged configuration; uninstall retains settings unless deletion is selected.
+An on-demand stored-data view shows usage and allows confirmed cleanup of records
+with no installed owner, including corrupt records or unavailable credentials.
+Data belonging to installed packages stays protected from this cleanup.
 
 **The current release publisher policy is empty, so package installation is
 disabled.** The manager reports this directly; it does not offer unsigned packages

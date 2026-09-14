@@ -51,6 +51,12 @@ restart is reported separately from a failed save. See the [settings
 contract](plugin-settings.md). Native failures are rendered as text in English/Russian UI; metadata never becomes HTML or
 executable frontend code.
 
+The on-demand stored-data view lists sizes and quota usage without decrypting
+records. Data with no installed owner can be removed after explicit confirmation;
+data belonging to any installed package remains protected. A removed package's
+name cannot be reconstructed from its record hash. See [retained data inventory
+and cleanup](plugin-settings.md#retained-data-inventory-and-cleanup).
+
 ## Package and signature contract
 
 An `.idplugin` file uses a strict, uncompressed ZIP layout. `manifest.json` comes
@@ -116,7 +122,10 @@ The destination parent must already exist. Output publication never overwrites a
 existing file, including a symlink. Identical valid inputs produce identical bytes;
 the producer fixes timestamps to 1980-01-01 and archive permissions to 0644 for
 data and 0755 for the entrypoint. It only creates an archive and never launches
-the worker. Native executable signing/notarization remains a release requirement.
+the worker. This plugin implementation introduces no new requirement to sign or
+notarize desktop executables or the application. Archive authentication is a
+separate mechanism from platform application signing; Android signing does not
+apply to this desktop-only plugin ecosystem.
 
 Windows MSVC builds embed the same Common Controls v6 manifest in application,
 test, and example executables. Tauri's default resource handling only covers
@@ -168,6 +177,10 @@ The management IPC surface is:
 - `save_plugin_settings({ pluginId, revision, values, secretChanges })`: validate
   and persist typed values/secret changes; return refreshed settings and a separate
   nullable `restart_error`.
+- `get_retained_plugin_data`: bounded ciphertext metadata, current installed
+  owner associations, and storage quotas; no stored values or key access.
+- `delete_retained_plugin_data({ recordId, revision })`: remove one unchanged
+  canonical record only when the native installed inventory has no owner for it.
 
 The application uses `PackageManager::open_with_configuration` with its private
 settings loader; `PackageManager::open(root, target, trust, host)` remains available

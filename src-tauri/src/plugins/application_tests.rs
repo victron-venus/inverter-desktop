@@ -690,3 +690,231 @@ async fn saved_settings_survive_restart_failure_and_enabled_intent_is_preserved(
     assert_eq!(host.snapshots()[0].state, WorkerState::Running);
     service.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn retained_inventory_is_lazy_and_bound_to_the_current_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let key_calls = calls.clone();
+    let (service, _, epoch) = settings_application(
+        &root,
+        Arc::new(move || {
+            key_calls.fetch_add(1, Ordering::SeqCst);
+            Err("credentials are unavailable".into())
+        }),
+    )
+    .await;
+    let data = service.retained_data(epoch).await.unwrap();
+    assert!(data.records.is_empty());
+    assert_eq!(data.total_bytes, 0);
+    assert_eq!(data.max_records, 64);
+    assert_eq!(data.max_bytes, 8 * 1024 * 1024);
+    let revision = service.snapshot(epoch).await.unwrap().data_revision;
+    service.retained_data(epoch).await.unwrap();
+    assert_eq!(
+        service.snapshot(epoch).await.unwrap().data_revision,
+        revision
+    );
+    assert!(!root.join("store/settings").exists());
+    service.session_changed(false);
+    assert!(service.retained_data(epoch).await.is_err());
+    let next = service.session_changed(true).unwrap();
+    assert!(service.retained_data(epoch).await.is_err());
+    assert!(service
+        .retained_data(next)
+        .await
+        .unwrap()
+        .records
+        .is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    service.close().await.unwrap();
+    assert!(service.retained_data(next).await.is_err());
+    assert_eq!(service.0.authorized_work.load(Ordering::Acquire), 0);
+}
+
+async fn retained_fixture(root: &Path) -> (PackageApplication, u64, PathBuf) {
+    let (service, _, epoch) = settings_application(root, settings_test_key()).await;
+    let package = configured_archive(root, "1.0.0", Some(settings_schema()), "configuration");
+    install(&service, package.clone(), epoch, false).await;
+    let initial = settings_view(&service, epoch).await;
+    save_fixture_settings(&service, epoch, &initial["revision"]).await;
+    (service, epoch, package)
+}
+
+#[tokio::test]
+async fn retained_inventory_identifies_installed_owners_and_protects_reinstalled_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (service, epoch, package) = retained_fixture(&root).await;
+    let installed = service.retained_data(epoch).await.unwrap();
+    assert_eq!(installed.records.len(), 1);
+    let record = &installed.records[0];
+    assert_eq!(record.plugin_id.as_deref(), Some(PLUGIN));
+    assert_eq!(record.record_id, SettingsStore::record_id(PLUGIN).unwrap());
+    assert_eq!(record.bytes, installed.total_bytes);
+    let public = serde_json::to_string(&installed).unwrap();
+    assert!(!public.contains("fixture-secret"));
+    assert!(!public.contains("endpoint"));
+    assert!(service
+        .delete_retained_data(&record.record_id, &record.revision, epoch)
+        .await
+        .is_err());
+    service.uninstall(PLUGIN, epoch).await.unwrap();
+    let retained = service.retained_data(epoch).await.unwrap();
+    assert_eq!(retained.records.len(), 1);
+    assert!(retained.records[0].plugin_id.is_none());
+    assert_eq!(retained.records[0].revision, record.revision);
+    install(&service, package, epoch, false).await;
+    assert!(service
+        .delete_retained_data(&record.record_id, &record.revision, epoch)
+        .await
+        .is_err());
+    assert_eq!(
+        settings_view(&service, epoch).await["secret_present"]["token"],
+        true
+    );
+    service.uninstall(PLUGIN, epoch).await.unwrap();
+    let revision_before_delete = service.snapshot(epoch).await.unwrap().data_revision;
+    service
+        .delete_retained_data(&record.record_id, &record.revision, epoch)
+        .await
+        .unwrap();
+    let empty = service.retained_data(epoch).await.unwrap();
+    assert!(empty.records.is_empty());
+    assert_eq!(empty.total_bytes, 0);
+    assert_ne!(
+        service.snapshot(epoch).await.unwrap().data_revision,
+        revision_before_delete
+    );
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn corrupt_orphan_data_can_be_removed_after_reopening_without_credentials() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let core = root.join("core-config.json");
+    fs::write(&core, b"preserved core configuration").unwrap();
+    let (service, epoch, _) = retained_fixture(&root).await;
+    service.uninstall(PLUGIN, epoch).await.unwrap();
+    let record_id = SettingsStore::record_id(PLUGIN).unwrap();
+    service.close().await.unwrap();
+    let record_path = root.join("store/settings").join(format!("{record_id}.enc"));
+    fs::write(&record_path, b"corrupt ciphertext").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let key_calls = calls.clone();
+    let (reopened, _, epoch) = settings_application(
+        &root,
+        Arc::new(move || {
+            key_calls.fetch_add(1, Ordering::SeqCst);
+            Err("credentials are unavailable".into())
+        }),
+    )
+    .await;
+    let data = reopened.retained_data(epoch).await.unwrap();
+    assert_eq!(data.records.len(), 1);
+    let record = &data.records[0];
+    assert!(record.plugin_id.is_none());
+    assert_eq!(record.bytes, b"corrupt ciphertext".len() as u64);
+    reopened
+        .delete_retained_data(&record.record_id, &record.revision, epoch)
+        .await
+        .unwrap();
+    assert!(!record_path.exists());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fs::read(core).unwrap(), b"preserved core configuration");
+    reopened.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_retained_deletion_preserves_replacement_and_invalidates_package_consent() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (service, epoch, package) = retained_fixture(&root).await;
+    service.uninstall(PLUGIN, epoch).await.unwrap();
+    let data = service.retained_data(epoch).await.unwrap();
+    let record = &data.records[0];
+    let path = root
+        .join("store/settings")
+        .join(format!("{}.enc", record.record_id));
+    fs::write(&path, b"changed after review").unwrap();
+    let preview = review(&service, package, epoch).await;
+    assert!(service
+        .delete_retained_data(&record.record_id, &record.revision, epoch)
+        .await
+        .is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"changed after review");
+    assert!(service
+        .install_review(&preview.token, "config", epoch, false)
+        .await
+        .is_err());
+    let refreshed = service.retained_data(epoch).await.unwrap();
+    let current = &refreshed.records[0];
+    assert_ne!(current.revision, record.revision);
+    service.session_changed(false);
+    let next = service.session_changed(true).unwrap();
+    assert!(service
+        .delete_retained_data(&current.record_id, &current.revision, epoch)
+        .await
+        .is_err());
+    assert!(path.exists());
+    service
+        .delete_retained_data(&current.record_id, &current.revision, next)
+        .await
+        .unwrap();
+    service.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_retained_deletion_keeps_expiry_active_and_cannot_commit_after_logout() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (service, epoch, _) = retained_fixture(&root).await;
+    service.uninstall(PLUGIN, epoch).await.unwrap();
+    let mut data = service.retained_data(epoch).await.unwrap();
+    let record = data.records.pop().unwrap();
+    let manager = service.manager().unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let blocker = tokio::spawn(async move {
+        manager
+            .read_retained_data_in_epoch(epoch, move |_| {
+                let _ = started_tx.send(());
+                release_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|_| "test operation was not released".to_string())
+            })
+            .await
+    });
+    started_rx.await.unwrap();
+    let caller_service = service.clone();
+    let caller = tokio::spawn(async move {
+        caller_service
+            .delete_retained_data(&record.record_id, &record.revision, epoch)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while service.0.authorized_work.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    assert!(service.has_session_work());
+    service.session_changed(false);
+    release_tx.send(()).unwrap();
+    assert!(blocker.await.unwrap().is_err());
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while service.has_session_work() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let next = service.session_changed(true).unwrap();
+    assert_eq!(service.retained_data(next).await.unwrap().records.len(), 1);
+    service.close().await.unwrap();
+}

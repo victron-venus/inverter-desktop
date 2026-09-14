@@ -125,3 +125,53 @@ a deletion failure leaves the installed record available for retry. Deletion and
 package inventory updates are separate filesystem changes: a later inventory
 write failure can leave a stopped installed record with settings already cleared.
 Core configuration and other plugin records are never part of this deletion.
+
+## Retained data inventory and cleanup
+
+The desktop Plugins panel provides an on-demand stored-data inventory. It displays
+record sizes, total usage, and storage limits. Opening or refreshing this view
+does not decrypt records, request a credential key, or create a missing settings
+directory. High-frequency worker updates do not trigger filesystem scans.
+The manager snapshot includes a data revision that invalidates cached views after
+package/settings activity and session changes. It is an invalidation token, not
+a count of successful writes; failed lifecycle operations may also advance it.
+Worker contribution events keep the same revision and cause no data scan.
+
+The authenticated settings window uses `get_retained_plugin_data` to read the
+inventory and `delete_retained_plugin_data` to delete a confirmed record. The
+native response contains opaque record IDs, ciphertext revisions, byte counts,
+and an optional installed plugin ID. It contains no values, secrets, filesystem
+paths, or claimed ciphertext health status. Pending transactions count toward
+byte usage but are not exposed as deletable records.
+
+Installed owners are identified from the native package inventory, including
+disabled packages and packages whose payload no longer verifies. Their data
+cannot be deleted through retained-data cleanup. Uninstall with explicit settings
+deletion, or uninstall first and then remove the retained record. Cleanup neither
+stops workers nor changes installed package state or core transports.
+
+After uninstall, only a one-way hash of the plugin ID remains in the filename.
+There is no name catalog, so the UI labels these records as unidentified stored
+data and includes a shortened record identifier. It does not infer a former
+plugin name. Reinstallation of the same plugin restores the owner association.
+
+Deletion requires explicit confirmation and the ciphertext revision obtained
+when the record was listed. Native code serializes the operation with package
+installation, settings changes, and uninstall. It checks the current installed
+owners again and rechecks the record bytes before unlinking. A changed or missing
+record requires refreshing the view; an old confirmation cannot delete a newly
+changed record or the data of a reinstalled package. Logout revokes queued
+operations, including work whose IPC caller was cancelled.
+
+If unlink succeeds but directory synchronization fails, the error explicitly says
+the record was removed and durability could not be confirmed. The error stays
+visible in the initiating window; refresh other open stored-data views explicitly
+after this exceptional outcome. Repeated deletion still checks record existence
+and revision rather than silently deleting a different record.
+
+Corrupt or empty ciphertext can be removed without the encryption key, reclaiming
+record and byte quota. This is limited to canonical, private, bounded regular
+files. Symlinks, hard links, reparse points, nonprivate entries, arbitrary paths,
+and oversized records remain errors. The API does not automatically repair or
+delete unexpected filesystem entries. Android and iOS include neither this UI
+nor its inventory and deletion commands.

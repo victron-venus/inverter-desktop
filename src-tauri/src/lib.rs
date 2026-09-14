@@ -1824,6 +1824,8 @@ pub fn run() {
                     plugins::bridge::get_plugin_manager_snapshot,
                     plugins::bridge::get_plugin_settings,
                     plugins::bridge::save_plugin_settings,
+                    plugins::bridge::get_retained_plugin_data,
+                    plugins::bridge::delete_retained_plugin_data,
                     plugins::bridge::preview_plugin_package,
                     plugins::bridge::install_plugin_package,
                     plugins::bridge::discard_plugin_package,

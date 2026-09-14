@@ -31,6 +31,23 @@ const AAD_DOMAIN: &[u8] = b"inverter-desktop/plugin-settings/v1\0";
 
 pub(crate) type SettingsKeyProvider = Arc<dyn Fn() -> Result<Vec<u8>, String> + Send + Sync>;
 
+/// Ciphertext metadata only; does not infer ownership or encrypted data validity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SettingsRecord {
+    pub record_id: String,
+    pub revision: String,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SettingsInventory {
+    pub records: Vec<SettingsRecord>,
+    /// Includes pending transactions because they consume the same storage quota.
+    pub total_bytes: u64,
+    pub max_records: usize,
+    pub max_bytes: u64,
+}
+
 /// Secret field names remain classified even after a package schema changes.
 /// Deliberately lacks Debug: neither diagnostics nor UI receive secret values.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +81,7 @@ struct DirectoryUsage {
     records: usize,
     bytes: usize,
     pending: Vec<PathBuf>,
+    inventory: Vec<SettingsRecord>,
 }
 
 pub(crate) struct PreparedSettingsWrite {
@@ -108,6 +126,48 @@ impl SettingsStore {
         let encrypted = read_private_file(&path)?;
         let key = self.key()?;
         decrypt(plugin_id, &encrypted, &key)
+    }
+
+    /// Inspect bounded, safe records without decrypting or requesting a key.
+    /// Corrupt ciphertext remains visible so an explicit cleanup can remove it.
+    pub(crate) fn inventory(&self) -> Result<SettingsInventory, String> {
+        let mut inventory = SettingsInventory {
+            records: Vec::new(),
+            total_bytes: 0,
+            max_records: MAX_SETTINGS_RECORDS,
+            max_bytes: MAX_SETTINGS_DIRECTORY_BYTES as u64,
+        };
+        if self.directory_exists()? {
+            let usage = self.scan()?;
+            inventory.records = usage.inventory;
+            inventory.total_bytes = usage.bytes as u64;
+        }
+        Ok(inventory)
+    }
+
+    /// Call only under the package operation and authority locks after the
+    /// manager has excluded every installed plugin identity from deletion.
+    /// Inspect only the selected record; deletion cannot increase storage usage.
+    pub(crate) fn remove_record(&self, record_id: &str, revision: &str) -> Result<(), String> {
+        if !is_lowercase_digest(record_id) || !is_lowercase_digest(revision) {
+            return Err("Invalid retained plugin settings record token".into());
+        }
+        let stale = "Retained plugin settings record changed; refresh before deleting";
+        if !self.directory_exists()? {
+            return Err(stale.into());
+        }
+        let path = self.directory.join(format!("{record_id}.enc"));
+        if !file_exists(&path)? {
+            return Err(stale.into());
+        }
+        let actual = format!("{:x}", Sha256::digest(read_private_file(&path)?));
+        if actual != revision {
+            return Err(stale.into());
+        }
+        fs::remove_file(path).map_err(|_| "Cannot remove retained plugin settings")?;
+        sync_directory(&self.directory).map_err(|_| {
+            "Retained plugin settings were removed but durability could not be confirmed".into()
+        })
     }
 
     /// The caller supplies a fresh revision for changed data. No revision or
@@ -173,13 +233,17 @@ impl SettingsStore {
         sync_directory(&self.directory)
     }
 
-    fn record_path(&self, plugin_id: &str) -> Result<PathBuf, String> {
+    pub(crate) fn record_id(plugin_id: &str) -> Result<String, String> {
         validate_plugin_id(plugin_id).map_err(|_| "Invalid plugin settings identity")?;
         // Names such as con.example are valid plugin IDs but reserved filenames
         // on Windows. A fixed lowercase digest is portable on all target systems.
+        Ok(format!("{:x}", Sha256::digest(plugin_id.as_bytes())))
+    }
+
+    fn record_path(&self, plugin_id: &str) -> Result<PathBuf, String> {
         Ok(self
             .directory
-            .join(format!("{:x}.enc", Sha256::digest(plugin_id.as_bytes()))))
+            .join(format!("{}.enc", Self::record_id(plugin_id)?)))
     }
 
     fn key(&self) -> Result<Vec<u8>, String> {
@@ -232,6 +296,7 @@ impl SettingsStore {
             records: 0,
             bytes: 0,
             pending: Vec::new(),
+            inventory: Vec::new(),
         };
         for entry in
             fs::read_dir(&self.directory).map_err(|_| "Cannot inspect plugin settings directory")?
@@ -248,12 +313,7 @@ impl SettingsStore {
                     return Err("Invalid plugin settings transaction filename".into());
                 }
                 usage.pending.push(entry.path());
-            } else if name.strip_suffix(".enc").is_some_and(|stem| {
-                stem.len() == 64
-                    && stem
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            }) {
+            } else if name.strip_suffix(".enc").is_some_and(is_lowercase_digest) {
                 usage.records += 1;
             } else {
                 return Err("Unexpected file in plugin settings directory".into());
@@ -261,16 +321,34 @@ impl SettingsStore {
             if usage.records > MAX_SETTINGS_RECORDS || usage.pending.len() > MAX_PENDING_FILES {
                 return Err("Plugin settings file limit exceeded".into());
             }
+            let bytes = read_private_file(&entry.path())?;
             usage.bytes = usage
                 .bytes
-                .checked_add(read_private_file(&entry.path())?.len())
+                .checked_add(bytes.len())
                 .ok_or("Plugin settings storage limit exceeded")?;
             if usage.bytes > MAX_SETTINGS_DIRECTORY_BYTES {
                 return Err("Plugin settings storage limit exceeded".into());
             }
+            if let Some(record_id) = name.strip_suffix(".enc") {
+                usage.inventory.push(SettingsRecord {
+                    record_id: record_id.to_owned(),
+                    revision: format!("{:x}", Sha256::digest(&bytes)),
+                    bytes: bytes.len() as u64,
+                });
+            }
         }
+        usage
+            .inventory
+            .sort_by(|left, right| left.record_id.cmp(&right.record_id));
         Ok(usage)
     }
+}
+
+fn is_lowercase_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 impl PreparedSettingsWrite {

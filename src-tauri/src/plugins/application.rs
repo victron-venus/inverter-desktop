@@ -25,6 +25,22 @@ pub(crate) struct SettingsSaveResult {
     restart_error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct RetainedPluginData {
+    records: Vec<RetainedPluginRecord>,
+    total_bytes: u64,
+    max_records: usize,
+    max_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RetainedPluginRecord {
+    record_id: String,
+    revision: String,
+    bytes: u64,
+    plugin_id: Option<String>,
+}
+
 struct SessionActivity(Arc<ApplicationInner>);
 
 impl Drop for SessionActivity {
@@ -39,6 +55,7 @@ pub(crate) struct ManagerSnapshot {
     pub error: Option<String>,
     pub installation_available: bool,
     pub target: String,
+    pub data_revision: String,
     pub plugins: Vec<ManagedPlugin>,
 }
 
@@ -289,6 +306,79 @@ impl PackageApplication {
         .await
     }
 
+    pub(crate) async fn retained_data(&self, epoch: u64) -> Result<RetainedPluginData, String> {
+        let activity = self.begin_activity();
+        self.check_epoch(epoch)?;
+        let manager = self.manager()?;
+        let store = self.settings_store()?;
+        let service = self.clone();
+        run_owned(activity, async move {
+            let view = manager
+                .read_retained_data_in_epoch(epoch, move |installed| {
+                    let identities = installed
+                        .iter()
+                        .map(|id| SettingsStore::record_id(id).map(|record| (record, id.clone())))
+                        .collect::<Result<BTreeMap<_, _>, _>>()?;
+                    let inventory = store.inventory()?;
+                    Ok(RetainedPluginData {
+                        records: inventory
+                            .records
+                            .into_iter()
+                            .map(|record| RetainedPluginRecord {
+                                plugin_id: identities.get(&record.record_id).cloned(),
+                                record_id: record.record_id,
+                                revision: record.revision,
+                                bytes: record.bytes,
+                            })
+                            .collect(),
+                        total_bytes: inventory.total_bytes,
+                        max_records: inventory.max_records,
+                        max_bytes: inventory.max_bytes,
+                    })
+                })
+                .await?;
+            service.check_epoch(epoch)?;
+            Ok(view)
+        })
+        .await
+    }
+
+    pub(crate) async fn delete_retained_data(
+        &self,
+        record_id: &str,
+        revision: &str,
+        epoch: u64,
+    ) -> Result<(), String> {
+        let activity = self.begin_activity();
+        self.check_epoch(epoch)?;
+        let manager = self.manager()?;
+        let store = self.settings_store()?;
+        let record_id = record_id.to_owned();
+        let expected_record = record_id.clone();
+        let revision = revision.to_owned();
+        let service = self.clone();
+        self.0.host.commit_in_epoch(epoch, || {
+            self.clear_preview();
+            Ok(())
+        })?;
+        run_owned(activity, async move {
+            let result = manager
+                .remove_retained_data_in_epoch(
+                    &record_id,
+                    epoch,
+                    Box::new(move || store.remove_record(&expected_record, &revision)),
+                )
+                .await;
+            if result.is_ok() {
+                service.0.metadata_revision.fetch_add(1, Ordering::AcqRel);
+                (service.0.changed)();
+            }
+            result?;
+            service.check_epoch(epoch)
+        })
+        .await
+    }
+
     async fn wait_manager(&self) -> Result<PackageManager, String> {
         loop {
             let ready = self.0.initialized.notified();
@@ -316,6 +406,7 @@ impl PackageApplication {
             error: None,
             installation_available: self.0.installation_available,
             target: self.0.target.clone(),
+            data_revision: self.0.metadata_revision.load(Ordering::Acquire).to_string(),
             plugins: Vec::new(),
         };
         let manager = match self.manager() {
@@ -329,6 +420,7 @@ impl PackageApplication {
         // once per inventory/session revision, not on every telemetry refresh.
         // The installer still re-verifies archive and payload before each launch.
         let revision = self.0.metadata_revision.load(Ordering::Acquire);
+        snapshot.data_revision = revision.to_string();
         let details = {
             let mut cache = self.0.metadata.lock().await;
             if let Some((cached_revision, details)) = &*cache {

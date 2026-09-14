@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { computed, ref } from 'vue'
 import type { PluginManagerSnapshot, PluginPackagePreview } from './types'
+import { createRetainedPluginData } from './useRetainedPluginData'
 
 async function discardToken(token: string) {
   try {
@@ -34,7 +35,19 @@ export function createPluginManager(fallbackError: () => string) {
   let startup: Promise<void> | undefined
   let listeners: Array<() => void> = []
   let editorKey = 0
-  const working = computed(() => busy.value || settingsBusy.value)
+  const retainedData = createRetainedPluginData(
+    fallbackError,
+    () =>
+      !!(
+        active &&
+        authorized.value &&
+        connected.value &&
+        snapshot.value?.ready &&
+        !busy.value &&
+        !settingsBusy.value
+      )
+  )
+  const working = computed(() => busy.value || settingsBusy.value || retainedData.busy.value)
   const canManage = computed(
     () => authorized.value && active && connected.value && snapshot.value?.ready && !working.value
   )
@@ -61,6 +74,7 @@ export function createPluginManager(fallbackError: () => string) {
   function clear() {
     clearPreview()
     clearSettings()
+    retainedData.close()
     snapshot.value = null
     confirmRemoval.value = null
     deleteSettings.value = false
@@ -81,6 +95,7 @@ export function createPluginManager(fallbackError: () => string) {
     try {
       const value = await invoke<PluginManagerSnapshot>('get_plugin_manager_snapshot')
       if (!current(session)) return
+      const previous = snapshot.value
       snapshot.value = value
       connected.value = true
       if (!value.plugins.some((plugin) => plugin.plugin_id === confirmRemoval.value)) {
@@ -99,10 +114,18 @@ export function createPluginManager(fallbackError: () => string) {
           ))
       )
         clearSettings()
+      if (!value.ready) retainedData.close()
+      else if (previous && previous.data_revision !== value.data_revision) {
+        // Native package/data changes invalidate consent, including changes made
+        // in another window. Worker-only updates keep this revision unchanged.
+        retainedData.invalidate()
+        void retainedData.refresh()
+      }
     } catch (error_) {
       if (!current(session)) return
       connected.value = false
       clearSettings()
+      retainedData.close()
       error.value = message(error_)
     } finally {
       if (current(session)) loading.value = false
@@ -198,6 +221,7 @@ export function createPluginManager(fallbackError: () => string) {
   async function pickPackage() {
     if (!canInstall.value) return
     clearSettings()
+    retainedData.close()
     const session = generation
     busy.value = true
     error.value = null
@@ -225,6 +249,7 @@ export function createPluginManager(fallbackError: () => string) {
   async function mutate(command: string, args: Record<string, unknown>, installing = false) {
     if (!canManage.value) return
     clearSettings()
+    retainedData.invalidate()
     const session = generation
     busy.value = true
     error.value = null
@@ -241,7 +266,12 @@ export function createPluginManager(fallbackError: () => string) {
         installFailed.value = installing
       }
     } finally {
-      if (current(session)) busy.value = false
+      if (current(session)) {
+        busy.value = false
+        // Every package operation can advance native data_revision, including
+        // enable/disable. Resume an open inventory after releasing the busy guard.
+        await retainedData.refresh()
+      }
     }
   }
 
@@ -268,6 +298,7 @@ export function createPluginManager(fallbackError: () => string) {
   function requestRemoval(pluginId: string) {
     if (!canManage.value || !findPlugin(pluginId)) return
     clearSettings()
+    retainedData.cancelDeletion()
     confirmRemoval.value = pluginId
     deleteSettings.value = false
   }
@@ -281,6 +312,7 @@ export function createPluginManager(fallbackError: () => string) {
   function openSettings(pluginId: string) {
     const plugin = findPlugin(pluginId)
     if (!canManage.value || !plugin?.permissions.includes('plugin_configuration')) return
+    retainedData.close()
     clearPreview()
     confirmRemoval.value = null
     settingsEditor.value = { plugin_id: pluginId, version: plugin.version, key: ++editorKey }
@@ -296,7 +328,18 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   async function settingsSaved(key: number) {
-    if (settingsEditor.value?.key === key) await refresh()
+    if (settingsEditor.value?.key === key) {
+      retainedData.invalidate()
+      await refresh()
+    }
+  }
+
+  async function openRetainedData() {
+    if (!canManage.value) return
+    clearSettings()
+    clearPreview()
+    confirmRemoval.value = null
+    await retainedData.open()
   }
 
   return {
@@ -306,6 +349,8 @@ export function createPluginManager(fallbackError: () => string) {
     confirmRemoval,
     deleteSettings,
     settingsEditor,
+    retainedData,
+    retainedDataOpened: retainedData.opened,
     working,
     busy,
     loading,
@@ -328,5 +373,6 @@ export function createPluginManager(fallbackError: () => string) {
     setSettingsBusy,
     closeSettings,
     settingsSaved,
+    openRetainedData,
   }
 }

@@ -49,6 +49,8 @@ FORBIDDEN_COMMANDS = (
     "get_plugin_manager_snapshot",
     "get_plugin_settings",
     "save_plugin_settings",
+    "get_retained_plugin_data",
+    "delete_retained_plugin_data",
     "preview_plugin_package",
     "uninstall_plugin_package",
     "install_plugin_package",

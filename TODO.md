@@ -40,9 +40,10 @@ implemented deterministic signed archives, publisher/content verification, and
 transactional native package APIs exercised with real workers.
 
 [PR #422](https://github.com/victron-venus/inverter-desktop/pull/422) completed
-application integration and the package manager on main, including hosted mobile
-artifact checks. The next checkpoint adds isolated encrypted plugin settings,
-a declarative desktop editor, and verified worker startup configuration.
+application integration and the package manager. [PR #423](https://github.com/victron-venus/inverter-desktop/pull/423)
+added isolated encrypted settings, a declarative editor, and verified worker
+startup configuration on main. Both checkpoints passed hosted mobile artifact
+checks. The current iteration adds inventory and cleanup for retained plugin data.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -50,7 +51,45 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
-### Current checkpoint: isolated settings and worker configuration
+### Current checkpoint: retained data inventory and cleanup
+
+- [x] Expose bounded, deterministic metadata for stored records without reading
+      plaintext or requesting the credential key. Preserve lazy empty-store reads
+      and report record/byte quotas, including transaction overhead.
+- [x] Map records only to IDs currently present in the native installed inventory.
+      Present records with unknown owners honestly; a filename hash cannot recover
+      an uninstalled plugin's name. Expose no filesystem paths or stored values.
+- [x] Allow explicit deletion of an unchanged, canonical record using its opaque
+      ID and ciphertext revision. Support corrupt or empty bounded ciphertext and
+      unavailable credentials; reject unsafe links, paths, and oversized files.
+- [x] Serialize inventory and cleanup with package lifecycle operations. Protect
+      all installed owners, including disabled packages and invalid payloads;
+      reject stale authentication epochs and preserve owned work after IPC cancellation.
+- [x] Add an on-demand desktop inventory with usage, refresh, empty/error states,
+      installed-owner guidance, and explicit deletion confirmation. Invalidate
+      stale responses and consent across authentication and package changes.
+- [x] Keep cleanup independent from worker restarts and core transports. Do not
+      scan retained files in response to high-frequency worker contribution events.
+- [x] Test quota recovery, corrupt/unknown records, stale revisions, reinstall
+      races, cancellation/logout, UI confirmation, and desktop/mobile boundaries.
+- [x] Complete independent reviews, lint/format/typecheck, focused and full relevant
+      suites, and both frontend builds. Fix the cross-window invalidation and
+      enable/disable refresh issues found during review with regression tests.
+
+Local validation: 340 macOS native tests and strict Clippy, 275 frontend tests,
+8 mobile frontend tests, 4 build-profile checks, and 22 native mobile-boundary
+tests passed. Both frontend production builds passed; final desktop output is
+restored. Formatting/typecheck passed, changed frontend files have no lint
+diagnostics, and Python lint scored 10/10. Hosted checks and actual APK/AAB/IPA
+inspection must pass on the final PR head before merge; the PR records delivery
+status independently from this completed source/test checklist.
+
+This iteration does not add a plaintext identity catalog, migrate legacy feature
+configuration, install a package, or introduce production publisher keys. Unsafe
+filesystem entries remain explicit errors; cleanup never follows links or accepts
+arbitrary paths. Real HA/camera extraction and device parity remain later phases.
+
+### Completed checkpoint: isolated settings and worker configuration
 
 - [x] Add a versioned, encrypted record per plugin ID outside package contents;
       reuse the existing application encryption key with a separate authenticated
@@ -85,12 +124,13 @@ legacy configuration migration, and feature extraction remain unfinished.
 - [x] Update rustls to 0.23.45 and its required crypto dependencies for
       RUSTSEC-2026-0285; preserve advisory enforcement and verify Cargo Deny.
 
-Local validation: 323 macOS native tests and strict Clippy, 252 frontend tests, 8 mobile frontend
-checks, 4 build-profile checks, and 22 native mobile-boundary tests passed. Both
-frontend production builds passed; final desktop output is restored. Hosted
-Linux/Windows/iOS/Android checks and final APK/AAB/IPA inspection must pass on the
-PR's current head before merging; the PR records live delivery status. This
-checkpoint does not establish real HA/camera package or physical-device parity.
+Validation for PR #423: 323 macOS native tests and strict Clippy, 252 frontend tests,
+8 mobile frontend checks, 4 build-profile checks, and 22 native mobile-boundary
+tests passed. Both frontend production builds passed. Hosted Linux passed 321
+tests, Windows passed 136, and final Android APK/AAB and iOS IPA inspection passed
+for head `c47ecc5` in [quality gate 34872923208](https://github.com/victron-venus/inverter-desktop/actions/runs/34872923208).
+The PR merged as `61b1e18`; the canonical main checkout was synchronized cleanly.
+This checkpoint does not establish real HA/camera package or physical-device parity.
 
 ### Completed checkpoint: application integration and management UI
 
@@ -223,13 +263,15 @@ mobile gate fail. A successful desktop build is insufficient evidence.
       bounded retries/backoff, queue/process/message limits, and normal app shutdown.
 - [x] Render generic text, metric, status, and preset-action dashboard contributions
       without HA entity types, executable UI, or remote navigation.
-- [ ] Extend contributions to settings, notifications, and owned media surfaces.
+- [x] Add declarative installed-package settings with validated secret handling.
+- [ ] Extend contributions to notifications and owned media surfaces.
 - [x] Limit worker IPC to authenticated dashboard/settings windows and advertised
       action parameters. Revoke old session epochs on logout/policy change/expiry;
       reject stale queued writes, contributions, and action results after re-login.
-- [ ] Authorize scoped host services for plugin settings/secrets, permitted
-      origins/topics, and owned files. Manifest permission metadata alone grants
-      none of these services.
+- [x] Authorize scoped settings/secrets delivery through the verified startup
+      configuration handshake for packages declaring configuration permission.
+- [ ] Authorize scoped host services for permitted origins/topics and owned files.
+      Manifest permission metadata alone grants none of these services.
 - [x] Keep inverter writes in core; expose no arbitrary Tauri invocation or
       core MQTT publishing operation to workers.
 - [x] Exercise a separately compiled fixture executable through actual pipes:
@@ -254,7 +296,8 @@ feature implementation does not satisfy worker lifecycle verification.
       CLI that signs actual file inventories with an externally supplied key.
 - [ ] Produce and publish real worker archives for supported macOS, Linux, and
       Windows architectures; a host-platform fixture does not establish delivery
-      or native signing on every desktop target.
+      on every desktop target. No new application/executable signing prerequisite
+      is introduced by the desktop plugin architecture.
 - [x] Verify publisher signature, API range, target, schema, complete file
       inventory, sizes, and digests before executing package content.
 - [x] Reject traversal, absolute paths, links, duplicate/case-colliding entries,
@@ -280,8 +323,8 @@ feature implementation does not satisfy worker lifecycle verification.
 - [ ] Close owned windows and clean owned media/temporary files when those host
       services are introduced.
 - [x] Offer retention/deletion of plugin settings on uninstall; preserve core data.
-- [ ] Add a retained-data inventory and explicit cleanup for uninstalled or
-      unavailable packages before end-user release, including quota recovery.
+- [x] Add a retained-data inventory and explicit cleanup for uninstalled packages
+      and unknown owners before end-user release, including quota recovery.
 - [x] Test native clean install, update, failed activation, rollback, and uninstall
       with actual signed archives and executable workers.
 

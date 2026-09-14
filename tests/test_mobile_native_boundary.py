@@ -233,14 +233,16 @@ class MobilePluginBoundaryTests(unittest.TestCase):
         # Keep the required manager surface explicit rather than deriving this
         # fixture from the guard, so an omitted command fails the regression.
         for command in (
+            "delete_retained_plugin_data",
+            "discard_plugin_package",
             "get_plugin_manager_snapshot",
             "get_plugin_settings",
-            "save_plugin_settings",
-            "preview_plugin_package",
+            "get_retained_plugin_data",
             "install_plugin_package",
-            "discard_plugin_package",
-            "set_plugin_enabled",
+            "preview_plugin_package",
             "rollback_plugin_package",
+            "save_plugin_settings",
+            "set_plugin_enabled",
             "uninstall_plugin_package",
         ):
             payload = CORE + b"\x00" + command.encode()
