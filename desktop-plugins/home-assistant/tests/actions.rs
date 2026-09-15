@@ -500,6 +500,8 @@ fn initialize_configuration(
         "cover_position_entities",
         "dishwasher_running_entity",
         "dishwasher_duration_entity",
+        "washer_remaining_entity",
+        "dryer_remaining_entity",
     ] {
         for name in frame["configuration"]["values"][field]
             .as_str()
@@ -556,6 +558,10 @@ fn initialize_configuration(
             "off"
         } else if selected("dishwasher_duration_entity") {
             "01:23:45"
+        } else if selected("washer_remaining_entity") {
+            "00:25:00"
+        } else if selected("dryer_remaining_entity") {
+            "00:40:00"
         } else if name.starts_with("media_player.") {
             "paused"
         } else {
@@ -3328,6 +3334,8 @@ fn start_discovery(
         "cover_position_entities",
         "dishwasher_running_entity",
         "dishwasher_duration_entity",
+        "washer_remaining_entity",
+        "dryer_remaining_entity",
     ] {
         for name in config["configuration"]["values"][field]
             .as_str()
@@ -5135,6 +5143,555 @@ fn dishwasher_profile_uses_existing_state_slots_and_keeps_31_controls_in_a_64_it
     );
     worker.action("profile-card-not-action", "entity-30", 5000);
     worker.error("profile-card-not-action", "invalid_action");
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+fn laundry_configuration(
+    fixture: &TcpListener,
+    watch: &str,
+    washer: Option<&str>,
+    dryer: Option<&str>,
+) -> Value {
+    let mut frame = configuration(fixture, watch, None);
+    for (field, value) in [
+        ("washer_remaining_entity", washer),
+        ("dryer_remaining_entity", dryer),
+    ] {
+        if let Some(value) = value {
+            frame["configuration"]["values"][field] = json!(value);
+        }
+    }
+    frame
+}
+
+#[test]
+fn laundry_defaults_role_only_selections_and_watch_overlap_preserve_exact_read_scope() {
+    for empty in [None, Some("")] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let config = laundry_configuration(
+            &fixture,
+            "sensor.barrier,sensor.washer,sensor.dryer",
+            empty,
+            empty,
+        );
+        let mut socket = initialize_configuration(&mut worker, &fixture, config);
+        live(
+            &mut socket,
+            "sensor.washer",
+            Some(entity("sensor.washer", "00:25:00")),
+        );
+        live(
+            &mut socket,
+            "sensor.dryer",
+            Some(entity("sensor.dryer", "00:40:00")),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, 1);
+        assert_eq!(item(&frame, "entity-1").unwrap()["text"], "00:25:00");
+        assert_eq!(item(&frame, "entity-2").unwrap()["text"], "00:40:00");
+        assert_weather_read_only(&frame);
+        no_request(&fixture, Duration::from_millis(30));
+        worker.stop(false);
+    }
+    for (washer, dryer, expected) in [
+        (Some("sensor.washer"), None, "Remaining time: 00:25:00"),
+        (None, Some("sensor.dryer"), "Remaining time: 00:40:00"),
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let config = laundry_configuration(&fixture, "", washer, dryer);
+        let _socket = initialize_configuration(&mut worker, &fixture, config);
+        let frame = weather_text(&mut worker, "entity-0", expected);
+        assert_eq!(frame["items"].as_array().unwrap().len(), 2);
+        assert_weather_read_only(&frame);
+        no_request(&fixture, Duration::from_millis(30));
+        worker.stop(false);
+    }
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let config = laundry_configuration(
+        &fixture,
+        "sensor.dryer,sensor.barrier,sensor.dryer",
+        Some("sensor.washer"),
+        Some("sensor.dryer"),
+    );
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    worker.until(|frame| {
+        item(frame, "entity-2").is_some_and(|item| item["text"] == "Remaining time: 00:25:00")
+            && item(frame, "entity-0")
+                .is_some_and(|item| item["text"] == "Remaining time: 00:40:00")
+    });
+    live(
+        &mut socket,
+        "sensor.unselected",
+        Some(entity("sensor.unselected", "never-selected")),
+    );
+    let frame = profile_barrier(&mut worker, &mut socket, "entity-1", 2);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        item(&frame, "entity-0").unwrap()["text"],
+        "Remaining time: 00:40:00"
+    );
+    assert!(!frame.to_string().contains("never-selected"));
+    assert_weather_read_only(&frame);
+    for (index, action) in [
+        "washer",
+        "dryer",
+        "entity-0",
+        "entity-2",
+        "sensor.washer",
+        "ha-action-0",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let request = format!("laundry-denied-{index}");
+        worker.action(&request, action, 5000);
+        worker.error(&request, "invalid_action");
+    }
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(true);
+}
+
+#[test]
+fn laundry_updates_preserve_whole_literals_and_withdraw_each_role_independently() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let config = laundry_configuration(
+        &fixture,
+        "sensor.barrier",
+        Some("sensor.washer"),
+        Some("sensor.dryer"),
+    );
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    worker.until(|frame| {
+        item(frame, "entity-1").is_some_and(|item| item["text"] == "Remaining time: 00:25:00")
+            && item(frame, "entity-2")
+                .is_some_and(|item| item["text"] == "Remaining time: 00:40:00")
+    });
+    for (index, state, expected) in [
+        (0, " 00:15:00 ", "00:15:00"),
+        (1, "0", "0"),
+        (2, "2.15e1", "2.15e1"),
+        (3, "running", "running"),
+        (4, "source supplied", "source supplied"),
+    ] {
+        let mut value = entity("sensor.washer", state);
+        value["attributes"]["unit_of_measurement"] = json!("must-not-be-inferred");
+        live(&mut socket, "sensor.washer", Some(value));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 1);
+        assert_eq!(
+            item(&frame, "entity-1").unwrap()["text"],
+            format!("Remaining time: {expected}")
+        );
+        assert_eq!(
+            item(&frame, "entity-2").unwrap()["text"],
+            "Remaining time: 00:40:00"
+        );
+    }
+    for (index, state, expected) in [
+        (0, "off", "Idle"),
+        (1, "idle", "Idle"),
+        (2, "unknown", "Unknown"),
+        (3, "unavailable", "Unavailable"),
+    ] {
+        live(
+            &mut socket,
+            "sensor.washer",
+            Some(entity("sensor.washer", state)),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 20);
+        let washer = item(&frame, "entity-1").unwrap();
+        assert_eq!(washer["kind"], "status");
+        assert_eq!(washer["value"], expected);
+        assert_eq!(washer["tone"], "neutral");
+        assert!(washer.get("text").is_none());
+        assert_eq!(
+            item(&frame, "entity-2").unwrap()["text"],
+            "Remaining time: 00:40:00"
+        );
+    }
+    for (index, state) in [
+        json!(false),
+        json!(25),
+        Value::Null,
+        json!(""),
+        json!("NaN"),
+        json!("1e999"),
+        json!("-inf"),
+        json!("00:\n15:00"),
+        json!("x".repeat(129)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut value = entity("sensor.washer", "00:15:00");
+        value["state"] = state;
+        live(&mut socket, "sensor.washer", Some(value));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 30);
+        assert_eq!(item(&frame, "entity-1").unwrap()["value"], "Unavailable");
+        assert_eq!(
+            item(&frame, "entity-2").unwrap()["text"],
+            "Remaining time: 00:40:00"
+        );
+    }
+    live(&mut socket, "sensor.dryer", None);
+    let frame = numeric_barrier(&mut worker, &mut socket, 50);
+    assert_eq!(item(&frame, "entity-2").unwrap()["value"], "Unavailable");
+    let mut restored = entity("sensor.washer", "00:10:00");
+    restored["attributes"]["friendly_name"] = json!("Renamed washer");
+    live(&mut socket, "sensor.washer", Some(restored));
+    live(
+        &mut socket,
+        "sensor.dryer",
+        Some(entity("sensor.dryer", "00:20:00")),
+    );
+    let frame = numeric_barrier(&mut worker, &mut socket, 51);
+    assert_eq!(
+        item(&frame, "entity-1").unwrap()["text"],
+        "Remaining time: 00:10:00"
+    );
+    assert_eq!(item(&frame, "entity-1").unwrap()["title"], "Renamed washer");
+    assert_eq!(
+        item(&frame, "entity-2").unwrap()["text"],
+        "Remaining time: 00:20:00"
+    );
+    assert_weather_read_only(&frame);
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn laundry_rejects_invalid_single_roles_conflicting_overlays_and_union_overflow() {
+    let fixture = listener();
+    let mut configurations = Vec::new();
+    for (washer, dryer) in [
+        (Some("sensor.same"), Some("sensor.same")),
+        (Some(" sensor.same "), Some("sensor.same")),
+        (Some("sensor.one,sensor.two"), None),
+        (None, Some("sensor.one\nsensor.two")),
+        (Some("sensor.*"), None),
+        (None, Some("sensor.A")),
+        (Some("sensor.a/b"), None),
+    ] {
+        configurations.push(laundry_configuration(&fixture, "", washer, dryer));
+    }
+    for field in ["washer_remaining_entity", "dryer_remaining_entity"] {
+        let mut duplicate = laundry_configuration(&fixture, "", None, None);
+        duplicate["configuration"]["values"]["dishwasher_running_entity"] = json!("sensor.running");
+        duplicate["configuration"]["values"][field] = json!("sensor.running");
+        configurations.push(duplicate);
+        let mut oversized = laundry_configuration(&fixture, "", None, None);
+        oversized["configuration"]["values"][field] = json!(format!("{}sensor.a", " ".repeat(121)));
+        configurations.push(oversized);
+    }
+    let full = (0..32)
+        .map(|index| format!("sensor.e{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    configurations.push(laundry_configuration(
+        &fixture,
+        &full,
+        Some("sensor.extra"),
+        None,
+    ));
+    configurations.push(laundry_configuration(
+        &fixture,
+        &full,
+        Some("sensor.e0"),
+        Some("sensor.extra"),
+    ));
+    for config in configurations {
+        let mut worker = Worker::start();
+        worker.send(hello());
+        worker.next();
+        worker.send(config);
+        worker.finish(false);
+    }
+    no_request(&fixture, Duration::from_millis(50));
+}
+
+#[test]
+fn laundry_profile_overlaps_keep_raw_numeric_grants_and_only_explicit_buttons_can_write() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = laundry_configuration(
+        &fixture,
+        "sensor.barrier",
+        Some("number.washer"),
+        Some("sensor.shared_runtime"),
+    );
+    config["configuration"]["values"]["action_entities"] =
+        json!("button.washer_start,button.washer_pause");
+    config["configuration"]["values"]["number_entities"] = json!("number.washer");
+    config["configuration"]["values"]["dishwasher_running_entity"] =
+        json!("binary_sensor.dishwasher");
+    config["configuration"]["values"]["dishwasher_duration_entity"] =
+        json!("sensor.shared_runtime");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = worker.until(|frame| {
+        frame["type"] == "contributions"
+            && actions(frame).len() == 2
+            && inputs(frame).len() == 1
+            && item(frame, "entity-4")
+                .is_some_and(|item| item["text"] == "State: Idle\nRuntime since midnight: 01:23:45")
+            && item(frame, "entity-5")
+                .is_some_and(|item| item["text"] == "Remaining time: 01:23:45")
+    });
+    assert_eq!(frame["items"].as_array().unwrap().len(), 10);
+    assert_eq!(actions(&frame).len(), 2);
+    assert_eq!(inputs(&frame).len(), 1);
+    assert_eq!(
+        item(&frame, "entity-3").unwrap()["text"],
+        "Remaining time: -0.3"
+    );
+    assert_eq!(
+        item(&frame, "entity-4").unwrap()["text"],
+        "State: Idle\nRuntime since midnight: 01:23:45"
+    );
+    assert_eq!(
+        item(&frame, "entity-5").unwrap()["text"],
+        "Remaining time: 01:23:45"
+    );
+    let input = item(&frame, "ha-number-0-set").unwrap().clone();
+    assert_eq!(input["state_id"], "entity-3");
+    live(
+        &mut socket,
+        "number.washer",
+        Some(number_entity("number.washer", "0.1")),
+    );
+    live(
+        &mut socket,
+        "sensor.shared_runtime",
+        Some(entity("sensor.shared_runtime", "02:00:00")),
+    );
+    let updated = numeric_barrier(&mut worker, &mut socket, 2);
+    assert_eq!(
+        item(&updated, "entity-3").unwrap()["text"],
+        "Remaining time: 0.1"
+    );
+    assert_eq!(
+        item(&updated, "ha-number-0-set").unwrap()["input_revision"],
+        input["input_revision"]
+    );
+    assert_eq!(
+        item(&updated, "entity-4").unwrap()["text"],
+        "State: Idle\nRuntime since midnight: 02:00:00"
+    );
+    assert_eq!(
+        item(&updated, "entity-5").unwrap()["text"],
+        "Remaining time: 02:00:00"
+    );
+    worker.action("no-profile-action", "entity-3", 5000);
+    worker.error("no-profile-action", "invalid_action");
+    no_request(&fixture, Duration::from_millis(30));
+    for (index, target) in ["button.washer_start", "button.washer_pause"]
+        .iter()
+        .enumerate()
+    {
+        let request = format!("explicit-washer-button-{index}");
+        worker.action(&request, &format!("ha-action-{index}"), 5000);
+        let mut response = service(&fixture, "button", target);
+        respond(&mut response, 200, json!([]));
+        worker.success(&request);
+    }
+    numeric_action(&mut worker, "explicit-number", &input, 0, 5000);
+    let mut response = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.washer","value":0.0}"#,
+    );
+    respond(&mut response, 200, json!([]));
+    worker.success("explicit-number");
+    let frame = numeric_barrier(&mut worker, &mut socket, 3);
+    assert_eq!(
+        item(&frame, "entity-3").unwrap()["text"],
+        "Remaining time: 0.1"
+    );
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn laundry_both_late_initial_roles_use_positive_completion_barriers_and_reconnect_clears_values() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let watch = "sensor.washer,sensor.dryer,sensor.after_washer,sensor.after_dryer,sensor.barrier";
+    worker.configure_frame(laundry_configuration(
+        &fixture,
+        watch,
+        Some("sensor.washer"),
+        Some("sensor.dryer"),
+    ));
+    let mut socket = authorize(&fixture, true);
+    let mut initial = [request(&fixture), request(&fixture)];
+    let washer = initial
+        .iter()
+        .position(|request| {
+            request.line == "GET /reverse/proxy/ha/api/states/sensor.washer HTTP/1.1"
+        })
+        .unwrap();
+    let dryer = 1 - washer;
+    assert_eq!(
+        initial[dryer].line,
+        "GET /reverse/proxy/ha/api/states/sensor.dryer HTTP/1.1"
+    );
+    live(
+        &mut socket,
+        "sensor.washer",
+        Some(entity("sensor.washer", "00:11:00")),
+    );
+    live(
+        &mut socket,
+        "sensor.dryer",
+        Some(entity("sensor.dryer", "00:22:00")),
+    );
+    weather_text(&mut worker, "entity-1", "Remaining time: 00:22:00");
+    respond(
+        &mut initial[washer].stream,
+        200,
+        entity("sensor.washer", "00:55:00"),
+    );
+    let mut third = request(&fixture);
+    assert_eq!(
+        third.line,
+        "GET /reverse/proxy/ha/api/states/sensor.after_washer HTTP/1.1"
+    );
+    let first = profile_barrier(&mut worker, &mut socket, "entity-4", 10);
+    assert_eq!(
+        item(&first, "entity-0").unwrap()["text"],
+        "Remaining time: 00:11:00"
+    );
+    assert_eq!(
+        item(&first, "entity-1").unwrap()["text"],
+        "Remaining time: 00:22:00"
+    );
+    respond(
+        &mut initial[dryer].stream,
+        200,
+        entity("sensor.dryer", "00:44:00"),
+    );
+    let mut fourth = request(&fixture);
+    assert_eq!(
+        fourth.line,
+        "GET /reverse/proxy/ha/api/states/sensor.after_dryer HTTP/1.1"
+    );
+    let second = profile_barrier(&mut worker, &mut socket, "entity-4", 11);
+    assert_eq!(
+        item(&second, "entity-0").unwrap()["text"],
+        "Remaining time: 00:11:00"
+    );
+    assert_eq!(
+        item(&second, "entity-1").unwrap()["text"],
+        "Remaining time: 00:22:00"
+    );
+    respond(&mut third.stream, 200, entity("sensor.after_washer", "1"));
+    respond(&mut fourth.stream, 200, entity("sensor.after_dryer", "2"));
+    let mut last = request(&fixture);
+    assert_eq!(
+        last.line,
+        "GET /reverse/proxy/ha/api/states/sensor.barrier HTTP/1.1"
+    );
+    respond(&mut last.stream, 200, entity("sensor.barrier", "0"));
+    drop(socket);
+    let disconnected = worker.until(|frame| {
+        item(frame, "connection").is_some_and(|item| item["value"] == "Disconnected")
+    });
+    assert_eq!(
+        item(&disconnected, "entity-0").unwrap()["value"],
+        "Unavailable"
+    );
+    assert_eq!(
+        item(&disconnected, "entity-1").unwrap()["value"],
+        "Unavailable"
+    );
+    assert!(!disconnected.to_string().contains("Remaining time:"));
+    let mut socket = authorize(&fixture, true);
+    let waiting = connected(&mut worker, 0);
+    assert!(item(&waiting, "entity-0").unwrap().get("text").is_none());
+    assert!(item(&waiting, "entity-1").unwrap().get("text").is_none());
+    let mut seen = HashSet::new();
+    for _ in 0..5 {
+        let mut request = request(&fixture);
+        let name = request
+            .line
+            .strip_prefix("GET /reverse/proxy/ha/api/states/")
+            .and_then(|name| name.strip_suffix(" HTTP/1.1"))
+            .unwrap();
+        assert!(seen.insert(name.to_owned()));
+        assert!(watch.split(',').any(|selected| selected == name));
+        let value = match name {
+            "sensor.washer" => "00:10:00",
+            "sensor.dryer" => "00:20:00",
+            _ => "0",
+        };
+        respond(&mut request.stream, 200, entity(name, value));
+    }
+    weather_text(&mut worker, "entity-1", "Remaining time: 00:20:00");
+    let frame = profile_barrier(&mut worker, &mut socket, "entity-4", 12);
+    assert_eq!(
+        item(&frame, "entity-0").unwrap()["text"],
+        "Remaining time: 00:10:00"
+    );
+    assert_weather_read_only(&frame);
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(true);
+}
+
+#[test]
+fn laundry_profiles_keep_the_32_state_and_31_control_budget_inside_one_64_item_frame() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let watch = std::iter::once("sensor.barrier".to_owned())
+        .chain((0..8).map(|index| format!("sensor.e{index}")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut config = laundry_configuration(
+        &fixture,
+        &watch,
+        Some("sensor.washer"),
+        Some("sensor.dryer"),
+    );
+    config["configuration"]["values"]["action_entities"] = json!((0..16)
+        .map(|index| format!("button.e{index}"))
+        .collect::<Vec<_>>()
+        .join(","));
+    config["configuration"]["values"]["media_player_entities"] = json!((0..4)
+        .map(|index| format!("media_player.e{index}"))
+        .collect::<Vec<_>>()
+        .join(","));
+    config["configuration"]["values"]["cover_entities"] = json!("cover.shade");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    connected(&mut worker, 31);
+    let washer = "🌦".repeat(32);
+    let dryer = "\"".repeat(128);
+    for (name, value) in [("sensor.washer", &washer), ("sensor.dryer", &dryer)] {
+        let mut state = entity(name, value);
+        state["attributes"]["friendly_name"] = json!("\"".repeat(128));
+        live(&mut socket, name, Some(state));
+    }
+    let frame = numeric_barrier(&mut worker, &mut socket, 10);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 64);
+    assert_eq!(actions(&frame).len(), 31);
+    for (index, value) in [(30, washer), (31, dryer)] {
+        let state = item(&frame, &format!("entity-{index}")).unwrap();
+        assert_eq!(state["title"].as_str().unwrap().len(), 128);
+        assert_eq!(state["text"], format!("Remaining time: {value}"));
+        assert!(state.get("state_id").is_none());
+    }
+    assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
+    assert_eq!(
+        frame["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<HashSet<_>>()
+            .len(),
+        64
+    );
     no_request(&fixture, Duration::from_millis(50));
     worker.stop(false);
 }

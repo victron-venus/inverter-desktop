@@ -171,7 +171,10 @@ selected weather state into existing bounded text contributions without new
 authority, wire messages or contribution kinds. HA 0.10 keeps `^1.6` and combines
 explicitly assigned dishwasher state/runtime readings in the running entity's
 existing text/status contribution. Its optional role settings grant reads only;
-the projection does not change action references or authority. Existing workers with compatible
+the projection does not change action references or authority. HA 0.11 adds
+optional washer/dryer remaining-time profiles in existing text/status slots,
+retaining `^1.6` and the same authority, wire schema and contribution kinds.
+Existing workers with compatible
 `^1.3`, `^1.4` or `^1.5` ranges still negotiate the selected 1.6 version; Frigate
 retains its existing API range and flat contributions.
 

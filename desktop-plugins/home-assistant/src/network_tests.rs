@@ -15,7 +15,7 @@ fn configuration(base: &str) -> Validated {
         number_entities: vec![],
         cover_position_entities: vec![],
         discovery_prefixes: vec![],
-        dishwasher: None,
+        appliances: Default::default(),
         token: "fixture-token-only".into(),
     }
 }

@@ -1,6 +1,6 @@
 //! Bounded read-only appliance overlays; raw entity cards retain all authority.
 
-use crate::config::DishwasherProfile;
+use crate::config::{ApplianceProfiles, DishwasherProfile};
 use serde_json::{json, Value};
 
 const MAX_ROLE_STATE_BYTES: usize = 128;
@@ -14,14 +14,14 @@ fn complete_state(value: Option<&Value>) -> Option<&str> {
 }
 
 #[derive(Default, PartialEq, Eq)]
-enum Running {
+enum Observation {
     #[default]
     Unobserved,
     Status(&'static str),
     State(String),
 }
 
-impl Running {
+impl Observation {
     fn observe(value: Option<&Value>) -> Self {
         let Some(state) = complete_state(value) else {
             return Self::Status("Unavailable");
@@ -51,7 +51,7 @@ fn runtime(value: Option<&Value>) -> Option<String> {
 pub(crate) struct Dishwasher {
     running_index: usize,
     duration_index: Option<usize>,
-    running: Running,
+    running: Observation,
     runtime: Option<String>,
 }
 
@@ -67,13 +67,13 @@ impl Dishwasher {
         Some(Self {
             running_index,
             duration_index,
-            running: Running::Unobserved,
+            running: Observation::Unobserved,
             runtime: None,
         })
     }
 
     pub(crate) fn clear(&mut self) {
-        self.running = Running::Unobserved;
+        self.running = Observation::Unobserved;
         self.runtime = None;
     }
 
@@ -81,7 +81,7 @@ impl Dishwasher {
     // these small role observations. No upstream attributes are retained.
     pub(crate) fn update(&mut self, index: usize, state: Option<&Value>) -> bool {
         if index == self.running_index {
-            let running = Running::observe(state);
+            let running = Observation::observe(state);
             if self.running != running {
                 self.running = running;
                 return true;
@@ -101,11 +101,11 @@ impl Dishwasher {
             return None;
         }
         match &self.running {
-            Running::Unobserved => None,
-            Running::Status(value) => Some(
+            Observation::Unobserved => None,
+            Observation::Status(value) => Some(
                 json!({"kind":"status","id":raw["id"],"title":raw["title"],"value":value,"tone":"neutral"}),
             ),
-            Running::State(state) => {
+            Observation::State(state) => {
                 let mut text = format!("State: {state}");
                 if let Some(runtime) = &self.runtime {
                     text.push_str("\nRuntime since midnight: ");
@@ -114,6 +114,117 @@ impl Dishwasher {
                 Some(json!({"kind":"text","id":raw["id"],"title":raw["title"],"text":text}))
             }
         }
+    }
+}
+
+fn remaining(value: Option<&Value>) -> Observation {
+    let Some(state) = complete_state(value) else {
+        return Observation::Status("Unavailable");
+    };
+    match state.to_ascii_lowercase().as_str() {
+        "unknown" => Observation::Status("Unknown"),
+        "unavailable" => Observation::Status("Unavailable"),
+        "off" | "idle" => Observation::Status("Idle"),
+        _ if state.parse::<f64>().is_ok_and(|number| !number.is_finite()) => {
+            Observation::Status("Unavailable")
+        }
+        _ => Observation::State(state.to_owned()),
+    }
+}
+
+struct RemainingTime {
+    index: usize,
+    state: Observation,
+}
+
+impl RemainingTime {
+    fn new(entities: &[String], name: &str) -> Option<Self> {
+        Some(Self {
+            index: entities.iter().position(|entity| entity == name)?,
+            state: Observation::Unobserved,
+        })
+    }
+
+    fn update(&mut self, index: usize, value: Option<&Value>) -> bool {
+        if index != self.index {
+            return false;
+        }
+        let state = remaining(value);
+        if state == self.state {
+            return false;
+        }
+        self.state = state;
+        true
+    }
+
+    fn contribution(&self, index: usize, raw: &Value) -> Option<Value> {
+        if index != self.index {
+            return None;
+        }
+        match &self.state {
+            Observation::Unobserved => None,
+            Observation::Status(value) => Some(
+                json!({"kind":"status","id":raw["id"],"title":raw["title"],"value":value,"tone":"neutral"}),
+            ),
+            Observation::State(value) => Some(
+                json!({"kind":"text","id":raw["id"],"title":raw["title"],"text":format!("Remaining time: {value}")}),
+            ),
+        }
+    }
+}
+
+pub(crate) struct Appliances {
+    dishwasher: Option<Dishwasher>,
+    laundry: Vec<RemainingTime>,
+}
+
+impl Appliances {
+    pub(crate) fn new(entities: &[String], profiles: &ApplianceProfiles) -> Self {
+        Self {
+            dishwasher: profiles
+                .dishwasher
+                .as_ref()
+                .and_then(|profile| Dishwasher::new(entities, profile)),
+            laundry: profiles
+                .washer_remaining_entity
+                .iter()
+                .chain(&profiles.dryer_remaining_entity)
+                .filter_map(|name| RemainingTime::new(entities, name))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        if let Some(dishwasher) = &mut self.dishwasher {
+            dishwasher.clear();
+        }
+        for profile in &mut self.laundry {
+            profile.state = Observation::Unobserved;
+        }
+    }
+
+    pub(crate) fn update(&mut self, index: usize, value: Option<&Value>) -> bool {
+        let mut changed = false;
+        if let Some(dishwasher) = &mut self.dishwasher {
+            changed |= dishwasher.update(index, value);
+        }
+        // A source may be both a dishwasher runtime and a laundry primary.
+        // Every cache must observe the event, including after an earlier change.
+        for profile in &mut self.laundry {
+            changed |= profile.update(index, value);
+        }
+        changed
+    }
+
+    pub(crate) fn contribution(&self, index: usize, raw: &Value) -> Option<Value> {
+        self.dishwasher
+            .as_ref()
+            .and_then(|profile| profile.contribution(index, raw))
+            .or_else(|| {
+                self.laundry
+                    .iter()
+                    .find_map(|profile| profile.contribution(index, raw))
+            })
     }
 }
 
@@ -268,5 +379,123 @@ mod tests {
         assert!(profile.contribution(1, &json!({})).is_none());
         profile.update(1, Some(&json!({"state":"on"})));
         assert_eq!(card(&profile)["text"], "State: Running");
+    }
+
+    #[test]
+    fn laundry_preserves_complete_remaining_literals_and_zero_without_inferred_activity_or_units() {
+        let mut timer =
+            RemainingTime::new(&["sensor.remaining".into()], "sensor.remaining").unwrap();
+        let raw = json!({"kind":"metric","id":"entity-0","title":"Washer","value":0});
+        let multibyte = "🌙".repeat(32);
+        for value in [
+            "0",
+            "0.00",
+            "01:23:45",
+            "  25 min  ",
+            "Paused",
+            "on",
+            "running",
+            "1e-999",
+            multibyte.as_str(),
+        ] {
+            timer.update(0, Some(&json!({"state":value,"attributes":{"unit_of_measurement":"hours","remaining":99}})));
+            assert_eq!(
+                timer.contribution(0, &raw).unwrap(),
+                json!({"kind":"text","id":"entity-0","title":"Washer","text":format!("Remaining time: {}", value.trim())})
+            );
+        }
+        for (value, expected) in [
+            ("UNKNOWN", "Unknown"),
+            (" unavailable ", "Unavailable"),
+            (" OFF ", "Idle"),
+            ("idle", "Idle"),
+        ] {
+            timer.update(0, Some(&json!({"state":value})));
+            assert_eq!(
+                timer.contribution(0, &raw).unwrap(),
+                json!({"kind":"status","id":"entity-0","title":"Washer","value":expected,"tone":"neutral"})
+            );
+        }
+        for value in [
+            json!(null),
+            json!(false),
+            json!(0),
+            json!([]),
+            json!({}),
+            json!(""),
+            json!(" \n\t "),
+            json!("12\n34"),
+            json!("x".repeat(129)),
+            json!("🌙".repeat(33)),
+            json!("NaN"),
+            json!("-inf"),
+            json!("Infinity"),
+            json!("1e999"),
+        ] {
+            timer.update(0, Some(&json!({"state":"5"})));
+            assert!(timer.update(0, Some(&json!({"state":value}))));
+            assert_eq!(
+                timer.contribution(0, &raw).unwrap()["value"],
+                "Unavailable",
+                "{value}"
+            );
+        }
+        timer.update(0, None);
+        assert_eq!(timer.contribution(0, &raw).unwrap()["value"], "Unavailable");
+    }
+
+    #[test]
+    fn laundry_and_dishwasher_shared_source_updates_are_eager_and_all_caches_clear() {
+        let mut profiles = Appliances::new(
+            &[
+                "sensor.shared".into(),
+                "binary_sensor.running".into(),
+                "sensor.dryer".into(),
+            ],
+            &ApplianceProfiles {
+                dishwasher: Some(DishwasherProfile {
+                    running_entity: "binary_sensor.running".into(),
+                    duration_entity: Some("sensor.shared".into()),
+                }),
+                washer_remaining_entity: Some("sensor.shared".into()),
+                dryer_remaining_entity: Some("sensor.dryer".into()),
+            },
+        );
+        let raw = |index| json!({"id":format!("entity-{index}"),"title":"Same title"});
+        profiles.update(1, Some(&json!({"state":"on"})));
+        profiles.update(2, Some(&json!({"state":"10"})));
+        for value in ["1.50", "1.500"] {
+            assert!(profiles.update(0, Some(&json!({"state":value}))));
+            assert_eq!(
+                profiles.contribution(0, &raw(0)).unwrap()["text"],
+                format!("Remaining time: {value}")
+            );
+            assert_eq!(
+                profiles.contribution(1, &raw(1)).unwrap()["text"],
+                format!("State: Running\nRuntime since midnight: {value}")
+            );
+            assert_eq!(
+                profiles.contribution(2, &raw(2)).unwrap()["text"],
+                "Remaining time: 10"
+            );
+        }
+        profiles.update(0, None);
+        assert_eq!(
+            profiles.contribution(0, &raw(0)).unwrap()["value"],
+            "Unavailable"
+        );
+        assert_eq!(
+            profiles.contribution(1, &raw(1)).unwrap()["text"],
+            "State: Running"
+        );
+        profiles.clear();
+        for index in 0..3 {
+            assert!(profiles.contribution(index, &raw(index)).is_none());
+        }
+        profiles.update(1, Some(&json!({"state":"on"})));
+        assert_eq!(
+            profiles.contribution(1, &raw(1)).unwrap()["text"],
+            "State: Running"
+        );
     }
 }

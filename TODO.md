@@ -72,6 +72,82 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
+### Current checkpoint: explicit read-only washer and dryer profiles
+
+Start from verified main `8e9f22e`. Move the explicitly configured washer and
+dryer remaining-time readings into HA worker profiles. Preserve reported data
+without treating arbitrary digits as proof that an appliance is running. Existing
+explicit button/scene selection remains the way to enable appliance actions;
+profile settings alone grant reads only.
+
+- [x] Add optional, empty-by-default `washer_remaining_entity` and
+      `dryer_remaining_entity` settings for single literal entity IDs. Apply the
+      existing 128-byte raw input bound, trim outer whitespace, omit empty fields
+      and preserve the exact prior 32-KiB configuration/storage boundary.
+- [x] Append new read targets after the existing watch/control/dishwasher union,
+      deduplicate without changing older indices and retain the 32-state limit
+      and explicit-selection priority over discovery. Reject conflicting primary
+      profile roles; allow overlap with explicitly watched/controlled entities or
+      the dishwasher duration role.
+- [x] Render each profile in its selected entity's existing state slot, with the
+      same stable ID and friendly title. Show whole bounded literal remaining
+      time, including zero and decimal spelling; use neutral status cards for
+      known idle/unknown/unavailable readings. Reject malformed, oversized and
+      nonfinite numeric states. Do not infer activity or units, convert values,
+      parse durations or run a local countdown.
+- [x] Preserve identity and independent live-over-initial-REST ordering, settings
+      replacement and disconnect/reconnect clearing. A shared dishwasher-duration
+      and laundry source must update both projections before publication. Keep
+      raw observations and existing action/numeric authority unchanged.
+- [x] Cover configuration, projection and state-book boundaries with meaningful
+      tests. Add real process scenarios for initial/live readings, stale REST
+      completion barriers, invalid data, explicit controls and bounded snapshots.
+      Extend installed-package lifecycle acceptance with exact read scope,
+      settings/enablement/authentication/uninstall teardown and independent core
+      MQTT telemetry with zero core command writes.
+- [x] Verify native settings defaults, selection, clearing, encrypted storage and
+      schema rollback for both fields against the immediate previous manifest
+      and earlier optional-field configurations. Keep secrets out of diagnostics.
+- [x] Bump only the HA worker/package to 0.11.0. Retain host API `^1.6`, manifest
+      and wire schemas, permissions and the existing publisher policy. Keep the
+      complete HA/camera/plugin ecosystem excluded from Android and iOS.
+- [x] Update English worker/application/package documentation. Explain literal
+      remaining time versus dishwasher runtime since midnight, explicit action
+      selection and shared-role display. Keep saved bundled configuration keys,
+      automatic migration, modern forecasts and bundled feature removal open.
+- [x] Run formatting, strict Clippy, appropriate worker/native/process/installed
+      validation, frontend checks/builds, packaging and mobile-boundary checks.
+      Independently review production logic, fixtures and documentation.
+- [ ] Push a separate PR, address comments in English, pass final-head checks,
+      merge as authorized and verify clean canonical main and its source CI.
+
+Local validation passed on the `8e9f22e` baseline: 214 HA worker tests
+(106 unit, 88 action/process, three TLS and 17 protocol), strict worker Clippy
+and formatting, and the real HA 0.11 release build. Independent review improved
+initial-read completion predicates in two new fixtures; all six affected process
+scenarios and strict test-target Clippy then passed again. The final fixtures
+observe both role reads or all expected controls before making initial-state
+assertions, and use separate positive completion barriers for both late REST reads.
+
+The host passed 454 native library tests, strict all-target Clippy and formatting.
+All seven installed HA scenarios were explicitly selected, each with one passed
+test and zero failed or ignored tests. The extended lifecycle verifies eight
+exact initial reads, independent role changes, replacement settings and removal
+of old roles, authentication/enablement/uninstall teardown, and independent core
+MQTT telemetry with zero inverter command writes. Native settings tests preserve
+exact 32-KiB boundaries across three historical schemas, explicit selection,
+clearing, encrypted storage, schema rollback and existing secrets.
+
+Frontend validation passed 414 desktop tests, 17 mobile tests, five build-profile
+tests, formatting, lint, typechecking and both mobile/desktop builds. HA packaging
+passed eight tests; native mobile-boundary validation passed 29. A disposable
+fixture using the production renderer passed light/dark review at 320px with
+zero, exact decimal spelling, arbitrary literal states, maximum-length UTF-8,
+neutral statuses, shared runtime display and disconnect clearing, with no
+horizontal overflow or browser errors. This does not establish production HA
+or physical appliance acceptance, native Linux/Windows graphical acceptance,
+automatic configuration migration or complete bundled appliance UI parity.
+
 ### Completed checkpoint: explicit read-only dishwasher profile
 
 Start from verified main `d7492c1`. Preserve the bundled dishwasher's explicitly

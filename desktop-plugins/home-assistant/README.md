@@ -1,7 +1,7 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.10.0, requiring host API `^1.6`.
+`inverter-desktop.home-assistant`, version 0.11.0, requiring host API `^1.6`.
 Connection status and selected entity states are read-only by default. Optional
 sensor-prefix discovery fills unused state slots without granting actions. Explicit
 optional action lists enable fixed button presses, scene activation, media
@@ -18,8 +18,9 @@ stable contribution/action IDs and 32-state/31-control limits are unchanged.
 Availability and capability changes withdraw or restore controls under the same
 state anchor; grouping adds no service authority and does not alter input revisions.
 An explicit read-only dishwasher profile combines its assigned running and runtime
-readings in the existing running entity card. Other appliance profiles, entity-picker UI and legacy configuration migration remain
-separate work.
+readings in the existing running entity card. Explicit washer and dryer profiles
+show their reported remaining time in each selected entity's existing card.
+Entity-picker UI and legacy configuration migration remain separate work.
 
 The existing desktop HA integration remains bundled until its remaining features
 have package parity. Android and iOS contain neither this worker nor the shared
@@ -47,10 +48,11 @@ the core telemetry connection.
   verification and the matching secure WebSocket scheme. Redirects are not followed.
 - `watch_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Separate entity IDs with commas or newlines. Blank entries are ignored and
-  duplicate IDs count once. The ordered union with action targets and dishwasher roles is limited to
+  duplicate IDs count once. The ordered union with action targets and appliance roles is limited to
   32 entities: watched IDs come first, followed by previously unseen button/scene
   targets, media-player targets, on/off targets, cover targets, number targets
-  and cover-position targets, then dishwasher running and duration roles. New selections preserve older target indices.
+  and cover-position targets, then dishwasher running/duration and washer/dryer
+  remaining-time roles. New selections preserve older target indices.
   Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
@@ -74,6 +76,15 @@ the core telemetry connection.
   empty default and 128-byte bound. Assign the entity reporting runtime since
   midnight. Requires a nonempty, different running entity. Both roles add explicit
   watched reads and count once in the 32-entity union, but never grant controls.
+- `washer_remaining_entity` and `dryer_remaining_entity`: optional strings,
+  default empty, each at most 128 raw UTF-8 bytes. Each assigns one literal entity
+  reporting that appliance's remaining time, using the single-ID format above.
+  Either role can be configured independently. The two remaining-time roles must
+  differ from each other and from the dishwasher running entity: each state slot
+  can have only one primary profile. They may overlap with watched/control
+  selections or the dishwasher duration entity. New IDs are appended after the
+  existing dishwasher roles; the same 32-state limit applies. Leave a role empty
+  to disable its profile. Selection grants reads only.
 - `action_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Explicitly select up to 16 unique literal `button.*` or `scene.*` IDs separated
   by commas or newlines. Targets are also watched within the total 32-entity
@@ -122,7 +133,8 @@ host's 64-contribution limit. Duplicate IDs count once within their list. All
 previously valid configurations remain within this budget when new fields are empty.
 Omitted or empty new fields also preserve the prior serialized 32 KiB
 configuration validation boundary.
-The two numeric fields, `discovery_prefixes` and both dishwasher roles use host API 1.5's explicit `omitEmpty` schema option:
+The two numeric fields, `discovery_prefixes` and all appliance roles use host API
+1.5's explicit `omitEmpty` schema option:
 empty values remain visible in settings, use the empty default when saved, and
 add no bytes to startup configuration. This preserves native storage/envelope
 limits as well as worker-side validation; nonempty selections are counted normally.
@@ -135,7 +147,7 @@ with `event_type: state_changed`. **That server stream covers all entities**:
 the worker filters it locally to explicit selections and eligible discoveries.
 This is not server-side subscription filtering or a token-level access restriction.
 
-When `watch_entities`, all six action lists, `discovery_prefixes` and both dishwasher roles are empty,
+When `watch_entities`, all six action lists, `discovery_prefixes` and all appliance roles are empty,
 the worker still establishes the authenticated WebSocket connection for status,
 but makes no entity REST reads or event subscription. A change to any list is
 applied through the normal settings restart. Entity state
@@ -155,7 +167,8 @@ worker; network failures reconnect with a bounded delay.
 Select `dishwasher_running_entity` and optionally `dishwasher_duration_entity`
 in the plugin's settings. Selection is explicit and independent of the bundled
 HA settings. The profile uses the running entity's existing state ID and friendly
-title; the ordinary duration entity card remains visible. It adds no state slot,
+title; the duration entity card stays independently visible and can itself have
+an explicitly configured remaining-time profile. It adds no state slot,
 contribution kind, action, automatic discovery or host API requirement.
 
 The summary labels the operating state as `State: Running` for `on` or `running`,
@@ -184,6 +197,39 @@ eligibility: a profile alone grants no writes, while separately selected control
 keep their existing authority, IDs, parameters and state references. Reads use
 the existing individual state endpoints and filtered `state_changed` events.
 There are no new service routes or core MQTT commands.
+
+## Read-only washer and dryer profiles
+
+Select `washer_remaining_entity` and/or `dryer_remaining_entity` in the plugin's
+settings. The two roles work independently and use their selected entity's
+existing state ID and friendly title. For example, a source state of `10:02`
+produces `Remaining time: 10:02`; `0` and `1.500` remain exactly those strings.
+The worker preserves complete trimmed strings of at most 128 UTF-8 bytes with no
+embedded controls. Attributes do not affect this projection. It does not infer
+activity from digits, parse duration formats, append assumed units, convert
+values or tick a local countdown.
+
+Known `unknown` and `unavailable` readings use neutral Unknown and Unavailable
+status cards; `off` and `idle` use Idle, after trimming and ASCII case folding.
+Missing, malformed, empty, oversized or nonfinite numeric readings show
+Unavailable. Other complete literals remain reported data after `Remaining time:`.
+A zero reading remains visible. This differs from the bundled section's digit
+heuristic and does not claim its visibility behavior or full appliance UI parity.
+
+Each accepted source update or deletion replaces the displayed reading. Literal
+changes such as `1.50` to `1.500` publish even if a generic numeric metric would
+compare equal. Both profiles retain the existing live-over-initial-REST ordering
+and clear with session teardown or settings replacement. If one source is also
+the dishwasher duration, its update changes both projections before publication;
+its independently visible state slot shows the explicitly selected laundry profile.
+No profile stores raw attributes or changes the original action/numeric observation.
+
+A remaining-time selection never grants an action. To enable an appliance's
+existing HA start/pause buttons, separately select their literal `button.*` IDs
+in `action_entities`; existing action availability and state grouping apply to
+those button entities. Profiles reuse the existing `state_changed` subscription and add no service
+endpoint, action ID, permission, state slot or core MQTT command. Bundled `ha_washer_*` and `ha_dryer_*`
+settings are retained separately and are not automatically migrated.
 
 ## Read-only weather summaries
 

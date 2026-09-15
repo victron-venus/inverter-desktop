@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "host_api": "^1.6",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",
@@ -21,7 +21,7 @@
       "watch_entities": {
         "type": "string",
         "title": "Entities to watch",
-        "description": "Entity IDs separated by commas or newlines. The ordered union with all control targets and dishwasher roles is limited to 32 entities. All control lists together allow 31 controls: one per button/scene, three per media player, two per on/off target, three per cover and one per numeric input. Read selection alone never enables writes.",
+        "description": "Entity IDs separated by commas or newlines. The ordered union with all control targets and appliance roles is limited to 32 entities. All control lists together allow 31 controls: one per button/scene, three per media player, two per on/off target, three per cover and one per numeric input. Read selection alone never enables writes.",
         "maxLength": 4096,
         "default": ""
       },
@@ -45,6 +45,22 @@
         "type": "string",
         "title": "Dishwasher runtime entity",
         "description": "Optional single entity ID reporting runtime since midnight, shown in the running entity card as received without inferred units or a countdown. Requires a different dishwasher running entity. Adds this exact entity to watched reads and never enables actions.",
+        "maxLength": 128,
+        "default": "",
+        "omitEmpty": true
+      },
+      "washer_remaining_entity": {
+        "type": "string",
+        "title": "Washer remaining-time entity",
+        "description": "Optional single entity ID reporting washer remaining time. Uses its existing read-only card and shows the complete value as received, including zero, without inferred activity, units or a local countdown. Must differ from the other remaining-time role and the dishwasher running role. No actions are enabled. Leave blank to disable this profile.",
+        "maxLength": 128,
+        "default": "",
+        "omitEmpty": true
+      },
+      "dryer_remaining_entity": {
+        "type": "string",
+        "title": "Dryer remaining-time entity",
+        "description": "Optional single entity ID reporting dryer remaining time. Uses its existing read-only card and shows the complete value as received, including zero, without inferred activity, units or a local countdown. Must differ from the other remaining-time role and the dishwasher running role. No actions are enabled. Leave blank to disable this profile.",
         "maxLength": 128,
         "default": "",
         "omitEmpty": true
