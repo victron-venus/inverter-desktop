@@ -109,7 +109,9 @@ class ReleasePluginPackageTests(unittest.TestCase):
             if command[0] == "cargo":
                 self.assertEqual(command[command.index("--target") + 1], "x86_64-apple-darwin")
             else:
-                self.assertIn("aarch64-apple-darwin/release/examples/plugin-package", command[0])
+                self.assertEqual(
+                    Path(command[0]), self.root / "src-tauri" / "target" /
+                    "aarch64-apple-darwin" / "release" / "examples" / "plugin-package")
 
     def test_existing_outputs_are_not_replaced(self):
         """A retried build cannot silently replace already collected release bytes."""
@@ -138,15 +140,36 @@ class ReleasePluginPackageTests(unittest.TestCase):
 
     def test_target_and_repository_validation_precedes_build_commands(self):
         """Mobile ABIs and URL injection are rejected before starting Cargo."""
-        for target, host, repository in [
+        cases = [
                 ("aarch64-linux-android", "aarch64-apple-darwin", "example/inverter"),
                 ("aarch64-apple-darwin", "aarch64-apple-ios", "example/inverter"),
-                ("aarch64-apple-darwin", "aarch64-apple-darwin", "example/inverter?token=x")]:
+                ("aarch64-apple-darwin", "aarch64-apple-darwin", "example/inverter?token=x")]
+        for invalid in ["--config=malicious.toml", "../aarch64-apple-darwin",
+                        "/tmp/target.json", "aarch64-apple-darwin\n--config=malicious.toml"]:
+            cases.extend([(invalid, "aarch64-apple-darwin", "example/inverter"),
+                          ("aarch64-apple-darwin", invalid, "example/inverter")])
+        for target, host, repository in cases:
             with self.subTest(target=target, host=host, repository=repository):
                 with patch.object(release, "run") as command:
                     with self.assertRaises(ValueError):
                         release.build_plugins(self.root, self.plan, repository, target, host)
                     command.assert_not_called()
+
+    def test_commands_receive_canonical_target_constants(self):
+        """Accepted caller strings never become command arguments themselves."""
+        class TargetText(str):
+            """An equal string with an unsafe conversion must not reach a command."""
+
+            def __str__(self):
+                return "--config=malicious.toml"
+
+        for target in release.plugin_package.TARGETS:
+            selected = release.desktop_target(TargetText(target))
+            self.assertIs(selected, target)
+            self.assertIs(type(selected), str)
+        self.build(TargetText("x86_64-apple-darwin"), TargetText("aarch64-apple-darwin"))
+        for command in self.commands:
+            self.assertFalse(any("malicious" in argument for argument in command))
 
     def test_frozen_plan_must_match_checkout_and_policy(self):
         """Download URLs cannot point at a release plan from another source SHA."""

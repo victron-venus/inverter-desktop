@@ -27,10 +27,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def desktop_target(value):
-    """Keep worker artifacts restricted to the supported desktop ABI list."""
-    if value not in plugin_package.TARGETS:
-        raise ValueError("Release plugins require a supported desktop target")
-    return value
+    """Select a trusted ABI constant instead of forwarding caller-supplied text."""
+    for target in plugin_package.TARGETS:
+        if value == target:
+            return target
+    raise ValueError("Release plugins require a supported desktop target")
 
 
 def compiler_host(root):
@@ -73,8 +74,8 @@ def encode_json(value):
 # pylint: disable=too-many-locals
 def build_plugins(root, plan, repository, target, host):
     """Create target-unique release assets without overwriting an existing artifact."""
-    desktop_target(target)
-    desktop_target(host)
+    target = desktop_target(target)
+    host = desktop_target(host)
     repository_name(repository)
     version_plan.validate_plan(plan)
     output = root / "release-output" / "desktop"

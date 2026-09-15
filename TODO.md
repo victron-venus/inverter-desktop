@@ -118,7 +118,7 @@ without downloading packages or including the desktop runtime.
 
 Local validation passed: 485 native library tests, all nine explicitly run
 installed HA/Frigate scenarios, 420 frontend tests, 17 mobile tests, five build
-profile tests, 35 package preparation/release orchestration tests and 29 mobile
+profile tests, 36 package preparation/release orchestration tests and 29 mobile
 native-boundary tests. Strict all-target Clippy, formatting, frontend lint and
 type checking, mobile/desktop builds and pre-commit passed. Independent review
 closed configuration epoch-publication and save/logout races. Local graphical
