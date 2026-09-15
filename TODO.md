@@ -149,7 +149,7 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Current checkpoint: opt-in read-only HA sensor discovery
+### Completed checkpoint: opt-in read-only HA sensor discovery
 
 Start from verified main `8108eb3`. Restore automatic sensor listing through the
 HA worker using existing host API 1.5 contributions. Discovery is optional and
@@ -200,7 +200,7 @@ explicit selections always retain their slots, ordering and authority.
 - [x] Run worker, native installed-package, packaging and mobile-boundary checks,
       appropriate formatting/lint/builds and independent reviews. Record evidence
       before marking implementation and validation complete.
-- [ ] Push a separate PR, address comments in English, pass final-head checks,
+- [x] Push a separate PR, address comments in English, pass final-head checks,
       merge as authorized, and verify clean canonical main and its source CI.
 
 This bounded discovery increment does not replace a searchable entity picker,
@@ -229,6 +229,23 @@ exact surviving sibling close, and still waits for native close acknowledgement.
 Production transfer limits and the separate elapsed-time tests are unchanged.
 The exact sibling fixture, all 16 media-service tests and strict native all-target
 Clippy pass after this correction.
+
+Delivery verified: [PR #438](https://github.com/victron-venus/inverter-desktop/pull/438)
+merged as `f40434988b82ec11d6ce66db0d684f878184fcc1`. Final reviewed head
+`c965917ebdab81a47b0b7e59d6f625dc9047a485` passed all 41 executed checks, including
+both Windows lifecycle runs and Android/iOS artifact checks. Six auxiliary checks
+were skipped and one superseded approval run was cancelled; the final head had
+its own approval and no unresolved review threads.
+
+All six ordinary main workflows passed on the merge commit, comprising 17 jobs:
+[CI](https://github.com/victron-venus/inverter-desktop/actions/runs/34973738596),
+[Cargo Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/34973738588),
+[Cargo Security Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/34973738551),
+[CodeQL](https://github.com/victron-venus/inverter-desktop/actions/runs/34973738705),
+[Unit Tests](https://github.com/victron-venus/inverter-desktop/actions/runs/34973738552)
+and [Code Quality](https://github.com/victron-venus/inverter-desktop/actions/runs/34973737678).
+The canonical checkout was verified clean on main, with the exact reviewed file
+tree, all six existing stashes and the private ignored `AGENTS.md` preserved.
 
 ### Completed checkpoint: bounded HA numeric inputs
 
