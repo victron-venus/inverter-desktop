@@ -220,6 +220,16 @@ selected explicitly, including discovery. Native all-target Clippy and every
 applicable pre-commit hook pass. Independent reviews found no unresolved issue in production logic, process
 fixtures, installed-package acceptance, metadata or configuration byte boundaries.
 
+PR #438 CI exposed an existing Windows sibling-window fixture failure: the test
+accepted a `Ready` event without checking its transfer error, then encountered
+`NotFound` when reading the missing clip. The ownership scenario now uses the
+existing frozen-I/O test clock so real socket/disk scheduling cannot consume its
+short transfer deadlines, explicitly requires both successful transfers and the
+exact surviving sibling close, and still waits for native close acknowledgement.
+Production transfer limits and the separate elapsed-time tests are unchanged.
+The exact sibling fixture, all 16 media-service tests and strict native all-target
+Clippy pass after this correction.
+
 ### Completed checkpoint: bounded HA numeric inputs
 
 Start from the verified PR #434 merge at `c614f07`. Add one declarative numeric

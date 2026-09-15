@@ -518,37 +518,54 @@ async fn ranges_are_window_bound_bounded_and_revoked_immediately() {
     service.shutdown().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn failed_window_preserves_sibling_and_shutdown_waits_for_close_acknowledgement() {
     let (base, server) = broker(vec![response("200 OK", b"one"), response("200 OK", b"two")]).await;
-    let (directory, service, mut events) = service(policy()).await;
+    // This exercises window ownership; real socket/disk scheduling must not
+    // consume the short transfer deadlines tested separately above.
+    let (directory, service, mut events) =
+        frozen_io("initialize sibling media service", service(policy())).await;
     service.try_submit(request(&base, lease())).unwrap();
-    let first = ready(&mut events).await;
+    let first = frozen_io("first sibling ready", ready(&mut events)).await;
+    assert_eq!(first.error, None);
     service.try_submit(request(&base, lease())).unwrap();
-    let second = ready(&mut events).await;
+    let second = frozen_io("second sibling ready", ready(&mut events)).await;
+    assert_eq!(second.error, None);
     service.window_failed(&first.media_id);
     assert_eq!(
-        service
-            .read_range(&second.media_id, &second.window_label, None, false)
-            .await
-            .unwrap()
-            .bytes,
+        frozen_io(
+            "read surviving sibling",
+            service.read_range(&second.media_id, &second.window_label, None, false),
+        )
+        .await
+        .unwrap()
+        .bytes,
         b"two"
     );
     let closing = service.clone();
     let task = tokio::spawn(async move { closing.shutdown().await });
-    let label = match timeout(Duration::from_secs(1), events.recv())
-        .await
-        .unwrap()
-        .unwrap()
+    let label = match frozen_io(
+        "shutdown sibling close request",
+        timeout(Duration::from_secs(1), events.recv()),
+    )
+    .await
+    .unwrap()
+    .unwrap()
     {
         MediaEvent::Close { window_label } => window_label,
         _ => panic!("shutdown must close owned sibling"),
     };
+    assert_eq!(label, second.window_label);
     assert!(!task.is_finished());
     service.window_destroyed(&label);
-    task.await.unwrap().unwrap();
-    server.await.unwrap();
+    frozen_io("acknowledged sibling shutdown", task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        frozen_io("sibling requests", server).await.unwrap().len(),
+        2
+    );
     assert_eq!(
         fs::read_dir(directory.path().join("media"))
             .unwrap()
