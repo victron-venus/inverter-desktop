@@ -421,7 +421,13 @@ fn omit_empty_preserves_effective_values_and_only_canonicalizes_opted_in_empty_s
     }
 }
 
-fn ha_numeric_upgrade() -> (PluginManifest, SettingsSchema, SettingsData) {
+const HA_OMIT_EMPTY_SELECTIONS: [&str; 3] = [
+    "number_entities",
+    "cover_position_entities",
+    "discovery_prefixes",
+];
+
+fn ha_optional_selection_upgrade() -> (PluginManifest, SettingsSchema, SettingsData) {
     let package: Value = serde_json::from_str(include_str!(
         "../../../scripts/plugins/home-assistant-manifest.json"
     ))
@@ -431,7 +437,7 @@ fn ha_numeric_upgrade() -> (PluginManifest, SettingsSchema, SettingsData) {
     let properties = previous_metadata.config_schema["properties"]
         .as_object_mut()
         .unwrap();
-    for key in ["number_entities", "cover_position_entities"] {
+    for key in HA_OMIT_EMPTY_SELECTIONS {
         assert_eq!(metadata.config_schema["properties"][key]["omitEmpty"], true);
         properties.remove(key).unwrap();
     }
@@ -451,8 +457,8 @@ fn ha_numeric_upgrade() -> (PluginManifest, SettingsSchema, SettingsData) {
 }
 
 #[test]
-fn ha_numeric_schema_preserves_the_exact_previous_worker_configuration_byte_boundary() {
-    let (metadata, previous, mut data) = ha_numeric_upgrade();
+fn ha_optional_selections_preserve_the_exact_previous_worker_configuration_byte_boundary() {
+    let (metadata, previous, mut data) = ha_optional_selection_upgrade();
     let maximum = super::super::protocol::MAX_CONFIGURATION_BYTES;
     let padding = maximum
         - serde_json::to_vec(&previous.configuration(&data).unwrap())
@@ -467,9 +473,9 @@ fn ha_numeric_schema_preserves_the_exact_previous_worker_configuration_byte_boun
     let upgraded = SettingsSchema::compile(&metadata).unwrap();
     for explicit_empty in [false, true] {
         if explicit_empty {
-            data.values.insert("number_entities".into(), json!(""));
-            data.values
-                .insert("cover_position_entities".into(), json!(""));
+            for key in HA_OMIT_EMPTY_SELECTIONS {
+                data.values.insert(key.into(), json!(""));
+            }
         }
         assert_eq!(
             serde_json::to_vec(&upgraded.configuration(&data).unwrap()).unwrap(),
@@ -482,11 +488,11 @@ fn ha_numeric_schema_preserves_the_exact_previous_worker_configuration_byte_boun
 }
 
 #[test]
-fn ha_numeric_upgrade_can_resave_a_previous_settings_record_at_the_storage_limit() {
+fn ha_optional_selection_upgrade_can_resave_a_previous_settings_record_at_the_storage_limit() {
     use super::super::settings_store::{SettingsStore, MAX_SETTINGS_PLAINTEXT_BYTES};
     use std::sync::Arc;
 
-    let (metadata, previous, mut data) = ha_numeric_upgrade();
+    let (metadata, previous, mut data) = ha_optional_selection_upgrade();
     let padding = MAX_SETTINGS_PLAINTEXT_BYTES - serde_json::to_vec(&data).unwrap().len();
     data.secrets
         .get_mut("ha_token")
@@ -522,7 +528,7 @@ fn ha_numeric_upgrade_can_resave_a_previous_settings_record_at_the_storage_limit
     assert!(stored == data);
 
     let mut unfiltered_metadata = metadata.clone();
-    for key in ["number_entities", "cover_position_entities"] {
+    for key in HA_OMIT_EMPTY_SELECTIONS {
         unfiltered_metadata.config_schema["properties"][key]["omitEmpty"] = json!(false);
     }
     assert!(SettingsSchema::compile(&unfiltered_metadata)
@@ -535,8 +541,9 @@ fn ha_numeric_upgrade_can_resave_a_previous_settings_record_at_the_storage_limit
         original
     );
     let view = upgraded.view(&metadata, "upgraded", &stored).unwrap();
-    assert_eq!(view.values["number_entities"], "");
-    assert_eq!(view.values["cover_position_entities"], "");
+    for key in HA_OMIT_EMPTY_SELECTIONS {
+        assert_eq!(view.values[key], "");
+    }
     let saved = upgraded
         .merge(
             "upgraded",

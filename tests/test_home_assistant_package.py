@@ -43,7 +43,7 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 if "windows" in target:
                     binary += ".exe"
                 self.assertEqual(manifest["plugin_id"], "inverter-desktop.home-assistant")
-                self.assertEqual(manifest["version"], "0.6.0")
+                self.assertEqual(manifest["version"], "0.7.0")
                 self.assertEqual(manifest["host_api"], "^1.5")
                 self.assertEqual(manifest["target"], target)
                 self.assertEqual(manifest["entrypoint"], f"bin/{binary}")
@@ -69,7 +69,7 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertEqual(set(fields), {
             "ha_base_url", "watch_entities", "action_entities", "media_player_entities",
             "binary_entities", "cover_entities", "number_entities",
-            "cover_position_entities", "ha_token",
+            "cover_position_entities", "discovery_prefixes", "ha_token",
         })
         self.assertTrue(all(field["type"] == "string" for field in fields.values()))
         self.assertEqual(fields["ha_base_url"]["maxLength"], 2048)
@@ -86,11 +86,16 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertEqual(fields["cover_entities"]["default"], "")
         self.assertEqual(fields["cover_entities"]["maxLength"], 4096)
         self.assertNotIn("cover_entities", schema["required"])
-        for key in ("number_entities", "cover_position_entities"):
+        for key, limit in (("number_entities", 4096), ("cover_position_entities", 4096),
+                           ("discovery_prefixes", 1024)):
             self.assertEqual(fields[key]["default"], "")
             self.assertIs(fields[key]["omitEmpty"], True)
-            self.assertEqual(fields[key]["maxLength"], 4096)
+            self.assertEqual(fields[key]["maxLength"], limit)
             self.assertNotIn(key, schema["required"])
+        self.assertEqual({key for key, field in fields.items() if field.get("omitEmpty")}, {
+            "number_entities", "cover_position_entities", "discovery_prefixes",
+        })
+        self.assertNotIn("writeOnly", fields["discovery_prefixes"])
         self.assertNotIn("minLength", fields["watch_entities"])
         self.assertTrue(fields["ha_token"]["writeOnly"])
         self.assertEqual(fields["ha_token"]["minLength"], 1)

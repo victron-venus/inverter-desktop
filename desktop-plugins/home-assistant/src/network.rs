@@ -15,6 +15,7 @@ use tokio_tungstenite::{
 };
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_DISCOVERY_STATES: usize = 4096;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const PING_INTERVAL: Duration = Duration::from_secs(20);
 const PONG_TIMEOUT: Duration = Duration::from_secs(10);
@@ -118,18 +119,27 @@ fn event<'a>(
         return Ok(None);
     }
     let data = event.get("data").ok_or(Failure::Retry)?;
-    let entity = data
-        .get("entity_id")
-        .and_then(Value::as_str)
-        .ok_or(Failure::Retry)?;
-    // HA's event-type subscription can include other entities. Never retain
-    // their state, attributes or names, and do not claim a server-side filter.
-    if !configuration
+    let Some(entity) = data.get("entity_id").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let explicit = configuration
         .entities
         .iter()
-        .any(|selected| selected == entity)
-    {
+        .any(|selected| selected == entity);
+    // This is local filtering of a broad HA event stream. Discovery cannot
+    // promote matching entities into any configured action list.
+    if !explicit && !configuration.discovery_matches(entity) {
         return Ok(None);
+    }
+    if !explicit {
+        // Malformed discovered data withdraws only that row. Buffering the
+        // tombstone also prevents an older bulk snapshot from resurrecting it.
+        let value = data.get("new_state").filter(|value| {
+            value.is_object()
+                && value.get("entity_id").and_then(Value::as_str) == Some(entity)
+                && value.get("state").is_some_and(Value::is_string)
+        });
+        return Ok(Some((entity, value)));
     }
     let value = data.get("new_state").ok_or(Failure::Retry)?;
     if value.is_null() {
@@ -194,7 +204,7 @@ async fn authenticate(
         Some("auth_invalid") => return Err(Failure::Authentication),
         _ => return Err(Failure::Retry),
     }
-    if !configuration.entities.is_empty() {
+    if !configuration.entities.is_empty() || configuration.discovery_enabled() {
         send(
             socket,
             json!({"id":SUBSCRIPTION_ID,"type":"subscribe_events","event_type":"state_changed"}),
@@ -233,7 +243,7 @@ async fn initial_state(
     entity: &str,
 ) -> Result<Option<Value>, Failure> {
     time::timeout(OPERATION_TIMEOUT, async {
-        let mut response = client
+        let response = client
             .get(configuration.state_url(entity))
             .bearer_auth(&configuration.token)
             .send()
@@ -245,27 +255,58 @@ async fn initial_state(
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        if !response.status().is_success()
-            || response
-                .content_length()
-                .is_some_and(|bytes| bytes > MAX_RESPONSE_BYTES as u64)
-        {
+        if !response.status().is_success() {
             return Err(Failure::Retry);
         }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| Failure::Retry)? {
-            if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
-                return Err(Failure::Retry);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        inverter_worker_protocol::reject_reserved_number_keys(&bytes)
-            .map_err(|_| Failure::Retry)?;
-        let value: Value = serde_json::from_slice(&bytes).map_err(|_| Failure::Retry)?;
+        let value = bounded_json(response).await?;
         if !value.is_object() || value.get("entity_id").and_then(Value::as_str) != Some(entity) {
             return Err(Failure::Retry);
         }
         Ok(Some(value))
+    })
+    .await
+    .map_err(|_| Failure::Retry)?
+}
+
+async fn bounded_json(mut response: reqwest::Response) -> Result<Value, Failure> {
+    if response
+        .content_length()
+        .is_some_and(|bytes| bytes > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(Failure::Retry);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| Failure::Retry)? {
+        if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+            return Err(Failure::Retry);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    inverter_worker_protocol::reject_reserved_number_keys(&bytes).map_err(|_| Failure::Retry)?;
+    serde_json::from_slice(&bytes).map_err(|_| Failure::Retry)
+}
+
+async fn discovery_states(
+    client: &reqwest::Client,
+    configuration: &Validated,
+) -> Result<Vec<Value>, Failure> {
+    time::timeout(OPERATION_TIMEOUT, async {
+        let response = client
+            .get(configuration.discovery_url())
+            .bearer_auth(&configuration.token)
+            .send()
+            .await
+            .map_err(|_| Failure::Retry)?;
+        if rejected(response.status().as_u16()) {
+            return Err(Failure::Authentication);
+        }
+        if !response.status().is_success() {
+            return Err(Failure::Retry);
+        }
+        match bounded_json(response).await? {
+            Value::Array(states) if states.len() <= MAX_DISCOVERY_STATES => Ok(states),
+            _ => Err(Failure::Retry),
+        }
     })
     .await
     .map_err(|_| Failure::Retry)?
@@ -343,6 +384,9 @@ async fn session(
         })
         .buffer_unordered(INITIAL_CONCURRENCY);
     let mut initial_finished = configuration.entities.is_empty();
+    let discovery = discovery_states(client, configuration);
+    tokio::pin!(discovery);
+    let mut discovery_finished = !configuration.discovery_enabled();
     loop {
         // Check deadlines before each frame, even under continuous server traffic.
         if let Some(id) = heartbeat.due(Instant::now())? {
@@ -365,6 +409,14 @@ async fn session(
                 match item {
                     Some((entity,result)) => state.lock().unwrap_or_else(|error| error.into_inner()).initial(&entity,result?.as_ref()),
                     None => initial_finished = true,
+                }
+            },
+            result = &mut discovery, if !discovery_finished => {
+                discovery_finished = true;
+                match result {
+                    Ok(states) => state.lock().unwrap_or_else(|error| error.into_inner()).discovery_snapshot(&states),
+                    Err(Failure::Authentication) => return Err(Failure::Authentication),
+                    Err(Failure::Retry) => state.lock().unwrap_or_else(|error| error.into_inner()).discovery_failed(),
                 }
             }
         }

@@ -1,8 +1,9 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.6.0, requiring host API `^1.5`.
-Connection status and selected entity states are read-only by default. Explicit
+`inverter-desktop.home-assistant`, version 0.7.0, requiring host API `^1.5`.
+Connection status and selected entity states are read-only by default. Optional
+sensor-prefix discovery fills unused state slots without granting actions. Explicit
 optional action lists enable fixed button presses, scene activation, media
 transport, on/off controls, cover Open/Close/Stop, bounded numbers and cover positions. There is
 no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
@@ -41,6 +42,17 @@ the core telemetry connection.
   Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
+- `discovery_prefixes`: optional string, default empty, at most 1,024 UTF-8 bytes.
+  Select up to eight unique literal prefixes separated by commas or newlines.
+  Surrounding whitespace and blank entries are ignored; duplicate prefixes count
+  once. Each prefix is at most 128 bytes and starts with `sensor.` or
+  `binary_sensor.`. The optional object prefix uses only lowercase ASCII letters,
+  digits and underscores, for example `sensor.kitchen_` or `binary_sensor.door_`.
+  Bare `sensor.` and `binary_sensor.` select their entire respective domains.
+  Matching is literal and case-sensitive, with no glob, regular expression or
+  other domain support. Only valid literal entity IDs can be discovered. These
+  read-only targets fill remaining slots after all explicit selections; discovery
+  never creates fixed actions or numeric inputs. Leave empty to disable it.
 - `action_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Explicitly select up to 16 unique literal `button.*` or `scene.*` IDs separated
   by commas or newlines. Targets are also watched within the total 32-entity
@@ -89,23 +101,23 @@ host's 64-contribution limit. Duplicate IDs count once within their list. All
 previously valid configurations remain within this budget when new fields are empty.
 Omitted or empty new fields also preserve the prior serialized 32 KiB
 configuration validation boundary.
-The two numeric fields use host API 1.5's explicit `omitEmpty` schema option:
+The two numeric fields and `discovery_prefixes` use host API 1.5's explicit `omitEmpty` schema option:
 empty values remain visible in settings, use the empty default when saved, and
 add no bytes to startup configuration. This preserves native storage/envelope
 limits as well as worker-side validation; nonempty selections are counted normally.
 
-With a nonempty combined selection, initial REST reads request only
-`/api/states/<entity_id>` beneath the configured prefix. The worker never requests
-the all-entity REST collection or WebSocket `get_states`. Live updates use
-`subscribe_events` with `event_type: state_changed`. **That server stream covers
-all entities**: the worker immediately discards unwatched entities and retains
-only its configured list. This is local filtering, not a claim of server-side
-subscription filtering or token-level access restriction.
+Explicit selections use individual initial REST reads at
+`/api/states/<entity_id>` beneath the configured prefix. Only enabled discovery
+with free state slots adds the bounded collection read described below. The
+worker never sends WebSocket `get_states`. Live updates use `subscribe_events`
+with `event_type: state_changed`. **That server stream covers all entities**:
+the worker filters it locally to explicit selections and eligible discoveries.
+This is not server-side subscription filtering or a token-level access restriction.
 
-When all five lists are empty, the worker still establishes the authenticated
-WebSocket connection for connection status, but makes no entity REST reads or
-event subscription. A change
-to any list is applied through the normal settings restart. Entity state
+When `watch_entities`, all six action lists and `discovery_prefixes` are empty,
+the worker still establishes the authenticated WebSocket connection for status,
+but makes no entity REST reads or event subscription. A change to any list is
+applied through the normal settings restart. Entity state
 and labels are bounded plain data; the host renders contributions, and the worker
 supplies no frontend code or arbitrary navigation URLs.
 
@@ -116,6 +128,47 @@ and unavailable states. Disconnect clears stale values. Dashboard updates are
 coalesced to four per second, independently of socket reads and heartbeat checks.
 Authentication rejection stops reconnect attempts until settings restart the
 worker; network failures reconnect with a bounded delay.
+
+## Read-only sensor discovery
+
+Discovery is disabled by default. When prefixes are configured and explicit
+targets occupy fewer than 32 state slots, each authenticated connection makes
+one GET `<base>/api/states`. This response contains the all-entity collection,
+not a server-filtered prefix result. The request has a 15-second deadline, a
+1 MiB response limit and at most 4,096 source items. Only matching
+`sensor.*`/`binary_sensor.*` state projections are retained. Discovery adds no
+permissions, host API version, frontend contribution kind or write capability.
+
+All explicit watched and control targets retain their ordered indices and
+priority. Discovered targets fill at most `32 - explicit target count` state
+slots, excluding any explicit target. Initial matches are selected in lexical
+entity-ID order. Existing limits remain 32 state cards, 31 controls and 64 total
+contributions, with the same two concurrent service requests. A full explicit
+selection skips the collection request entirely.
+
+The worker subscribes before the collection read. While it is pending, a bounded
+buffer keeps the latest projected live update or deletion for at most 128 matching
+entity IDs. Those updates take precedence over the older snapshot. Buffer overflow,
+an oversized or invalid response, timeout or another collection failure disables
+discovery for that connection and shows a warning in the existing connection card.
+Explicit reads and controls continue; a 401/403 authentication rejection still
+halts the whole session and cancels its pending work. A later connection starts a
+fresh discovery attempt. There is no periodic collection refresh or retry within
+the same connection.
+
+After bootstrap, live additions use free discovery slots and deletions release
+their slots. Unknown or unavailable states stay visible as read-only status
+cards; malformed live states remove their discovered row. At capacity, unseen
+matches are discarded and the connection card
+shows a limit indication until reconnect. The worker keeps no hidden catalog or
+overflow queue to backfill later: a newly free slot needs a later matching live
+update or the next connection's snapshot. Disconnect clears discovered state,
+and reconnect resamples the collection. Discovery failures do not change explicit
+action IDs, presets, numeric grants or core transport ownership.
+
+This slice does not add an entity picker, appliance summaries, weather forecasts,
+grouped household layouts or automatic migration of bundled HA settings. The
+bundled desktop integration remains available while that parity work continues.
 
 ## Explicit button and scene actions
 
@@ -352,8 +405,8 @@ CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --li
   -- --exact --ignored --test-threads=1
 # Repeat with signed_home_assistant_package_actions, signed_home_assistant_package_media
 # signed_home_assistant_package_binary, signed_home_assistant_package_cover
-# and signed_home_assistant_package_numeric
-# for their respective selected actions.
+# signed_home_assistant_package_numeric and signed_home_assistant_package_discovery
+# for their respective controls and read-only discovery.
 ```
 
 Ordinary native tests do not build another crate or silently launch this external

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "host_api": "^1.5",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",
@@ -24,6 +24,14 @@
         "description": "Entity IDs separated by commas or newlines. The ordered union with all control targets is limited to 32 entities. All control lists together allow 31 controls: one per button/scene, three per media player, two per on/off target, three per cover and one per numeric input. Read selection alone never enables writes.",
         "maxLength": 4096,
         "default": ""
+      },
+      "discovery_prefixes": {
+        "type": "string",
+        "title": "Sensor prefixes to discover",
+        "description": "Optional read-only sensor. or binary_sensor. prefixes, up to eight, separated by commas or newlines. Use lowercase letters, digits and underscores after the dot, such as sensor.kitchen_; a bare domain prefix matches all its sensors. No wildcards or other domains. Discovery fills unused slots within the 32-entity limit after explicit selections and never enables actions. Leave blank to disable discovery.",
+        "maxLength": 1024,
+        "default": "",
+        "omitEmpty": true
       },
       "ha_token": {
         "type": "string",

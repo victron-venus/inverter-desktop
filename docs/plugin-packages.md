@@ -122,7 +122,7 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.6 requires host API
+worker supplies connection status and state cards. Version 0.7 retains host API
 `^1.5` and keeps service actions disabled unless `action_entities` explicitly
 selects literal `button.*` or `scene.*` targets, `media_player_entities` selects
 literal media players, `binary_entities` selects literal switches, input booleans
@@ -140,10 +140,25 @@ Position writes require their own selection and reported set-position support.
 Tilt and other parameterized services remain pending.
 The combined selection permits 32 watched entities and 31 controls, bounded
 to 64 contributions. There is no generic service proxy, core MQTT
-access, camera authority, or inverter flag alias lookup. Initial
-REST reads select individual configured entities; the broader `state_changed`
-event stream is filtered locally. Network permissions describe trusted worker
-behavior and do not sandbox its operating-system access.
+access, camera authority, or inverter flag alias lookup. Explicit targets use
+individual initial REST reads. Optional `discovery_prefixes` adds read-only
+`sensor.*` and `binary_sensor.*` cards in unused slots after all explicit targets,
+preserving their IDs and control authority. Prefixes are literal, with at most
+eight unique entries and no wildcards or other domains; the field is empty by
+default and uses `omitEmpty` to preserve existing startup envelopes.
+
+Only enabled discovery with free slots requests the all-entity `/api/states`
+collection once per connection, bounded to 1 MiB, 4,096 source items and 15 seconds.
+The worker subscribes first and retains at most 128 projected live updates or
+deletions during bootstrap so a late snapshot cannot resurrect older state.
+Initial matches are selected lexically; later matches use free slots. Excess
+matches are discarded with a visible limit indication, with no hidden catalog
+or periodic collection refresh. A collection failure or buffer overflow disables
+discovery for that connection while explicit reads and controls continue;
+authentication rejection still stops the whole session. Reconnect resamples.
+Both the collection and broader `state_changed` stream are filtered locally,
+not by a restricted HA token or server-side prefix subscription. Network
+permissions describe trusted worker behavior and do not sandbox its operating-system access.
 
 `prepare-plugin-package.py --plugin home-assistant` stages this worker using
 fixed built-in metadata and the same native header/path checks as Frigate. The
@@ -157,7 +172,8 @@ disposable package trust, a temporary HA HTTP/WebSocket fixture and an independe
 core MQTT connection. Separate read-only and action fixtures cover settings
 restart, disable, logout/uninstall, exact service POSTs and stale action rejection.
 Current demonstrated results and pending checks are recorded in TODO.md. A production HA installation, service/UI
-parity and legacy migration remain separate work. The release trust policy stays
+parity, entity-picker UI, appliance/weather presentation and legacy migration
+remain separate work. The release trust policy stays
 empty and this slice does not create signing keys.
 
 ## Producing an archive
