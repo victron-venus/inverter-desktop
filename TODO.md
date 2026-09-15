@@ -250,6 +250,9 @@ of 79 warnings and 84 informational diagnostics; changed plugin files have no
 lint diagnostics. Prettier checks pass. Packaging and native mobile-boundary
 suites pass 27 and 29 tests, and packaging Pylint rates 10/10.
 All applicable pre-commit hooks pass without skip overrides.
+The branch also incorporates PR #435 on main at `0962bd7`; all 366 frontend
+tests, 17 mobile tests, both typechecked builds, lint and formatting pass again
+on the combined tree.
 
 Four new native settings regressions bring that suite to 13 passing tests.
 They exercise the exact 32 KiB startup envelope and real encrypted settings
