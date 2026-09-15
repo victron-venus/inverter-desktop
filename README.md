@@ -43,8 +43,10 @@ A separately built [Home Assistant worker](desktop-plugins/home-assistant/README
 adds authenticated connection status and state cards for a configured entity
 list. Read-only operation is the default; explicit action lists enable fixed
 HA button presses, scene activation, media-player Play/Pause/Stop, explicit
-switch/helper/light on/off commands and supported cover Open/Close/Stop through
-instance-bound plugin controls. Cover capabilities update the available actions.
+switch/helper/light on/off commands, supported cover Open/Close/Stop, bounded
+numbers and cover positions through instance-bound plugin controls. Numeric
+changes require explicit Apply within the advertised bounds and step; position
+writes require a separate selection. Cover capabilities update the available actions.
 Displayed state follows Home Assistant updates rather than assuming a service
 call changed the device.
 The worker owns its REST/WebSocket connection and isolated token. Other HA

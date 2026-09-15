@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.5.0",
-  "host_api": "^1.4",
+  "version": "0.6.0",
+  "host_api": "^1.5",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",
   "permissions": ["dashboard_contributions", "plugin_configuration", "network_http"],
@@ -21,7 +21,7 @@
       "watch_entities": {
         "type": "string",
         "title": "Entities to watch",
-        "description": "Entity IDs separated by commas or newlines. The ordered union with action targets is limited to 32 entities. All action lists together allow 31 buttons: one per button/scene, three per media player, two per on/off target and three per cover. Read selection alone never enables writes.",
+        "description": "Entity IDs separated by commas or newlines. The ordered union with all control targets is limited to 32 entities. All control lists together allow 31 controls: one per button/scene, three per media player, two per on/off target, three per cover and one per numeric input. Read selection alone never enables writes.",
         "maxLength": 4096,
         "default": ""
       },
@@ -60,6 +60,22 @@
         "description": "Optional explicit cover.* IDs, up to four, separated by commas or newlines. Targets are also watched. Offers supported Open, Close and Stop actions while Home Assistant reports a known state. Leave blank to disable cover actions.",
         "maxLength": 4096,
         "default": ""
+      },
+      "number_entities": {
+        "type": "string",
+        "title": "Numbers to control",
+        "description": "Optional explicit number.* IDs, up to four, separated by commas or newlines. Offers a value field and Apply when Home Assistant reports valid numeric bounds and step. Targets are also watched. Leave blank to disable number inputs.",
+        "maxLength": 4096,
+        "default": "",
+        "omitEmpty": true
+      },
+      "cover_position_entities": {
+        "type": "string",
+        "title": "Cover positions to control",
+        "description": "Optional explicit cover.* IDs, up to four, separated by commas or newlines. Offers a position field and Apply when the cover reports a valid position and supports setting it. Targets are also watched. Leave blank to disable position inputs.",
+        "maxLength": 4096,
+        "default": "",
+        "omitEmpty": true
       }
     }
   },

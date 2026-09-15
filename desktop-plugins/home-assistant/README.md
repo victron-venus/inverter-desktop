@@ -1,10 +1,10 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.5.0, requiring host API `^1.4`.
+`inverter-desktop.home-assistant`, version 0.6.0, requiring host API `^1.5`.
 Connection status and selected entity states are read-only by default. Explicit
 optional action lists enable fixed button presses, scene activation, media
-transport, on/off controls and cover Open/Close/Stop. There is
+transport, on/off controls, cover Open/Close/Stop, bounded numbers and cover positions. There is
 no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
 camera authority or dependency on the bundled HA client.
 
@@ -36,7 +36,8 @@ the core telemetry connection.
   Separate entity IDs with commas or newlines. Blank entries are ignored and
   duplicate IDs count once. The ordered union with action targets is limited to
   32 entities: watched IDs come first, followed by previously unseen button/scene
-  targets, media-player targets, on/off targets and finally cover targets.
+  targets, media-player targets, on/off targets, cover targets, number targets
+  and finally cover-position targets. New selections preserve older target indices.
   Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
@@ -60,23 +61,38 @@ the core telemetry connection.
   Explicitly select up to four unique literal `cover.*` IDs separated by commas
   or newlines. Targets are also watched. Open, Close and Stop are available only
   for operations the entity supports while HA reports a known cover state.
-  Watching a cover alone grants no actions. Position, tilt, speed and toggle
-  commands are not supported by this version.
+  Watching a cover alone grants no actions. This list grants no position writes;
+  those require the separate selection below. Tilt, speed and toggle are unsupported.
+- `number_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
+  Explicitly select up to four unique literal `number.*` IDs separated by commas
+  or newlines. Targets are also watched. Eligible observations supply a bounded
+  input using HA's current minimum, maximum and step. `input_number.*` is not
+  supported in this slice. Watching a number alone grants no write access.
+- `cover_position_entities`: optional string, default empty, at most 4,096 UTF-8
+  bytes. Explicitly select up to four unique literal `cover.*` IDs separated by
+  commas or newlines. Targets are also watched. Position inputs require a known
+  cover state, a valid observed position and HA's set-position capability.
+  Selecting a position target does not grant Open, Close or Stop.
 - `ha_token`: required write-only token, 1–4,096 bytes of visible ASCII without
   whitespace or control characters. It is not read from core configuration or
   placed in arguments, inherited environment, dashboard contributions or logs.
   The token retains its account's Home Assistant permissions; this package does
   not create a restricted server-side token. Reads and explicitly selected
-  button/scene/media/on-off/cover actions use that token.
+  button/scene/media/on-off/cover/number actions use that token.
 
-All four action lists together may produce at most 31 action buttons: count one
+All six action lists together may produce at most 31 controls: count one
 per button or scene, three per media player, two per on/off target and three per
-cover, even if a selected cover supports fewer operations. Alongside
+cover, even if a selected cover supports fewer operations, and one per number
+or cover-position target. Alongside
 connection status and up to 32 state cards, this keeps each snapshot within the
 host's 64-contribution limit. Duplicate IDs count once within their list. All
-previous configurations without `cover_entities` remain within this budget.
-An omitted or empty new field also preserves the prior serialized 32 KiB
+previously valid configurations remain within this budget when new fields are empty.
+Omitted or empty new fields also preserve the prior serialized 32 KiB
 configuration validation boundary.
+The two numeric fields use host API 1.5's explicit `omitEmpty` schema option:
+empty values remain visible in settings, use the empty default when saved, and
+add no bytes to startup configuration. This preserves native storage/envelope
+limits as well as worker-side validation; nonempty selections are counted normally.
 
 With a nonempty combined selection, initial REST reads request only
 `/api/states/<entity_id>` beneath the configured prefix. The worker never requests
@@ -133,7 +149,7 @@ updates, rather than assuming the HTTP result proves a physical device change.
 Host API 1.4 binds each dashboard click to the actual displayed worker instance
 and exact preset. A settings restart or reinstall cannot redirect an old click
 to a newly configured target, even if a generation counter or action ID repeats.
-All four action lists must be empty to preserve the existing read-only behavior.
+All six action lists must be empty to preserve the existing read-only behavior.
 
 ## Explicit media-player transport
 
@@ -151,9 +167,9 @@ remaining deadline, cancellation, no-retry and unknown-outcome handling describe
 above. A successful response does not establish physical playback or undo effects
 after cancellation.
 
-Without on/off or cover targets, connection status, 32 state cards, 16 button/scene actions
+Without on/off, cover or numeric targets, connection status, 32 state cards, 16 button/scene actions
 and 12 media actions produce at most 61 contributions. The combined limits above
-allow up to 64 when on/off or cover controls are selected. The maximum snapshot must also
+allow up to 64 when additional controls are selected. The maximum snapshot must also
 fit the existing 64 KiB frame limit. These actions need no new host UI
 contribution, permission or protocol version.
 
@@ -211,8 +227,46 @@ Canceling a request stops local waiting; it neither reverses device movement nor
 sends Stop. Stop requires a separate explicit click and is rejected while both
 request slots are occupied. The user must check HA state after an unknown result.
 
-Arbitrary position, tilt and speed controls require a future contribution/UI
-increment. This version introduces no new host API, permissions or frontend code.
+## Explicit bounded numeric inputs
+
+Each eligible number supplies `ha-number-<index>-set`; each eligible position
+target supplies `ha-cover-position-<index>-set`. Both use the host API 1.5
+`number_input` contribution. The UI shows the observed value, bounds and step,
+keeps edited drafts separate from live state, and submits only after Apply.
+
+For numbers, HA must report a numeric state and numeric `min`, `max` and `step`
+attributes. The worker parses decimal literals exactly, including exponent
+notation, and admits only values representable with at most six decimal places
+and integer coefficients bounded to 10^15. The state must lie on the grid
+anchored at the minimum. Precision derives from the bounds and step, so eligible
+value updates alone retain the input revision. Unsupported precision, malformed
+metadata, non-string units or off-grid observations retain the read-only state card
+but withdraw its numeric input. String units follow existing display normalization:
+strip controls, trim and bound to 32 UTF-8 bytes, with empty or null meaning no unit.
+Revisions track the effective published unit. The worker also rejects reserved JSON number
+objects before deserialization, preventing objects from masquerading as numbers.
+
+Position inputs require exact `open`, `closed`, `opening` or `closing` state,
+an unsigned feature mask containing bit 4 (`SET_POSITION`), and integer
+`current_position` from 0 through 100. Their range is 0–100 with step 1 and unit `%`.
+Other cover features do not grant position authority.
+
+Only `{input_revision, value_scaled}` is accepted for these operations. The
+worker checks the currently eligible and published grant, converts the integer
+coefficient to an exact JSON number, then calls `number/set_value` with exactly
+`{entity_id, value}`, or `cover/set_cover_position` with exactly
+`{entity_id, position}`. Targets and service routes cannot be supplied by callers.
+These follow HA's [number action](https://www.home-assistant.io/actions/number.set_value/)
+and [cover-position action](https://www.home-assistant.io/actions/cover.set_cover_position/).
+
+Changes to eligibility, bounds, step, precision or unit rotate the revision.
+Withdrawal and restoration also require a new revision; ordinary observed-value
+updates do not. Both host and worker reject stale revisions. Numeric operations
+share the existing two request slots, deadlines, cancellation and no-retry rules.
+Service success does not change the displayed observation: only HA reads and
+events do. Cancellation never issues Stop or restores a previous number.
+Tilt, speed and other parameterized services remain pending. No new permission,
+core MQTT route, production publisher key or mobile dependency is introduced.
 
 The wire behavior follows the official
 [WebSocket API](https://developers.home-assistant.io/docs/api/websocket/) and
@@ -226,8 +280,8 @@ requests. The package declares only `plugin_configuration`,
 ## Build and stage
 
 The worker has its own Cargo workspace and checked-in lockfile. It depends on
-the local `desktop-plugins/worker-protocol` crate only for bounded stdio framing
-and output. Identity, configuration, HA authentication and networking remain in
+the local `desktop-plugins/worker-protocol` crate for bounded stdio framing,
+JSON number-object rejection and output. Identity, configuration, HA authentication and networking remain in
 this worker. Build it separately from the host to keep machine load bounded:
 
 ```bash
@@ -297,7 +351,8 @@ CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --li
   plugins::home_assistant_integration_tests::signed_home_assistant_package_lifecycle \
   -- --exact --ignored --test-threads=1
 # Repeat with signed_home_assistant_package_actions, signed_home_assistant_package_media
-# signed_home_assistant_package_binary and signed_home_assistant_package_cover
+# signed_home_assistant_package_binary, signed_home_assistant_package_cover
+# and signed_home_assistant_package_numeric
 # for their respective selected actions.
 ```
 

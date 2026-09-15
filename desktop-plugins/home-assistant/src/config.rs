@@ -8,6 +8,8 @@ pub const MAX_ACTION_ENTITIES: usize = 16;
 pub const MAX_MEDIA_PLAYER_ENTITIES: usize = 4;
 pub const MAX_BINARY_ENTITIES: usize = 8;
 pub const MAX_COVER_ENTITIES: usize = 4;
+pub const MAX_NUMBER_ENTITIES: usize = 4;
+pub const MAX_COVER_POSITION_ENTITIES: usize = 4;
 pub const MAX_ACTION_BUTTONS: usize = 31;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
@@ -34,6 +36,10 @@ pub struct Values {
     pub binary_entities: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cover_entities: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub number_entities: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cover_position_entities: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -49,6 +55,8 @@ pub struct Validated {
     pub media_player_entities: Vec<String>,
     pub binary_entities: Vec<String>,
     pub cover_entities: Vec<String>,
+    pub number_entities: Vec<String>,
+    pub cover_position_entities: Vec<String>,
     pub token: String,
 }
 
@@ -82,6 +90,8 @@ pub enum Operation {
     OpenCover,
     CloseCover,
     StopCover,
+    SetNumber,
+    SetCoverPosition,
 }
 
 impl Operation {
@@ -97,6 +107,8 @@ impl Operation {
             Self::OpenCover => "Open ",
             Self::CloseCover => "Close ",
             Self::StopCover => "Stop ",
+            Self::SetNumber => "Set ",
+            Self::SetCoverPosition => "Set position ",
         }
     }
 
@@ -133,6 +145,8 @@ impl Operation {
             Self::OpenCover => "api/services/cover/open_cover",
             Self::CloseCover => "api/services/cover/close_cover",
             Self::StopCover => "api/services/cover/stop_cover",
+            Self::SetNumber => "api/services/number/set_value",
+            Self::SetCoverPosition => "api/services/cover/set_cover_position",
         }
     }
 }
@@ -262,10 +276,28 @@ impl Configuration {
         {
             return Err("invalid HA cover entities");
         }
+        let number_entities = entity_list(&self.values.number_entities)?;
+        if number_entities.len() > MAX_NUMBER_ENTITIES
+            || number_entities
+                .iter()
+                .any(|entity| !entity.starts_with("number."))
+        {
+            return Err("invalid HA number entities");
+        }
+        let cover_position_entities = entity_list(&self.values.cover_position_entities)?;
+        if cover_position_entities.len() > MAX_COVER_POSITION_ENTITIES
+            || cover_position_entities
+                .iter()
+                .any(|entity| !entity.starts_with("cover."))
+        {
+            return Err("invalid HA cover position entities");
+        }
         if action_entities.len()
             + 3 * media_player_entities.len()
             + 2 * binary_entities.len()
             + 3 * cover_entities.len()
+            + number_entities.len()
+            + cover_position_entities.len()
             > MAX_ACTION_BUTTONS
         {
             return Err("too many HA action buttons");
@@ -275,6 +307,8 @@ impl Configuration {
             .chain(&media_player_entities)
             .chain(&binary_entities)
             .chain(&cover_entities)
+            .chain(&number_entities)
+            .chain(&cover_position_entities)
         {
             if !entities.contains(entity) {
                 entities.push(entity.clone());
@@ -290,6 +324,8 @@ impl Configuration {
             media_player_entities,
             binary_entities,
             cover_entities,
+            number_entities,
+            cover_position_entities,
             token: self.secrets.ha_token,
         })
     }
@@ -408,6 +444,29 @@ impl Validated {
         self.base
             .join(operation.path())
             .expect("validated URL and fixed service path")
+    }
+
+    pub fn inputs(&self) -> Vec<ConfiguredAction> {
+        [
+            (&self.number_entities, "ha-number", Operation::SetNumber),
+            (
+                &self.cover_position_entities,
+                "ha-cover-position",
+                Operation::SetCoverPosition,
+            ),
+        ]
+        .into_iter()
+        .flat_map(|(entities, prefix, operation)| {
+            entities
+                .iter()
+                .enumerate()
+                .map(move |(index, entity)| ConfiguredAction {
+                    id: format!("{prefix}-{index}-set"),
+                    entity: entity.clone(),
+                    operation,
+                })
+        })
+        .collect()
     }
 }
 
@@ -996,5 +1055,183 @@ mod tests {
             format!("{}x", legacy["secrets"]["ha_token"].as_str().unwrap()).into();
         let oversized: Configuration = serde_json::from_value(legacy).unwrap();
         assert_eq!(oversized.validate().err(), Some("invalid configuration"));
+    }
+
+    #[test]
+    fn numeric_selections_are_explicit_ordered_bounded_and_preserve_old_ids() {
+        let mut config = configuration(
+            "https://ha.example/prefix",
+            "cover.position,number.first,sensor.a",
+        );
+        config.values.action_entities = "button.a".into();
+        config.values.media_player_entities = "media_player.a".into();
+        config.values.binary_entities = "light.a".into();
+        config.values.cover_entities = "cover.control".into();
+        config.values.number_entities = "number.second,number.first,number.second".into();
+        config.values.cover_position_entities = "cover.control,cover.position,cover.control".into();
+        let config = config.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            [
+                "cover.position",
+                "number.first",
+                "sensor.a",
+                "button.a",
+                "media_player.a",
+                "light.a",
+                "cover.control",
+                "number.second"
+            ]
+        );
+        assert_eq!(
+            config
+                .actions()
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "ha-action-0",
+                "ha-media-0-play",
+                "ha-media-0-pause",
+                "ha-media-0-stop",
+                "ha-binary-0-on",
+                "ha-binary-0-off",
+                "ha-cover-0-open",
+                "ha-cover-0-close",
+                "ha-cover-0-stop"
+            ]
+        );
+        let inputs = config.inputs();
+        assert_eq!(
+            inputs
+                .iter()
+                .map(|input| (input.id.as_str(), input.entity.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("ha-number-0-set", "number.second"),
+                ("ha-number-1-set", "number.first"),
+                ("ha-cover-position-0-set", "cover.control"),
+                ("ha-cover-position-1-set", "cover.position")
+            ]
+        );
+        assert_eq!(
+            config.service_url(inputs[0].operation).as_str(),
+            "https://ha.example/prefix/api/services/number/set_value"
+        );
+        assert_eq!(
+            config.service_url(inputs[2].operation).as_str(),
+            "https://ha.example/prefix/api/services/cover/set_cover_position"
+        );
+        let mut old = configuration("http://localhost", "number.a,cover.a");
+        old.values.cover_entities = "cover.a".into();
+        assert!(old.validate().unwrap().inputs().is_empty());
+        for (field, domain) in [
+            ("number_entities", "number"),
+            ("cover_position_entities", "cover"),
+        ] {
+            for invalid in [
+                "switch.a".into(),
+                "number.*".into(),
+                "cover.a/escape".into(),
+                "do_not_supply_charger".into(),
+                " ".repeat(4097),
+                (0..5)
+                    .map(|i| format!("{domain}.e{i}"))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ] {
+                let mut config =
+                    serde_json::to_value(configuration("http://localhost", "")).unwrap();
+                config["values"][field] = json!(invalid);
+                assert!(serde_json::from_value::<Configuration>(config)
+                    .unwrap()
+                    .validate()
+                    .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_control_reservations_cover_every_existing_budget_and_watch_boundary() {
+        let list = |domain: &str, count| {
+            (0..count)
+                .map(|i| format!("{domain}.e{i}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        // Every old control total is achievable. Also exercise overlaps between
+        // all four selected covers and independently selected positions.
+        for previous in 0..=31 {
+            for numbers in 0..=MAX_NUMBER_ENTITIES {
+                for positions in 0..=MAX_COVER_POSITION_ENTITIES {
+                    let mut config = configuration("http://localhost", "");
+                    let covers = (previous / 3).min(4);
+                    let remaining = previous - 3 * covers;
+                    let media = (remaining / 3).min(4);
+                    let buttons = remaining - 3 * media;
+                    config.values.cover_entities = list("cover", covers);
+                    config.values.media_player_entities = list("media_player", media);
+                    config.values.action_entities = list("button", buttons);
+                    config.values.number_entities = list("number", numbers);
+                    config.values.cover_position_entities = list("cover", positions);
+                    let config = config.validate();
+                    let count = previous + numbers + positions;
+                    if count <= MAX_ACTION_BUTTONS {
+                        let config = config.unwrap();
+                        assert_eq!(config.actions().len() + config.inputs().len(), count);
+                        assert!(1 + MAX_ENTITIES + count <= 64);
+                    } else {
+                        assert_eq!(config.err(), Some("too many HA action buttons"));
+                    }
+                }
+            }
+        }
+        for count in [28, 29] {
+            let mut config = configuration("http://localhost", &list("sensor", count));
+            config.values.number_entities = list("number", 4);
+            assert_eq!(config.validate().is_ok(), count == 28);
+        }
+    }
+
+    #[test]
+    fn empty_numeric_fields_preserve_the_exact_previous_configuration_byte_boundary() {
+        let mut legacy = json!({"revision":"legacy-numeric-limit","values":{
+            "ha_base_url":"http://localhost","watch_entities":"\u{b}".repeat(4096),
+            "action_entities":"\u{b}".repeat(1200),"media_player_entities":"",
+            "binary_entities":"light.a","cover_entities":"cover.a"},"secrets":{"ha_token":"fixture-token"}});
+        let padding = MAX_CONFIGURATION_BYTES - serde_json::to_vec(&legacy).unwrap().len();
+        legacy["secrets"]["ha_token"] = json!(format!("fixture-token{}", "x".repeat(padding)));
+        assert_eq!(
+            serde_json::to_vec(&legacy).unwrap().len(),
+            MAX_CONFIGURATION_BYTES
+        );
+        for field in [
+            None,
+            Some("number_entities"),
+            Some("cover_position_entities"),
+        ] {
+            if let Some(field) = field {
+                legacy["values"][field] = json!("");
+            }
+            let config: Configuration = serde_json::from_value(legacy.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&config).unwrap().len(),
+                MAX_CONFIGURATION_BYTES
+            );
+            let config = config.validate().unwrap();
+            assert!(config.inputs().is_empty());
+            assert_eq!(config.actions().len(), 5);
+        }
+        legacy["secrets"]["ha_token"] = json!(format!(
+            "{}x",
+            legacy["secrets"]["ha_token"].as_str().unwrap()
+        ));
+        assert_eq!(
+            serde_json::from_value::<Configuration>(legacy)
+                .unwrap()
+                .validate()
+                .err(),
+            Some("invalid configuration")
+        );
     }
 }

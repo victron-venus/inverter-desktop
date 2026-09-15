@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.4.0**, independently of the application version. The
+The current host API is **1.5.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -64,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.4.0",
+  "host_api_version": "1.5.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -76,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.4.0",
+  "host_api_version": "1.5.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -118,7 +118,7 @@ startup deadline covers both steps. Early contributions, missing/mismatched or
 duplicate acknowledgments fail that generation. Packages without configuration
 permission receive no configuration frame and complete startup after `ready`.
 Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
-are incompatible with a 1.4 host. The wire protocol and manifest remain version 1.
+are incompatible with a 1.5 host. The wire protocol and manifest remain version 1.
 A configured worker should declare an API requirement such as `^1.1`.
 
 The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
@@ -126,6 +126,10 @@ frame limit. Values and secrets are scoped to the verified plugin ID; fields not
 present in its current schema are retained on disk but withheld from the worker.
 The native service validates required values before launching. Missing required
 setup therefore requires installing disabled, saving settings, then enabling.
+With host API 1.5, a schema may explicitly use `omitEmpty` for optional public
+default-empty strings. Only those empty values are withheld from startup; the
+editor retains their effective empty default and saves without redundant keys.
+See the [schema contract](plugin-settings.md).
 
 Configuration is sent through the owned worker's startup pipe only. It is absent
 from command-line arguments, inherited environment, runtime snapshots, UI events,
@@ -159,8 +163,9 @@ work. None of this identity data is a publisher key or permission to bypass auth
 
 This extends the native dashboard boundary, not the worker wire schema. Existing
 worker Action/Cancel/ActionResult/ActionError messages stay at protocol version 1.
-HA packages with service actions require `^1.4` so they cannot be installed on an
-older host without the displayed-instance check. Frigate remains compatible with
+HA 0.2–0.5 packages with fixed service actions require `^1.4`. HA 0.6 requires
+`^1.5` for bounded numeric inputs as well. Existing workers with compatible
+`^1.3` or `^1.4` ranges still negotiate the selected 1.5 version; Frigate retains
 its existing API range.
 
 ## Dashboard contributions
@@ -195,7 +200,7 @@ plugin's namespace.
 }
 ```
 
-Four contribution kinds are supported:
+Five contribution kinds are supported:
 
 - `text`: `id`, `title`, `text`.
 - `metric`: `id`, `title`, finite numeric `value`, and optional `unit` (omitted or
@@ -203,10 +208,62 @@ Four contribution kinds are supported:
 - `status`: `id`, `title`, `value`, and `tone`. Tone is one of `neutral`,
   `success`, `warning`, or `error`.
 - `action`: `id`, `title`, `action_id`, `label`, and object-valued `params`.
+- `number_input` (host API 1.5): `id`, `title`, `action_id`, `label`,
+  `input_revision`, integer `value_scaled`, `min_scaled`, `max_scaled`,
+  `step_scaled`, integer `decimal_places`, and optional `unit` (omitted or null).
 
 The UI renders text using text bindings. A string such as `<b>example</b>` is
 literal text, not markup. Metric formatting and visual appearance belong to
 the host. A worker supplies data, not application code.
+
+## Bounded numeric input authority (host API 1.5)
+
+A numeric input advertises a decimal grid using integer coefficients, avoiding
+binary floating-point rounding across JSON, Rust and JavaScript:
+
+```json
+{
+  "kind": "number_input",
+  "id": "temperature-input",
+  "title": "Temperature",
+  "action_id": "set-temperature",
+  "label": "Set temperature",
+  "input_revision": "limits-7",
+  "value_scaled": -3,
+  "min_scaled": -5,
+  "max_scaled": 5,
+  "step_scaled": 1,
+  "decimal_places": 1,
+  "unit": "°C"
+}
+```
+
+Here `-3` represents `-0.3`, and the step is `0.1`. Precision is 0–6 decimal
+places; each coefficient's absolute value is at most 10^15. The minimum cannot
+exceed the maximum, the step must be positive, and the observed value must lie
+within the bounds and on the grid anchored at the minimum. Titles, labels, units
+and revision identifiers follow the existing plain-text and token limits.
+Numeric action IDs must be unique across all actionable contributions; existing
+fixed-action aliases remain supported. Numeric declarations contain no `params`.
+
+Submission uses the existing instance-bound action command with exactly
+`{"input_revision":"limits-7","value_scaled":-2}`. Fractional coefficients,
+extra keys, mismatched revisions, out-of-range values and off-grid values are
+rejected. Fixed actions still require exact advertised preset parameters.
+
+The host checks the complete numeric grant at enqueue, supervisor dispatch and
+immediately before the first pipe byte, including after a pending write wakes.
+Withdrawal, revision or constraint changes revoke queued grants; restoring the
+same text revision cannot revive them. Observed-value, title and label updates
+alone retain authority. Once transmission begins, existing frame-completion,
+deadline, authentication and cancellation rules remain authoritative.
+
+The desktop editor separates observed state from a draft and requires explicit
+Apply. Live value updates preserve an edited draft; changes to bounds, step,
+precision, unit or revision require review before further submission. Pending
+and uncertain-result feedback is keyed by plugin, instance and action ID, so
+changed values, revisions or temporary withdrawal cannot unlock a duplicate
+request. These contributions add no mobile UI, permission or core command route.
 
 ## Native desktop notifications (host API 1.2)
 
@@ -508,8 +565,9 @@ by a separately compiled fixture executable. The package manager constructs it o
 verification; a manually constructed spec itself is not a package trust decision.
 
 Only authenticated `main` and `config` windows can call `get_plugin_snapshot` or
-`plugin_action`. The latter accepts a worker ID, an advertised action ID, and the
-exact advertised parameters; it cannot select a core Tauri or MQTT command.
+`plugin_action`. The latter requires the displayed worker instance, its plugin
+and advertised action IDs, plus exact fixed-preset parameters or a value matching
+the current numeric grant; it cannot select a core Tauri or MQTT command.
 The host rechecks the process generation, current session epoch, and deadline
 before dispatch. A logout or authentication-policy change synchronously revokes
 the old epoch, clears contributions, and stops its workers. Logging in again
@@ -520,8 +578,9 @@ call independently requires a current session.
 
 The fixed `plugin-host-update` event contains no worker data. The app coalesces
 updates to at most 20 refresh signals per second, and windows retrieve an
-authorized snapshot. The desktop dashboard renders text, metrics, status, and
-preset actions; an empty host renders no plugin panel. The desktop Plugins settings tab manages package lifecycle through separate
+authorized snapshot. The desktop dashboard renders text, metrics, status,
+preset actions and bounded numeric inputs; an empty host renders no plugin panel.
+The desktop Plugins settings tab manages package lifecycle through separate
 settings-window-only IPC, including native selection and a single-use verified
 preview token. The management frontend coalesces snapshot requests and the native
 service caches inventory metadata by revision. Configuration-capable packages also
@@ -533,8 +592,9 @@ desktop notifications use the permission and delivery contract above. The first
 [Frigate worker](../desktop-plugins/frigate/README.md) owns its MQTT connection;
 `network_mqtt` is a declaration, not an OS firewall or a core MQTT host service.
 The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md)
-owns its authenticated REST/WebSocket connection and emits only declarative
-connection/entity cards. Its `network_http` declaration similarly grants no
+owns its authenticated REST/WebSocket connection and emits declarative
+connection/entity cards and explicitly selected fixed or numeric controls.
+Its `network_http` declaration similarly grants no
 generic host proxy and provides no OS sandbox. Both workers reuse a small bounded
 stdio library, while identity negotiation, configuration and network behavior
 stay feature-owned. Their crates, binaries and manifests are excluded from mobile.

@@ -12,6 +12,8 @@ fn configuration(base: &str) -> Validated {
         media_player_entities: vec![],
         binary_entities: vec![],
         cover_entities: vec![],
+        number_entities: vec![],
+        cover_position_entities: vec![],
         token: "fixture-token-only".into(),
     }
 }
@@ -252,4 +254,34 @@ async fn initial_http_enforces_both_declared_and_streaming_body_limit() {
     }
     chunked.extend_from_slice(b"0\r\n\r\n");
     assert_eq!(initial_response(chunked).await.0, Err(Failure::Retry));
+}
+
+#[tokio::test]
+async fn raw_ha_numeric_object_spoofing_is_rejected_before_rest_or_websocket_deserialization() {
+    for key in [
+        "$serde_json::private::Number",
+        r"\u0024serde_json::private::Number",
+    ] {
+        let attributes =
+            format!(r#"{{"supported_features":{{"{key}":"4"}},"current_position":20}}"#);
+        let event = format!(
+            r#"{{"type":"event","id":1,"event":{{"event_type":"state_changed","data":{{"entity_id":"cover.a","new_state":{{"entity_id":"cover.a","state":"closed","attributes":{attributes}}}}}}}}}"#
+        );
+        assert_eq!(packet(event.as_bytes()), Err(Failure::Retry));
+        let body = format!(
+            r#"{{"entity_id":"sensor.selected","state":"2","attributes":{{"min":{{"{key}":"0"}}}}}}"#
+        );
+        assert_eq!(
+            initial_response(response("200 OK", body.as_bytes()))
+                .await
+                .0,
+            Err(Failure::Retry)
+        );
+    }
+    let ordinary = br#"{"entity_id":"sensor.selected","state":"2","attributes":{"friendly_name":"$serde_json::private::Number"}}"#;
+    assert!(initial_response(response("200 OK", ordinary))
+        .await
+        .0
+        .unwrap()
+        .is_some());
 }

@@ -21,6 +21,27 @@ fn contribute() {
     );
 }
 
+fn contribute_numeric(revision: &str, value: i64, withdrawn: bool) {
+    let input = if withdrawn {
+        String::new()
+    } else {
+        format!(
+            r#",{{"kind":"number_input","id":"numeric-input","title":"Temperature","action_id":"set-number","label":"Set temperature","unit":"°C","input_revision":"{revision}","value_scaled":{value},"min_scaled":-25,"max_scaled":25,"step_scaled":5,"decimal_places":1}}"#
+        )
+    };
+    emit(&format!(
+        r#"{{"type":"contributions","items":[{{"kind":"action","id":"numeric-control","title":"Fixture","action_id":"numeric-control","label":"Update","params":{{}}}}{input}]}}"#
+    ));
+}
+
+fn integer_field<'a>(line: &'a str, name: &str) -> &'a str {
+    let key = format!("\"{name}\":");
+    let tail = line.split_once(&key).unwrap().1;
+    &tail[..tail
+        .find(|character: char| character != '-' && !character.is_ascii_digit())
+        .unwrap()]
+}
+
 fn notification(id: &str) {
     emit(&format!(
         "{{\"type\":\"notification\",\"id\":\"{id}\",\"title\":\"Private camera title\",\"body\":\"Private camera body\"}}"
@@ -47,6 +68,8 @@ fn main() {
     let mut configuration_revision = String::new();
     let mut configuration_secret_matches = false;
     let mut notification_sequence = 0;
+    let mut numeric_updates = 0;
+    let mut numeric_writes = 0;
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = line.unwrap();
@@ -83,7 +106,9 @@ fn main() {
                     std::thread::sleep(Duration::from_secs(60));
                     return;
                 }
-                if !mode.starts_with("configuration") || mode == "configuration_early_data" {
+                if mode == "numeric" {
+                    contribute_numeric("input-1", -15, false);
+                } else if !mode.starts_with("configuration") || mode == "configuration_early_data" {
                     contribute();
                 }
                 if mode == "notifications" {
@@ -155,6 +180,33 @@ fn main() {
             }
             "action" => {
                 let request_id = field(&line, "request_id");
+                if mode == "numeric" {
+                    let value = match field(&line, "action_id") {
+                        "set-number" => {
+                            numeric_writes += 1;
+                            format!(
+                                r#"{{"input_revision":"{}","value_scaled":{},"writes":{numeric_writes}}}"#,
+                                field(&line, "input_revision"),
+                                integer_field(&line, "value_scaled")
+                            )
+                        }
+                        "numeric-control" => {
+                            numeric_updates += 1;
+                            match numeric_updates {
+                                1 => contribute_numeric("input-1", -10, false),
+                                2 => contribute_numeric("input-2", -10, false),
+                                3 => contribute_numeric("input-2", -10, true),
+                                _ => contribute_numeric("input-3", -10, false),
+                            }
+                            numeric_writes.to_string()
+                        }
+                        _ => panic!("unexpected numeric action"),
+                    };
+                    emit(&format!(
+                        r#"{{"type":"action_result","request_id":"{request_id}","value":{value}}}"#
+                    ));
+                    continue;
+                }
                 if field(&line, "action_id") == "echo" {
                     if mode == "configuration_video" {
                         http_video(

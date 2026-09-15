@@ -54,6 +54,12 @@ const COVER_TARGETS: [&str; 5] = [
     "cover.unavailable",
     "cover.next",
 ];
+const NUMBER_TARGETS: [&str; 3] = [
+    "number.do_not_supply_charger",
+    "number.invalid",
+    "number.next",
+];
+const POSITION_TARGETS: [&str; 3] = ["cover.numeric", "cover.no_position", "cover.numeric_next"];
 
 #[derive(Clone)]
 struct Request {
@@ -84,6 +90,7 @@ struct ServiceControl {
     media_enabled: bool,
     binary_enabled: bool,
     cover_enabled: bool,
+    numeric_enabled: bool,
     stall_next: Arc<AtomicBool>,
     pending: Arc<AtomicUsize>,
     release: broadcast::Sender<()>,
@@ -95,6 +102,7 @@ impl ServiceControl {
             media_enabled: false,
             binary_enabled: false,
             cover_enabled: false,
+            numeric_enabled: false,
             stall_next: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             release: broadcast::channel(4).0,
@@ -121,6 +129,13 @@ impl ServiceControl {
             ..Self::new()
         }
     }
+
+    fn numeric() -> Self {
+        Self {
+            numeric_enabled: true,
+            ..Self::new()
+        }
+    }
 }
 
 fn fixture_services(target: &str, control: &ServiceControl) -> &'static [&'static str] {
@@ -143,8 +158,35 @@ fn fixture_services(target: &str, control: &ServiceControl) -> &'static [&'stati
         target if control.cover_enabled && COVER_TARGETS.contains(&target) => {
             &["cover/open_cover", "cover/close_cover", "cover/stop_cover"]
         }
+        target if control.numeric_enabled && NUMBER_TARGETS.contains(&target) => {
+            &["number/set_value"]
+        }
+        target if control.numeric_enabled && POSITION_TARGETS.contains(&target) => &[
+            "cover/set_cover_position",
+            "cover/open_cover",
+            "cover/close_cover",
+            "cover/stop_cover",
+        ],
         _ => &[],
     }
+}
+
+fn fixture_service_body(path: &str, target: &str, body: &Value, control: &ServiceControl) -> bool {
+    if control.numeric_enabled
+        && NUMBER_TARGETS.contains(&target)
+        && path.ends_with("api/services/number/set_value")
+    {
+        return body["value"].as_f64().is_some_and(f64::is_finite)
+            && *body == json!({"entity_id":target,"value":body["value"]});
+    }
+    if control.numeric_enabled
+        && POSITION_TARGETS.contains(&target)
+        && path.ends_with("api/services/cover/set_cover_position")
+    {
+        return body["position"].as_u64().is_some_and(|value| value <= 100)
+            && *body == json!({"entity_id":target,"position":body["position"]});
+    }
+    *body == json!({"entity_id":target})
 }
 
 struct ActiveSocket(Arc<AtomicUsize>);
@@ -294,7 +336,22 @@ impl HomeAssistant {
                     && COVER_TARGETS
                         .iter()
                         .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
-                assert!(readonly || action_target || media_target || binary_target || cover_target);
+                let numeric_target = self
+                    .services
+                    .as_ref()
+                    .is_some_and(|control| control.numeric_enabled)
+                    && NUMBER_TARGETS
+                        .iter()
+                        .chain(&POSITION_TARGETS)
+                        .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
+                assert!(
+                    readonly
+                        || action_target
+                        || media_target
+                        || binary_target
+                        || cover_target
+                        || numeric_target
+                );
             }
             if request.operation == "service" {
                 assert!(
@@ -306,7 +363,12 @@ impl HomeAssistant {
                     body["entity_id"].as_str().unwrap(),
                     self.services.as_ref().unwrap(),
                 );
-                assert_eq!(body.as_object().unwrap().len(), 1);
+                assert!(fixture_service_body(
+                    &request.path,
+                    body["entity_id"].as_str().unwrap(),
+                    body,
+                    self.services.as_ref().unwrap()
+                ));
                 assert!(expected
                     .iter()
                     .any(|service| request.path.ends_with(&format!("api/services/{service}"))));
@@ -486,6 +548,34 @@ async fn serve_connection(
         entity
             if services
                 .as_ref()
+                .is_some_and(|control| control.numeric_enabled)
+                && NUMBER_TARGETS.contains(&entity) =>
+        {
+            let value = match entity {
+                "number.invalid" => number_state(entity, "1", 0.0, 10.0, 0.0),
+                "number.next" => number_state(entity, "7", 0.0, 10.0, 1.0),
+                _ => number_state(entity, "-0.3", -0.5, 0.5, 0.1),
+            };
+            ("200 OK", value)
+        }
+        entity
+            if services
+                .as_ref()
+                .is_some_and(|control| control.numeric_enabled)
+                && POSITION_TARGETS.contains(&entity) =>
+        {
+            (
+                "200 OK",
+                position_state(
+                    entity,
+                    20,
+                    if entity == "cover.no_position" { 3 } else { 15 },
+                ),
+            )
+        }
+        entity
+            if services
+                .as_ref()
                 .is_some_and(|control| control.cover_enabled)
                 && COVER_TARGETS.contains(&entity) =>
         {
@@ -579,7 +669,7 @@ async fn serve_service(
     if !fixture_services(target, &control)
         .iter()
         .any(|service| path == format!("{prefix}api/services/{service}"))
-        || body != json!({"entity_id":target})
+        || !fixture_service_body(path, target, &body, &control)
     {
         return Err(());
     }
@@ -628,6 +718,20 @@ fn cover_state(entity: &str, state: &str, features: Option<Value>) -> Value {
     if let Some(features) = features {
         value["attributes"]["supported_features"] = features;
     }
+    value
+}
+
+fn number_state(entity: &str, state: &str, minimum: f64, maximum: f64, step: f64) -> Value {
+    let mut value = entity_state(entity, state, entity);
+    value["attributes"]["min"] = json!(minimum);
+    value["attributes"]["max"] = json!(maximum);
+    value["attributes"]["step"] = json!(step);
+    value
+}
+
+fn position_state(entity: &str, position: i64, features: u64) -> Value {
+    let mut value = cover_state(entity, "open", Some(json!(features)));
+    value["attributes"]["current_position"] = json!(position);
     value
 }
 
@@ -690,10 +794,10 @@ fn no_private_data(host: &PluginHost, origin: &HomeAssistant) {
 fn no_secrets(host: &PluginHost, origin: &HomeAssistant) {
     no_private_data(host, origin);
     for snapshot in host.snapshots() {
-        assert!(snapshot
-            .contributions
-            .iter()
-            .all(|item| !matches!(item, DashboardContribution::Action { .. })));
+        assert!(snapshot.contributions.iter().all(|item| !matches!(
+            item,
+            DashboardContribution::Action { .. } | DashboardContribution::NumberInput { .. }
+        )));
     }
 }
 
@@ -989,6 +1093,30 @@ async fn configure_cover(
     .await;
 }
 
+async fn configure_numeric(
+    service: &PackageApplication,
+    epoch: u64,
+    origin: &HomeAssistant,
+    prefix: &str,
+    selections: (&str, &str, &str),
+    token: Option<&str>,
+) {
+    save_configuration(
+        service,
+        epoch,
+        origin,
+        BTreeMap::from([
+            ("ha_base_url".into(), json!(origin.base(prefix))),
+            ("watch_entities".into(), json!("sensor.temperature")),
+            ("number_entities".into(), json!(selections.0)),
+            ("cover_position_entities".into(), json!(selections.1)),
+            ("cover_entities".into(), json!(selections.2)),
+        ]),
+        token,
+    )
+    .await;
+}
+
 async fn save_configuration(
     service: &PackageApplication,
     epoch: u64,
@@ -1033,6 +1161,78 @@ fn actions(host: &PluginHost) -> Vec<Value> {
         .into_iter()
         .filter(|item| item["kind"] == "action")
         .collect()
+}
+
+fn numeric_inputs(host: &PluginHost) -> Vec<Value> {
+    items(host)
+        .into_iter()
+        .filter(|item| item["kind"] == "number_input")
+        .collect()
+}
+
+fn numeric_input(host: &PluginHost, id: &str) -> Value {
+    numeric_inputs(host)
+        .into_iter()
+        .find(|item| item["action_id"] == id)
+        .expect("expected an advertised numeric input")
+}
+
+fn numeric_params(input: &Value, value: i64) -> Value {
+    json!({"input_revision":input["input_revision"],"value_scaled":value})
+}
+
+fn submit_numeric(
+    host: &PluginHost,
+    instance: &str,
+    input: &Value,
+    value: i64,
+    epoch: u64,
+) -> JoinHandle<Result<Value, PluginError>> {
+    let host = host.clone();
+    let instance = instance.to_owned();
+    let action_id = input["action_id"].as_str().unwrap().to_owned();
+    let params = numeric_params(input, value);
+    tokio::spawn(async move {
+        host.action_in_epoch(
+            PLUGIN,
+            &instance,
+            &action_id,
+            params,
+            Duration::from_secs(30),
+            epoch,
+        )
+        .await
+    })
+}
+
+fn assert_numeric_service(
+    origin: &HomeAssistant,
+    index: usize,
+    prefix: &str,
+    service: &str,
+    body: Value,
+) {
+    let observed = origin.observed.lock().unwrap();
+    let request = observed
+        .requests
+        .iter()
+        .filter(|request| request.operation == "service")
+        .nth(index)
+        .expect("expected an admitted numeric POST");
+    assert_eq!(request.path, format!("{prefix}api/services/{service}"));
+    assert_eq!(request.body, Some(body));
+}
+
+async fn fresh_numeric_snapshot(host: &PluginHost, origin: &HomeAssistant, marker: u64) {
+    origin.event(
+        "sensor.temperature",
+        Some(entity_state(
+            "sensor.temperature",
+            &marker.to_string(),
+            "Temperature",
+        )),
+    );
+    item_value(host, "entity-0", "value", json!(marker as f64)).await;
 }
 
 fn submit_action(
@@ -2563,6 +2763,516 @@ async fn signed_home_assistant_package_cover() {
         origin.count("service"),
         7,
         "only admitted commands send POSTs; cancellation must not issue Stop"
+    );
+    assert!(host.snapshots().is_empty());
+    assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
+    assert!(fs::read_dir(root.join("store/settings"))
+        .unwrap()
+        .next()
+        .is_none());
+    core.assert_receives(&broker, 6).await;
+    commands.assert_live_without_commands(6).await;
+    origin.assert_safe();
+    service.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires explicitly built INVERTER_HOME_ASSISTANT_WORKER and local MOSQUITTO_BIN; CI runs this acceptance test"]
+async fn signed_home_assistant_package_numeric() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let broker = Broker::new(&root).await;
+    let core = CoreTelemetry::new(broker.port);
+    let commands = CommandProbe::new(broker.port).await;
+    let controls = ServiceControl::numeric();
+    let origin = HomeAssistant::with_services(Some(controls.clone())).await;
+    let (service, host, epoch) = install(&root).await;
+    let settings =
+        serde_json::to_value(service.get_settings(PLUGIN, epoch).await.unwrap()).unwrap();
+    assert_eq!(settings["values"]["number_entities"], "");
+    assert_eq!(settings["values"]["cover_position_entities"], "");
+    configure(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        Some("sensor.temperature,number.do_not_supply_charger,cover.numeric"),
+        Some(&origin.first_token),
+    )
+    .await;
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    until(|| items(&host).len() == 4 && origin.count("state") == 3).await;
+    assert!(numeric_inputs(&host).is_empty());
+    assert!(actions(&host).is_empty());
+    no_secrets(&host, &origin);
+    core.assert_receives(&broker, 1).await;
+    commands.assert_live_without_commands(1).await;
+
+    configure_numeric(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        (
+            &NUMBER_TARGETS[..2].join(","),
+            &POSITION_TARGETS[..2].join(","),
+            POSITION_TARGETS[0],
+        ),
+        None,
+    )
+    .await;
+    connection(&host).await;
+    until(|| numeric_inputs(&host).len() == 2 && actions(&host).len() == 3).await;
+    until(|| {
+        let current = items(&host);
+        current.iter().any(|item| {
+            item["title"] == NUMBER_TARGETS[1] && item["kind"] == "metric" && item["value"] == 1.0
+        }) && current.iter().any(|item| {
+            item["title"] == POSITION_TARGETS[1] && item["kind"] == "text" && item["text"] == "open"
+        })
+    })
+    .await;
+    let first_instance = instance(&host);
+    let number = numeric_input(&host, "ha-number-0-set");
+    let position = numeric_input(&host, "ha-cover-position-0-set");
+    assert_eq!(number["value_scaled"], -3);
+    assert_eq!(number["min_scaled"], -5);
+    assert_eq!(number["max_scaled"], 5);
+    assert_eq!(number["step_scaled"], 1);
+    assert_eq!(number["decimal_places"], 1);
+    assert_eq!(position["value_scaled"], 20);
+    assert_eq!(position["min_scaled"], 0);
+    assert_eq!(position["max_scaled"], 100);
+    assert_eq!(position["step_scaled"], 1);
+    assert_eq!(position["decimal_places"], 0);
+    assert_eq!(position["unit"], "%");
+    for id in ["ha-number-1-set", "ha-cover-position-1-set"] {
+        assert!(!numeric_inputs(&host)
+            .iter()
+            .any(|item| item["action_id"] == id));
+    }
+    for params in [
+        json!({}),
+        json!({"input_revision":"stale","value_scaled":-2}),
+        json!({"input_revision":number["input_revision"],"value_scaled":-2.0}),
+        json!({"input_revision":number["input_revision"],"value_scaled":i64::MIN}),
+        json!({"input_revision":number["input_revision"],"value_scaled":i64::MAX}),
+        json!({"input_revision":number["input_revision"],"value_scaled":-2,"entity_id":NUMBER_TARGETS[2]}),
+        json!({"input_revision":number["input_revision"],"value":-0.2}),
+    ] {
+        assert_eq!(
+            host.action_in_epoch(
+                PLUGIN,
+                &first_instance,
+                "ha-number-0-set",
+                params,
+                WAIT,
+                epoch
+            )
+            .await
+            .unwrap_err(),
+            PluginError::UnknownAction
+        );
+    }
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-cover-0-open",
+            numeric_params(&position, 30),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 0);
+
+    assert_eq!(
+        submit_numeric(&host, &first_instance, &number, -2, epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_numeric_service(
+        &origin,
+        0,
+        FIRST_PREFIX,
+        "number/set_value",
+        json!({"entity_id":NUMBER_TARGETS[0],"value":-0.2}),
+    );
+    fresh_numeric_snapshot(&host, &origin, 60).await;
+    assert_eq!(numeric_input(&host, "ha-number-0-set")["value_scaled"], -3);
+    assert!(items(&host).iter().any(|item| item["kind"] == "metric"
+        && item["title"] == NUMBER_TARGETS[0]
+        && item["value"] == -0.3));
+    origin.event(
+        NUMBER_TARGETS[0],
+        Some(number_state(NUMBER_TARGETS[0], "-0.2", -0.5, 0.5, 0.1)),
+    );
+    until(|| numeric_input(&host, "ha-number-0-set")["value_scaled"] == -2).await;
+    assert_eq!(
+        numeric_input(&host, "ha-number-0-set")["input_revision"],
+        number["input_revision"]
+    );
+
+    assert_eq!(
+        submit_numeric(&host, &first_instance, &position, 35, epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_numeric_service(
+        &origin,
+        1,
+        FIRST_PREFIX,
+        "cover/set_cover_position",
+        json!({"entity_id":POSITION_TARGETS[0],"position":35}),
+    );
+    fresh_numeric_snapshot(&host, &origin, 61).await;
+    assert_eq!(
+        numeric_input(&host, "ha-cover-position-0-set")["value_scaled"],
+        20
+    );
+    origin.event(
+        POSITION_TARGETS[0],
+        Some(position_state(POSITION_TARGETS[0], 35, 15)),
+    );
+    until(|| numeric_input(&host, "ha-cover-position-0-set")["value_scaled"] == 35).await;
+    assert_eq!(
+        numeric_input(&host, "ha-cover-position-0-set")["input_revision"],
+        position["input_revision"]
+    );
+    assert_eq!(
+        submit_action(&host, &first_instance, "ha-cover-0-open", epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_service(
+        &origin,
+        2,
+        FIRST_PREFIX,
+        "cover/open_cover",
+        POSITION_TARGETS[0],
+    );
+    core.assert_receives(&broker, 2).await;
+    commands.assert_live_without_commands(2).await;
+
+    // Only bounds change: the observed value remains representable under both
+    // grants, so rejecting the old request proves revision binding, not range rejection.
+    origin.event(
+        NUMBER_TARGETS[0],
+        Some(number_state(NUMBER_TARGETS[0], "-0.2", -0.4, 0.4, 0.2)),
+    );
+    until(|| numeric_input(&host, "ha-number-0-set")["input_revision"] != number["input_revision"])
+        .await;
+    let changed_number = numeric_input(&host, "ha-number-0-set");
+    assert_eq!(changed_number["value_scaled"], -2);
+    assert_eq!(changed_number["min_scaled"], -4);
+    assert_eq!(changed_number["max_scaled"], 4);
+    assert_eq!(changed_number["step_scaled"], 2);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-number-0-set",
+            numeric_params(&number, -2),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-number-0-set",
+            numeric_params(&changed_number, 1),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 3);
+    assert_eq!(
+        submit_numeric(&host, &first_instance, &changed_number, 0, epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_numeric_service(
+        &origin,
+        3,
+        FIRST_PREFIX,
+        "number/set_value",
+        json!({"entity_id":NUMBER_TARGETS[0],"value":0.0}),
+    );
+    fresh_numeric_snapshot(&host, &origin, 62).await;
+    assert_eq!(numeric_input(&host, "ha-number-0-set")["value_scaled"], -2);
+    origin.event(
+        NUMBER_TARGETS[0],
+        Some(number_state(NUMBER_TARGETS[0], "0", -0.4, 0.4, 0.2)),
+    );
+    until(|| numeric_input(&host, "ha-number-0-set")["value_scaled"] == 0).await;
+    assert_eq!(
+        numeric_input(&host, "ha-number-0-set")["input_revision"],
+        changed_number["input_revision"]
+    );
+
+    origin.event(
+        NUMBER_TARGETS[0],
+        Some(number_state(
+            NUMBER_TARGETS[0],
+            "unavailable",
+            -0.4,
+            0.4,
+            0.2,
+        )),
+    );
+    until(|| numeric_inputs(&host).len() == 1).await;
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-number-0-set",
+            numeric_params(&changed_number, 0),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    origin.event(
+        NUMBER_TARGETS[0],
+        Some(number_state(NUMBER_TARGETS[0], "0", -0.4, 0.4, 0.2)),
+    );
+    until(|| numeric_inputs(&host).len() == 2).await;
+    let restored_number = numeric_input(&host, "ha-number-0-set");
+    assert_ne!(
+        restored_number["input_revision"],
+        changed_number["input_revision"]
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-number-0-set",
+            numeric_params(&changed_number, 0),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+
+    origin.event(
+        POSITION_TARGETS[0],
+        Some(position_state(POSITION_TARGETS[0], 35, 11)),
+    );
+    until(|| numeric_inputs(&host).len() == 1).await;
+    assert_eq!(actions(&host).len(), 3);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-cover-position-0-set",
+            numeric_params(&position, 35),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    origin.event(
+        POSITION_TARGETS[0],
+        Some(position_state(POSITION_TARGETS[0], 35, 15)),
+    );
+    until(|| numeric_inputs(&host).len() == 2).await;
+    let restored_position = numeric_input(&host, "ha-cover-position-0-set");
+    assert_ne!(
+        restored_position["input_revision"],
+        position["input_revision"]
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-cover-position-0-set",
+            numeric_params(&position, 35),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 4);
+    assert_eq!(
+        submit_numeric(&host, &first_instance, &restored_position, 50, epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_numeric_service(
+        &origin,
+        4,
+        FIRST_PREFIX,
+        "cover/set_cover_position",
+        json!({"entity_id":POSITION_TARGETS[0],"position":50}),
+    );
+    fresh_numeric_snapshot(&host, &origin, 63).await;
+    assert_eq!(
+        numeric_input(&host, "ha-cover-position-0-set")["value_scaled"],
+        35
+    );
+    origin.event(
+        POSITION_TARGETS[0],
+        Some(position_state(POSITION_TARGETS[0], 50, 15)),
+    );
+    until(|| numeric_input(&host, "ha-cover-position-0-set")["value_scaled"] == 50).await;
+    no_private_data(&host, &origin);
+    core.assert_receives(&broker, 3).await;
+    commands.assert_live_without_commands(3).await;
+
+    controls.stall_next.store(true, Ordering::Release);
+    let replaced = submit_numeric(&host, &first_instance, &restored_number, 2, epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_numeric_service(
+        &origin,
+        5,
+        FIRST_PREFIX,
+        "number/set_value",
+        json!({"entity_id":NUMBER_TARGETS[0],"value":0.2}),
+    );
+    configure_numeric(
+        &service,
+        epoch,
+        &origin,
+        SECOND_PREFIX,
+        (NUMBER_TARGETS[2], POSITION_TARGETS[2], ""),
+        Some(&origin.second_token),
+    )
+    .await;
+    connection(&host).await;
+    until(|| numeric_inputs(&host).len() == 2 && instance(&host) != first_instance).await;
+    until(|| {
+        controls.pending.load(Ordering::Acquire) == 0 && origin.active.load(Ordering::Acquire) == 1
+    })
+    .await;
+    assert!(timeout(WAIT, replaced).await.unwrap().unwrap().is_err());
+    let second_instance = instance(&host);
+    assert!(actions(&host).is_empty());
+    let next_number = numeric_input(&host, "ha-number-0-set");
+    let next_position = numeric_input(&host, "ha-cover-position-0-set");
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-number-0-set",
+            numeric_params(&restored_number, 2),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::Unavailable
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &second_instance,
+            "ha-number-0-set",
+            numeric_params(&next_number, 8),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap(),
+        json!({})
+    );
+    assert_numeric_service(
+        &origin,
+        6,
+        SECOND_PREFIX,
+        "number/set_value",
+        json!({"entity_id":NUMBER_TARGETS[2],"value":8}),
+    );
+    assert_eq!(
+        submit_numeric(&host, &second_instance, &next_position, 75, epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_numeric_service(
+        &origin,
+        7,
+        SECOND_PREFIX,
+        "cover/set_cover_position",
+        json!({"entity_id":POSITION_TARGETS[2],"position":75}),
+    );
+    no_private_data(&host, &origin);
+    core.assert_receives(&broker, 4).await;
+    commands.assert_live_without_commands(4).await;
+
+    controls.stall_next.store(true, Ordering::Release);
+    let disabled = submit_numeric(&host, &second_instance, &next_number, 9, epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_numeric_service(
+        &origin,
+        8,
+        SECOND_PREFIX,
+        "number/set_value",
+        json!({"entity_id":NUMBER_TARGETS[2],"value":9}),
+    );
+    service.set_enabled(PLUGIN, false, epoch).await.unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, disabled).await.unwrap().unwrap().is_err());
+    assert!(items(&host).is_empty());
+    core.assert_receives(&broker, 5).await;
+    commands.assert_live_without_commands(5).await;
+
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    until(|| numeric_inputs(&host).len() == 2).await;
+    let final_instance = instance(&host);
+    assert_ne!(final_instance, second_instance);
+    let final_position = numeric_input(&host, "ha-cover-position-0-set");
+    controls.stall_next.store(true, Ordering::Release);
+    let removed = submit_numeric(&host, &final_instance, &final_position, 40, epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_numeric_service(
+        &origin,
+        9,
+        SECOND_PREFIX,
+        "cover/set_cover_position",
+        json!({"entity_id":POSITION_TARGETS[2],"position":40}),
+    );
+    service
+        .uninstall_with_settings(PLUGIN, true, epoch)
+        .await
+        .unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, removed).await.unwrap().unwrap().is_err());
+    assert_eq!(
+        origin.count("service"),
+        10,
+        "only admitted writes issue requests; teardown must not retry or send Stop"
     );
     assert!(host.snapshots().is_empty());
     assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());

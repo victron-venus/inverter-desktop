@@ -1,8 +1,551 @@
 use super::*;
 use serde_json::json;
+use std::pin::Pin;
 use std::sync::OnceLock;
 
 const TEST_PLUGIN: &str = "test.fixture";
+
+fn number_input() -> DashboardContribution {
+    serde_json::from_value(json!({
+        "kind":"number_input","id":"numeric-input","title":"Temperature",
+        "action_id":"set-number","label":"Set temperature","unit":"°C",
+        "input_revision":"input-1","value_scaled":-15,"min_scaled":-25,
+        "max_scaled":25,"step_scaled":5,"decimal_places":1
+    }))
+    .unwrap()
+}
+
+fn number_params() -> Value {
+    json!({"input_revision":"input-1","value_scaled":5})
+}
+
+fn replace_inputs(entry: &WorkerEntry, items: Vec<DashboardContribution>) {
+    super::super::protocol::validate_contributions(&items).unwrap();
+    let _authority = entry.authority.lock().unwrap();
+    entry.replace_contributions(items);
+}
+
+fn fake_pipes() -> (WorkerPipes, mpsc::Receiver<Outgoing>) {
+    let (writer, outgoing) = mpsc::channel(PIPE_QUEUE_CAPACITY);
+    let (_incoming, frames) = mpsc::channel(1);
+    let (rejection_sender, rejected) = mpsc::channel(MAX_IN_FLIGHT);
+    (
+        WorkerPipes {
+            writer,
+            frames,
+            rejected,
+            rejection_sender,
+            tasks: vec![],
+        },
+        outgoing,
+    )
+}
+
+#[tokio::test]
+async fn numeric_actions_use_current_revision_and_exact_scaled_params_through_real_pipes() {
+    let host = PluginHost::default();
+    host.start(spec("numeric")).await.unwrap();
+    let snapshot = ready(&host).await;
+    let instance = snapshot.instance_id.unwrap();
+    let epoch = host.authority_epoch();
+    for params in [
+        json!({}),
+        json!({"input_revision":"old","value_scaled":5}),
+        json!({"input_revision":"input-1","value_scaled":6}),
+        json!({"input_revision":"input-1","value_scaled":30}),
+        json!({"input_revision":"input-1","value_scaled":5.0}),
+        json!({"input_revision":"input-1","value_scaled":5,"position":5}),
+    ] {
+        assert_eq!(
+            host.action_in_epoch(
+                TEST_PLUGIN,
+                &instance,
+                "set-number",
+                params,
+                Duration::from_secs(2),
+                epoch
+            )
+            .await
+            .unwrap_err(),
+            PluginError::UnknownAction
+        );
+    }
+    assert_eq!(action(&host, "numeric-control").await.unwrap(), 0);
+    let changed = wait_for(&host, |snapshot| {
+        snapshot.contributions.iter().any(|item| {
+            matches!(
+                item,
+                DashboardContribution::NumberInput {
+                    value_scaled: -10,
+                    ..
+                }
+            )
+        })
+    })
+    .await;
+    assert_eq!(changed.instance_id.as_deref(), Some(instance.as_str()));
+    let response = host
+        .action_in_epoch(
+            TEST_PLUGIN,
+            &instance,
+            "set-number",
+            number_params(),
+            Duration::from_secs(2),
+            epoch,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response,
+        json!({"input_revision":"input-1","value_scaled":5,"writes":1})
+    );
+    assert_eq!(action(&host, "numeric-control").await.unwrap(), 1);
+    wait_for(&host, |snapshot| snapshot.contributions.iter().any(|item| {
+        matches!(item, DashboardContribution::NumberInput { input_revision, .. } if input_revision == "input-2")
+    })).await;
+    assert_eq!(
+        host.action_in_epoch(
+            TEST_PLUGIN,
+            &instance,
+            "set-number",
+            number_params(),
+            Duration::from_secs(2),
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(action(&host, "numeric-control").await.unwrap(), 1);
+    wait_for(&host, |snapshot| snapshot.contributions.len() == 1).await;
+    assert_eq!(
+        host.action_in_epoch(
+            TEST_PLUGIN,
+            &instance,
+            "set-number",
+            json!({"input_revision":"input-2","value_scaled":5}),
+            Duration::from_secs(2),
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(action(&host, "numeric-control").await.unwrap(), 1);
+    wait_for(&host, |snapshot| snapshot.contributions.iter().any(|item| {
+        matches!(item, DashboardContribution::NumberInput { input_revision, .. } if input_revision == "input-3")
+    })).await;
+    assert_eq!(
+        host.action_in_epoch(
+            TEST_PLUGIN,
+            "stale-instance",
+            "set-number",
+            json!({"input_revision":"input-3","value_scaled":5}),
+            Duration::from_secs(2),
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::Unavailable
+    );
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_numeric_controls_recheck_full_grant_and_continuity_not_only_worker_revision() {
+    let host = PluginHost::default();
+    host.start(spec("numeric")).await.unwrap();
+    ready(&host).await;
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let generation = entry.snapshot().generation;
+    for change in [
+        "withdraw-restore",
+        "constraints-restore",
+        "min",
+        "max",
+        "step",
+        "precision",
+        "unit",
+        "revision",
+        "id",
+        "value",
+        "title",
+        "label",
+    ] {
+        replace_inputs(&entry, vec![number_input()]);
+        let lease = entry
+            .numeric
+            .lock()
+            .unwrap()
+            .get("set-number")
+            .unwrap()
+            .clone();
+        let mut changed = number_input();
+        if let DashboardContribution::NumberInput {
+            min_scaled,
+            max_scaled,
+            step_scaled,
+            decimal_places,
+            unit,
+            input_revision,
+            id,
+            value_scaled,
+            title,
+            label,
+            ..
+        } = &mut changed
+        {
+            match change {
+                "min" | "constraints-restore" => *min_scaled = -30,
+                "max" => *max_scaled = 30,
+                "step" => *step_scaled = 10,
+                "precision" => *decimal_places = 2,
+                "unit" => *unit = Some("°F".into()),
+                "revision" => *input_revision = "input-2".into(),
+                "id" => *id = "replacement-input".into(),
+                "value" => *value_scaled = -10,
+                "title" => *title = "Renamed temperature".into(),
+                "label" => *label = "Apply temperature".into(),
+                _ => {}
+            }
+        }
+        if change == "withdraw-restore" {
+            replace_inputs(&entry, vec![]);
+        }
+        replace_inputs(&entry, vec![changed]);
+        if change == "constraints-restore" {
+            replace_inputs(&entry, vec![number_input()]);
+        }
+        let (pipes, mut outgoing) = fake_pipes();
+        let (reply, response) = oneshot::channel();
+        let (_cancel, cancellation) = watch::channel(false);
+        let mut pending = HashMap::new();
+        handle_control(
+            Control::Action {
+                request_id: change.into(),
+                generation,
+                action_id: "set-number".into(),
+                params: number_params(),
+                numeric: Some(lease.clone()),
+                cancellation,
+                deadline: Instant::now() + Duration::from_secs(2),
+                reply,
+            },
+            &entry,
+            generation,
+            true,
+            &pipes,
+            &mut pending,
+        );
+        if matches!(change, "value" | "title" | "label") {
+            assert_eq!(pending.len(), 1);
+            assert!(
+                matches!(outgoing.try_recv().unwrap(), Outgoing::Action { numeric: Some(guard), .. }
+                if Arc::ptr_eq(&guard.lease, &lease))
+            );
+            drop(response);
+        } else {
+            assert_eq!(
+                response.await.unwrap(),
+                Err(PluginError::UnknownAction),
+                "{change}"
+            );
+            assert!(pending.is_empty());
+            assert!(outgoing.try_recv().is_err());
+        }
+    }
+    // A fixed preset cannot turn into a dynamic grant while queued.
+    let (pipes, mut outgoing) = fake_pipes();
+    replace_inputs(&entry, vec![number_input()]);
+    let (reply, response) = oneshot::channel();
+    let (_cancel, cancellation) = watch::channel(false);
+    handle_control(
+        Control::Action {
+            request_id: "old-static".into(),
+            generation,
+            action_id: "set-number".into(),
+            params: number_params(),
+            numeric: None,
+            cancellation,
+            deadline: Instant::now() + Duration::from_secs(2),
+            reply,
+        },
+        &entry,
+        generation,
+        true,
+        &pipes,
+        &mut HashMap::new(),
+    );
+    assert_eq!(response.await.unwrap(), Err(PluginError::UnknownAction));
+    assert!(outgoing.try_recv().is_err());
+    host.shutdown().await;
+}
+
+#[derive(Default)]
+struct WriteGate {
+    state: Mutex<(bool, usize, Option<std::task::Waker>, Vec<u8>)>,
+}
+
+impl WriteGate {
+    fn open(&self) {
+        let waker = {
+            let mut state = self.state.lock().unwrap();
+            state.0 = true;
+            state.2.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    async fn polled(&self) {
+        time::timeout(Duration::from_secs(2), async {
+            while self.state.lock().unwrap().1 == 0 {
+                time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+struct GatedWriter(Arc<WriteGate>);
+
+impl AsyncWrite for GatedWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let mut state = self.0.state.lock().unwrap();
+        state.1 += 1;
+        if !state.0 {
+            state.2 = Some(context.waker().clone());
+            return Poll::Pending;
+        }
+        state.3.extend_from_slice(bytes);
+        Poll::Ready(Ok(bytes.len()))
+    }
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn numeric_writer_rechecks_grants_after_queueing_and_after_a_pending_first_write() {
+    for queued in [false, true] {
+        for change in ["withdraw", "restore", "same-revision", "unchanged"] {
+            let gate = Arc::new(WriteGate::default());
+            let lease = Arc::new(NumericLease {
+                grant: number_input().number_input_grant().unwrap(),
+                revoked: watch::channel(false).0,
+            });
+            let registry = Arc::new(Mutex::new(HashMap::from([(
+                "set-number".into(),
+                lease.clone(),
+            )])));
+            let (rejected, mut rejections) = mpsc::channel(4);
+            let (outgoing, receiver) = mpsc::channel(4);
+            let (_stop, stop_receiver) = watch::channel(false);
+            let (_cancel, cancellation) = watch::channel(false);
+            let authority = Arc::new(Mutex::new(Authority {
+                enabled: true,
+                epoch: 7,
+            }));
+            let control = b"earlier control frame\n";
+            if queued {
+                outgoing
+                    .send(Outgoing::Control(control.to_vec()))
+                    .await
+                    .unwrap();
+            }
+            let deadline = Instant::now() + Duration::from_secs(2);
+            outgoing
+                .send(Outgoing::Action {
+                    request_id: "number".into(),
+                    action_id: "set-number".into(),
+                    params: number_params(),
+                    numeric: Some(NumericWriteGuard {
+                        lease: lease.clone(),
+                        registry: registry.clone(),
+                        rejected,
+                    }),
+                    deadline,
+                    cancellation,
+                })
+                .await
+                .unwrap();
+            drop(outgoing);
+            let task = tokio::spawn(write_frames(
+                GatedWriter(gate.clone()),
+                receiver,
+                stop_receiver,
+                authority.clone(),
+                7,
+            ));
+            gate.polled().await;
+            if change != "unchanged" {
+                let _authority = authority.lock().unwrap();
+                let mut registry = registry.lock().unwrap();
+                registry.remove("set-number");
+                if change != "same-revision" {
+                    lease.revoked.send_replace(true);
+                }
+                if change != "withdraw" {
+                    let mut grant = lease.grant.clone();
+                    if change == "same-revision" {
+                        grant.min_scaled = -30;
+                    }
+                    registry.insert(
+                        "set-number".into(),
+                        Arc::new(NumericLease {
+                            grant,
+                            revoked: watch::channel(false).0,
+                        }),
+                    );
+                }
+            }
+            // Deliberately omit a wake notification for same-revision changes:
+            // the actual first poll must check the full current grant too.
+            time::sleep(Duration::from_millis(25)).await;
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u64;
+            gate.open();
+            time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let bytes = gate.state.lock().unwrap().3.clone();
+            let prefix = if queued { control.len() } else { 0 };
+            if queued {
+                assert_eq!(&bytes[..prefix], control);
+            }
+            if change == "unchanged" {
+                let frame: HostMessage = serde_json::from_slice(&bytes[prefix..]).unwrap();
+                assert!(
+                    matches!(frame, HostMessage::Action { request_id, action_id, params, deadline_ms }
+                    if request_id == "number" && action_id == "set-number" && params == number_params()
+                        && (1..=remaining).contains(&deadline_ms))
+                );
+                assert!(rejections.try_recv().is_err());
+            } else {
+                assert_eq!(bytes.len(), prefix, "{change}, queued={queued}");
+                assert_eq!(rejections.try_recv().unwrap(), "number");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn partial_numeric_frames_finish_on_capability_change_but_close_on_cancel_or_deadline() {
+    for change in ["capability", "cancel", "deadline"] {
+        let (writer, mut reader) = tokio::io::duplex(8);
+        let lease = Arc::new(NumericLease {
+            grant: number_input().number_input_grant().unwrap(),
+            revoked: watch::channel(false).0,
+        });
+        let registry = Arc::new(Mutex::new(HashMap::from([(
+            "set-number".into(),
+            lease.clone(),
+        )])));
+        let (rejected, mut rejections) = mpsc::channel(4);
+        let (outgoing, receiver) = mpsc::channel(4);
+        let (_stop, stop_receiver) = watch::channel(false);
+        let (cancel, cancellation) = watch::channel(false);
+        let authority = Arc::new(Mutex::new(Authority {
+            enabled: true,
+            epoch: 7,
+        }));
+        outgoing
+            .send(Outgoing::Action {
+                request_id: "partial-number".into(),
+                action_id: "set-number".into(),
+                params: number_params(),
+                numeric: Some(NumericWriteGuard {
+                    lease: lease.clone(),
+                    registry: registry.clone(),
+                    rejected,
+                }),
+                deadline: Instant::now()
+                    + if change == "deadline" {
+                        Duration::from_millis(500)
+                    } else {
+                        Duration::from_secs(2)
+                    },
+                cancellation,
+            })
+            .await
+            .unwrap();
+        let following = b"following frame must never splice into partial JSON\n";
+        outgoing
+            .send(Outgoing::Control(following.to_vec()))
+            .await
+            .unwrap();
+        drop(outgoing);
+        let task = tokio::spawn(write_frames(
+            writer,
+            receiver,
+            stop_receiver,
+            authority.clone(),
+            7,
+        ));
+        let mut first = [0; 8];
+        time::timeout(Duration::from_secs(2), reader.read_exact(&mut first))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut bytes = first.to_vec();
+        if change == "capability" {
+            {
+                let _authority = authority.lock().unwrap();
+                registry.lock().unwrap().clear();
+                lease.revoked.send_replace(true);
+            }
+            time::timeout(Duration::from_secs(2), reader.read_to_end(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            task.await.unwrap().unwrap();
+            assert!(bytes.ends_with(following));
+            let frame: HostMessage =
+                serde_json::from_slice(&bytes[..bytes.len() - following.len()]).unwrap();
+            assert!(
+                matches!(frame, HostMessage::Action { params, .. } if params == number_params())
+            );
+        } else {
+            if change == "cancel" {
+                cancel.send(true).unwrap();
+            }
+            assert_eq!(
+                time::timeout(Duration::from_secs(2), task)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap_err(),
+                if change == "cancel" {
+                    "worker_write_cancelled"
+                } else {
+                    "worker_write_timeout"
+                }
+            );
+            reader.read_to_end(&mut bytes).await.unwrap();
+            assert!(!bytes.contains(&b'\n'));
+            assert!(!String::from_utf8_lossy(&bytes).contains("following"));
+        }
+        assert!(rejections.try_recv().is_err());
+    }
+}
 
 fn fixture() -> PathBuf {
     static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
@@ -767,6 +1310,7 @@ async fn queued_writes_recheck_deadline_cancellation_and_revoked_epoch() {
         outgoing
             .send(Outgoing::Action {
                 request_id: "expired-request".into(),
+                numeric: None,
                 action_id: "echo".into(),
                 params: json!({"marker":"must never be written"}),
                 deadline: Instant::now()
@@ -839,6 +1383,7 @@ async fn a_queued_action_forwards_only_its_original_remaining_budget() {
     outgoing
         .send(Outgoing::Action {
             request_id: "queued-request".into(),
+            numeric: None,
             action_id: "fixed-action".into(),
             params: params.clone(),
             deadline,
@@ -890,6 +1435,7 @@ async fn an_action_with_less_than_one_millisecond_remaining_is_not_written() {
     outgoing
         .send(Outgoing::Action {
             request_id: "submillisecond-request".into(),
+            numeric: None,
             action_id: "echo".into(),
             params: json!({}),
             deadline: Instant::now() + Duration::from_micros(500),
@@ -920,6 +1466,7 @@ async fn interruption_mid_action_frame_closes_writer_instead_of_writing_next_fra
         outgoing
             .send(Outgoing::Action {
                 request_id: "partial-request".into(),
+                numeric: None,
                 action_id: "echo".into(),
                 params: json!({"marker":"first action cannot complete while reader is stalled"}),
                 deadline: Instant::now()

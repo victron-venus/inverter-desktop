@@ -118,7 +118,7 @@ impl Worker {
         self.send(&hello());
         assert_eq!(
             self.next(),
-            json!({"type":"ready","protocol_version":1,"host_api_version":"1.4.0",
+            json!({"type":"ready","protocol_version":1,"host_api_version":"1.5.0",
                 "plugin_id":"inverter-desktop.home-assistant"})
         );
     }
@@ -193,7 +193,7 @@ impl Drop for Worker {
 }
 
 fn hello() -> Value {
-    json!({"type":"hello","protocol_version":1,"host_api_version":"1.4.0",
+    json!({"type":"hello","protocol_version":1,"host_api_version":"1.5.0",
         "plugin_id":"inverter-desktop.home-assistant"})
 }
 
@@ -365,7 +365,7 @@ fn strict_handshake_rejects_wrong_identity_protocol_api_and_unknown_fields() {
         ("protocol_version", json!(2)),
         ("host_api_version", json!("1.2.0")),
         ("host_api_version", json!("2.0.0")),
-        ("host_api_version", json!("1.4.0-beta.1")),
+        ("host_api_version", json!("1.5.0-beta.1")),
         ("host_api_version", json!("invalid")),
         ("extra", json!(TOKEN)),
     ] {
@@ -708,9 +708,9 @@ fn blocked_output(eof: bool) {
     // The valid large build identifier fills stdout with Ready before the
     // configuration acknowledgement can flush. No reader drains that pipe.
     let mut frame = hello();
-    frame["host_api_version"] = json!("1.4.0+");
+    frame["host_api_version"] = json!("1.5.0+");
     let padding = MAX_FRAME - serde_json::to_vec(&frame).unwrap().len() - 1;
-    frame["host_api_version"] = json!(format!("1.4.0+{}", "a".repeat(padding)));
+    frame["host_api_version"] = json!(format!("1.5.0+{}", "a".repeat(padding)));
     let input = process.0.stdin.as_mut().unwrap();
     writeln!(input, "{frame}").unwrap();
     writeln!(input, "{}", configuration(&fixture, "sensor.selected")).unwrap();

@@ -73,6 +73,20 @@ count Unicode characters, while every string also has a hard 4,096-byte UTF-8
 limit. Numeric fields support finite `minimum` and `maximum`; integers must be
 integral and within the JavaScript safe-integer range. Optional `default` values must satisfy their field constraints.
 
+Host API 1.5 adds the opt-in field keyword `omitEmpty`. It may be true only for
+an optional, public string with an explicit `default` of `""`. The settings editor
+still shows an empty value, while saving represents it through the schema default
+instead of a stored empty key. Empty values are also omitted from the worker's
+startup configuration; nonempty values are stored and sent normally. Workers using this
+keyword must treat the absent field as empty and require a compatible host API
+such as `^1.5`. Absent or false preserves the previous default-delivery behavior.
+Required fields, secrets, other types and missing or nonempty defaults cannot
+opt in. Validation still applies before omission, and the complete transmitted
+configuration and encrypted settings data retain their separate 32 KiB limits.
+This permits new optional selections without enlarging existing configuration
+or saved data when those selections are empty. Existing stored empty values
+are normalized on the next explicit save; opening settings does not rewrite data.
+
 `writeOnly: true` denotes a secret string. Secrets cannot have defaults or enum
 choices. The `required` list checks presence; use `minLength: 1` to reject empty
 strings. Opening settings permits incomplete setup. Save and worker startup

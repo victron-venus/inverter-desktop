@@ -58,6 +58,7 @@ fn packet(bytes: &[u8]) -> Result<Value, Failure> {
     if bytes.len() > MAX_RESPONSE_BYTES {
         return Err(Failure::Retry);
     }
+    inverter_worker_protocol::reject_reserved_number_keys(bytes).map_err(|_| Failure::Retry)?;
     let value: Value = serde_json::from_slice(bytes).map_err(|_| Failure::Retry)?;
     if !value.is_object() || value.get("type").and_then(Value::as_str).is_none() {
         return Err(Failure::Retry);
@@ -258,6 +259,8 @@ async fn initial_state(
             }
             bytes.extend_from_slice(&chunk);
         }
+        inverter_worker_protocol::reject_reserved_number_keys(&bytes)
+            .map_err(|_| Failure::Retry)?;
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| Failure::Retry)?;
         if !value.is_object() || value.get("entity_id").and_then(Value::as_str) != Some(entity) {
             return Err(Failure::Retry);

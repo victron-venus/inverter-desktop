@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { ref } from 'vue'
-import type { ActionContribution, PluginSnapshot } from './types'
+import { numberInputAcceptsValue, sameNumberInputAuthority, validNumberInput } from './numberInput'
+import type { ActionContribution, NumberInputContribution, PluginSnapshot } from './types'
 
 /** Native-validated JSON objects compare by content, independent of key order. */
 function canonical(value: unknown): string {
@@ -23,6 +24,15 @@ function canonical(value: unknown): string {
 function actionKey(pluginId: string, instanceId: string | null, action: ActionContribution) {
   // Display-only changes must not unlock a pending operation or hide its error.
   return canonical([pluginId, instanceId, action.action_id, action.params])
+}
+
+function numberInputKey(
+  pluginId: string,
+  instanceId: string | null,
+  input: NumberInputContribution
+) {
+  // Limits and values can change while a submitted service outcome is unknown.
+  return canonical([pluginId, instanceId, input.action_id])
 }
 
 /** Each mounted dashboard owns its subscriptions; the native host owns worker processes. */
@@ -178,6 +188,41 @@ export function createPluginDashboard() {
     )
     if (!advertised) return
     const key = actionKey(pluginId, instanceId, action)
+    await submitOperation(pluginId, instanceId, action.action_id, action.params, key)
+  }
+
+  async function runNumberInput(
+    pluginId: string,
+    instanceId: string | null,
+    input: NumberInputContribution,
+    valueScaled: number
+  ) {
+    const plugin = plugins.value.find((entry) => entry.plugin_id === pluginId)
+    if (!plugin || !instanceId || plugin.instance_id !== instanceId || !canAct(plugin)) return
+    if (!validNumberInput(input) || !numberInputAcceptsValue(input, valueScaled)) return
+    const advertised = plugin.contributions.some(
+      (entry) =>
+        entry.kind === 'number_input' &&
+        validNumberInput(entry) &&
+        sameNumberInputAuthority(entry, input)
+    )
+    if (!advertised) return
+    await submitOperation(
+      pluginId,
+      instanceId,
+      input.action_id,
+      { input_revision: input.input_revision, value_scaled: valueScaled },
+      numberInputKey(pluginId, instanceId, input)
+    )
+  }
+
+  async function submitOperation(
+    pluginId: string,
+    instanceId: string,
+    actionId: string,
+    params: Record<string, unknown>,
+    key: string
+  ) {
     if (pendingActions.value.has(key)) return
     const session = generation
     const operation = { pluginId, instanceId }
@@ -188,8 +233,8 @@ export function createPluginDashboard() {
       await invoke('plugin_action', {
         pluginId,
         instanceId,
-        actionId: action.action_id,
-        params: action.params,
+        actionId,
+        params,
       })
     } catch {
       if (current(session) && operations.get(key) === operation) failedActions.value.add(key)
@@ -215,5 +260,7 @@ export function createPluginDashboard() {
     canAct,
     actionKey,
     runAction,
+    numberInputKey,
+    runNumberInput,
   }
 }

@@ -43,6 +43,19 @@
               {{ $t('plugins.actionFailed') }}
             </p>
           </template>
+          <PluginNumberInput
+            v-else-if="item.kind === 'number_input'"
+            :key="`${plugin.instance_id}:${item.id}`"
+            :input="item"
+            :disabled="!canAct(plugin)"
+            :pending="
+              pendingActions.has(numberInputKey(plugin.plugin_id, plugin.instance_id, item))
+            "
+            :failed="failedActions.has(numberInputKey(plugin.plugin_id, plugin.instance_id, item))"
+            @submit="
+              (input, value) => runNumberInput(plugin.plugin_id, plugin.instance_id, input, value)
+            "
+          />
         </div>
       </div>
     </section>
@@ -53,11 +66,21 @@
 import { onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UiButton from '../../../components/UiButton.vue'
+import PluginNumberInput from './PluginNumberInput.vue'
 import { createPluginDashboard } from './usePluginDashboard'
 
 const { t: $t } = useI18n()
 const dashboard = createPluginDashboard()
-const { plugins, pendingActions, failedActions, canAct, actionKey, runAction } = dashboard
+const {
+  plugins,
+  pendingActions,
+  failedActions,
+  canAct,
+  actionKey,
+  runAction,
+  numberInputKey,
+  runNumberInput,
+} = dashboard
 const statusClass = {
   neutral: 'text-main',
   success: 'text-battery',

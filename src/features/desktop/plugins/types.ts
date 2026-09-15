@@ -17,6 +17,20 @@ export type DashboardContribution =
       label: string
       params: Record<string, unknown>
     }
+  | {
+      kind: 'number_input'
+      id: string
+      title: string
+      action_id: string
+      label: string
+      unit?: string | null
+      input_revision: string
+      value_scaled: number
+      min_scaled: number
+      max_scaled: number
+      step_scaled: number
+      decimal_places: number
+    }
 
 export interface PluginSnapshot {
   plugin_id: string
@@ -29,6 +43,7 @@ export interface PluginSnapshot {
 }
 
 export type ActionContribution = Extract<DashboardContribution, { kind: 'action' }>
+export type NumberInputContribution = Extract<DashboardContribution, { kind: 'number_input' }>
 
 export interface ManagedPlugin {
   plugin_id: string

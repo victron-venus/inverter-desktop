@@ -42,6 +42,8 @@ struct RawField {
     description: Option<String>,
     #[serde(default, rename = "writeOnly")]
     secret: bool,
+    #[serde(default, rename = "omitEmpty")]
+    omit_empty: bool,
     #[serde(rename = "enum")]
     choices: Option<Vec<String>>,
     minimum: Option<f64>,
@@ -77,6 +79,8 @@ pub(crate) struct SettingField {
     max_length: Option<usize>,
     #[serde(skip)]
     default: Option<Value>,
+    #[serde(skip)]
+    omit_empty: bool,
 }
 
 #[derive(Serialize)]
@@ -140,6 +144,11 @@ impl SettingsSchema {
                     && (raw.kind != SettingType::String
                         || raw.default.is_some()
                         || raw.choices.is_some()))
+                || (raw.omit_empty
+                    && (required.contains(&key)
+                        || raw.secret
+                        || raw.kind != SettingType::String
+                        || raw.default.as_ref().and_then(Value::as_str) != Some("")))
                 || (raw.kind != SettingType::String
                     && (raw.choices.is_some()
                         || raw.min_length.is_some()
@@ -180,6 +189,7 @@ impl SettingsSchema {
                 min_length: raw.min_length,
                 max_length: raw.max_length,
                 default: raw.default,
+                omit_empty: raw.omit_empty,
             };
             if let Some(choices) = &field.choices {
                 for choice in choices {
@@ -285,7 +295,11 @@ impl SettingsSchema {
                         }
                     }
                 }
-            } else if let Some(value) = values.get(&field.key).or(field.default.as_ref()) {
+            } else if let Some(value) = values
+                .get(&field.key)
+                .or(field.default.as_ref())
+                .filter(|value| !field.omit_empty || value.as_str() != Some(""))
+            {
                 next.values.insert(field.key.clone(), value.clone());
             }
         }
@@ -325,10 +339,16 @@ impl SettingsSchema {
 
     pub(crate) fn configuration(&self, data: &SettingsData) -> Result<WorkerConfiguration, String> {
         self.validate_data(data)?;
+        let mut values = self.public_values(data);
+        for field in &self.fields {
+            if field.omit_empty && values.get(&field.key).and_then(Value::as_str) == Some("") {
+                // Opted-in defaults stay visible without consuming startup bytes.
+                values.remove(&field.key);
+            }
+        }
         let configuration = WorkerConfiguration {
             revision: data.revision.clone(),
-            values: serde_json::to_value(self.public_values(data))
-                .map_err(|_| "Cannot encode plugin settings")?,
+            values: serde_json::to_value(values).map_err(|_| "Cannot encode plugin settings")?,
             secrets: self
                 .fields
                 .iter()

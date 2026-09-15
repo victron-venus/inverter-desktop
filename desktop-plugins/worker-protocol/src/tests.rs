@@ -316,3 +316,28 @@ fn write_failure_is_reported_without_the_underlying_error_contents() {
     write_frames(FailingWriter, outgoing);
     assert_eq!(result.blocking_recv().unwrap(), Err("host output closed"));
 }
+
+#[test]
+fn reserved_numeric_object_keys_are_rejected_before_frame_values_can_be_coerced() {
+    for key in [
+        "$serde_json::private::Number",
+        r"\u0024serde_json::private::Number",
+        r"$serde_json::private::\u004eumber",
+    ] {
+        let frame = format!(
+            r#"{{"type":"action","request_id":"numeric-1","action_id":"ha-number-0-set","params":{{"input_revision":"r1","value_scaled":{{"{key}":"1"}}}},"deadline_ms":5000}}"#
+        ) + "\n";
+        assert!(read_frame::<_, Configuration>(&mut Cursor::new(frame.as_bytes())).is_err());
+    }
+    for bytes in [
+        br#"{"value":"$serde_json::private::Number"}"#.as_slice(),
+        br#"{"escaped":"\"$serde_json::private::Number\":123","value":1.25e-1}"#.as_slice(),
+        br#"{"$serde_json::private::Numberx":1}"#.as_slice(),
+    ] {
+        assert!(reject_reserved_number_keys(bytes).is_ok());
+    }
+    let frame = br#"{"type":"action","request_id":"numeric-1","action_id":"ha-number-0-set","params":{"input_revision":"$serde_json::private::Number","value_scaled":1},"deadline_ms":5000}
+"#;
+    assert!(read_frame::<_, Configuration>(&mut Cursor::new(frame)).is_ok());
+    assert!(reject_reserved_number_keys(br#"{"unterminated\"#).is_err());
+}

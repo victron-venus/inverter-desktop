@@ -194,7 +194,7 @@ impl Worker {
     async fn configure(&mut self, listener: &TcpListener, selected: bool) {
         self.send(
             json!({"type":"hello","plugin_id":"inverter-desktop.home-assistant",
-            "protocol_version":1,"host_api_version":"1.4.0"}),
+            "protocol_version":1,"host_api_version":"1.5.0"}),
         );
         assert_eq!(self.next().await["type"], "ready");
         self.send(
