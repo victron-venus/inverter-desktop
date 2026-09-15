@@ -14,6 +14,7 @@ fn configuration(base: &str) -> Validated {
         cover_entities: vec![],
         number_entities: vec![],
         cover_position_entities: vec![],
+        discovery_prefixes: vec![],
         token: "fixture-token-only".into(),
     }
 }
@@ -284,4 +285,177 @@ async fn raw_ha_numeric_object_spoofing_is_rejected_before_rest_or_websocket_des
         .0
         .unwrap()
         .is_some());
+}
+
+#[test]
+fn discovery_events_match_valid_ids_and_malformed_discovered_data_becomes_tombstones() {
+    let mut config = configuration("http://localhost/prefix/");
+    config.discovery_prefixes = vec!["sensor.".into(), "binary_sensor.door_".into()];
+    let valid = changed(
+        "sensor.extra",
+        json!({"entity_id":"sensor.extra","state":"7"}),
+    );
+    assert_eq!(
+        event(&config, &valid).unwrap().unwrap().1.unwrap()["state"],
+        "7"
+    );
+    for state in [
+        Value::Null,
+        json!({}),
+        json!([]),
+        json!(7),
+        json!({"entity_id":"sensor.other","state":"7"}),
+        json!({"entity_id":"sensor.extra","state":true}),
+    ] {
+        assert_eq!(
+            event(&config, &changed("sensor.extra", state)).unwrap(),
+            Some(("sensor.extra", None))
+        );
+    }
+    let mut missing = changed("sensor.extra", Value::Null);
+    missing["event"]["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("new_state");
+    assert_eq!(
+        event(&config, &missing).unwrap(),
+        Some(("sensor.extra", None))
+    );
+    for id in [
+        "sensor.",
+        "sensor.A",
+        "sensor.a.b",
+        "sensor.a/escape",
+        "sensor.a*",
+        "sensorx.a",
+        "binary_sensor.window",
+        "light.a",
+        "do_not_supply_charger",
+    ] {
+        assert!(
+            event(&config, &changed(id, json!({"private":"ignored"})))
+                .unwrap()
+                .is_none(),
+            "{id}"
+        );
+    }
+    for id in [Value::Null, json!(42), json!([])] {
+        let mut malformed = valid.clone();
+        malformed["event"]["data"]["entity_id"] = id;
+        assert!(event(&config, &malformed).unwrap().is_none());
+    }
+    assert_eq!(
+        event(
+            &config,
+            &changed(
+                "sensor.selected",
+                json!({"entity_id":"sensor.wrong","state":"7"})
+            )
+        ),
+        Err(Failure::Retry)
+    );
+    config.discovery_prefixes.clear();
+    assert!(event(&config, &valid).unwrap().is_none());
+}
+
+async fn discovery_response(response: Vec<u8>) -> (Result<Vec<Value>, Failure>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut configuration = configuration(&format!(
+        "http://{}/ha-prefix/",
+        listener.local_addr().unwrap()
+    ));
+    configuration.discovery_prefixes = vec!["sensor.".into()];
+    let server = async {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+            assert!(request.len() < 8192);
+        }
+        let _ = stream.write_all(&response).await;
+        String::from_utf8(request).unwrap()
+    };
+    let client = http_client().unwrap();
+    time::timeout(Duration::from_secs(3), async {
+        tokio::join!(discovery_states(&client, &configuration), server)
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn discovery_http_uses_only_the_fixed_prefixed_collection_and_authentication() {
+    let body = br#"[{"entity_id":"sensor.a","state":"2"}]"#;
+    let (result, request) = discovery_response(response("200 OK", body)).await;
+    assert_eq!(result.unwrap()[0]["entity_id"], "sensor.a");
+    assert!(request.starts_with("GET /ha-prefix/api/states HTTP/1.1\r\n"));
+    assert!(request
+        .to_ascii_lowercase()
+        .contains("\r\nauthorization: bearer fixture-token-only\r\n"));
+    for (status, expected) in [
+        ("401 Unauthorized", Failure::Authentication),
+        ("403 Forbidden", Failure::Authentication),
+        ("404 Not Found", Failure::Retry),
+        ("500 Server Error", Failure::Retry),
+    ] {
+        assert_eq!(
+            discovery_response(response(status, b"private response"))
+                .await
+                .0,
+            Err(expected)
+        );
+    }
+}
+
+#[tokio::test]
+async fn discovery_collection_bounds_and_json_shape_are_enforced_before_state_selection() {
+    for body in [b"null".to_vec(),b"{}".to_vec(),b"invalid-json".to_vec(),br#"[{"entity_id":"sensor.a","state":"1","attributes":{"min":{"$serde_json::private::Number":"0"}}}]"#.to_vec()] {
+        assert_eq!(discovery_response(response("200 OK",&body)).await.0,Err(Failure::Retry));
+    }
+    let maximum = serde_json::to_vec(&vec![json!({}); MAX_DISCOVERY_STATES]).unwrap();
+    assert_eq!(
+        discovery_response(response("200 OK", &maximum))
+            .await
+            .0
+            .unwrap()
+            .len(),
+        MAX_DISCOVERY_STATES
+    );
+    let too_many = serde_json::to_vec(&vec![json!({}); MAX_DISCOVERY_STATES + 1]).unwrap();
+    assert_eq!(
+        discovery_response(response("200 OK", &too_many)).await.0,
+        Err(Failure::Retry)
+    );
+    let mut exact = b"[]".to_vec();
+    exact.resize(MAX_RESPONSE_BYTES, b' ');
+    assert!(discovery_response(response("200 OK", &exact))
+        .await
+        .0
+        .unwrap()
+        .is_empty());
+    exact.push(b' ');
+    assert_eq!(
+        discovery_response(response("200 OK", &exact)).await.0,
+        Err(Failure::Retry)
+    );
+    let chunked = format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",exact.len(),String::from_utf8(exact).unwrap());
+    assert_eq!(
+        discovery_response(chunked.into_bytes()).await.0,
+        Err(Failure::Retry)
+    );
+}
+
+#[tokio::test]
+async fn discovery_http_does_not_follow_collection_redirects() {
+    let forbidden = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let response = format!("HTTP/1.1 302 Found\r\nLocation: http://{}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",forbidden.local_addr().unwrap());
+    assert_eq!(
+        discovery_response(response.into_bytes()).await.0,
+        Err(Failure::Retry)
+    );
+    assert!(time::timeout(Duration::from_millis(50), forbidden.accept())
+        .await
+        .is_err());
 }

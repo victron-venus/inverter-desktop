@@ -86,11 +86,31 @@ impl Observations {
 }
 
 #[derive(Clone)]
+struct DiscoveryControl {
+    snapshot: Arc<Mutex<Value>>,
+    stall_next: Arc<AtomicBool>,
+    pending: Arc<AtomicUsize>,
+    release: broadcast::Sender<()>,
+}
+
+impl DiscoveryControl {
+    fn new(snapshot: Value) -> Self {
+        Self {
+            snapshot: Arc::new(Mutex::new(snapshot)),
+            stall_next: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(AtomicUsize::new(0)),
+            release: broadcast::channel(4).0,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct ServiceControl {
     media_enabled: bool,
     binary_enabled: bool,
     cover_enabled: bool,
     numeric_enabled: bool,
+    discovery: Option<DiscoveryControl>,
     stall_next: Arc<AtomicBool>,
     pending: Arc<AtomicUsize>,
     release: broadcast::Sender<()>,
@@ -103,6 +123,7 @@ impl ServiceControl {
             binary_enabled: false,
             cover_enabled: false,
             numeric_enabled: false,
+            discovery: None,
             stall_next: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             release: broadcast::channel(4).0,
@@ -298,6 +319,16 @@ impl HomeAssistant {
             assert!(
                 request.path.starts_with(FIRST_PREFIX) || request.path.starts_with(SECOND_PREFIX)
             );
+            if request.operation == "discovery" {
+                assert!(self
+                    .services
+                    .as_ref()
+                    .is_some_and(|control| control.discovery.is_some()));
+                assert!(
+                    request.path == format!("{FIRST_PREFIX}api/states")
+                        || request.path == format!("{SECOND_PREFIX}api/states")
+                );
+            }
             if request.operation == "state" {
                 let readonly = [
                     "sensor.temperature",
@@ -529,6 +560,10 @@ async fn serve_connection(
         )
         .await;
     }
+    if path == format!("{prefix}api/states") {
+        let discovery = services.and_then(|control| control.discovery).ok_or(())?;
+        return serve_discovery(stream, &headers, &path, observed, active, discovery).await;
+    }
     if !path.starts_with(&format!("{prefix}api/states/")) || path.contains('?') {
         return Err(());
     }
@@ -632,6 +667,43 @@ async fn serve_connection(
         .write_all(response.as_bytes())
         .await
         .map_err(|_| ())?;
+    stream.write_all(&bytes).await.map_err(|_| ())?;
+    stream.shutdown().await.map_err(|_| ())
+}
+
+async fn serve_discovery(
+    mut stream: TcpStream,
+    headers: &str,
+    path: &str,
+    observed: Arc<Mutex<Observations>>,
+    active: Arc<AtomicUsize>,
+    control: DiscoveryControl,
+) -> Result<(), ()> {
+    let mut consumed = vec![0; headers.len()];
+    stream.read_exact(&mut consumed).await.map_err(|_| ())?;
+    // Capture the older snapshot before allowing live events to race its response.
+    let bytes = serde_json::to_vec(&*control.snapshot.lock().unwrap()).unwrap();
+    let mut release = control.release.subscribe();
+    let stalled = control.stall_next.swap(false, Ordering::AcqRel);
+    active.fetch_add(1, Ordering::AcqRel);
+    let _socket = ActiveSocket(active);
+    observed.lock().unwrap().record(path, "discovery");
+    if stalled {
+        control.pending.fetch_add(1, Ordering::AcqRel);
+        let _pending = ActiveSocket(control.pending);
+        let mut byte = [0];
+        tokio::select! {
+            result = release.recv() => result.map_err(|_| ())?,
+            closed = stream.read(&mut byte) => {
+                return if matches!(closed, Ok(0) | Err(_)) { Ok(()) } else { Err(()) };
+            }
+        }
+    }
+    let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    );
+    stream.write_all(headers.as_bytes()).await.map_err(|_| ())?;
     stream.write_all(&bytes).await.map_err(|_| ())?;
     stream.shutdown().await.map_err(|_| ())
 }
@@ -1111,6 +1183,29 @@ async fn configure_numeric(
             ("number_entities".into(), json!(selections.0)),
             ("cover_position_entities".into(), json!(selections.1)),
             ("cover_entities".into(), json!(selections.2)),
+        ]),
+        token,
+    )
+    .await;
+}
+
+async fn configure_discovery(
+    service: &PackageApplication,
+    epoch: u64,
+    origin: &HomeAssistant,
+    prefix: &str,
+    selections: (&str, &str, &str),
+    token: Option<&str>,
+) {
+    save_configuration(
+        service,
+        epoch,
+        origin,
+        BTreeMap::from([
+            ("ha_base_url".into(), json!(origin.base(prefix))),
+            ("watch_entities".into(), json!(selections.0)),
+            ("action_entities".into(), json!(selections.1)),
+            ("discovery_prefixes".into(), json!(selections.2)),
         ]),
         token,
     )
@@ -3280,6 +3375,280 @@ async fn signed_home_assistant_package_numeric() {
         .unwrap()
         .next()
         .is_none());
+    core.assert_receives(&broker, 6).await;
+    commands.assert_live_without_commands(6).await;
+    origin.assert_safe();
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly built INVERTER_HOME_ASSISTANT_WORKER and local MOSQUITTO_BIN; CI runs this acceptance test"]
+async fn signed_home_assistant_package_discovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let broker = Broker::new(&root).await;
+    let core = CoreTelemetry::new(broker.port);
+    let commands = CommandProbe::new(broker.port).await;
+    let discovery = DiscoveryControl::new(json!([
+        entity_state("sensor.temperature", "999", "Wrong explicit snapshot"),
+        entity_state("binary_sensor.do_not_supply_charger", "on", "Binary flag"),
+        entity_state("sensor.room_a", "5", "Room A"),
+        entity_state("sensor.room_b", "9", "Room B"),
+        entity_state("sensor.room_deleted", "19", "Deleted room"),
+        entity_state("switch.forbidden", "on", "Forbidden control")
+    ]));
+    let origin = HomeAssistant::with_services(Some(ServiceControl {
+        discovery: Some(discovery.clone()),
+        ..ServiceControl::new()
+    }))
+    .await;
+    let (service, host, epoch) = install(&root).await;
+    configure_discovery(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        ("sensor.temperature", "", ""),
+        Some(&origin.first_token),
+    )
+    .await;
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    item_value(&host, "entity-0", "value", json!(21.5)).await;
+    assert_eq!(
+        origin.count("discovery"),
+        0,
+        "discovery defaults to disabled"
+    );
+    no_secrets(&host, &origin);
+    core.assert_receives(&broker, 1).await;
+    commands.assert_live_without_commands(1).await;
+
+    // The collection response is captured before these newer live events.
+    // Individual reads and explicitly granted writes must work while it waits.
+    discovery.stall_next.store(true, Ordering::Release);
+    configure_discovery(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        (
+            "sensor.temperature",
+            "button.do_not_supply_charger",
+            "sensor.,binary_sensor.",
+        ),
+        None,
+    )
+    .await;
+    until(|| discovery.pending.load(Ordering::Acquire) == 1 && actions(&host).len() == 1).await;
+    item_value(&host, "entity-0", "value", json!(21.5)).await;
+    let first_instance = instance(&host);
+    assert_eq!(
+        submit_action(&host, &first_instance, "ha-action-0", epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_service(
+        &origin,
+        0,
+        FIRST_PREFIX,
+        "button/press",
+        "button.do_not_supply_charger",
+    );
+    origin.event(
+        "sensor.room_a",
+        Some(entity_state("sensor.room_a", "6", "Room A")),
+    );
+    origin.event("sensor.room_deleted", None);
+    fresh_numeric_snapshot(&host, &origin, 22).await;
+    discovery.release.send(()).unwrap();
+    until(|| {
+        items(&host)
+            .iter()
+            .any(|item| item["title"] == "Room A" && item["value"] == 6.0)
+    })
+    .await;
+    let current = items(&host);
+    assert!(current
+        .iter()
+        .any(|item| item["title"] == "Room B" && item["value"] == 9.0));
+    assert!(current
+        .iter()
+        .any(|item| item["title"] == "Binary flag" && item["text"] == "on"));
+    assert!(!current.iter().any(|item| [
+        "Deleted room",
+        "Forbidden control",
+        "Wrong explicit snapshot"
+    ]
+    .contains(&item["title"].as_str().unwrap_or_default())));
+    assert!(current
+        .iter()
+        .any(|item| item["id"] == "entity-0" && item["value"] == 22.0));
+    let room_id = current
+        .iter()
+        .find(|item| item["title"] == "Room A")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for item in current.iter().filter(|item| {
+        item["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("discovery-"))
+    }) {
+        assert!(["metric", "status", "text"].contains(&item["kind"].as_str().unwrap()));
+        assert_eq!(
+            host.action_in_epoch(
+                PLUGIN,
+                &first_instance,
+                item["id"].as_str().unwrap(),
+                json!({}),
+                WAIT,
+                epoch
+            )
+            .await
+            .unwrap_err(),
+            PluginError::UnknownAction
+        );
+    }
+    assert!(numeric_inputs(&host).is_empty());
+    assert_eq!(origin.count("service"), 1);
+    core.assert_receives(&broker, 2).await;
+    commands.assert_live_without_commands(2).await;
+
+    origin.event(
+        "sensor.room_a",
+        Some(entity_state("sensor.room_a", "7", "Room A")),
+    );
+    item_value(&host, &room_id, "value", json!(7.0)).await;
+    origin.event("sensor.room_a", None);
+    origin.event(
+        "sensor.room_c",
+        Some(entity_state("sensor.room_c", "10", "Room C")),
+    );
+    // A malformed discovery-only envelope withdraws its row without disrupting
+    // the explicit control session or resurrecting data from the old snapshot.
+    origin.event(
+        "sensor.room_b",
+        Some(entity_state("sensor.other", "8", "Room B")),
+    );
+    fresh_numeric_snapshot(&host, &origin, 23).await;
+    let current = items(&host);
+    assert!(!current
+        .iter()
+        .any(|item| item["title"] == "Room A" || item["title"] == "Room B"));
+    assert!(current
+        .iter()
+        .any(|item| item["title"] == "Room C" && item["id"] != room_id));
+    assert_eq!(instance(&host), first_instance);
+    assert_eq!(origin.count("discovery"), 1);
+    assert_eq!(actions(&host).len(), 1);
+    no_private_data(&host, &origin);
+
+    // A failed bulk read affects discovery only. The explicit button remains
+    // available and sends exactly its configured HA service request.
+    *discovery.snapshot.lock().unwrap() = json!({"invalid":"collection"});
+    configure_discovery(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        (
+            "sensor.temperature",
+            "button.do_not_supply_charger",
+            "sensor.room_",
+        ),
+        None,
+    )
+    .await;
+    item_value(
+        &host,
+        "connection",
+        "value",
+        json!("Connected; Discovery unavailable"),
+    )
+    .await;
+    until(|| actions(&host).len() == 1).await;
+    assert_eq!(
+        submit_action(&host, &instance(&host), "ha-action-0", epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_service(
+        &origin,
+        1,
+        FIRST_PREFIX,
+        "button/press",
+        "button.do_not_supply_charger",
+    );
+    core.assert_receives(&broker, 3).await;
+    commands.assert_live_without_commands(3).await;
+
+    *discovery.snapshot.lock().unwrap() = json!([
+        entity_state("binary_sensor.next", "off", "Next discovered"),
+        entity_state("sensor.room_a", "99", "Old selection"),
+        entity_state("sensor.next", "999", "Wrong explicit snapshot")
+    ]);
+    configure_discovery(
+        &service,
+        epoch,
+        &origin,
+        SECOND_PREFIX,
+        ("sensor.next", "", "binary_sensor."),
+        Some(&origin.second_token),
+    )
+    .await;
+    item_value(&host, "entity-0", "value", json!(7.0)).await;
+    until(|| {
+        items(&host)
+            .iter()
+            .any(|item| item["title"] == "Next discovered" && item["text"] == "off")
+    })
+    .await;
+    assert_ne!(instance(&host), first_instance);
+    assert_eq!(items(&host).len(), 3);
+    no_secrets(&host, &origin);
+    core.assert_receives(&broker, 4).await;
+    commands.assert_live_without_commands(4).await;
+
+    service.set_enabled(PLUGIN, false, epoch).await.unwrap();
+    origin.no_sockets().await;
+    discovery.stall_next.store(true, Ordering::Release);
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    until(|| discovery.pending.load(Ordering::Acquire) == 1).await;
+    item_value(&host, "entity-0", "value", json!(7.0)).await;
+    service.set_enabled(PLUGIN, false, epoch).await.unwrap();
+    origin.no_sockets().await;
+    assert_eq!(discovery.pending.load(Ordering::Acquire), 0);
+    assert!(items(&host).is_empty());
+    core.assert_receives(&broker, 5).await;
+    commands.assert_live_without_commands(5).await;
+
+    discovery.stall_next.store(true, Ordering::Release);
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    until(|| discovery.pending.load(Ordering::Acquire) == 1).await;
+    item_value(&host, "entity-0", "value", json!(7.0)).await;
+    service
+        .uninstall_with_settings(PLUGIN, true, epoch)
+        .await
+        .unwrap();
+    origin.no_sockets().await;
+    assert_eq!(discovery.pending.load(Ordering::Acquire), 0);
+    assert!(host.snapshots().is_empty());
+    assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
+    assert!(fs::read_dir(root.join("store/settings"))
+        .unwrap()
+        .next()
+        .is_none());
+    assert_eq!(
+        origin.count("service"),
+        2,
+        "discovery never grants writes or retries accepted actions"
+    );
     core.assert_receives(&broker, 6).await;
     commands.assert_live_without_commands(6).await;
     origin.assert_safe();

@@ -10,6 +10,8 @@ pub const MAX_BINARY_ENTITIES: usize = 8;
 pub const MAX_COVER_ENTITIES: usize = 4;
 pub const MAX_NUMBER_ENTITIES: usize = 4;
 pub const MAX_COVER_POSITION_ENTITIES: usize = 4;
+pub const MAX_DISCOVERY_PREFIXES: usize = 8;
+pub const MAX_DISCOVERY_PREFIX_BYTES: usize = 1024;
 pub const MAX_ACTION_BUTTONS: usize = 31;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
@@ -40,6 +42,8 @@ pub struct Values {
     pub number_entities: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cover_position_entities: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub discovery_prefixes: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -57,6 +61,7 @@ pub struct Validated {
     pub cover_entities: Vec<String>,
     pub number_entities: Vec<String>,
     pub cover_position_entities: Vec<String>,
+    pub discovery_prefixes: Vec<String>,
     pub token: String,
 }
 
@@ -317,6 +322,7 @@ impl Configuration {
         if entities.len() > MAX_ENTITIES {
             return Err("too many watched entities");
         }
+        let discovery_prefixes = discovery_prefixes(&self.values.discovery_prefixes)?;
         Ok(Validated {
             base: base_url(&self.values.ha_base_url)?,
             entities,
@@ -326,6 +332,7 @@ impl Configuration {
             cover_entities,
             number_entities,
             cover_position_entities,
+            discovery_prefixes,
             token: self.secrets.ha_token,
         })
     }
@@ -381,6 +388,52 @@ fn safe_path(path: &str) -> bool {
     })
 }
 
+fn literal_entity(entity: &str) -> bool {
+    entity.len() <= 128
+        && entity.split_once('.').is_some_and(|(domain, object)| {
+            !domain.is_empty()
+                && !object.is_empty()
+                && domain
+                    .bytes()
+                    .chain(object.bytes())
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+}
+
+fn discovery_prefixes(value: &str) -> Result<Vec<String>, &'static str> {
+    if value.len() > MAX_DISCOVERY_PREFIX_BYTES {
+        return Err("discovery prefixes are too large");
+    }
+    let mut prefixes = Vec::new();
+    for prefix in value
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|prefix| !prefix.is_empty())
+    {
+        if prefix.len() > 128
+            || !prefix.split_once('.').is_some_and(|(domain, object)| {
+                matches!(domain, "sensor" | "binary_sensor")
+                    && object
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            })
+        {
+            return Err("invalid discovery prefix");
+        }
+        if !prefixes.iter().any(|known| known == prefix) {
+            prefixes.push(prefix.to_owned());
+            if prefixes.len() > MAX_DISCOVERY_PREFIXES {
+                return Err("too many discovery prefixes");
+            }
+        }
+    }
+    Ok(prefixes)
+}
+
+pub fn matches_discovery(prefixes: &[String], entity: &str) -> bool {
+    literal_entity(entity) && prefixes.iter().any(|prefix| entity.starts_with(prefix))
+}
+
 fn entity_list(value: &str) -> Result<Vec<String>, &'static str> {
     if value.len() > 4096 {
         return Err("entity list is too large");
@@ -392,16 +445,7 @@ fn entity_list(value: &str) -> Result<Vec<String>, &'static str> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        let parts: Vec<_> = entity.split('.').collect();
-        if entity.len() > 128
-            || parts.len() != 2
-            || parts.iter().any(|part| {
-                part.is_empty()
-                    || !part
-                        .bytes()
-                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-            })
-        {
+        if !literal_entity(entity) {
             return Err("invalid HA entity ID");
         }
         if seen.insert(entity.to_owned()) {
@@ -415,6 +459,18 @@ fn entity_list(value: &str) -> Result<Vec<String>, &'static str> {
 }
 
 impl Validated {
+    pub fn discovery_enabled(&self) -> bool {
+        !self.discovery_prefixes.is_empty() && self.entities.len() < MAX_ENTITIES
+    }
+
+    pub fn discovery_url(&self) -> Url {
+        self.base.join("api/states").expect("validated URL")
+    }
+
+    pub fn discovery_matches(&self, entity: &str) -> bool {
+        self.discovery_enabled() && matches_discovery(&self.discovery_prefixes, entity)
+    }
+
     pub fn websocket_url(&self) -> Url {
         let mut url = self.base.join("api/websocket").expect("validated URL");
         let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
@@ -1228,6 +1284,170 @@ mod tests {
         ));
         assert_eq!(
             serde_json::from_value::<Configuration>(legacy)
+                .unwrap()
+                .validate()
+                .err(),
+            Some("invalid configuration")
+        );
+    }
+
+    #[test]
+    fn discovery_prefixes_are_opt_in_literal_bounded_and_do_not_change_explicit_authority() {
+        let mut config = configuration("https://ha.example:8443/prefix/ha", "sensor.manual");
+        config.values.action_entities = "button.a,scene.b".into();
+        config.values.media_player_entities = "media_player.a".into();
+        config.values.binary_entities = "light.a".into();
+        config.values.cover_entities = "cover.a".into();
+        config.values.number_entities = "number.a".into();
+        config.values.cover_position_entities = "cover.a".into();
+        let previous =
+            serde_json::from_value::<Configuration>(serde_json::to_value(&config).unwrap())
+                .unwrap()
+                .validate()
+                .unwrap();
+        config.values.discovery_prefixes =
+            " sensor.room_,\nbinary_sensor.,sensor.room_,sensor. ".into();
+        let config = config.validate().unwrap();
+        assert_eq!(
+            config.discovery_prefixes,
+            ["sensor.room_", "binary_sensor.", "sensor."]
+        );
+        assert!(config.discovery_enabled());
+        assert_eq!(config.entities, previous.entities);
+        assert_eq!(
+            config
+                .actions()
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            previous
+                .actions()
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            config
+                .inputs()
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            previous
+                .inputs()
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            config.discovery_url().as_str(),
+            "https://ha.example:8443/prefix/ha/api/states"
+        );
+        for entity in [
+            "sensor.room_temperature",
+            "sensor.other",
+            "binary_sensor.door",
+            "sensor.do_not_supply_charger",
+        ] {
+            assert!(config.discovery_matches(entity));
+        }
+        for entity in [
+            "sensor.",
+            "sensor.room.*",
+            "sensor.room.a",
+            "sensor.room/A",
+            "sensor.Room",
+            "binary_sensor.",
+            "sensorx.a",
+            "switch.a",
+            "do_not_supply_charger",
+        ] {
+            assert!(!config.discovery_matches(entity), "{entity}");
+        }
+        let empty = configuration("http://localhost", "").validate().unwrap();
+        assert!(empty.discovery_prefixes.is_empty());
+        assert!(!empty.discovery_enabled());
+    }
+
+    #[test]
+    fn discovery_prefix_limits_and_full_explicit_capacity_are_enforced() {
+        for prefix in [
+            "sensor",
+            "binary_sensor",
+            "switch.",
+            "number.a",
+            "cover.",
+            "button.a",
+            "sensor.*",
+            "sensor.[a-z]",
+            "sensor.a?",
+            "sensor.a.b",
+            "sensor.a/b",
+            "sensor.a%20",
+            "sensor.A",
+            "sensor.a b",
+            "sensor.é",
+            "do_not_supply_charger",
+        ] {
+            assert!(discovery_prefixes(prefix).is_err(), "{prefix}");
+        }
+        let maximum = format!("sensor.{}", "a".repeat(121));
+        assert_eq!(maximum.len(), 128);
+        assert!(discovery_prefixes(&maximum).is_ok());
+        assert!(discovery_prefixes(&format!("{maximum}a")).is_err());
+        let eight = (0..8)
+            .map(|i| format!("sensor.e{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            discovery_prefixes(&format!("{eight},sensor.e0"))
+                .unwrap()
+                .len(),
+            8
+        );
+        assert!(discovery_prefixes(&format!("{eight},sensor.e8")).is_err());
+        let exact = format!("sensor.{}", " ".repeat(MAX_DISCOVERY_PREFIX_BYTES - 7));
+        assert_eq!(exact.len(), MAX_DISCOVERY_PREFIX_BYTES);
+        assert_eq!(discovery_prefixes(&exact).unwrap(), ["sensor."]);
+        assert!(discovery_prefixes(&format!("{exact} ")).is_err());
+        let selected = (0..32)
+            .map(|i| format!("sensor.e{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut config = configuration("http://localhost", &selected);
+        config.values.discovery_prefixes = "sensor.".into();
+        let config = config.validate().unwrap();
+        assert_eq!(config.entities.len(), 32);
+        assert!(!config.discovery_enabled());
+        assert!(!config.discovery_matches("sensor.additional"));
+    }
+
+    #[test]
+    fn empty_discovery_selection_preserves_the_exact_numeric_configuration_byte_boundary() {
+        let mut previous = json!({"revision":"previous-discovery-limit","values":{
+            "ha_base_url":"http://localhost","watch_entities":"\u{b}".repeat(4096),"action_entities":"\u{b}".repeat(1200),"media_player_entities":"",
+            "binary_entities":"light.a","cover_entities":"cover.a","number_entities":"number.a","cover_position_entities":"cover.a"},
+            "secrets":{"ha_token":"fixture-token"}});
+        let padding = MAX_CONFIGURATION_BYTES - serde_json::to_vec(&previous).unwrap().len();
+        previous["secrets"]["ha_token"] = json!(format!("fixture-token{}", "x".repeat(padding)));
+        for explicit_empty in [false, true] {
+            if explicit_empty {
+                previous["values"]["discovery_prefixes"] = json!("");
+            }
+            let config: Configuration = serde_json::from_value(previous.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&config).unwrap().len(),
+                MAX_CONFIGURATION_BYTES
+            );
+            let config = config.validate().unwrap();
+            assert!(!config.discovery_enabled());
+            assert_eq!(config.inputs().len(), 2);
+        }
+        previous["secrets"]["ha_token"] = json!(format!(
+            "{}x",
+            previous["secrets"]["ha_token"].as_str().unwrap()
+        ));
+        assert_eq!(
+            serde_json::from_value::<Configuration>(previous)
                 .unwrap()
                 .validate()
                 .err(),

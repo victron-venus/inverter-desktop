@@ -3251,3 +3251,698 @@ fn numeric_disconnect_and_new_session_invalidate_previous_input_revisions() {
     worker.success("new-session");
     worker.stop(false);
 }
+
+fn discovery_configuration(fixture: &TcpListener, watch: &str, prefixes: Option<&str>) -> Value {
+    let mut config = configuration(fixture, watch, None);
+    if let Some(prefixes) = prefixes {
+        config["configuration"]["values"]["discovery_prefixes"] = json!(prefixes);
+    }
+    config
+}
+
+fn discovery_items(frame: &Value) -> Vec<&Value> {
+    frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            item["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("discovery-"))
+        })
+        .collect()
+}
+
+fn discovered<'a>(frame: &'a Value, title: &str) -> Option<&'a Value> {
+    discovery_items(frame)
+        .into_iter()
+        .find(|item| item["title"] == title)
+}
+
+fn discovery_status(worker: &mut Worker, expected: &str) -> Value {
+    worker.until(|frame| {
+        frame["type"] == "contributions"
+            && item(frame, "connection").is_some_and(|item| item["value"] == expected)
+    })
+}
+
+fn start_discovery(
+    worker: &mut Worker,
+    fixture: &TcpListener,
+    config: Value,
+) -> (WebSocket<TcpStream>, TcpStream) {
+    let mut names = Vec::new();
+    for field in [
+        "watch_entities",
+        "action_entities",
+        "media_player_entities",
+        "binary_entities",
+        "cover_entities",
+        "number_entities",
+        "cover_position_entities",
+    ] {
+        for name in config["configuration"]["values"][field]
+            .as_str()
+            .unwrap_or("")
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    worker.configure_frame(config.clone());
+    let socket = authorize(fixture, true);
+    let mut snapshot = None;
+    let mut observed = HashSet::new();
+    for _ in 0..names.len() + 1 {
+        let mut req = request(fixture);
+        assert!(req.body.is_empty());
+        if req.line == "GET /reverse/proxy/ha/api/states HTTP/1.1" {
+            assert!(snapshot.is_none(), "only one collection per connection");
+            snapshot = Some(req.stream);
+        } else {
+            let name = req
+                .line
+                .strip_prefix("GET /reverse/proxy/ha/api/states/")
+                .and_then(|line| line.strip_suffix(" HTTP/1.1"))
+                .expect("only fixed explicit reads and opted-in collection");
+            assert!(names.contains(&name));
+            assert!(observed.insert(name.to_owned()));
+            let state = match name.split_once('.').unwrap().0 {
+                "number" => number_entity(name, "-0.3"),
+                "cover" => position_entity(name, "closed", json!(15), json!(20)),
+                "media_player" => entity(name, "paused"),
+                "switch" | "light" | "input_boolean" => entity(name, "off"),
+                "button" | "scene" => entity(name, "unknown"),
+                _ => entity(name, "1"),
+            };
+            respond(&mut req.stream, 200, state);
+        }
+    }
+    (socket, snapshot.expect("opted-in collection request"))
+}
+
+#[test]
+fn discovery_defaults_and_full_explicit_capacity_never_request_the_collection() {
+    for prefixes in [None, Some("")] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut socket = initialize_configuration(
+            &mut worker,
+            &fixture,
+            discovery_configuration(&fixture, "sensor.barrier,sensor.manual", prefixes),
+        );
+        live(
+            &mut socket,
+            "sensor.unselected",
+            Some(entity("sensor.unselected", "9")),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, 2);
+        assert_eq!(frame["items"].as_array().unwrap().len(), 3);
+        assert!(discovery_items(&frame).is_empty());
+        no_request(&fixture, Duration::from_millis(80));
+        worker.stop(false);
+    }
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut selected = vec!["sensor.barrier".to_owned()];
+    selected.extend((0..31).map(|i| format!("sensor.manual_{i}")));
+    let mut socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        discovery_configuration(&fixture, &selected.join(","), Some("sensor.")),
+    );
+    live(
+        &mut socket,
+        "sensor.unselected",
+        Some(entity("sensor.unselected", "9")),
+    );
+    let frame = numeric_barrier(&mut worker, &mut socket, 2);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 33);
+    assert!(discovery_items(&frame).is_empty());
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_only_configuration_subscribes_and_sorts_read_only_prefix_matches() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let (mut socket, mut snapshot) = start_discovery(
+        &mut worker,
+        &fixture,
+        discovery_configuration(
+            &fixture,
+            "",
+            Some("sensor.room_,binary_sensor.door_,sensor.room_"),
+        ),
+    );
+    respond(
+        &mut snapshot,
+        200,
+        json!([
+            entity("sensor.room_z", "unknown"),
+            entity("switch.room_a", "on"),
+            entity("sensor.unmatched", "3"),
+            entity("binary_sensor.door_front", "on"),
+            entity("sensor.room_a", "2"),
+            entity("sensor.room_a.extra", "7"),
+            entity("sensor.room_*", "7")
+        ]),
+    );
+    let frame =
+        worker.until(|frame| frame["type"] == "contributions" && discovery_items(frame).len() == 3);
+    assert_eq!(
+        discovery_items(&frame)
+            .iter()
+            .map(|item| item["title"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["binary_sensor.door_front", "sensor.room_a", "sensor.room_z"]
+    );
+    assert!(discovery_items(&frame)
+        .iter()
+        .all(|item| matches!(item["kind"].as_str(), Some("text" | "metric" | "status"))));
+    assert!(actions(&frame).is_empty());
+    assert!(inputs(&frame).is_empty());
+    let old_id = discovered(&frame, "sensor.room_a").unwrap()["id"].clone();
+    live(
+        &mut socket,
+        "sensor.room_a",
+        Some(entity("sensor.room_a", "8")),
+    );
+    let next = worker.until(|frame| {
+        frame["type"] == "contributions"
+            && discovered(frame, "sensor.room_a").is_some_and(|item| item["value"] == 8.0)
+    });
+    assert_eq!(discovered(&next, "sensor.room_a").unwrap()["id"], old_id);
+    for (index, id) in [
+        old_id.as_str().unwrap(),
+        "ha-action-0",
+        "ha-binary-0-on",
+        "ha-number-0-set",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = format!("readonly-{index}");
+        worker.action(&request, id, 5000);
+        worker.error(&request, "invalid_action");
+    }
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_live_updates_deletions_and_malformed_tombstones_override_late_snapshot() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let (mut socket, mut snapshot) = start_discovery(
+        &mut worker,
+        &fixture,
+        discovery_configuration(&fixture, "sensor.barrier,sensor.manual", Some("sensor.")),
+    );
+    live(
+        &mut socket,
+        "sensor.manual",
+        Some(entity("sensor.manual", "77")),
+    );
+    live(
+        &mut socket,
+        "sensor.updated",
+        Some(entity("sensor.updated", "9")),
+    );
+    live(&mut socket, "sensor.deleted", None);
+    live(
+        &mut socket,
+        "sensor.malformed",
+        Some(json!({"entity_id":"sensor.other","state":"bad"})),
+    );
+    live(
+        &mut socket,
+        "sensor.live_only",
+        Some(entity("sensor.live_only", "11")),
+    );
+    let before = numeric_barrier(&mut worker, &mut socket, 2);
+    assert!(discovery_items(&before).is_empty());
+    assert_eq!(item(&before, "entity-1").unwrap()["value"], 77.0);
+    respond(
+        &mut snapshot,
+        200,
+        json!([
+            entity("sensor.manual", "1"),
+            entity("sensor.manual", "2"),
+            entity("sensor.updated", "1"),
+            entity("sensor.deleted", "1"),
+            entity("sensor.malformed", "1"),
+            entity("sensor.snapshot_only", "3")
+        ]),
+    );
+    let frame =
+        worker.until(|frame| frame["type"] == "contributions" && discovery_items(frame).len() == 3);
+    assert_eq!(discovered(&frame, "sensor.updated").unwrap()["value"], 9.0);
+    assert_eq!(
+        discovered(&frame, "sensor.live_only").unwrap()["value"],
+        11.0
+    );
+    assert!(discovered(&frame, "sensor.deleted").is_none());
+    assert!(discovered(&frame, "sensor.malformed").is_none());
+    assert_eq!(item(&frame, "entity-1").unwrap()["value"], 77.0);
+    let old = discovered(&frame, "sensor.updated").unwrap()["id"].clone();
+    live(&mut socket, "sensor.updated", None);
+    let removed = numeric_barrier(&mut worker, &mut socket, 3);
+    assert!(discovered(&removed, "sensor.updated").is_none());
+    live(
+        &mut socket,
+        "sensor.updated",
+        Some(entity("sensor.updated", "10")),
+    );
+    let restored = numeric_barrier(&mut worker, &mut socket, 4);
+    assert_ne!(discovered(&restored, "sensor.updated").unwrap()["id"], old);
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_capacity_discards_unseen_state_and_free_slots_require_a_new_live_update() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut selected = vec!["sensor.barrier".to_owned()];
+    selected.extend((0..29).map(|i| format!("sensor.manual_{i}")));
+    let (mut socket, mut snapshot) = start_discovery(
+        &mut worker,
+        &fixture,
+        discovery_configuration(&fixture, &selected.join(","), Some("sensor.")),
+    );
+    respond(
+        &mut snapshot,
+        200,
+        json!([
+            entity("sensor.z", "30"),
+            entity("sensor.b", "2"),
+            entity("sensor.a", "1"),
+            entity("sensor.manual_0", "999")
+        ]),
+    );
+    let frame = discovery_status(&mut worker, "Connected; Discovery limit reached");
+    assert_eq!(
+        discovery_items(&frame)
+            .iter()
+            .map(|item| item["title"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["sensor.a", "sensor.b"]
+    );
+    let b_id = discovered(&frame, "sensor.b").unwrap()["id"].clone();
+    live(&mut socket, "sensor.z", Some(entity("sensor.z", "31")));
+    live(&mut socket, "sensor.a", None);
+    let removed = numeric_barrier(&mut worker, &mut socket, 2);
+    assert_eq!(discovery_items(&removed).len(), 1);
+    assert!(discovered(&removed, "sensor.z").is_none());
+    live(&mut socket, "sensor.z", Some(entity("sensor.z", "32")));
+    let added = numeric_barrier(&mut worker, &mut socket, 3);
+    assert_eq!(discovery_items(&added).len(), 2);
+    assert_eq!(discovered(&added, "sensor.z").unwrap()["value"], 32.0);
+    assert_eq!(discovered(&added, "sensor.b").unwrap()["id"], b_id);
+    assert_eq!(added["items"].as_array().unwrap().len(), 33);
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_failure_never_revokes_explicit_actions_or_numeric_input_revisions() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = discovery_configuration(&fixture, "sensor.barrier", Some("sensor."));
+    config["configuration"]["values"]["action_entities"] = json!("button.explicit");
+    config["configuration"]["values"]["number_entities"] = json!("number.explicit");
+    let (mut socket, mut snapshot) = start_discovery(&mut worker, &fixture, config);
+    let before = numeric_connected(&mut worker, 1);
+    let number = item(&before, "ha-number-0-set").unwrap().clone();
+    worker.action("while-pending", "ha-action-0", 5000);
+    let mut action = service(&fixture, "button", "button.explicit");
+    respond(&mut snapshot, 500, json!({"private":PRIVATE_BODY}));
+    let failed = discovery_status(&mut worker, "Connected; Discovery unavailable");
+    assert_eq!(
+        item(&failed, "ha-number-0-set").unwrap()["input_revision"],
+        number["input_revision"]
+    );
+    assert!(item(&failed, "ha-action-0").is_some());
+    respond(&mut action, 200, json!([]));
+    worker.success("while-pending");
+    numeric_action(&mut worker, "after-failure", &number, 0, 5000);
+    let mut action = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.explicit","value":0.0}"#,
+    );
+    respond(&mut action, 200, json!([]));
+    worker.success("after-failure");
+    live(
+        &mut socket,
+        "sensor.ignored_after_failure",
+        Some(entity("sensor.ignored_after_failure", "9")),
+    );
+    let frame = numeric_barrier(&mut worker, &mut socket, 2);
+    assert!(discovery_items(&frame).is_empty());
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_bootstrap_overflow_discards_snapshot_and_keeps_explicit_controls() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = discovery_configuration(&fixture, "sensor.barrier", Some("sensor."));
+    config["configuration"]["values"]["action_entities"] = json!("button.explicit");
+    let (mut socket, mut snapshot) = start_discovery(&mut worker, &fixture, config);
+    for index in 0..129 {
+        live(
+            &mut socket,
+            &format!("sensor.buffer_{index}"),
+            Some(entity(
+                &format!("sensor.buffer_{index}"),
+                &index.to_string(),
+            )),
+        );
+    }
+    let failed = discovery_status(&mut worker, "Connected; Discovery unavailable");
+    assert!(discovery_items(&failed).is_empty());
+    assert!(item(&failed, "ha-action-0").is_some());
+    respond(
+        &mut snapshot,
+        200,
+        json!([entity("sensor.snapshot_only", "8")]),
+    );
+    let after = numeric_barrier(&mut worker, &mut socket, 2);
+    assert!(discovery_items(&after).is_empty());
+    worker.action("overflow-action", "ha-action-0", 5000);
+    let mut action = service(&fixture, "button", "button.explicit");
+    respond(&mut action, 200, json!([]));
+    worker.success("overflow-action");
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_malformed_duplicate_oversized_and_redirected_snapshots_fail_without_reconnect() {
+    let too_many = Value::Array(
+        (0..4097)
+            .map(|i| entity(&format!("sensor.e{i}"), "1"))
+            .collect(),
+    );
+    let cases = [
+        json!({}),
+        json!([null]),
+        json!([{"state":"1"}]),
+        json!([{"entity_id":42,"state":"1"}]),
+        json!([{"entity_id":"sensor.missing"}]),
+        json!([
+            entity("sensor.duplicate", "1"),
+            entity("sensor.duplicate", "2")
+        ]),
+        too_many,
+    ];
+    for body in cases {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut config = discovery_configuration(&fixture, "sensor.barrier", Some("sensor."));
+        config["configuration"]["values"]["action_entities"] = json!("button.explicit");
+        let (_socket, mut snapshot) = start_discovery(&mut worker, &fixture, config);
+        respond(&mut snapshot, 200, body);
+        let failed = discovery_status(&mut worker, "Connected; Discovery unavailable");
+        assert!(discovery_items(&failed).is_empty());
+        assert!(item(&failed, "ha-action-0").is_some());
+        no_request(&fixture, Duration::from_millis(60));
+        worker.stop(false);
+    }
+    for streamed in [false, true] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let (_socket, mut snapshot) = start_discovery(
+            &mut worker,
+            &fixture,
+            discovery_configuration(&fixture, "sensor.barrier", Some("sensor.")),
+        );
+        if streamed {
+            write!(snapshot,"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",1024*1024+1).unwrap();
+            let _ = snapshot.write_all(&vec![b' '; 1024 * 1024 + 1]);
+        } else {
+            write!(
+                snapshot,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                1024 * 1024 + 1
+            )
+            .unwrap();
+        }
+        let failed = discovery_status(&mut worker, "Connected; Discovery unavailable");
+        assert!(discovery_items(&failed).is_empty());
+        no_request(&fixture, Duration::from_millis(60));
+        worker.stop(false);
+    }
+    let forbidden = listener();
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let (_socket, mut snapshot) = start_discovery(
+        &mut worker,
+        &fixture,
+        discovery_configuration(&fixture, "sensor.barrier", Some("sensor.")),
+    );
+    write!(snapshot,"HTTP/1.1 302 Found\r\nLocation: http://{}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",forbidden.local_addr().unwrap()).unwrap();
+    discovery_status(&mut worker, "Connected; Discovery unavailable");
+    no_request(&forbidden, Duration::from_millis(80));
+    no_request(&fixture, Duration::from_millis(60));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_only_malformed_live_data_withdraws_rows_without_reconnecting() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = discovery_configuration(&fixture, "sensor.barrier", Some("sensor."));
+    config["configuration"]["values"]["action_entities"] = json!("button.explicit");
+    let (mut socket, mut snapshot) = start_discovery(&mut worker, &fixture, config);
+    respond(&mut snapshot, 200, json!([entity("sensor.live", "1")]));
+    worker.until(|frame| frame["type"] == "contributions" && discovery_items(frame).len() == 1);
+    for (index, value) in [
+        json!([]),
+        json!("wrong"),
+        json!({}),
+        json!({"entity_id":"sensor.wrong","state":"1"}),
+        json!({"entity_id":"sensor.live","state":false}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        live(&mut socket, "sensor.live", Some(value));
+        let frame = numeric_barrier(&mut worker, &mut socket, 2 + index * 2);
+        assert!(discovery_items(&frame).is_empty());
+        assert!(item(&frame, "ha-action-0").is_some());
+        live(&mut socket, "sensor.live", Some(entity("sensor.live", "2")));
+        let restored = numeric_barrier(&mut worker, &mut socket, 3 + index * 2);
+        assert_eq!(discovery_items(&restored).len(), 1);
+    }
+    worker.action("malformed-discovery-action", "ha-action-0", 5000);
+    let mut action = service(&fixture, "button", "button.explicit");
+    respond(&mut action, 200, json!([]));
+    worker.success("malformed-discovery-action");
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_auth_rejection_cancels_explicit_service_and_clears_session() {
+    for status in [401, 403] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut config = discovery_configuration(&fixture, "sensor.barrier", Some("sensor."));
+        config["configuration"]["values"]["action_entities"] = json!("button.explicit");
+        let (_socket, mut snapshot) = start_discovery(&mut worker, &fixture, config);
+        connected(&mut worker, 1);
+        worker.action("active", "ha-action-0", 5000);
+        let pending = service(&fixture, "button", "button.explicit");
+        respond(&mut snapshot, status, json!({"private":PRIVATE_BODY}));
+        worker.error("active", "outcome_unknown");
+        let frame = discovery_status(&mut worker, "Authentication rejected");
+        assert!(actions(&frame).is_empty());
+        assert!(discovery_items(&frame).is_empty());
+        worker.action("revoked", "ha-action-0", 5000);
+        worker.error("revoked", "unavailable");
+        drop(pending);
+        no_request(&fixture, Duration::from_millis(80));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn discovery_reconnect_resamples_with_new_ids_and_no_periodic_collection() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let (socket, mut snapshot) = start_discovery(
+        &mut worker,
+        &fixture,
+        discovery_configuration(&fixture, "", Some("sensor.")),
+    );
+    respond(&mut snapshot, 200, json!([entity("sensor.old", "1")]));
+    let first =
+        worker.until(|frame| frame["type"] == "contributions" && discovery_items(frame).len() == 1);
+    let old_id = discovered(&first, "sensor.old").unwrap()["id"].clone();
+    drop(socket);
+    let disconnected = discovery_status(&mut worker, "Disconnected");
+    assert!(discovery_items(&disconnected).is_empty());
+    let mut socket = authorize(&fixture, true);
+    let mut snapshot = request(&fixture);
+    assert_eq!(snapshot.line, "GET /reverse/proxy/ha/api/states HTTP/1.1");
+    respond(
+        &mut snapshot.stream,
+        200,
+        json!([entity("sensor.old", "2"), entity("sensor.new", "3")]),
+    );
+    let next =
+        worker.until(|frame| frame["type"] == "contributions" && discovery_items(frame).len() == 2);
+    assert_ne!(discovered(&next, "sensor.old").unwrap()["id"], old_id);
+    live(&mut socket, "sensor.new", None);
+    worker.until(|frame| frame["type"] == "contributions" && discovery_items(frame).len() == 1);
+    no_request(&fixture, Duration::from_millis(150));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_snapshot_deadline_leaves_explicit_updates_and_application_heartbeat_live() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let (mut socket, _snapshot) = start_discovery(
+        &mut worker,
+        &fixture,
+        discovery_configuration(&fixture, "sensor.barrier", Some("sensor.")),
+    );
+    let initial = numeric_barrier(&mut worker, &mut socket, 2);
+    assert!(discovery_items(&initial).is_empty());
+    // A held collection response must expire at its original 15-second deadline.
+    // Read the heartbeat directly with a bounded socket deadline, then inspect
+    // queued publications; Worker::until deliberately has a shorter 5s guard.
+    socket
+        .get_mut()
+        .set_read_timeout(Some(Duration::from_secs(25)))
+        .unwrap();
+    let heartbeat = ws_json(&mut socket);
+    assert_eq!(heartbeat["type"], "ping");
+    ws_send(&mut socket, json!({"id":heartbeat["id"],"type":"pong"}));
+    let failed = discovery_status(&mut worker, "Connected; Discovery unavailable");
+    assert!(discovery_items(&failed).is_empty());
+    let after = numeric_barrier(&mut worker, &mut socket, 3);
+    assert_eq!(
+        item(&after, "connection").unwrap()["value"],
+        "Connected; Discovery unavailable"
+    );
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn discovery_prefix_configuration_is_strict_and_never_grants_action_domains() {
+    let prefixes = (0..9)
+        .map(|i| format!("sensor.e{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for prefix in [
+        "sensor".into(),
+        "switch.".into(),
+        "number.".into(),
+        "cover.".into(),
+        "button.".into(),
+        "media_player.".into(),
+        "sensor.*".into(),
+        "sensor.[ab]".into(),
+        "sensor.a.b".into(),
+        "sensor.A".into(),
+        format!("sensor.{}", "a".repeat(122)),
+        " ".repeat(1025),
+        prefixes,
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let frame = discovery_configuration(&fixture, "", Some(&prefix));
+        worker.send(hello());
+        worker.next();
+        worker.send(frame);
+        worker.finish(false);
+        no_request(&fixture, Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn discovery_stalled_collection_shutdown_and_eof_do_not_wait_for_the_network_deadline() {
+    for eof in [false, true] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let (_socket, _snapshot) = start_discovery(
+            &mut worker,
+            &fixture,
+            discovery_configuration(&fixture, "", Some("sensor.")),
+        );
+        worker.stop(eof);
+        no_request(&fixture, Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn discovery_and_maximum_explicit_controls_fit_the_actual_64_contribution_frame() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let buttons = (0..16).map(|i| format!("button.e{i}")).collect::<Vec<_>>();
+    let media = (0..4)
+        .map(|i| format!("media_player.e{i}"))
+        .collect::<Vec<_>>();
+    let mut config =
+        discovery_configuration(&fixture, "sensor.barrier", Some("sensor.discovered_"));
+    config["configuration"]["values"]["action_entities"] = json!(buttons.join(","));
+    config["configuration"]["values"]["media_player_entities"] = json!(media.join(","));
+    config["configuration"]["values"]["cover_entities"] = json!("cover.a");
+    let (mut socket, mut snapshot) = start_discovery(&mut worker, &fixture, config);
+    for name in buttons.iter().chain(&media) {
+        let mut value = entity(name, &"\\\"".repeat(512));
+        value["attributes"]["friendly_name"] = json!("\\\"".repeat(128));
+        live(&mut socket, name, Some(value));
+    }
+    let mut states = (0..11)
+        .map(|i| {
+            entity(
+                &format!("sensor.discovered_{i:02}_do_not_supply_charger"),
+                &"\\\"".repeat(512),
+            )
+        })
+        .collect::<Vec<_>>();
+    for state in &mut states {
+        state["attributes"]["friendly_name"] = json!("\\\"".repeat(128));
+    }
+    respond(&mut snapshot, 200, json!(states));
+    discovery_status(&mut worker, "Connected; Discovery limit reached");
+    let frame = numeric_barrier(&mut worker, &mut socket, 2);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 64);
+    assert_eq!(actions(&frame).len(), 31);
+    assert_eq!(discovery_items(&frame).len(), 10);
+    assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
+    let ids = frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 64);
+    for item in discovery_items(&frame) {
+        assert_eq!(item["kind"], "text");
+        assert_eq!(item["title"].as_str().unwrap().len(), 128);
+        assert_eq!(item["text"].as_str().unwrap().len(), 512);
+    }
+    worker.action(
+        "discovery-no-service",
+        discovery_items(&frame)[0]["id"].as_str().unwrap(),
+        5000,
+    );
+    worker.error("discovery-no-service", "invalid_action");
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}

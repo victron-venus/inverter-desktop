@@ -61,8 +61,7 @@ media Play/Pause/Stop on main at `7e5ad18`. Its final head `3d1a188` passed all 
 executed checks, with review approved and no open threads.
 [PR #431](https://github.com/victron-venus/inverter-desktop/pull/431) added explicit
 HA on/off controls on main at `ae73fa0`. Its final head `7d75afd` passed all 41
-executed checks, with review approved and no open threads. The current separate
-iteration adds bounded numeric inputs for selected HA numbers and cover positions.
+executed checks, with review approved and no open threads.
 [PR #434](https://github.com/victron-venus/inverter-desktop/pull/434) completed cover
 Open/Close/Stop on main at `c614f07`; all 41 executed checks passed for `f55ace8`,
 with exact-head approval and no unresolved review threads.
@@ -150,7 +149,78 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Current checkpoint: bounded HA numeric inputs
+### Current checkpoint: opt-in read-only HA sensor discovery
+
+Start from verified main `8108eb3`. Restore automatic sensor listing through the
+HA worker using existing host API 1.5 contributions. Discovery is optional and
+never creates device actions or modifies the core MQTT connection. Existing
+explicit selections always retain their slots, ordering and authority.
+
+- [x] Add empty-default `discovery_prefixes` with explicit `omitEmpty` semantics.
+      Accept at most eight unique literal `sensor.` or `binary_sensor.` prefixes,
+      at most 128 bytes each and 1,024 bytes total. Reject other domains, glob/regex
+      syntax and malformed identifiers. Preserve prior exact 32 KiB configuration
+      boundaries when the setting is absent or empty.
+- [x] Fetch the all-state REST collection once per connection only when discovery
+      is enabled and explicit selections leave space. Preserve the 1 MiB response
+      bound, 15-second timeout, verified TLS and no redirects; reject snapshots
+      exceeding 4,096 source entries. Disabled or full explicit configurations
+      must make no collection request.
+- [x] Keep individual explicit reads independent and subscribe before discovery.
+      Buffer at most 128 matching live entity changes/deletions while the snapshot
+      is pending, projecting state immediately to bounded display data. Never
+      retain arbitrary attributes or an unbounded inventory. Overflow abandons
+      discovery for the current session rather than applying stale state.
+- [x] Overlay newer live changes and tombstones before choosing deterministic
+      lexical snapshot matches. Exclude explicit targets and fill only the
+      remaining slots within 32 total state cards. Preserve stable discovered
+      card IDs while present; discoveries produce only text, metric or status.
+- [x] Apply selected live updates and deletions. Admit new matching entities only
+      into free slots; discard unseen state at capacity and show a bounded limit
+      indication. Reconnect resamples the inventory. Do not silently retain a
+      hidden catalog, expand action lists or add periodic collection requests.
+- [x] Isolate discovery failures and saturation from explicit controls and their
+      connection state. Authentication rejection still stops the session. Reset
+      discovery state on disconnect, settings replacement and worker teardown.
+      Keep all six action lists, numeric revisions, 31-control budget and literal
+      HA-versus-core MQTT routing unchanged.
+- [x] Preserve the 64-contribution/64 KiB output bounds, including maximum names,
+      values and action selections. Fold discovery status into existing bounded
+      connection presentation instead of consuming an unreserved extra slot.
+- [x] Add worker unit and real-process tests for validation, opt-in network scope,
+      deterministic capacity, live-before-snapshot updates/deletions, overflow,
+      failed/malformed/oversized snapshots, authentication, heartbeat and reconnect.
+      Prove that discovered action-looking IDs grant no service calls.
+- [x] Add installed-release-package acceptance using private HTTP/WebSocket/MQTT
+      services: explicit precedence, discovered values and updates, deletion,
+      changed settings, stalled discovery teardown and zero core commands while
+      both core charger-flag states continue updating.
+- [x] Release worker metadata as 0.7 with host API ^1.5, update English package/user
+      documentation, and preserve mobile exclusions and the empty publisher policy.
+- [x] Run worker, native installed-package, packaging and mobile-boundary checks,
+      appropriate formatting/lint/builds and independent reviews. Record evidence
+      before marking implementation and validation complete.
+- [ ] Push a separate PR, address comments in English, pass final-head checks,
+      merge as authorized, and verify clean canonical main and its source CI.
+
+This bounded discovery increment does not replace a searchable entity picker,
+appliance summaries, weather/forecast presentation, broader domain discovery,
+legacy configuration migration or the remaining bundled integrations. At capacity,
+previously omitted entities appear after a slot becomes available and a live
+update is received, or after reconnect resamples the inventory.
+
+Local validation: all 158 HA worker tests pass (69 units, 70 action/network
+process scenarios, three isolated TLS cases and 16 protocol cases), together with
+strict all-target worker Clippy, formatting and the optimized release build.
+All 27 package tests and 29 native mobile-boundary tests pass. Frontend formatting
+and lint pass; lint reports the existing warnings in unchanged frontend files.
+All 410 ordinary native tests pass (the nine opt-in package fixtures are excluded
+from that selection); all seven HA installed-release-package scenarios pass when
+selected explicitly, including discovery. Native all-target Clippy and every
+applicable pre-commit hook pass. Independent reviews found no unresolved issue in production logic, process
+fixtures, installed-package acceptance, metadata or configuration byte boundaries.
+
+### Completed checkpoint: bounded HA numeric inputs
 
 Start from the verified PR #434 merge at `c614f07`. Add one declarative numeric
 input to the desktop host and use it for explicitly selected `number.*` values
@@ -292,7 +362,7 @@ of the next 100 ms read deadline, and used wall-clock 30 ms chunk sleeps.
       control to test dependencies and bound external I/O waits by real time.
 - [x] Run the focused regression, the native media suite, strict Clippy and
       formatting; independently review the correction and record the evidence.
-- [ ] Push the correction PR, address English review comments, merge only after
+- [x] Push the correction PR, address English review comments, merge only after
       final-head checks pass, and verify the resulting main workflows.
 
 The failed post-merge job is
@@ -301,8 +371,14 @@ The corrected exact regression and all 16 native media tests pass locally.
 Strict all-target Clippy and Rust formatting pass. Independent review verifies
 actual media-file identity, timer settling before the idle/backoff transitions,
 120 ms of progressive transfer against the 100 ms idle bound, two observed GETs,
-exact final bytes and complete owned-file cleanup. Hosted correction checks and
-the follow-up merge receipt remain pending.
+exact final bytes and complete owned-file cleanup. PR #437 passed all 41 executed
+checks on final head `e7ab276` (three conditional checks skipped), with exact-head
+approval and no unresolved findings, then merged as `8108eb3`. All six source CI
+workflows (18 checks) passed on that merge. The subsequent release workflow
+[34944524212](https://github.com/victron-venus/inverter-desktop/actions/runs/34944524212)
+passed its repeated checks, desktop/mobile builds and candidate publication as
+`v2.5.42-beta.25`. The clean canonical checkout, six stashes and private local
+guide were preserved. These results do not establish physical-device behavior.
 
 Discovery, appliance/weather presentation, other camera adapters, legacy
 configuration migration, removal of bundled desktop integrations and production

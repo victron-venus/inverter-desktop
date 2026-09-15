@@ -163,8 +163,9 @@ work. None of this identity data is a publisher key or permission to bypass auth
 
 This extends the native dashboard boundary, not the worker wire schema. Existing
 worker Action/Cancel/ActionResult/ActionError messages stay at protocol version 1.
-HA 0.2–0.5 packages with fixed service actions require `^1.4`. HA 0.6 requires
-`^1.5` for bounded numeric inputs as well. Existing workers with compatible
+HA 0.2–0.5 packages with fixed service actions require `^1.4`. HA 0.6 and 0.7 require
+`^1.5` for bounded numeric inputs as well. HA 0.7's optional read-only sensor
+discovery adds no host API, wire schema or contribution kind. Existing workers with compatible
 `^1.3` or `^1.4` ranges still negotiate the selected 1.5 version; Frigate retains
 its existing API range.
 
@@ -594,7 +595,17 @@ desktop notifications use the permission and delivery contract above. The first
 The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md)
 owns its authenticated REST/WebSocket connection and emits declarative
 connection/entity cards and explicitly selected fixed or numeric controls.
-Its `network_http` declaration similarly grants no
+Its optional sensor-prefix discovery fills unused state slots after all explicit
+targets; discoveries have no action or numeric-input authority. It reuses the
+existing text, metric and status contributions and reports discovery warnings
+inside the connection card, preserving the 64-item limit. Those warnings do not
+change the connected session or revoke explicit controls. Malformed/oversized
+discovery snapshots or an overflowed bootstrap buffer disable discovery for that
+connection; authentication rejection still revokes the session normally.
+The worker's [read-scope contract](../desktop-plugins/home-assistant/README.md#read-only-sensor-discovery)
+bounds the optional all-entity collection and locally filters the shared state
+stream. There is no periodic refresh, retained overflow catalog or new entity-picker
+UI. Its `network_http` declaration similarly grants no
 generic host proxy and provides no OS sandbox. Both workers reuse a small bounded
 stdio library, while identity negotiation, configuration and network behavior
 stay feature-owned. Their crates, binaries and manifests are excluded from mobile.

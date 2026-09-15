@@ -41,7 +41,8 @@ services. Clip/window acceptance is tracked separately from source implementatio
 Snapshots, optional HA proxy support, other camera adapters, and migration remain.
 A separately built [Home Assistant worker](desktop-plugins/home-assistant/README.md)
 adds authenticated connection status and state cards for a configured entity
-list. Read-only operation is the default; explicit action lists enable fixed
+list. Optional sensor prefixes discover read-only cards in remaining slots;
+explicit targets retain priority. Read-only operation is the default; explicit action lists enable fixed
 HA button presses, scene activation, media-player Play/Pause/Stop, explicit
 switch/helper/light on/off commands, supported cover Open/Close/Stop, bounded
 numbers and cover positions through instance-bound plugin controls. Numeric

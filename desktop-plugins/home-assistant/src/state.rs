@@ -1,4 +1,5 @@
 use crate::config::ConfiguredAction;
+use crate::discovery::Discovery;
 use crate::numeric::{self, Observation};
 use inverter_worker_protocol::Output;
 use serde_json::{json, Value};
@@ -18,6 +19,7 @@ pub struct Connection {
 
 pub struct Book {
     entities: Vec<Entity>,
+    discovery: Discovery,
     connection: &'static str,
     tone: &'static str,
     revision: u64,
@@ -126,11 +128,25 @@ fn contribution(index: usize, entity: &str, state: Option<&Value>) -> Value {
     json!({"kind":"text","id":format!("entity-{index}"),"title":title,"text":text})
 }
 
+pub(crate) fn readonly_contribution(entity: &str, state: &Value) -> Value {
+    contribution(0, entity, Some(state))
+}
+
 impl Book {
+    #[cfg(test)]
     pub fn new(
         entities: &[String],
         actions: &[ConfiguredAction],
         inputs: &[ConfiguredAction],
+    ) -> Shared {
+        Self::with_discovery(entities, actions, inputs, &[])
+    }
+
+    pub fn with_discovery(
+        entities: &[String],
+        actions: &[ConfiguredAction],
+        inputs: &[ConfiguredAction],
+        discovery_prefixes: &[String],
     ) -> Shared {
         let (link, _) = watch::channel(Connection::default());
         Arc::new(Mutex::new(Self {
@@ -148,6 +164,7 @@ impl Book {
                     title: name.clone(),
                 })
                 .collect(),
+            discovery: Discovery::new(entities, discovery_prefixes),
             connection: "Connecting",
             tone: "neutral",
             revision: 0,
@@ -189,6 +206,7 @@ impl Book {
     }
 
     pub fn begin_session(&mut self) {
+        self.discovery.begin_session();
         for input in &mut self.inputs {
             input.update(None);
         }
@@ -207,6 +225,7 @@ impl Book {
     }
 
     fn clear(&mut self) {
+        self.discovery.clear();
         for input in &mut self.inputs {
             input.update(None);
         }
@@ -236,6 +255,18 @@ impl Book {
         self.update(name, state, true);
     }
 
+    pub fn discovery_snapshot(&mut self, states: &[Value]) {
+        if self.discovery.snapshot(states) {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    pub fn discovery_failed(&mut self) {
+        if self.discovery.failed() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
     fn update(&mut self, name: &str, state: Option<&Value>, live: bool) {
         let Some((index, entity)) = self
             .entities
@@ -243,6 +274,9 @@ impl Book {
             .enumerate()
             .find(|(_, entity)| entity.name == name)
         else {
+            if live && self.discovery.live(name, state) {
+                self.revision = self.revision.wrapping_add(1);
+            }
             return;
         };
         if !live && entity.live_seen {
@@ -377,11 +411,16 @@ impl Book {
     }
 
     fn frame(&self) -> Value {
+        let (connection, tone) = self.discovery.notice().map_or_else(
+            || (self.connection.to_owned(), self.tone),
+            |notice| (format!("{}; {notice}", self.connection), "warning"),
+        );
         let mut items = vec![
             json!({"kind":"status","id":"connection","title":"Home Assistant",
-            "value":self.connection,"tone":self.tone}),
+            "value":connection,"tone":tone}),
         ];
         items.extend(self.entities.iter().map(|entity| entity.item.clone()));
+        items.extend(self.discovery.items().cloned());
         for index in 0..self.actions.len() {
             if let Some(entity) = self.action_entity(index) {
                 let action = &self.actions[index];
@@ -1296,6 +1335,195 @@ mod tests {
         let encoded = serde_json::to_vec(&frame).unwrap();
         assert!(encoded.len() < inverter_worker_protocol::MAX_FRAME_BYTES);
         // Exercise the actual transport encoder, queue and completed flush too.
+        Output::with_writer(std::io::sink())
+            .send(frame)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn discovery_warnings_preserve_explicit_action_and_numeric_authority() {
+        let config: crate::config::Configuration = serde_json::from_value(json!({
+            "revision":"independent-discovery","values":{"ha_base_url":"http://localhost",
+            "action_entities":"button.a","number_entities":"number.a","discovery_prefixes":"sensor."},
+            "secrets":{"ha_token":"fixture"}})).unwrap();
+        let config = config.validate().unwrap();
+        let shared = Book::with_discovery(
+            &config.entities,
+            &config.actions(),
+            &config.inputs(),
+            &config.discovery_prefixes,
+        );
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        book.live(
+            "button.a",
+            Some(&json!({"entity_id":"button.a","state":"unknown"})),
+        );
+        book.live("number.a", Some(&number_state("-0.3")));
+        book.mark_published();
+        let link = book.subscribe_connection();
+        let epoch = link.borrow().epoch;
+        let input = input_item(&book, "ha-number-0-set");
+        let params = json!({"input_revision":input["input_revision"],"value_scaled":-2});
+        for index in 0..129 {
+            book.live(&format!("sensor.buffer_{index}"), None);
+        }
+        assert_eq!(
+            book.frame()["items"][0]["value"],
+            "Connected; Discovery unavailable"
+        );
+        assert_eq!(book.frame()["items"][0]["tone"], "warning");
+        assert!(link.borrow().connected);
+        assert_eq!(link.borrow().epoch, epoch);
+        assert!(book.action_target("ha-action-0").is_some());
+        assert!(book.input_target("ha-number-0-set", &params).is_ok());
+        assert_eq!(
+            input_item(&book, "ha-number-0-set")["input_revision"],
+            input["input_revision"]
+        );
+        book.discovery_snapshot(&[json!({"entity_id":"sensor.feed_ac_state","state":"on"})]);
+        assert!(book.action_target("feed_ac_state").is_none());
+        assert!(book.action_target("discovery-0").is_none());
+        book.live("number.a", Some(&number_state("-0.2")));
+        assert!(book.input_target("ha-number-0-set", &params).is_ok());
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn discovery_bootstrap_and_reconnect_keep_explicit_state_and_live_tombstones_separate() {
+        let shared =
+            Book::with_discovery(&["sensor.explicit".into()], &[], &[], &["sensor.".into()]);
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        let live = json!({"entity_id":"sensor.live","state":"2"});
+        book.live(
+            "sensor.explicit",
+            Some(&json!({"entity_id":"sensor.explicit","state":"9"})),
+        );
+        book.live("sensor.live", Some(&live));
+        book.live("sensor.deleted", None);
+        book.discovery_snapshot(&[
+            json!({"entity_id":"sensor.explicit","state":"100"}),
+            json!({"entity_id":"sensor.deleted","state":"stale"}),
+            json!({"entity_id":"sensor.live","state":"1"}),
+        ]);
+        assert_eq!(book.frame()["items"][1]["id"], "entity-0");
+        assert_eq!(book.frame()["items"][1]["value"], 9.0);
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 3);
+        let discovered = book.frame()["items"][2].clone();
+        assert_eq!(discovered["value"], 2.0);
+        book.initial(
+            "sensor.live",
+            Some(&json!({"entity_id":"sensor.live","state":"late"})),
+        );
+        assert_eq!(book.frame()["items"][2], discovered);
+        book.live(
+            "sensor.live",
+            Some(&json!({"entity_id":"sensor.live","state":false})),
+        );
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 2);
+        book.discovery_snapshot(std::slice::from_ref(&live));
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 2);
+        book.disconnected();
+        assert!(!book.subscribe_connection().borrow().connected);
+        book.discovery_snapshot(std::slice::from_ref(&live));
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 2);
+        book.begin_session();
+        book.connected();
+        book.discovery_snapshot(&[live]);
+        assert_eq!(book.frame()["items"][0]["value"], "Connected");
+        assert_eq!(book.frame()["items"][1]["value"], "Waiting");
+        assert_ne!(book.frame()["items"][2]["id"], discovered["id"]);
+        book.authentication_rejected();
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 2);
+        assert!(book.subscribe_connection().borrow().authentication_rejected);
+    }
+
+    #[tokio::test]
+    async fn discoveries_and_all_control_slots_fit_the_actual_frame_limit() {
+        let literal = |domain: &str, index: usize| {
+            let suffix = format!("_{index}");
+            format!(
+                "{domain}.{}{suffix}",
+                "x".repeat(128 - domain.len() - 1 - suffix.len())
+            )
+        };
+        let buttons = (0..3)
+            .map(|index| literal("button", index))
+            .collect::<Vec<_>>();
+        let media = (0..4)
+            .map(|index| literal("media_player", index))
+            .collect::<Vec<_>>();
+        let covers = (0..4)
+            .map(|index| literal("cover", index))
+            .collect::<Vec<_>>();
+        let config: crate::config::Configuration = serde_json::from_value(json!({
+            "revision":"maximum-discovery","values":{"ha_base_url":"http://localhost",
+            "action_entities":buttons.join(","),"media_player_entities":media.join(","),
+            "cover_entities":covers.join(","),"cover_position_entities":covers.join(","),
+            "discovery_prefixes":"sensor."},"secrets":{"ha_token":"fixture"}}))
+        .unwrap();
+        let config = config.validate().unwrap();
+        assert_eq!(config.entities.len(), 11);
+        let shared = Book::with_discovery(
+            &config.entities,
+            &config.actions(),
+            &config.inputs(),
+            &config.discovery_prefixes,
+        );
+        let frame = {
+            let mut book = shared.lock().unwrap();
+            book.begin_session();
+            book.connected();
+            for entity in &config.entities {
+                let value = if covers.contains(entity) {
+                    "opening".into()
+                } else {
+                    "\\\"".repeat(512)
+                };
+                book.live(entity, Some(&json!({"entity_id":entity,"state":value,"attributes":{
+                    "friendly_name":"\\\"".repeat(128),"current_position":100,"supported_features":15}})));
+            }
+            let discoveries = (0..22)
+                .map(|index| {
+                    json!({"entity_id":literal("sensor", index),
+                "state":"\\\"".repeat(512),"attributes":{"friendly_name":"\\\"".repeat(128)}})
+                })
+                .collect::<Vec<_>>();
+            book.discovery_snapshot(&discoveries);
+            for input in &mut book.inputs {
+                input.revision = u64::MAX;
+            }
+            book.frame()
+        };
+        let items = frame["items"].as_array().unwrap();
+        assert_eq!(items.len(), 64);
+        assert_eq!(
+            items.iter().filter(|item| item["kind"] == "action").count(),
+            27
+        );
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item["kind"] == "number_input")
+                .count(),
+            4
+        );
+        let discovered = items
+            .iter()
+            .filter(|item| item["id"].as_str().unwrap().starts_with("discovery-"))
+            .collect::<Vec<_>>();
+        assert_eq!(discovered.len(), 21);
+        assert!(discovered
+            .iter()
+            .all(|item| item["kind"] == "text" && item.get("action_id").is_none()));
+        assert_eq!(items[0]["value"], "Connected; Discovery limit reached");
+        let bytes = serde_json::to_vec(&frame).unwrap().len();
+        // Reserve the extra digits that monotonic discovery IDs may acquire.
+        assert!(bytes + 21 * 20 < inverter_worker_protocol::MAX_FRAME_BYTES);
         Output::with_writer(std::io::sink())
             .send(frame)
             .await
