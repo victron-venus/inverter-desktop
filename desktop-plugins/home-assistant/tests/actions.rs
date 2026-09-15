@@ -387,6 +387,12 @@ fn entity(name: &str, state: &str) -> Value {
     json!({"entity_id":name,"state":state,"attributes":{"friendly_name":name}})
 }
 
+fn cover_entity(name: &str, state: &str, features: Value) -> Value {
+    let mut value = entity(name, state);
+    value["attributes"]["supported_features"] = features;
+    value
+}
+
 fn live(socket: &mut WebSocket<TcpStream>, name: &str, state: Option<Value>) {
     ws_send(
         socket,
@@ -449,6 +455,14 @@ fn binary_configuration(fixture: &TcpListener, watch: &str, selected: Option<&st
     frame
 }
 
+fn cover_configuration(fixture: &TcpListener, watch: &str, selected: Option<&str>) -> Value {
+    let mut frame = configuration(fixture, watch, None);
+    if let Some(selected) = selected {
+        frame["configuration"]["values"]["cover_entities"] = json!(selected);
+    }
+    frame
+}
+
 fn initialize_configuration(
     worker: &mut Worker,
     fixture: &TcpListener,
@@ -461,6 +475,7 @@ fn initialize_configuration(
         "action_entities",
         "media_player_entities",
         "binary_entities",
+        "cover_entities",
     ] {
         for name in frame["configuration"]["values"][field]
             .as_str()
@@ -495,14 +510,27 @@ fn initialize_configuration(
             .split([',', '\n'])
             .map(str::trim)
             .any(|selected| selected == name);
-        let state = if binary_selected {
+        let cover_selected = frame["configuration"]["values"]["cover_entities"]
+            .as_str()
+            .unwrap_or("")
+            .split([',', '\n'])
+            .map(str::trim)
+            .any(|selected| selected == name);
+        let state = if cover_selected {
+            "closed"
+        } else if binary_selected {
             "off"
         } else if name.starts_with("media_player.") {
             "paused"
         } else {
             "unknown"
         };
-        respond(&mut request.stream, 200, entity(name, state));
+        let value = if cover_selected {
+            cover_entity(name, state, json!(11))
+        } else {
+            entity(name, state)
+        };
+        respond(&mut request.stream, 200, value);
     }
     socket
 }
@@ -1930,6 +1958,477 @@ fn binary_transport_preserves_no_retry_deadlines_and_shared_two_request_limit() 
     worker.error("binary-pending", "outcome_unknown");
     respond(&mut button, 200, json!([]));
     worker.success("button-pending");
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+fn cover_snapshot(worker: &mut Worker, state: &str, operations: &[&str]) -> Value {
+    let expected = operations
+        .iter()
+        .map(|operation| format!("ha-cover-0-{operation}"))
+        .collect::<Vec<_>>();
+    worker.until(|frame| {
+        frame["type"] == "contributions"
+            && item(frame, "connection").is_some_and(|item| item["value"] == "Connected")
+            && item(frame, "entity-0").is_some_and(|item| item["text"] == state)
+            && actions(frame)
+                .iter()
+                .filter_map(|item| item["action_id"].as_str())
+                .filter(|id| id.starts_with("ha-cover-"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+                == expected
+    })
+}
+
+#[test]
+fn cover_omitted_and_empty_selection_keep_capable_watched_covers_read_only() {
+    for selected in [None, Some("")] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let name = "cover.inverter_on";
+        let mut socket = initialize_configuration(
+            &mut worker,
+            &fixture,
+            cover_configuration(&fixture, name, selected),
+        );
+        live(
+            &mut socket,
+            name,
+            Some(cover_entity(name, "opening", json!(11))),
+        );
+        let frame = worker
+            .until(|frame| item(frame, "entity-0").is_some_and(|item| item["text"] == "opening"));
+        assert!(actions(&frame).is_empty());
+        for operation in ["open", "close", "stop"] {
+            worker.action(operation, &format!("ha-cover-0-{operation}"), 5000);
+            worker.error(operation, "invalid_action");
+        }
+        no_request(&fixture, Duration::from_millis(100));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn cover_exact_presets_preserve_literal_targets_old_ids_and_server_confirmed_state() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let name = "cover.inverter_on";
+    let other = "cover.do_not_supply_charger";
+    let mut config = media_configuration(
+        &fixture,
+        &format!("{name},sensor.power"),
+        Some("scene.evening,button.trigger"),
+        Some("media_player.television"),
+    );
+    config["configuration"]["values"]["binary_entities"] = json!("light.reading");
+    config["configuration"]["values"]["cover_entities"] = json!(format!("{name},{other}"));
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = connected(&mut worker, 13);
+    for (id, title) in [
+        ("entity-0", name),
+        ("entity-5", "light.reading"),
+        ("entity-6", other),
+        ("ha-action-0", "scene.evening"),
+        ("ha-action-1", "button.trigger"),
+        ("ha-media-0-play", "media_player.television"),
+        ("ha-binary-0-off", "light.reading"),
+    ] {
+        assert_eq!(item(&frame, id).unwrap()["title"], title);
+    }
+    for (index, title) in [name, other].iter().enumerate() {
+        for (operation, verb) in [("open", "Open"), ("close", "Close"), ("stop", "Stop")] {
+            let id = format!("ha-cover-{index}-{operation}");
+            let preset = item(&frame, &id).unwrap();
+            assert_eq!(preset["action_id"], id);
+            assert_eq!(preset["params"], json!({}));
+            assert_eq!(preset["label"], format!("{verb} {title}"));
+        }
+    }
+    for (operation, observed, next) in [
+        ("open", "closed", "opening"),
+        ("close", "opening", "closing"),
+        ("stop", "closing", "closed"),
+    ] {
+        let id = format!("ha-cover-0-{operation}");
+        worker.action(&id, &id, 5000);
+        let mut pending = exact_service(&fixture, "cover", &format!("{operation}_cover"), name);
+        respond(
+            &mut pending,
+            200,
+            json!([cover_entity(name, next, json!(11))]),
+        );
+        success_without_state_change(&mut worker, &id, observed);
+        live(&mut socket, name, Some(cover_entity(name, next, json!(11))));
+        let updated =
+            worker.until(|frame| item(frame, "entity-0").is_some_and(|item| item["text"] == next));
+        assert_eq!(actions(&updated).len(), 13);
+    }
+    worker.action("other-cover", "ha-cover-1-stop", 5000);
+    let mut pending = exact_service(&fixture, "cover", "stop_cover", other);
+    respond(&mut pending, 200, json!([]));
+    worker.success("other-cover");
+    for (index, action, params) in [
+        (0, "ha-cover-0-open", json!({"entity_id":"cover.other"})),
+        (1, "ha-cover-0-close", json!({"service":"cover.stop_cover"})),
+        (2, "ha-cover-0-open", json!({"position":50})),
+        (3, "ha-cover-0-stop", json!({"tilt_position":25})),
+        (4, "ha-cover-0-open", json!({"speed":1})),
+        (5, "ha-cover-0-set_position", json!({})),
+        (6, "ha-cover-2-open", json!({})),
+        (7, "ha-cover-00-open", json!({})),
+        (8, "cover.open_cover", json!({})),
+        (9, "inverter_on", json!({})),
+    ] {
+        let request = format!("cover-invalid-{index}");
+        worker.send(action_frame(&request, action, params, 5000));
+        worker.error(&request, "invalid_action");
+        no_request(&fixture, Duration::ZERO);
+    }
+    worker.stop(false);
+}
+
+#[test]
+fn cover_feature_only_updates_publish_exact_presets_and_revoke_previous_commands() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let name = "cover.selected";
+    let mut socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        cover_configuration(&fixture, "", Some(name)),
+    );
+    cover_snapshot(&mut worker, "closed", &["open", "close", "stop"]);
+    for (index, (features, expected)) in [
+        (1u64, vec!["open"]),
+        (2, vec!["close"]),
+        (8, vec!["stop"]),
+        (11, vec!["open", "close", "stop"]),
+        (0, vec![]),
+        (12, vec!["stop"]),
+        (4, vec![]),
+        (u64::MAX, vec!["open", "close", "stop"]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // State and title remain unchanged; only capability bits differ.
+        live(
+            &mut socket,
+            name,
+            Some(cover_entity(name, "closed", json!(features))),
+        );
+        let frame = cover_snapshot(&mut worker, "closed", &expected);
+        assert_eq!(item(&frame, "entity-0").unwrap()["title"], name);
+        for operation in ["open", "close", "stop"] {
+            let request = format!("feature-{index}-{operation}");
+            worker.action(&request, &format!("ha-cover-0-{operation}"), 5000);
+            if expected.contains(&operation) {
+                let mut pending =
+                    exact_service(&fixture, "cover", &format!("{operation}_cover"), name);
+                respond(&mut pending, 200, json!([]));
+                worker.success(&request);
+            } else {
+                worker.error(&request, "unavailable");
+                no_request(&fixture, Duration::ZERO);
+            }
+        }
+    }
+    worker.stop(false);
+}
+
+#[test]
+fn cover_observation_validation_withdraws_commands_and_accepts_moving_states() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let name = "cover.selected";
+    worker.configure_frame(cover_configuration(&fixture, "", Some(name)));
+    let mut socket = authorize(&fixture, true);
+    let mut initial = request(&fixture);
+    assert_eq!(
+        initial.line,
+        "GET /reverse/proxy/ha/api/states/cover.selected HTTP/1.1"
+    );
+    connected(&mut worker, 0);
+    worker.action("cover-waiting", "ha-cover-0-stop", 5000);
+    worker.error("cover-waiting", "unavailable");
+    respond(
+        &mut initial.stream,
+        404,
+        json!({"message":"Entity not found"}),
+    );
+    worker
+        .until(|frame| item(frame, "entity-0").is_some_and(|item| item["value"] == "Unavailable"));
+    worker.action("cover-missing", "ha-cover-0-open", 5000);
+    worker.error("cover-missing", "unavailable");
+    for state in ["open", "closed", "opening", "closing"] {
+        live(
+            &mut socket,
+            name,
+            Some(cover_entity(name, state, json!(11))),
+        );
+        cover_snapshot(&mut worker, state, &["open", "close", "stop"]);
+    }
+    let mut invalid = [
+        json!("unknown"),
+        json!("unavailable"),
+        json!("OPEN"),
+        json!("open "),
+        json!(""),
+        json!("on"),
+        json!(true),
+        json!(1),
+        Value::Null,
+    ]
+    .into_iter()
+    .map(|state| {
+        Some(json!({"entity_id":name,"state":state,"attributes":{"supported_features":11}}))
+    })
+    .collect::<Vec<_>>();
+    invalid.extend([
+        Some(json!({"entity_id":name,"attributes":{"supported_features":11}})),
+        Some(entity(name, "closed")),
+        Some(json!({"entity_id":name,"state":"closed"})),
+        Some(json!({"entity_id":name,"state":"closed","attributes":[]})),
+        None,
+    ]);
+    for features in [
+        json!(-1),
+        json!(1.0),
+        json!("11"),
+        json!(true),
+        Value::Null,
+        json!([]),
+        json!({}),
+    ] {
+        invalid.push(Some(cover_entity(name, "closed", features)));
+    }
+    for (index, invalid) in invalid.into_iter().enumerate() {
+        live(
+            &mut socket,
+            name,
+            Some(cover_entity(name, "opening", json!(11))),
+        );
+        cover_snapshot(&mut worker, "opening", &["open", "close", "stop"]);
+        live(&mut socket, name, invalid);
+        connected(&mut worker, 0);
+        for operation in ["open", "close", "stop"] {
+            let request = format!("cover-withdrawn-{index}-{operation}");
+            worker.action(&request, &format!("ha-cover-0-{operation}"), 5000);
+            worker.error(&request, "unavailable");
+        }
+        no_request(&fixture, Duration::ZERO);
+    }
+    live(
+        &mut socket,
+        name,
+        Some(cover_entity(name, "closing", json!(11))),
+    );
+    cover_snapshot(&mut worker, "closing", &["open", "close", "stop"]);
+    socket.close(None).unwrap();
+    drop(socket);
+    let frame = worker.until(|frame| {
+        item(frame, "connection").is_some_and(|item| item["value"] == "Disconnected")
+    });
+    assert!(actions(&frame).is_empty());
+    worker.action("cover-disconnected", "ha-cover-0-stop", 5000);
+    worker.error("cover-disconnected", "unavailable");
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+#[test]
+fn cover_invalid_configuration_rejects_domains_counts_union_and_reserved_action_overflow() {
+    let fixture = listener();
+    let five = (0..5)
+        .map(|index| format!("cover.c{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let overlong = " ".repeat(4097);
+    let mut invalid = [
+        "sensor.selected",
+        "button.selected",
+        "scene.selected",
+        "media_player.selected",
+        "switch.selected",
+        "input_boolean.selected",
+        "light.selected",
+        "inverter_on",
+        "Cover.upper",
+        "cover.invalid/path",
+        "cover.",
+        five.as_str(),
+        overlong.as_str(),
+    ]
+    .into_iter()
+    .map(|selected| cover_configuration(&fixture, "", Some(selected)))
+    .collect::<Vec<_>>();
+    for selected in [Value::Null, json!(["cover.selected"])] {
+        let mut config = cover_configuration(&fixture, "", None);
+        config["configuration"]["values"]["cover_entities"] = selected;
+        invalid.push(config);
+    }
+    let watch = (0..32)
+        .map(|index| format!("sensor.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    invalid.push(cover_configuration(&fixture, &watch, Some("cover.extra")));
+    let buttons = (0..16)
+        .map(|index| format!("button.b{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut overflow = media_configuration(
+        &fixture,
+        "",
+        Some(&buttons),
+        Some("media_player.one,media_player.two"),
+    );
+    overflow["configuration"]["values"]["binary_entities"] = json!("switch.one,light.two");
+    overflow["configuration"]["values"]["cover_entities"] = json!("cover.one,cover.two");
+    // Reserve all three cover commands before observing any supported_features.
+    invalid.push(overflow);
+    for config in invalid {
+        let mut worker = Worker::start();
+        worker.send(hello());
+        assert_eq!(worker.next()["type"], "ready");
+        worker.send(config);
+        worker.finish(false);
+        assert!(worker.frames.try_iter().next().is_none());
+        no_request(&fixture, Duration::ZERO);
+    }
+}
+
+#[test]
+fn cover_four_unique_targets_and_all_action_families_fit_64_bounded_contributions() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let sensors = (0..16)
+        .map(|index| format!("sensor.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let buttons = (0..6)
+        .map(|index| format!("button.b{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let binary = (0..5)
+        .map(|index| format!("switch.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut config = media_configuration(
+        &fixture,
+        &format!("cover.c3,{sensors},cover.c3"),
+        Some(&buttons),
+        Some("media_player.selected"),
+    );
+    config["configuration"]["values"]["binary_entities"] = json!(binary);
+    config["configuration"]["values"]["cover_entities"] =
+        json!("cover.c0,\ncover.c1,cover.c2,cover.c3,cover.c0,cover.c3");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = connected(&mut worker, 31);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 64);
+    for (id, title) in [
+        ("entity-0", "cover.c3"),
+        ("entity-22", "button.b5"),
+        ("entity-23", "media_player.selected"),
+        ("entity-28", "switch.s4"),
+        ("entity-29", "cover.c0"),
+        ("entity-31", "cover.c2"),
+        ("ha-action-5", "button.b5"),
+        ("ha-media-0-stop", "media_player.selected"),
+        ("ha-binary-4-off", "switch.s4"),
+        ("ha-cover-3-stop", "cover.c3"),
+    ] {
+        assert_eq!(item(&frame, id).unwrap()["title"], title);
+    }
+    for value in frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["id"].as_str().unwrap().starts_with("entity-"))
+    {
+        let name = value["title"].as_str().unwrap();
+        let mut value = if name.starts_with("cover.") {
+            cover_entity(name, "opening", json!(11))
+        } else {
+            let state = if name.starts_with("sensor.") {
+                "\\".repeat(512)
+            } else if name.starts_with("switch.") {
+                "on".into()
+            } else {
+                "playing".into()
+            };
+            entity(name, &state)
+        };
+        value["attributes"]["friendly_name"] = json!("\"".repeat(128));
+        live(&mut socket, name, Some(value));
+    }
+    let bounded = worker.until(|frame| {
+        item(frame, "entity-31").is_some_and(|item| item["title"] == "\"".repeat(128))
+    });
+    assert_eq!(bounded["items"].as_array().unwrap().len(), 64);
+    assert!(serde_json::to_vec(&bounded).unwrap().len() + 1 < MAX_FRAME);
+    let mut ids = HashSet::new();
+    for value in bounded["items"].as_array().unwrap() {
+        assert!(ids.insert(value["id"].as_str().unwrap()));
+        assert!(value["title"].as_str().unwrap().len() <= 128);
+        if value["kind"] == "action" {
+            assert_eq!(value["params"], json!({}));
+            assert!(value["label"].as_str().unwrap().len() <= 128);
+        }
+    }
+    worker.action("last-cover", "ha-cover-3-stop", 5000);
+    let mut pending = exact_service(&fixture, "cover", "stop_cover", "cover.c3");
+    respond(&mut pending, 200, json!([]));
+    worker.success("last-cover");
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+#[test]
+fn cover_cancellation_and_deadlines_never_send_stop_and_share_two_active_slots() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let name = "cover.selected";
+    let mut config = cover_configuration(&fixture, "", Some(name));
+    config["configuration"]["values"]["binary_entities"] = json!("switch.selected");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    connected(&mut worker, 5);
+    worker.send(json!({"type":"cancel","request_id":"cover-pre-canceled"}));
+    worker.action("cover-barrier", "missing", 5000);
+    worker.error("cover-barrier", "invalid_action");
+    worker.action("cover-pre-canceled", "ha-cover-0-open", 5000);
+    worker.error("cover-pre-canceled", "canceled");
+    no_request(&fixture, Duration::ZERO);
+    worker.action("cover-pending", "ha-cover-0-open", 5000);
+    let _pending = exact_service(&fixture, "cover", "open_cover", name);
+    worker.action("binary-pending", "ha-binary-0-off", 5000);
+    let mut binary = exact_service(&fixture, "switch", "turn_off", "switch.selected");
+    worker.action("cover-overloaded", "ha-cover-0-stop", 5000);
+    worker.error("cover-overloaded", "overloaded");
+    live(
+        &mut socket,
+        name,
+        Some(cover_entity(name, "opening", json!(11))),
+    );
+    let moving =
+        worker.until(|frame| item(frame, "entity-1").is_some_and(|item| item["text"] == "opening"));
+    assert_eq!(actions(&moving).len(), 5);
+    worker.send(json!({"type":"cancel","request_id":"cover-pending"}));
+    worker.error("cover-pending", "outcome_unknown");
+    respond(&mut binary, 200, json!([]));
+    worker.success("binary-pending");
+    no_request(&fixture, Duration::from_millis(100));
+    let started = Instant::now();
+    worker.action("cover-deadline", "ha-cover-0-close", 250);
+    let _deadline = exact_service(&fixture, "cover", "close_cover", name);
+    worker.error("cover-deadline", "outcome_unknown");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    no_request(&fixture, Duration::from_millis(1200));
+    // Only a fresh explicit Stop may issue stop_cover after cancellation/expiry.
+    worker.action("explicit-cover-stop", "ha-cover-0-stop", 5000);
+    let mut stop = exact_service(&fixture, "cover", "stop_cover", name);
+    respond(&mut stop, 200, json!([]));
+    worker.success("explicit-cover-stop");
     no_request(&fixture, Duration::from_millis(100));
     worker.stop(false);
 }

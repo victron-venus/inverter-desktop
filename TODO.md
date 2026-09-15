@@ -58,9 +58,12 @@ at `f91598c`. All 41 executed checks passed for final head `c13489d`, including
 Android/iOS artifact boundaries; review was approved with no open threads.
 [PR #429](https://github.com/victron-venus/inverter-desktop/pull/429) added selected
 media Play/Pause/Stop on main at `7e5ad18`. Its final head `3d1a188` passed all 41
+executed checks, with review approved and no open threads.
+[PR #431](https://github.com/victron-venus/inverter-desktop/pull/431) added explicit
+HA on/off controls on main at `ae73fa0`. Its final head `7d75afd` passed all 41
 executed checks, with review approved and no open threads. The current separate
-iteration adds explicit HA on/off controls using the same bounded worker transport
-and host controls.
+iteration adds explicit cover Open/Close/Stop using the same bounded worker
+transport and host controls.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -145,7 +148,74 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Next iteration: explicit HA on/off controls
+### Next iteration: explicit HA cover controls
+
+Extend the independently installed HA package with opt-in Open, Close and Stop
+for selected `cover.*` entities. Start from the verified PR #431 merge on main
+at `ae73fa0`. Use the existing immutable action-button contract and host API 1.4;
+arbitrary position, tilt, speed and numeric input remain a separate UI increment.
+
+- [x] Add optional `cover_entities`, empty by default, with at most four unique
+      literal `cover.*` IDs. Append watched targets after existing binary
+      selections, preserving previous indices, deduplication order and accepted
+      configurations, including the serialized 32 KiB boundary.
+- [x] Reserve three action slots per selected cover within the combined
+      31-action and 32-watched-entity limits, independently of current device
+      capabilities. Prove actual maximum contribution count and encoded size.
+- [x] Publish immutable `ha-cover-<index>-open/close/stop` presets with `{}`.
+      Resolve only fixed `cover/open_cover`, `cover/close_cover` and
+      `cover/stop_cover` routes, with literal `entity_id` bodies. Reject arbitrary
+      service, target, position, tilt and speed parameters and core aliases.
+- [x] Require the current connected session, an exact observed `open`, `closed`,
+      `opening` or `closing` state, and the operation's unsigned integer
+      `supported_features` bit (Open 1, Close 2, Stop 8). Missing or malformed
+      attributes grant no commands. Other bits grant no additional commands.
+- [x] Publish capability-only changes even when displayed state/title is
+      unchanged; immediately recheck current capabilities at action admission.
+      Clear eligibility on missing/deleted/unavailable state or disconnection.
+- [x] Preserve HA-confirmed state, original deadlines, cancellation, verified
+      TLS, no redirects/retries, authentication rejection and shared two-request
+      concurrency. Cancellation must not issue Stop. Stop is an explicit action
+      with the same admission and concurrency rules as other commands.
+- [x] Add unit and actual-process acceptance for exact routes, immutable params,
+      stable IDs, feature-only updates, malformed observations, moving states,
+      read-only defaults, all configuration bounds and shared executor behavior.
+- [x] Exercise the actual installed release package with private HA/MQTT
+      services: exact writes, server-confirmed state, capability revocation,
+      stale-instance rejection, settings replacement and stalled-command
+      teardown. Keep core charger-flag telemetry live and observe zero commands.
+- [x] Update package version/manifest, packaging contracts and English docs.
+      Preserve mobile compile/bundle exclusions and the empty publisher policy.
+- [x] Run relevant tests, strict lint, fresh frontend/release builds and staging
+      with serialized local load; complete independent subagent reviews.
+- [ ] Push a separate PR, resolve comments in English, pass final-head CI and
+      synchronize clean main after the authorized merge.
+
+Local acceptance passes: 39 worker unit tests, 44 action subprocess tests, 16
+read/protocol subprocess tests and three macOS TLS scenarios. Strict worker and
+native all-target Clippy pass. The actual HA 0.5 release worker builds and stages;
+all seven separately selected installed-package scenarios pass with actual
+release workers (two Frigate, five HA), with zero failures or ignored selections.
+The cover fixture verifies seven exact admitted POSTs, capability-only revocation,
+HA-confirmed state, stale-instance/preset rejection and pending-request teardown.
+Core charger-flag telemetry remains live in both states, with zero MQTT commands.
+
+Packaging and mobile boundary suites pass 27 and 29 tests; packaging Pylint is
+10/10. A fresh desktop frontend build includes typechecking. Frontend sources
+are unchanged from the tested main base; project Biome succeeds with the same
+79 warnings and 84 informational diagnostics. All applicable pre-commit hooks
+pass without skip overrides. Independent production, process,
+installed-fixture, CI-selection and documentation reviews found no open issues.
+Configuration tests cover all 3,825 action-count combinations and preserve old
+IDs and the exact serialized 32 KiB boundary. Real encoder checks cover maximum
+64-item frames, including the single-cover case with more long state values.
+
+Physical HA devices and actual scheduled automations remain separate acceptance
+work. This iteration does not complete arbitrary cover positioning, numeric
+inputs, discovery, appliance/weather presentation, remaining camera adapters,
+legacy configuration migration or replacement of bundled desktop features.
+
+### Completed checkpoint: explicit HA on/off controls
 
 Extend the independently installed HA package with explicit Turn on and Turn off
 for selected `switch.*`, `input_boolean.*` and `light.*` entities. Keep observed
@@ -184,7 +254,7 @@ frontend, mobile and installed-package paths have been revalidated.
       Preserve mobile exclusions and the empty production publisher policy.
 - [x] Run relevant tests, lint, fresh frontend/release builds and staging with
       serialized local load; complete independent subagent reviews.
-- [ ] Push a separate PR, resolve comments in English, pass final-head CI and
+- [x] Push a separate PR, resolve comments in English, pass final-head CI and
       synchronize clean main after the authorized merge.
 
 Local acceptance passed: 32 unit tests, 37 action subprocess tests, 16
@@ -214,7 +284,11 @@ bounded header chunks instead of one socket operation per byte, success assertio
 report only safe error enums, and the retry scenario checks exact served bytes
 and complete file cleanup. Transfer deadlines, retry counts and production code
 are unchanged. The exact scenario, all 16 media tests and strict native Clippy
-pass locally; final Windows acceptance remains part of the current-head CI gate.
+pass locally. Both final Windows runs pass. PR #431 merged as `ae73fa0` after all
+41 executed checks passed for `7d75afd`, with exact-head approval and no unresolved
+review threads. The canonical checkout is clean on main with the identical tested
+tree; all six stashes and the private project guide are preserved. The original
+Windows failure cause remains unproven.
 
 Physical HA devices, actual scheduled automations, number/cover inputs, discovery,
 appliance/weather presentation, remaining camera adapters and legacy migration

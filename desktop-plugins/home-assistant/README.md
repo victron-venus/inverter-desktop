@@ -1,10 +1,10 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.4.0, requiring host API `^1.4`.
+`inverter-desktop.home-assistant`, version 0.5.0, requiring host API `^1.4`.
 Connection status and selected entity states are read-only by default. Explicit
 optional action lists enable fixed button presses, scene activation, media
-transport and on/off controls. There is
+transport, on/off controls and cover Open/Close/Stop. There is
 no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
 camera authority or dependency on the bundled HA client.
 
@@ -36,7 +36,7 @@ the core telemetry connection.
   Separate entity IDs with commas or newlines. Blank entries are ignored and
   duplicate IDs count once. The ordered union with action targets is limited to
   32 entities: watched IDs come first, followed by previously unseen button/scene
-  targets, media-player targets and finally on/off targets.
+  targets, media-player targets, on/off targets and finally cover targets.
   Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
@@ -56,18 +56,27 @@ the core telemetry connection.
   offers Turn on and Turn off while its observed state is exactly `on` or `off`.
   Other domains, generic toggle, brightness and color settings are not supported.
   Selecting one of these entities only in `watch_entities` grants no write access.
+- `cover_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
+  Explicitly select up to four unique literal `cover.*` IDs separated by commas
+  or newlines. Targets are also watched. Open, Close and Stop are available only
+  for operations the entity supports while HA reports a known cover state.
+  Watching a cover alone grants no actions. Position, tilt, speed and toggle
+  commands are not supported by this version.
 - `ha_token`: required write-only token, 1–4,096 bytes of visible ASCII without
   whitespace or control characters. It is not read from core configuration or
   placed in arguments, inherited environment, dashboard contributions or logs.
   The token retains its account's Home Assistant permissions; this package does
   not create a restricted server-side token. Reads and explicitly selected
-  button/scene/media/on-off actions use that token.
+  button/scene/media/on-off/cover actions use that token.
 
-All three action lists together may produce at most 31 action buttons: count one
-per button or scene, three per media player and two per on/off target. Alongside
+All four action lists together may produce at most 31 action buttons: count one
+per button or scene, three per media player, two per on/off target and three per
+cover, even if a selected cover supports fewer operations. Alongside
 connection status and up to 32 state cards, this keeps each snapshot within the
 host's 64-contribution limit. Duplicate IDs count once within their list. All
-previous configurations without `binary_entities` remain within this budget.
+previous configurations without `cover_entities` remain within this budget.
+An omitted or empty new field also preserves the prior serialized 32 KiB
+configuration validation boundary.
 
 With a nonempty combined selection, initial REST reads request only
 `/api/states/<entity_id>` beneath the configured prefix. The worker never requests
@@ -77,7 +86,7 @@ all entities**: the worker immediately discards unwatched entities and retains
 only its configured list. This is local filtering, not a claim of server-side
 subscription filtering or token-level access restriction.
 
-When all four lists are empty, the worker still establishes the authenticated
+When all five lists are empty, the worker still establishes the authenticated
 WebSocket connection for connection status, but makes no entity REST reads or
 event subscription. A change
 to any list is applied through the normal settings restart. Entity state
@@ -124,7 +133,7 @@ updates, rather than assuming the HTTP result proves a physical device change.
 Host API 1.4 binds each dashboard click to the actual displayed worker instance
 and exact preset. A settings restart or reinstall cannot redirect an old click
 to a newly configured target, even if a generation counter or action ID repeats.
-All three action lists must be empty to preserve the existing read-only behavior.
+All four action lists must be empty to preserve the existing read-only behavior.
 
 ## Explicit media-player transport
 
@@ -142,9 +151,9 @@ remaining deadline, cancellation, no-retry and unknown-outcome handling describe
 above. A successful response does not establish physical playback or undo effects
 after cancellation.
 
-Without on/off targets, connection status, 32 state cards, 16 button/scene actions
+Without on/off or cover targets, connection status, 32 state cards, 16 button/scene actions
 and 12 media actions produce at most 61 contributions. The combined limits above
-allow up to 64 when on/off controls are selected. The maximum snapshot must also
+allow up to 64 when on/off or cover controls are selected. The maximum snapshot must also
 fit the existing 64 KiB frame limit. These actions need no new host UI
 contribution, permission or protocol version.
 
@@ -174,6 +183,36 @@ concurrency, deadline, cancellation, authentication and no-retry rules.
 An HA entity named `input_boolean.do_not_supply_charger` remains a literal HA
 target. It is never resolved as an inverter-control alias or published to a core
 MQTT topic. Any behavior attached to that entity inside HA remains owned by HA.
+
+## Explicit cover controls
+
+Each selected cover has stable `ha-cover-<index>-open`,
+`ha-cover-<index>-close` and `ha-cover-<index>-stop` presets with empty parameters.
+Existing button, scene, media and on/off IDs remain unchanged. The worker derives
+exactly `cover/open_cover`, `cover/close_cover` or `cover/stop_cover` beneath
+`<base>/api/services/`, sending only the literal `entity_id` in the JSON body.
+These follow the official [cover actions](https://www.home-assistant.io/integrations/cover/#list-of-actions).
+
+The current connected session must have observed exact `open`, `closed`,
+`opening` or `closing` state. Each operation also requires its corresponding
+bit in the unsigned integer `attributes.supported_features`: Open 1, Close 2 or
+Stop 8. Missing or malformed features grant no controls; unrelated bits grant
+no extra operations. See the [HA cover feature contract](https://developers.home-assistant.io/docs/core/entity/cover/#supported-features)
+and [feature constants](https://github.com/home-assistant/core/blob/dev/homeassistant/components/cover/const.py).
+Supported operations remain available in all four known states, including while
+the cover is moving. Unknown, unavailable, deleted or malformed observations
+withdraw commands. Capability changes update controls even when the displayed
+state and name stay the same; current state and features are rechecked at admission.
+
+A successful service response never synthesizes cover movement or position.
+Only HA reads and events change the displayed state. All actions share the
+existing deadlines, two-request limit, authentication and no-retry rules.
+Canceling a request stops local waiting; it neither reverses device movement nor
+sends Stop. Stop requires a separate explicit click and is rejected while both
+request slots are occupied. The user must check HA state after an unknown result.
+
+Arbitrary position, tilt and speed controls require a future contribution/UI
+increment. This version introduces no new host API, permissions or frontend code.
 
 The wire behavior follows the official
 [WebSocket API](https://developers.home-assistant.io/docs/api/websocket/) and
@@ -258,7 +297,8 @@ CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --li
   plugins::home_assistant_integration_tests::signed_home_assistant_package_lifecycle \
   -- --exact --ignored --test-threads=1
 # Repeat with signed_home_assistant_package_actions, signed_home_assistant_package_media
-# and signed_home_assistant_package_binary for their respective selected actions.
+# signed_home_assistant_package_binary and signed_home_assistant_package_cover
+# for their respective selected actions.
 ```
 
 Ordinary native tests do not build another crate or silently launch this external

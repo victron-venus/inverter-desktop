@@ -122,13 +122,17 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.4 requires host API
+worker supplies connection status and state cards. Version 0.5 requires host API
 `^1.4` and keeps service actions disabled unless `action_entities` explicitly
 selects literal `button.*` or `scene.*` targets, `media_player_entities` selects
-literal media players, or `binary_entities` selects literal switches, input booleans
-or lights. Fixed button presses, scene activation, media-player Play/Pause/Stop
-and explicit Turn on/Turn off are supported. On/off actions require exact observed
+literal media players, `binary_entities` selects literal switches, input booleans
+or lights, or `cover_entities` selects literal covers. Fixed button presses, scene
+activation, media-player Play/Pause/Stop, explicit Turn on/Turn off and cover
+Open/Close/Stop are supported. On/off actions require exact observed
 `on` or `off` state, and service responses do not synthesize a state change.
+Cover operations require a known cover state and the corresponding reported
+capability; capability-only updates withdraw or restore controls. Cancellation
+never sends a cover Stop command. Position, tilt and numeric inputs remain pending.
 The combined selection permits 32 watched entities and 31 action buttons, bounded
 to 64 contributions. There is no generic service proxy, core MQTT
 access, camera authority, or inverter flag alias lookup. Initial

@@ -7,6 +7,7 @@ pub const MAX_ENTITIES: usize = 32;
 pub const MAX_ACTION_ENTITIES: usize = 16;
 pub const MAX_MEDIA_PLAYER_ENTITIES: usize = 4;
 pub const MAX_BINARY_ENTITIES: usize = 8;
+pub const MAX_COVER_ENTITIES: usize = 4;
 pub const MAX_ACTION_BUTTONS: usize = 31;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
@@ -31,6 +32,8 @@ pub struct Values {
     pub media_player_entities: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub binary_entities: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cover_entities: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -45,6 +48,7 @@ pub struct Validated {
     pub action_entities: Vec<String>,
     pub media_player_entities: Vec<String>,
     pub binary_entities: Vec<String>,
+    pub cover_entities: Vec<String>,
     pub token: String,
 }
 
@@ -75,6 +79,9 @@ pub enum Operation {
     Stop,
     TurnOn(BinaryDomain),
     TurnOff(BinaryDomain),
+    OpenCover,
+    CloseCover,
+    StopCover,
 }
 
 impl Operation {
@@ -87,6 +94,9 @@ impl Operation {
             Self::Stop => "Stop ",
             Self::TurnOn(_) => "Turn on ",
             Self::TurnOff(_) => "Turn off ",
+            Self::OpenCover => "Open ",
+            Self::CloseCover => "Close ",
+            Self::StopCover => "Stop ",
         }
     }
 
@@ -96,6 +106,15 @@ impl Operation {
 
     pub fn requires_binary_state(self) -> bool {
         matches!(self, Self::TurnOn(_) | Self::TurnOff(_))
+    }
+
+    pub fn required_cover_feature(self) -> Option<u64> {
+        match self {
+            Self::OpenCover => Some(1),
+            Self::CloseCover => Some(2),
+            Self::StopCover => Some(8),
+            _ => None,
+        }
     }
 
     fn path(self) -> &'static str {
@@ -111,6 +130,9 @@ impl Operation {
             Self::TurnOff(BinaryDomain::InputBoolean) => "api/services/input_boolean/turn_off",
             Self::TurnOn(BinaryDomain::Light) => "api/services/light/turn_on",
             Self::TurnOff(BinaryDomain::Light) => "api/services/light/turn_off",
+            Self::OpenCover => "api/services/cover/open_cover",
+            Self::CloseCover => "api/services/cover/close_cover",
+            Self::StopCover => "api/services/cover/stop_cover",
         }
     }
 }
@@ -128,6 +150,7 @@ pub fn configured_actions(
     actions: &[String],
     media_players: &[String],
     binary_entities: &[String],
+    covers: &[String],
 ) -> Vec<ConfiguredAction> {
     let mut configured = Vec::new();
     for (index, entity) in actions.iter().enumerate() {
@@ -165,6 +188,19 @@ pub fn configured_actions(
         ] {
             configured.push(ConfiguredAction {
                 id: format!("ha-binary-{index}-{verb}"),
+                entity: entity.clone(),
+                operation,
+            });
+        }
+    }
+    for (index, entity) in covers.iter().enumerate() {
+        for (verb, operation) in [
+            ("open", Operation::OpenCover),
+            ("close", Operation::CloseCover),
+            ("stop", Operation::StopCover),
+        ] {
+            configured.push(ConfiguredAction {
+                id: format!("ha-cover-{index}-{verb}"),
                 entity: entity.clone(),
                 operation,
             });
@@ -218,7 +254,18 @@ impl Configuration {
         {
             return Err("invalid HA binary entities");
         }
-        if action_entities.len() + 3 * media_player_entities.len() + 2 * binary_entities.len()
+        let cover_entities = entity_list(&self.values.cover_entities)?;
+        if cover_entities.len() > MAX_COVER_ENTITIES
+            || cover_entities
+                .iter()
+                .any(|entity| !entity.starts_with("cover."))
+        {
+            return Err("invalid HA cover entities");
+        }
+        if action_entities.len()
+            + 3 * media_player_entities.len()
+            + 2 * binary_entities.len()
+            + 3 * cover_entities.len()
             > MAX_ACTION_BUTTONS
         {
             return Err("too many HA action buttons");
@@ -227,6 +274,7 @@ impl Configuration {
             .iter()
             .chain(&media_player_entities)
             .chain(&binary_entities)
+            .chain(&cover_entities)
         {
             if !entities.contains(entity) {
                 entities.push(entity.clone());
@@ -241,6 +289,7 @@ impl Configuration {
             action_entities,
             media_player_entities,
             binary_entities,
+            cover_entities,
             token: self.secrets.ha_token,
         })
     }
@@ -351,6 +400,7 @@ impl Validated {
             &self.action_entities,
             &self.media_player_entities,
             &self.binary_entities,
+            &self.cover_entities,
         )
     }
 
@@ -746,19 +796,25 @@ mod tests {
         for actions in 0..=MAX_ACTION_ENTITIES {
             for media in 0..=MAX_MEDIA_PLAYER_ENTITIES {
                 for binary in 0..=MAX_BINARY_ENTITIES {
-                    let mut config = configuration("http://localhost", "");
-                    config.values.action_entities = list("button", actions);
-                    config.values.media_player_entities = list("media_player", media);
-                    config.values.binary_entities = list("switch", binary);
-                    let count = actions + 3 * media + 2 * binary;
-                    let config = config.validate();
-                    if count <= MAX_ACTION_BUTTONS {
-                        let config = config.unwrap();
-                        assert_eq!(config.actions().len(), count);
-                        assert!(1 + MAX_ENTITIES + config.actions().len() <= 64);
-                    } else {
-                        assert!(binary > 0, "previously accepted configuration rejected");
-                        assert_eq!(config.err(), Some("too many HA action buttons"));
+                    for covers in 0..=MAX_COVER_ENTITIES {
+                        let mut config = configuration("http://localhost", "");
+                        config.values.action_entities = list("button", actions);
+                        config.values.media_player_entities = list("media_player", media);
+                        config.values.binary_entities = list("switch", binary);
+                        config.values.cover_entities = list("cover", covers);
+                        let count = actions + 3 * media + 2 * binary + 3 * covers;
+                        let config = config.validate();
+                        if count <= MAX_ACTION_BUTTONS {
+                            let config = config.unwrap();
+                            assert_eq!(config.actions().len(), count);
+                            assert!(1 + MAX_ENTITIES + config.actions().len() <= 64);
+                        } else {
+                            assert!(
+                                binary > 0 || covers > 0,
+                                "previously accepted configuration rejected"
+                            );
+                            assert_eq!(config.err(), Some("too many HA action buttons"));
+                        }
                     }
                 }
             }
@@ -792,6 +848,150 @@ mod tests {
         legacy["values"]["binary_entities"] = "".into();
         let empty: Configuration = serde_json::from_value(legacy.clone()).unwrap();
         assert!(empty.validate().unwrap().actions().is_empty());
+        legacy["secrets"]["ha_token"] =
+            format!("{}x", legacy["secrets"]["ha_token"].as_str().unwrap()).into();
+        let oversized: Configuration = serde_json::from_value(legacy).unwrap();
+        assert_eq!(oversized.validate().err(), Some("invalid configuration"));
+    }
+
+    #[test]
+    fn cover_selection_appends_after_binary_and_preserves_all_existing_action_ids() {
+        let mut config = configuration(
+            "https://ha.example:8443/proxy/ha",
+            "cover.office,sensor.a,switch.desk,scene.night,media_player.den",
+        );
+        assert!(config.values.cover_entities.is_empty());
+        config.values.action_entities = "button.first,scene.night".into();
+        config.values.media_player_entities = "media_player.den,media_player.office".into();
+        config.values.binary_entities = "switch.desk,light.room".into();
+        config.values.cover_entities = "cover.blind,\ncover.office,cover.blind".into();
+        let config = config.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            [
+                "cover.office",
+                "sensor.a",
+                "switch.desk",
+                "scene.night",
+                "media_player.den",
+                "button.first",
+                "media_player.office",
+                "light.room",
+                "cover.blind",
+            ]
+        );
+        assert_eq!(config.cover_entities, ["cover.blind", "cover.office"]);
+        let actions = config.actions();
+        let previous = configured_actions(
+            &config.action_entities,
+            &config.media_player_entities,
+            &config.binary_entities,
+            &[],
+        );
+        assert_eq!(actions.len(), previous.len() + 6);
+        for (actual, previous) in actions.iter().zip(&previous) {
+            assert_eq!(actual.id, previous.id);
+            assert_eq!(actual.entity, previous.entity);
+            assert_eq!(
+                config.service_url(actual.operation),
+                config.service_url(previous.operation)
+            );
+        }
+        for (index, entity) in config.cover_entities.iter().enumerate() {
+            for (offset, verb) in ["open", "close", "stop"].into_iter().enumerate() {
+                let action = &actions[previous.len() + index * 3 + offset];
+                assert_eq!(action.id, format!("ha-cover-{index}-{verb}"));
+                assert_eq!(&action.entity, entity);
+                assert_eq!(
+                    config.service_url(action.operation).as_str(),
+                    format!("https://ha.example:8443/proxy/ha/api/services/cover/{verb}_cover")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cover_domain_list_and_union_limits_are_independent_of_action_capabilities() {
+        for selection in [
+            "sensor.a",
+            "switch.a",
+            "input_boolean.a",
+            "light.a",
+            "button.a",
+            "media_player.a",
+            "coverx.a",
+            "cover.*",
+            "cover.Upper",
+            "cover.a/b",
+            "cover.a.b",
+            "cover.",
+            "do_not_supply_charger",
+        ] {
+            let mut config = configuration("http://localhost", "");
+            config.values.cover_entities = selection.into();
+            assert!(config.validate().is_err(), "accepted {selection}");
+        }
+        let list = |domain: &str, count| {
+            (0..count)
+                .map(|index| format!("{domain}.e{index}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let mut config = configuration("http://localhost", "");
+        config.values.cover_entities = list("cover", 5);
+        assert!(config.validate().is_err());
+        let mut config = configuration("http://localhost", "");
+        config.values.cover_entities = " ".repeat(4097);
+        assert!(config.validate().is_err());
+        let mut config = configuration(
+            "http://localhost",
+            &format!("{},cover.e0", list("sensor", 28)),
+        );
+        config.values.cover_entities = format!("{},cover.e0", list("cover", 4));
+        let config = config.validate().unwrap();
+        assert_eq!(config.entities.len(), MAX_ENTITIES);
+        assert_eq!(config.cover_entities.len(), MAX_COVER_ENTITIES);
+        assert_eq!(
+            config.actions().len(),
+            12,
+            "configuration reserves all three slots per cover before any state is observed"
+        );
+        let mut config = configuration("http://localhost", &list("sensor", 29));
+        config.values.cover_entities = list("cover", 4);
+        assert!(config.validate().is_err());
+        let read_only = configuration("http://localhost", "cover.read_only")
+            .validate()
+            .unwrap();
+        assert!(read_only.cover_entities.is_empty());
+        assert!(read_only.actions().is_empty());
+    }
+
+    #[test]
+    fn omitted_or_empty_cover_selection_preserves_a_previous_binary_config_at_the_size_limit() {
+        let mut legacy = json!({
+            "revision":"legacy-cover-limit",
+            "values":{
+                "ha_base_url":"http://localhost",
+                "watch_entities":"\u{b}".repeat(4096),
+                "action_entities":"\u{b}".repeat(1200),
+                "media_player_entities":"",
+                "binary_entities":"switch.desk"
+            },
+            "secrets":{"ha_token":"fixture-token"}
+        });
+        let padding = MAX_CONFIGURATION_BYTES - serde_json::to_vec(&legacy).unwrap().len();
+        let token = format!("fixture-token{}", "x".repeat(padding));
+        assert!(token.len() <= 4096);
+        legacy["secrets"]["ha_token"] = token.into();
+        assert_eq!(
+            serde_json::to_vec(&legacy).unwrap().len(),
+            MAX_CONFIGURATION_BYTES
+        );
+        let omitted: Configuration = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(omitted.validate().unwrap().actions().len(), 2);
+        legacy["values"]["cover_entities"] = "".into();
+        let empty: Configuration = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(empty.validate().unwrap().actions().len(), 2);
         legacy["secrets"]["ha_token"] =
             format!("{}x", legacy["secrets"]["ha_token"].as_str().unwrap()).into();
         let oversized: Configuration = serde_json::from_value(legacy).unwrap();
