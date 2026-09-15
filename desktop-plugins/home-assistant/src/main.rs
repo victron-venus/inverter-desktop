@@ -1,4 +1,5 @@
 mod actions;
+mod appliances;
 mod config;
 mod discovery;
 mod network;
@@ -58,11 +59,12 @@ async fn session(
         .send(json!({"type":"configuration_ready","revision":revision}))
         .await?;
     // Network work starts only after the configuration acknowledgement flushes.
-    let book = state::Book::with_discovery(
+    let book = state::Book::with_appliances(
         &configuration.entities,
         &configuration.actions(),
         &configuration.inputs(),
         &configuration.discovery_prefixes,
+        configuration.dishwasher.as_ref(),
     );
     tokio::select! {
         result=actions::run(incoming,output,configuration.clone(),book.clone())=>result,

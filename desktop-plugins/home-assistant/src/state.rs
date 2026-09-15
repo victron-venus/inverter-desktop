@@ -1,4 +1,5 @@
-use crate::config::ConfiguredAction;
+use crate::appliances::Dishwasher;
+use crate::config::{ConfiguredAction, DishwasherProfile};
 use crate::discovery::Discovery;
 use crate::numeric::{self, Observation};
 use inverter_worker_protocol::Output;
@@ -20,6 +21,7 @@ pub struct Connection {
 pub struct Book {
     entities: Vec<Entity>,
     discovery: Discovery,
+    dishwasher: Option<Dishwasher>,
     connection: &'static str,
     tone: &'static str,
     revision: u64,
@@ -151,11 +153,22 @@ impl Book {
         Self::with_discovery(entities, actions, inputs, &[])
     }
 
+    #[cfg(test)]
     pub fn with_discovery(
         entities: &[String],
         actions: &[ConfiguredAction],
         inputs: &[ConfiguredAction],
         discovery_prefixes: &[String],
+    ) -> Shared {
+        Self::with_appliances(entities, actions, inputs, discovery_prefixes, None)
+    }
+
+    pub fn with_appliances(
+        entities: &[String],
+        actions: &[ConfiguredAction],
+        inputs: &[ConfiguredAction],
+        discovery_prefixes: &[String],
+        dishwasher: Option<&DishwasherProfile>,
     ) -> Shared {
         let (link, _) = watch::channel(Connection::default());
         Arc::new(Mutex::new(Self {
@@ -174,6 +187,7 @@ impl Book {
                 })
                 .collect(),
             discovery: Discovery::new(entities, discovery_prefixes),
+            dishwasher: dishwasher.and_then(|profile| Dishwasher::new(entities, profile)),
             connection: "Connecting",
             tone: "neutral",
             revision: 0,
@@ -216,6 +230,9 @@ impl Book {
 
     pub fn begin_session(&mut self) {
         self.discovery.begin_session();
+        if let Some(profile) = &mut self.dishwasher {
+            profile.clear();
+        }
         for input in &mut self.inputs {
             input.update(None);
         }
@@ -235,6 +252,9 @@ impl Book {
 
     fn clear(&mut self) {
         self.discovery.clear();
+        if let Some(profile) = &mut self.dishwasher {
+            profile.clear();
+        }
         for input in &mut self.inputs {
             input.update(None);
         }
@@ -292,6 +312,14 @@ impl Book {
             return;
         }
         entity.live_seen |= live;
+        if self.dishwasher.as_mut().is_some_and(|profile| {
+            profile.update(
+                index,
+                state.filter(|state| state["entity_id"].as_str() == Some(name)),
+            )
+        }) {
+            self.revision = self.revision.wrapping_add(1);
+        }
         for input in self
             .inputs
             .iter_mut()
@@ -428,7 +456,12 @@ impl Book {
             json!({"kind":"status","id":"connection","title":"Home Assistant",
             "value":connection,"tone":tone}),
         ];
-        items.extend(self.entities.iter().map(|entity| entity.item.clone()));
+        items.extend(self.entities.iter().enumerate().map(|(index, entity)| {
+            self.dishwasher
+                .as_ref()
+                .and_then(|profile| profile.contribution(index, &entity.item))
+                .unwrap_or_else(|| entity.item.clone())
+        }));
         items.extend(self.discovery.items().cloned());
         for index in 0..self.actions.len() {
             if let Some(entity) = self.action_entity(index) {
@@ -605,6 +638,387 @@ mod tests {
             number["input_revision"]
         );
         assert!(book.action_target("ha-action-0").is_none());
+    }
+
+    fn appliance_configuration(
+        watch: &str,
+        running: &str,
+        duration: &str,
+    ) -> crate::config::Validated {
+        let config: crate::config::Configuration = serde_json::from_value(json!({
+            "revision":"dishwasher", "values":{"ha_base_url":"http://localhost", "watch_entities":watch,
+                "dishwasher_running_entity":running, "dishwasher_duration_entity":duration},
+            "secrets":{"ha_token":"fixture"}
+        })).unwrap();
+        config.validate().unwrap()
+    }
+
+    fn appliance_book(config: &crate::config::Validated) -> Shared {
+        Book::with_appliances(
+            &config.entities,
+            &config.actions(),
+            &config.inputs(),
+            &config.discovery_prefixes,
+            config.dishwasher.as_ref(),
+        )
+    }
+
+    fn appliance_state(entity: &str, value: &str) -> Value {
+        json!({"entity_id":entity,"state":value,"attributes":{"friendly_name":"Shared title","unit_of_measurement":"hours"}})
+    }
+
+    #[test]
+    fn dishwasher_refreshes_from_both_sources_without_changing_raw_cards_or_source_freshness() {
+        let config =
+            appliance_configuration("sensor.runtime", "binary_sensor.running", "sensor.runtime");
+        let shared = appliance_book(&config);
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        book.initial(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        book.initial(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "1.50")),
+        );
+        assert_eq!(
+            book.frame()["items"][2],
+            json!({"kind":"text","id":"entity-1","title":"Shared title","text":"State: Running\nRuntime since midnight: 1.50"})
+        );
+        assert_eq!(book.entities[1].item["text"], "on");
+        assert_eq!(book.frame()["items"][1], book.entities[0].item);
+        let raw_runtime = book.entities[0].item.clone();
+        let revision = book.revision;
+        book.live(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "1.500")),
+        );
+        assert_eq!(
+            book.entities[0].item, raw_runtime,
+            "generic numeric state remains equal"
+        );
+        assert_ne!(
+            book.revision, revision,
+            "changed runtime spelling still republishes summary"
+        );
+        assert!(
+            !book.entities[1].live_seen,
+            "a duration event does not mark primary live"
+        );
+        book.initial(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "off")),
+        );
+        assert_eq!(
+            book.frame()["items"][2]["text"],
+            "State: Idle\nRuntime since midnight: 1.500"
+        );
+        book.live(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        let frame = book.frame();
+        book.initial(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "off")),
+        );
+        book.initial(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "99")),
+        );
+        assert_eq!(
+            book.frame(),
+            frame,
+            "both source guards reject stale initial state"
+        );
+        book.live("sensor.runtime", None);
+        assert_eq!(book.frame()["items"][2]["text"], "State: Running");
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        book.initial(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "99")),
+        );
+        assert_eq!(book.frame()["items"][2]["text"], "State: Running");
+        book.live(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "02:15:00")),
+        );
+        let mut renamed = appliance_state("binary_sensor.running", "Running");
+        renamed["attributes"]["friendly_name"] = json!("Kitchen dishwasher");
+        book.live("binary_sensor.running", Some(&renamed));
+        assert_eq!(book.frame()["items"][2]["id"], "entity-1");
+        assert_eq!(book.frame()["items"][2]["title"], "Kitchen dishwasher");
+        assert_eq!(
+            book.frame()["items"][2]["text"],
+            "State: Running\nRuntime since midnight: 02:15:00"
+        );
+    }
+
+    #[test]
+    fn dishwasher_role_state_and_runtime_clear_independently_and_across_sessions() {
+        let config = appliance_configuration("", "binary_sensor.running", "sensor.runtime");
+        let shared = appliance_book(&config);
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        book.live(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "01:23:45")),
+        );
+        assert_eq!(
+            book.frame()["items"][1]["value"],
+            "Waiting",
+            "duration cannot invent primary status"
+        );
+        book.initial(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        for (value, expected) in [(" UNKNOWN ", "Unknown"), ("unavailable", "Unavailable")] {
+            book.live(
+                "binary_sensor.running",
+                Some(&appliance_state("binary_sensor.running", value)),
+            );
+            assert_eq!(book.frame()["items"][1]["value"], expected);
+            assert!(book.frame()["items"][1].get("text").is_none());
+        }
+        book.live(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        book.live("binary_sensor.running", None);
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        book.initial(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        book.live(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        book.disconnected();
+        assert!(book.frame()["items"][1].get("text").is_none());
+        assert_eq!(book.frame()["items"][2]["value"], "Unavailable");
+        book.begin_session();
+        book.connected();
+        book.initial(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "off")),
+        );
+        assert_eq!(
+            book.frame()["items"][1]["text"],
+            "State: Idle",
+            "old runtime is not retained after reconnect"
+        );
+        book.initial(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "00:00:00")),
+        );
+        assert_eq!(
+            book.frame()["items"][1]["text"],
+            "State: Idle\nRuntime since midnight: 00:00:00"
+        );
+        book.authentication_rejected();
+        assert!(book.frame()["items"][1].get("text").is_none());
+        book.begin_session();
+        book.connected();
+        book.initial(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        assert_eq!(book.frame()["items"][1]["text"], "State: Running");
+    }
+
+    #[test]
+    fn dishwasher_profiles_do_not_add_or_relax_explicit_action_or_numeric_grants() {
+        let config: crate::config::Configuration = serde_json::from_value(json!({
+            "revision":"dishwasher-authority", "values":{"ha_base_url":"http://localhost",
+                "dishwasher_running_entity":"switch.running", "dishwasher_duration_entity":"number.runtime",
+                "binary_entities":"switch.running", "number_entities":"number.runtime"}, "secrets":{"ha_token":"fixture"}
+        })).unwrap();
+        let config = config.validate().unwrap();
+        let shared = appliance_book(&config);
+        let mut book = shared.lock().unwrap();
+        book.connected();
+        let mut runtime = number_state("0");
+        runtime["entity_id"] = json!("number.runtime");
+        book.live("number.runtime", Some(&runtime));
+        book.live(
+            "switch.running",
+            Some(&appliance_state("switch.running", " ON ")),
+        );
+        assert_eq!(
+            book.frame()["items"][1]["text"],
+            "State: Running\nRuntime since midnight: 0"
+        );
+        book.mark_published();
+        assert!(
+            book.action_target("ha-binary-0-on").is_none(),
+            "summary normalization must not relax raw binary eligibility"
+        );
+        let input = input_item(&book, "ha-number-0-set");
+        let params = json!({"input_revision":input["input_revision"],"value_scaled":0});
+        assert!(book.input_target("ha-number-0-set", &params).is_ok());
+        book.live(
+            "switch.running",
+            Some(&appliance_state("switch.running", "on")),
+        );
+        assert!(
+            book.action_target("ha-binary-0-on").is_none(),
+            "new raw availability still needs publication"
+        );
+        book.mark_published();
+        assert_eq!(
+            book.action_target("ha-binary-0-on").unwrap().entity,
+            "switch.running"
+        );
+        assert_eq!(input_item(&book, "ha-binary-0-on")["state_id"], "entity-0");
+        assert_eq!(input_item(&book, "ha-number-0-set")["state_id"], "entity-1");
+        runtime["state"] = json!("0.0");
+        book.live("number.runtime", Some(&runtime));
+        assert_eq!(
+            book.frame()["items"][1]["text"],
+            "State: Running\nRuntime since midnight: 0.0"
+        );
+        assert_eq!(
+            input_item(&book, "ha-number-0-set")["input_revision"],
+            input["input_revision"]
+        );
+        assert!(book.input_target("ha-number-0-set", &params).is_ok());
+        assert!(book.action_target("ha-binary-0-on").is_some());
+        for id in ["entity-0", "entity-1", "switch.running", "number.runtime"] {
+            assert!(book.action_target(id).is_none());
+            assert_eq!(book.input_target(id, &params).err(), Some("invalid_action"));
+        }
+        book.live(
+            "switch.running",
+            Some(&appliance_state("switch.running", "unavailable")),
+        );
+        assert!(book.action_target("ha-binary-0-on").is_none());
+        assert!(book.input_target("ha-number-0-set", &params).is_ok());
+    }
+
+    #[test]
+    fn dishwasher_identity_guards_and_missing_profile_preserve_generic_and_discovered_cards() {
+        let config =
+            appliance_configuration("sensor.runtime", "binary_sensor.running", "sensor.runtime");
+        let shared = appliance_book(&config);
+        let mut book = shared.lock().unwrap();
+        book.connected();
+        book.live(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.running", "on")),
+        );
+        book.live(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.runtime", "2h")),
+        );
+        book.live(
+            "sensor.runtime",
+            Some(&appliance_state("sensor.other", "99h")),
+        );
+        assert_eq!(book.frame()["items"][2]["text"], "State: Running");
+        book.live(
+            "binary_sensor.running",
+            Some(&appliance_state("binary_sensor.other", "off")),
+        );
+        assert_eq!(book.frame()["items"][2]["value"], "Unavailable");
+        let shared = Book::with_discovery(&config.entities, &[], &[], &["sensor.".into()]);
+        let mut unconfigured = shared.lock().unwrap();
+        unconfigured.begin_session();
+        unconfigured.connected();
+        for name in &config.entities {
+            let state = appliance_state(name, "on");
+            unconfigured.live(name, Some(&state));
+        }
+        unconfigured
+            .discovery_snapshot(&[appliance_state("sensor.dishwasher_runtime", "01:23:45")]);
+        let frame = unconfigured.frame();
+        for (index, name) in config.entities.iter().enumerate() {
+            assert_eq!(
+                frame["items"][index + 1],
+                contribution(index, name, Some(&appliance_state(name, "on")))
+            );
+        }
+        assert_eq!(frame["items"][3]["text"], "01:23:45");
+        assert!(frame["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item.get("action_id").is_none()));
+        let no_duration = appliance_configuration("", "sensor.running", "");
+        let shared = appliance_book(&no_duration);
+        let mut single = shared.lock().unwrap();
+        single.connected();
+        single.live(
+            "sensor.running",
+            Some(&appliance_state("sensor.running", "Paused")),
+        );
+        assert_eq!(single.frame()["items"].as_array().unwrap().len(), 2);
+        assert_eq!(single.frame()["items"][1]["text"], "State: Paused");
+    }
+
+    #[tokio::test]
+    async fn dishwasher_roles_share_the_existing_64_item_frame_and_preserve_whole_escaped_values() {
+        let buttons = (0..16)
+            .map(|index| format!("button.e{index}"))
+            .collect::<Vec<_>>();
+        let media = (0..4)
+            .map(|index| format!("media_player.e{index}"))
+            .collect::<Vec<_>>();
+        let watch = (0..11)
+            .map(|index| format!("sensor.e{index}"))
+            .collect::<Vec<_>>();
+        let config: crate::config::Configuration = serde_json::from_value(json!({
+            "revision":"dishwasher-capacity", "values":{"ha_base_url":"http://localhost", "watch_entities":watch.join(","),
+                "action_entities":buttons.join(","), "media_player_entities":media.join(","), "cover_entities":"cover.a",
+                "dishwasher_running_entity":"sensor.e0", "dishwasher_duration_entity":"sensor.e1"}, "secrets":{"ha_token":"fixture"}
+        })).unwrap();
+        let config = config.validate().unwrap();
+        let shared = appliance_book(&config);
+        let frame = {
+            let mut book = shared.lock().unwrap();
+            book.connected();
+            for name in &config.entities {
+                let value = if name == "cover.a" {
+                    "opening".to_owned()
+                } else if name == "sensor.e0" || name == "sensor.e1" {
+                    "\\\"".repeat(64)
+                } else {
+                    "\\\"".repeat(256)
+                };
+                book.live(name, Some(&json!({"entity_id":name,"state":value,"attributes":{"friendly_name":"\\\"".repeat(64),"supported_features":11}})));
+            }
+            book.frame()
+        };
+        let items = frame["items"].as_array().unwrap();
+        assert_eq!(config.entities.len(), 32);
+        assert_eq!(items.len(), 64);
+        assert_eq!(
+            items.iter().filter(|item| item["kind"] == "action").count(),
+            31
+        );
+        assert_eq!(
+            items[1]["text"],
+            format!(
+                "State: {}\nRuntime since midnight: {}",
+                "\\\"".repeat(64),
+                "\\\"".repeat(64)
+            )
+        );
+        assert_eq!(items[2]["text"], "\\\"".repeat(64));
+        assert!(items[1]["text"].as_str().unwrap().len() <= 512);
+        assert_grouped_frame(&frame, &config);
+        assert!(
+            serde_json::to_vec(&frame).unwrap().len() < inverter_worker_protocol::MAX_FRAME_BYTES
+        );
+        Output::with_writer(std::io::sink())
+            .send(frame)
+            .await
+            .unwrap();
     }
 
     fn weather_state(condition: &str, temperature: Value) -> Value {

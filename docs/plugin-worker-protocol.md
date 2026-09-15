@@ -168,7 +168,10 @@ HA 0.2–0.5 packages with fixed service actions require `^1.4`. HA 0.6 and 0.7 
 discovery adds no host API, wire schema or contribution kind. HA 0.8 requires
 `^1.6` for explicit state/control grouping. HA 0.9 retains that range and projects
 selected weather state into existing bounded text contributions without new
-authority, wire messages or contribution kinds. Existing workers with compatible
+authority, wire messages or contribution kinds. HA 0.10 keeps `^1.6` and combines
+explicitly assigned dishwasher state/runtime readings in the running entity's
+existing text/status contribution. Its optional role settings grant reads only;
+the projection does not change action references or authority. Existing workers with compatible
 `^1.3`, `^1.4` or `^1.5` ranges still negotiate the selected 1.6 version; Frigate
 retains its existing API range and flat contributions.
 

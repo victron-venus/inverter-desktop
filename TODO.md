@@ -72,6 +72,77 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
+### Current checkpoint: explicit read-only dishwasher profile
+
+Start from verified main `d7492c1`. Preserve the bundled dishwasher's explicitly
+configured running state and runtime since midnight in one existing HA worker
+card. This is a read-only composite-state profile; it does not infer appliance
+roles, migrate saved settings, add actions or claim a remaining-time countdown.
+
+- [x] Add optional, empty-by-default `dishwasher_running_entity` and
+      `dishwasher_duration_entity` settings for single literal entity IDs.
+      Require a running role before accepting a duration role. Append new read
+      targets to the existing deduplicated ordered union without changing older
+      indices, the 32-state limit or discovery priority. Keep empty fields omitted
+      so existing configuration serialization and its 32-KiB bound remain valid.
+- [x] Combine explicitly assigned readings in the running entity's existing state
+      card, retaining its ID/title and the ordinary duration entity card. Match
+      only known running/idle states; preserve other observed states as bounded
+      data. Label duration as runtime since midnight without assumed units,
+      conversion, guessed remaining time or a countdown. Keep values whole and
+      the summary within the existing text/frame limits.
+- [x] Refresh the composite when either role changes, becomes unavailable or is
+      removed. Preserve independent live-over-initial-REST ordering for both
+      roles, clear retained observations on reconnect/disconnect and keep settings
+      replacement isolated from the previous worker instance.
+- [x] Preserve read-only selection and existing explicit control authority.
+      Profiles add no service operation, automatic discovery, host permission or
+      core MQTT/IGW dependency. Existing action/numeric grants remain based on
+      their original selected entity and observed capability.
+- [x] Add meaningful configuration, projection and state-book tests, plus process
+      scenarios proving independent updates and stale-read ordering with positive
+      completion barriers. Extend the real installed-package lifecycle with
+      exact read scope, denied profile actions, settings/authentication/disable/
+      uninstall teardown, independent core MQTT telemetry and zero command writes.
+- [x] Bump only the HA worker/package to 0.10.0. Retain host API `^1.6`, protocol
+      and manifest schemas, permissions and empty production publisher policy.
+      Keep the entire HA/camera/plugin ecosystem excluded from Android and iOS.
+- [x] Update English worker/application/package documentation and packaging
+      expectations. Correct the bundled internal runtime name without renaming
+      saved configuration fields. Leave washer/dryer profiles, modern forecasts, automatic
+      migration and bundled feature removal open.
+- [x] Run formatting, strict Clippy, appropriate worker/native/process/installed
+      checks, frontend checks/builds, packaging and mobile-boundary validation.
+      Independently review implementation, fixtures and documentation.
+- [ ] Push a separate PR, address comments in English, pass final-head checks,
+      merge as authorized and verify clean canonical main and its source CI.
+
+Local validation passed on the `d7492c1` baseline: 198 HA worker tests (96 unit,
+82 action/process, three TLS and 17 protocol), 453 ordinary native tests, strict
+worker/native Clippy and formatting, and the real HA 0.10 release build. All
+seven installed HA package scenarios were explicitly selected, each reporting
+one passed test with zero failed or ignored tests. Existing weather, actions,
+media, binary, cover, numeric and discovery behavior remains covered.
+
+The installed lifecycle checks exact role reads, independent updates/deletions,
+settings replacement, authentication/enablement/uninstall teardown, denied
+profile actions and core MQTT telemetry with zero command writes. Process tests
+hold both initial role reads, observe the third and fourth requests separately
+under the two-request concurrency limit, then use independent live publication
+barriers to prove both stale REST completions cannot overwrite newer role data.
+Native settings tests preserve the exact prior 32-KiB startup/storage boundary
+and verify empty defaults, explicit selection, clearing and schema rollback.
+
+The application passed 414 desktop frontend tests, 17 mobile tests, five
+build-profile tests, formatting, lint, typechecking and mobile/desktop builds.
+Packaging passed 27 tests; the native mobile-boundary suite passed 29. Independent
+reviews covered production logic, fixtures, metadata and English documentation.
+A disposable fixture using the production renderer passed light/dark review at
+320px, including running/idle state, missing runtime, maximum-length source
+strings and disconnect clearing, without horizontal overflow or browser errors.
+This does not establish production HA/device acceptance or Linux/Windows native
+graphical acceptance. Remaining appliance profiles and automatic migration stay open.
+
 ### Completed checkpoint: bounded HA weather summaries
 
 Start from verified main `a3eb56d`, then incorporate main `507f3d9` before final

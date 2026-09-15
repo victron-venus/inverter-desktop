@@ -238,11 +238,9 @@
           <span class="text-[10px] font-semibold text-battery tracking-tight">{{
             $t('sections.running')
           }}</span>
-          <span
-            v-if="dishwasherRemainingTime"
-            class="text-[11px] font-semibold text-main tabular"
-            >{{ dishwasherRemainingTime }}</span
-          >
+          <span v-if="dishwasherRuntime" class="text-[11px] font-semibold text-main tabular">{{
+            dishwasherRuntime
+          }}</span>
         </div>
       </div>
 
@@ -370,7 +368,7 @@ const props = defineProps<{
   dryerStartEntity?: string
   dryerPauseEntity?: string
   dishwasherActive?: boolean
-  dishwasherRemainingTime?: string | null
+  dishwasherRuntime?: string | null
   haSensors: HaSensorDisplay[]
   haNumbers: HaNumberDisplay[]
   haCovers: HaCoverDisplay[]

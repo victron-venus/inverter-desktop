@@ -43,7 +43,7 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 if "windows" in target:
                     binary += ".exe"
                 self.assertEqual(manifest["plugin_id"], "inverter-desktop.home-assistant")
-                self.assertEqual(manifest["version"], "0.9.0")
+                self.assertEqual(manifest["version"], "0.10.0")
                 self.assertEqual(manifest["host_api"], "^1.6")
                 self.assertEqual(manifest["target"], target)
                 self.assertEqual(manifest["entrypoint"], f"bin/{binary}")
@@ -70,6 +70,7 @@ class HomeAssistantPackageTests(unittest.TestCase):
             "ha_base_url", "watch_entities", "action_entities", "media_player_entities",
             "binary_entities", "cover_entities", "number_entities",
             "cover_position_entities", "discovery_prefixes", "ha_token",
+            "dishwasher_running_entity", "dishwasher_duration_entity",
         })
         self.assertTrue(all(field["type"] == "string" for field in fields.values()))
         self.assertEqual(fields["ha_base_url"]["maxLength"], 2048)
@@ -87,13 +88,16 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertEqual(fields["cover_entities"]["maxLength"], 4096)
         self.assertNotIn("cover_entities", schema["required"])
         for key, limit in (("number_entities", 4096), ("cover_position_entities", 4096),
-                           ("discovery_prefixes", 1024)):
+                           ("discovery_prefixes", 1024),
+                           ("dishwasher_running_entity", 128),
+                           ("dishwasher_duration_entity", 128)):
             self.assertEqual(fields[key]["default"], "")
             self.assertIs(fields[key]["omitEmpty"], True)
             self.assertEqual(fields[key]["maxLength"], limit)
             self.assertNotIn(key, schema["required"])
         self.assertEqual({key for key, field in fields.items() if field.get("omitEmpty")}, {
             "number_entities", "cover_position_entities", "discovery_prefixes",
+            "dishwasher_running_entity", "dishwasher_duration_entity",
         })
         self.assertNotIn("writeOnly", fields["discovery_prefixes"])
         self.assertNotIn("minLength", fields["watch_entities"])

@@ -53,6 +53,9 @@ equal friendly names do not merge entities, and discovery remains read-only.
 Explicitly watched weather entities show their condition and reported temperature
 with its supplied unit. Up to five legacy forecast entries can be shown when
 already present in the state; separate modern forecast retrieval remains pending.
+An explicitly configured read-only dishwasher profile combines its running state
+and reported runtime since midnight in the existing state card. It does not infer
+roles, add controls or calculate remaining time.
 Displayed state follows Home Assistant updates rather than assuming a service
 call changed the device.
 The worker owns its REST/WebSocket connection and isolated token. Other HA
