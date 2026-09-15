@@ -41,8 +41,9 @@ services. Clip/window acceptance is tracked separately from source implementatio
 Snapshots, optional HA proxy support, other camera adapters, and migration remain.
 A separately built [Home Assistant worker](desktop-plugins/home-assistant/README.md)
 adds authenticated connection status and state cards for a configured entity
-list. Read-only operation is the default; an explicit action list enables fixed
-HA button presses and scene activation through instance-bound plugin controls.
+list. Read-only operation is the default; explicit action lists enable fixed
+HA button presses, scene activation and media-player Play/Pause/Stop through
+instance-bound plugin controls.
 The worker owns its REST/WebSocket connection and isolated token. Other HA
 services, legacy UI parity, and migration remain tracked work; core inverter
 buttons continue to use MQTT independently.

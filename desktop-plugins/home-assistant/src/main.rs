@@ -55,7 +55,7 @@ async fn session(
         .send(json!({"type":"configuration_ready","revision":revision}))
         .await?;
     // Network work starts only after the configuration acknowledgement flushes.
-    let book = state::Book::new(&configuration.entities, &configuration.action_entities);
+    let book = state::Book::new(&configuration.entities, &configuration.actions());
     tokio::select! {
         result=actions::run(incoming,output,configuration.clone(),book.clone())=>result,
         result=state::publish(book.clone(),output.clone())=>result,

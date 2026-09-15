@@ -1,9 +1,10 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.2.0, requiring host API `^1.4`.
-Connection status and selected entity states are read-only by default. An explicit
-optional action list enables fixed button presses and scene activation. There is
+`inverter-desktop.home-assistant`, version 0.3.0, requiring host API `^1.4`.
+Connection status and selected entity states are read-only by default. Explicit
+optional action lists enable fixed button presses, scene activation and media
+transport. There is
 no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
 camera authority or dependency on the bundled HA client.
 
@@ -34,21 +35,27 @@ the core telemetry connection.
 - `watch_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Separate entity IDs with commas or newlines. Blank entries are ignored and
   duplicate IDs count once. The ordered union with action targets is limited to
-  32 entities: watched IDs come first, followed by previously unseen action IDs.
+  32 entities: watched IDs come first, followed by previously unseen button/scene
+  targets and then media-player targets.
   Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
 - `action_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Explicitly select up to 16 unique literal `button.*` or `scene.*` IDs separated
   by commas or newlines. Targets are also watched within the total 32-entity
-  limit. Only this list enables actions; selecting an entity for reads never does.
+  limit. Only this list enables button/scene actions; selecting an entity for reads never does.
   Other domains and arbitrary service definitions are rejected.
+- `media_player_entities`: optional string, default empty, at most 4,096 UTF-8
+  bytes. Explicitly select up to four unique literal `media_player.*` IDs separated
+  by commas or newlines. Each selected player offers Play, Pause and Stop and is
+  watched within the shared 32-entity limit. This list does not alter button/scene
+  action indices. Watching a media player alone grants no transport actions.
 - `ha_token`: required write-only token, 1–4,096 bytes of visible ASCII without
   whitespace or control characters. It is not read from core configuration or
   placed in arguments, inherited environment, dashboard contributions or logs.
   The token retains its account's Home Assistant permissions; this package does
   not create a restricted server-side token. Reads and explicitly selected
-  button/scene actions use that token.
+  button/scene/media actions use that token.
 
 With a nonempty combined selection, initial REST reads request only
 `/api/states/<entity_id>` beneath the configured prefix. The worker never requests
@@ -58,10 +65,10 @@ all entities**: the worker immediately discards unwatched entities and retains
 only its configured list. This is local filtering, not a claim of server-side
 subscription filtering or token-level access restriction.
 
-When both lists are empty, the worker still establishes the authenticated
+When all three lists are empty, the worker still establishes the authenticated
 WebSocket connection for connection status, but makes no entity REST reads or
 event subscription. A change
-to either list is applied through the normal settings restart. Entity state
+to any list is applied through the normal settings restart. Entity state
 and labels are bounded plain data; the host renders contributions, and the worker
 supplies no frontend code or arbitrary navigation URLs.
 
@@ -105,7 +112,28 @@ updates, rather than assuming the HTTP result proves a physical device change.
 Host API 1.4 binds each dashboard click to the actual displayed worker instance
 and exact preset. A settings restart or reinstall cannot redirect an old click
 to a newly configured target, even if a generation counter or action ID repeats.
-Empty action configuration preserves the existing read-only behavior.
+Both action lists must be empty to preserve the existing read-only behavior.
+
+## Explicit media-player transport
+
+Each configured, connected and observed media player offers three fixed actions:
+`ha-media-<index>-play`, `ha-media-<index>-pause` and `ha-media-<index>-stop`.
+Missing, deleted, `unknown` and `unavailable` players offer no actions. Labels
+identify the literal selected player; a state card continues to follow HA updates.
+
+Presets always have empty params. The worker sends POST beneath
+`<base>/api/services/media_player/`, choosing exactly `media_play`, `media_pause`
+or `media_stop`, with only `{"entity_id":"<literal target>"}` in the JSON body. Callers cannot select an
+arbitrary operation or target. Existing button/scene indices remain unchanged.
+All actions share the same two-request concurrency limit, response bound,
+remaining deadline, cancellation, no-retry and unknown-outcome handling described
+above. A successful response does not establish physical playback or undo effects
+after cancellation.
+
+At the configured limits, connection status, 32 state cards, 16 button/scene
+actions and 12 media actions produce at most 61 contributions. The maximum
+combined snapshot must also fit the existing 64 KiB frame limit. Media transport
+needs no new host UI contribution, permission or protocol version.
 
 The wire behavior follows the official
 [WebSocket API](https://developers.home-assistant.io/docs/api/websocket/) and

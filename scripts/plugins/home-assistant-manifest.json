@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "host_api": "^1.4",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",
@@ -28,7 +28,7 @@
       "ha_token": {
         "type": "string",
         "title": "Home Assistant token",
-        "description": "Required token for this plugin. Reads and explicitly selected button/scene actions use its existing Home Assistant account permissions.",
+        "description": "Required token for this plugin. Reads and explicitly selected actions use its existing Home Assistant account permissions.",
         "writeOnly": true,
         "minLength": 1,
         "maxLength": 4096
@@ -36,7 +36,14 @@
       "action_entities": {
         "type": "string",
         "title": "Buttons and scenes to control",
-        "description": "Optional explicit button.* and scene.* IDs, up to 16, separated by commas or newlines. Targets are also watched. Leave blank for read-only use. These actions can control household devices.",
+        "description": "Optional explicit button.* and scene.* IDs, up to 16, separated by commas or newlines. Targets are also watched. Leave blank to disable button and scene actions. These actions can control household devices.",
+        "maxLength": 4096,
+        "default": ""
+      },
+      "media_player_entities": {
+        "type": "string",
+        "title": "Media players to control",
+        "description": "Optional explicit media_player.* IDs, up to four, separated by commas or newlines. Targets are also watched. Offers Play, Pause and Stop. Leave blank to disable media actions.",
         "maxLength": 4096,
         "default": ""
       }
