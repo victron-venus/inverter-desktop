@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.5.0**, independently of the application version. The
+The current host API is **1.6.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -64,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.5.0",
+  "host_api_version": "1.6.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -76,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.5.0",
+  "host_api_version": "1.6.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -118,7 +118,7 @@ startup deadline covers both steps. Early contributions, missing/mismatched or
 duplicate acknowledgments fail that generation. Packages without configuration
 permission receive no configuration frame and complete startup after `ready`.
 Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
-are incompatible with a 1.5 host. The wire protocol and manifest remain version 1.
+are incompatible with a 1.6 host. The wire protocol and manifest remain version 1.
 A configured worker should declare an API requirement such as `^1.1`.
 
 The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
@@ -165,9 +165,10 @@ This extends the native dashboard boundary, not the worker wire schema. Existing
 worker Action/Cancel/ActionResult/ActionError messages stay at protocol version 1.
 HA 0.2–0.5 packages with fixed service actions require `^1.4`. HA 0.6 and 0.7 require
 `^1.5` for bounded numeric inputs as well. HA 0.7's optional read-only sensor
-discovery adds no host API, wire schema or contribution kind. Existing workers with compatible
-`^1.3` or `^1.4` ranges still negotiate the selected 1.5 version; Frigate retains
-its existing API range.
+discovery adds no host API, wire schema or contribution kind. HA 0.8 requires
+`^1.6` for explicit state/control grouping. Existing workers with compatible
+`^1.3`, `^1.4` or `^1.5` ranges still negotiate the selected 1.6 version; Frigate
+retains its existing API range and flat contributions.
 
 ## Dashboard contributions
 
@@ -216,6 +217,37 @@ Five contribution kinds are supported:
 The UI renders text using text bindings. A string such as `<b>example</b>` is
 literal text, not markup. Metric formatting and visual appearance belong to
 the host. A worker supplies data, not application code.
+
+## Grouped state and controls (host API 1.6)
+
+An `action` or `number_input` may include `state_id`, an optional contribution
+ID referring to a `text`, `metric` or `status` item in the same replacement
+snapshot. Omitted or null means a standalone control. Read-only items cannot
+declare this field. The host validates the reference even when its target follows
+the control in the array; blank, malformed, dangling, self and control-to-control
+references fail the snapshot. A reference cannot name another worker's item.
+
+For example, a cover status with `id: "shade-state"` and explicitly authorized
+Open, Close and position controls with `state_id: "shade-state"` appear together
+under the status title. The renderer retains state-card order and the original
+order of controls within each card. Friendly names and ID prefixes never establish
+ownership. Plain text, metric and status updates can replace the anchor's kind
+without changing its identity. Unreferenced controls retain their flat layout.
+
+References are presentation only. Each control stays in the flat snapshot and
+consumes its existing contribution slot; the 64-item and 64-KiB limits still apply.
+There are no nested groups, executable views or additional permissions. Referencing
+a read-only card never grants that card an action, and selecting or discovering
+a state never creates controls. Actions retain exact parameters and instance
+binding; numeric inputs retain their revision and constraints. Changing a group's
+title or layout cannot reset pending/uncertain operation feedback or widen a grant.
+An explicit move between state cards may reset an unsent numeric draft to the
+current observed value; it never submits that draft. A stable anchor preserves
+the editor through ordinary state/title updates.
+
+Workers emitting `state_id` must require host API `^1.6` or a compatible range
+excluding older hosts. Older workers can omit the field and retain their existing
+flat contributions while acknowledging the exact selected 1.6 version.
 
 ## Bounded numeric input authority (host API 1.5)
 

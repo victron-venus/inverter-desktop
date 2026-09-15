@@ -16,6 +16,7 @@ export type DashboardContribution =
       action_id: string
       label: string
       params: Record<string, unknown>
+      state_id?: string
     }
   | {
       kind: 'number_input'
@@ -23,6 +24,7 @@ export type DashboardContribution =
       title: string
       action_id: string
       label: string
+      state_id?: string
       unit?: string | null
       input_revision: string
       value_scaled: number

@@ -72,6 +72,77 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
+### Current checkpoint: grouped HA entity cards
+
+Start from verified main `e6de910`. Present each explicitly selected HA entity's
+state and already authorized controls in one generic desktop card. Keep the flat
+contribution and authority model, with an explicit optional `state_id` reference
+on controls. Do not infer ownership from friendly names, action IDs or HA domains.
+
+- [x] Extend host API to 1.6 with optional `state_id` on `action` and
+      `number_input`. Require a valid reference to an existing `text`, `metric`
+      or `status` contribution in the same snapshot. Reject dangling, self and
+      control-to-control references; retain unique IDs and the 64-item/64-KiB
+      limits without nested contributions or extra grouping slots.
+- [x] Preserve old flat contributions and compatible worker API ranges. Require
+      HA worker 0.8 to negotiate `^1.6`; update package metadata and compatibility
+      tests without changing wire/manifest schema versions or publisher policy.
+- [x] Produce references from the HA worker's exact configured entity ownership.
+      Group fixed actions and bounded number/cover-position inputs with their
+      existing state cards, retaining stable IDs, explicit selection order and
+      unchanged service targets/parameters. Discovery remains read-only.
+- [x] Render state and controls together through generic desktop components.
+      Preserve standalone contributions, readable state and accessible control
+      labels; separate identical IDs across plugins and identical friendly names
+      across entities. Keep the state anchor's ordering and control order.
+- [x] Preserve per-instance dispatch, exact action descriptors, numeric revisions
+      and value validation. Presentation changes must not unlock duplicate
+      pending operations, clear uncertain outcomes or change native authority.
+      Withdraw controls on unavailable state and clear revoked instances.
+- [x] Cover malformed references and compatibility in native protocol tests;
+      explicit ownership, state changes and frame bounds in worker tests; and
+      grouping, dispatch, pending/error feedback and numeric editing in Vue tests.
+- [x] Extend actual signed-package HA acceptance with state/control references,
+      unchanged service targets, unavailable/reconnect/settings lifecycle and
+      independent MQTT telemetry. Run all existing HA package scenarios against
+      the newly built release worker rather than a mock executable.
+- [x] Update English protocol, worker, packaging and application documentation.
+      Keep remaining appliance profiles, configuration migration, bundled-feature
+      removal and real-device acceptance explicitly open.
+- [x] Run appropriate formatting, lint, typechecking, frontend builds/tests,
+      native/worker checks, packaging and mobile boundary tests. Independently
+      review the implementation and inspect the rendered grouped cards.
+- [ ] Push a separate PR, address comments in English, pass final-head checks,
+      merge as authorized and verify canonical clean main and its source CI.
+
+This iteration changes presentation of already permitted controls. It does not
+add service operations, automatic control discovery, appliance role inference,
+plugin installation consent, mobile features or application-signing prerequisites.
+Bundled HA/cameras remain until their remaining parity and migration work passes.
+
+Local validation completed: strict worker/native Clippy and formatting;
+161 HA worker tests; 415 ordinary native tests; all nine opt-in installed-package
+scenarios explicitly selected (seven HA, two Frigate), each reporting one passed
+test with no ignored tests. The unchanged Frigate 0.2 worker's MQTT and clip
+lifecycles also pass on host API 1.6, verifying compatible flat contributions.
+Both real worker release binaries were built from this checkout.
+
+Frontend validation passed 377 desktop tests, 17 mobile tests and five build-profile
+tests, plus formatting, lint, typechecking and mobile/desktop builds. Packaging
+passed 27 tests and the native mobile boundary passed 29 tests. Independent
+reviews covered protocol authority, worker ownership, installed-fixture mapping,
+Vue identity/feedback and documentation consistency.
+
+The local browser fixture passed light/dark themes, a narrow 320px viewport,
+separate equally named entities, explicit Apply error feedback and control removal
+on disconnect. A maximum-length unbroken action label initially overflowed its
+card; scoped wrapping in the plugin contribution renderer fixed the observed
+689px content in a 248px container. The wrapped control remained clickable with
+no overflow in either theme. All 92 focused dashboard/numeric tests, typechecking,
+scoped formatting/lint and the desktop build passed after that correction.
+These fixtures do not establish graphical acceptance on Linux/Windows or behavior
+against a production HA installation or physical household devices.
+
 ### Completed checkpoint: Frigate motion worker and native notifications
 
 This iteration delivers a separately built first-party worker for Frigate MQTT

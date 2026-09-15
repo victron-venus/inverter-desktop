@@ -25,6 +25,35 @@ fn replace_inputs(entry: &WorkerEntry, items: Vec<DashboardContribution>) {
     entry.replace_contributions(items);
 }
 
+fn card_state(id: &str, text: &str) -> DashboardContribution {
+    DashboardContribution::Text {
+        id: id.into(),
+        title: "Entity".into(),
+        text: text.into(),
+    }
+}
+
+#[test]
+fn entity_card_grouping_never_creates_or_changes_static_action_authority() {
+    let control: DashboardContribution = serde_json::from_value(json!({
+        "kind":"action","id":"control","title":"Entity","action_id":"turn-on",
+        "label":"Turn on","params":{"value":true},"state_id":"state"
+    }))
+    .unwrap();
+    let mut items = vec![card_state("state", "On"), control];
+    super::super::protocol::validate_contributions(&items).unwrap();
+    assert!(advertises(&items, "turn-on", &json!({"value":true})));
+    assert!(!advertises(&items, "turn-on", &json!({"value":false})));
+    assert!(!advertises(&items, "state", &json!({})));
+    assert!(!advertises(&items, "control", &json!({"value":true})));
+    if let DashboardContribution::Action { state_id, .. } = &mut items[1] {
+        *state_id = None;
+    }
+    assert!(advertises(&items, "turn-on", &json!({"value":true})));
+    items.pop();
+    assert!(!advertises(&items, "turn-on", &json!({"value":true})));
+}
+
 fn fake_pipes() -> (WorkerPipes, mpsc::Receiver<Outgoing>) {
     let (writer, outgoing) = mpsc::channel(PIPE_QUEUE_CAPACITY);
     let (_incoming, frames) = mpsc::channel(1);
@@ -148,6 +177,86 @@ async fn numeric_actions_use_current_revision_and_exact_scaled_params_through_re
         .unwrap_err(),
         PluginError::Unavailable
     );
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn entity_card_regrouping_preserves_queued_numeric_grants_but_not_removed_controls() {
+    let host = PluginHost::default();
+    host.start(spec("numeric")).await.unwrap();
+    ready(&host).await;
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let generation = entry.snapshot().generation;
+    replace_inputs(&entry, vec![number_input()]);
+    let lease = entry
+        .numeric
+        .lock()
+        .unwrap()
+        .get("set-number")
+        .unwrap()
+        .clone();
+    for (index, state_id) in [Some("first"), Some("second"), None]
+        .into_iter()
+        .enumerate()
+    {
+        let mut control = number_input();
+        if let DashboardContribution::NumberInput {
+            state_id: target, ..
+        } = &mut control
+        {
+            *target = state_id.map(str::to_owned);
+        }
+        let items = vec![
+            card_state("first", &format!("Observed {index}")),
+            card_state("second", "Replacement display"),
+            control,
+        ];
+        assert!(!advertises(&items, "first", &number_params()));
+        replace_inputs(&entry, items);
+        let current = entry
+            .numeric
+            .lock()
+            .unwrap()
+            .get("set-number")
+            .unwrap()
+            .clone();
+        assert!(Arc::ptr_eq(&lease, &current));
+        assert!(!*lease.revoked.borrow());
+        let (pipes, mut outgoing) = fake_pipes();
+        let (reply, response) = oneshot::channel();
+        let (_cancel, cancellation) = watch::channel(false);
+        let mut pending = HashMap::new();
+        handle_control(
+            Control::Action {
+                request_id: format!("regroup-{index}"),
+                generation,
+                action_id: "set-number".into(),
+                params: number_params(),
+                numeric: Some(lease.clone()),
+                cancellation,
+                deadline: Instant::now() + Duration::from_secs(2),
+                reply,
+            },
+            &entry,
+            generation,
+            true,
+            &pipes,
+            &mut pending,
+        );
+        assert_eq!(pending.len(), 1);
+        assert!(
+            matches!(outgoing.try_recv().unwrap(), Outgoing::Action { numeric: Some(guard), .. }
+            if Arc::ptr_eq(&guard.lease, &lease))
+        );
+        drop(response);
+    }
+    replace_inputs(&entry, vec![card_state("first", "Still visible")]);
+    assert!(*lease.revoked.borrow());
+    assert!(!advertises(
+        &entry.snapshot().contributions,
+        "set-number",
+        &number_params()
+    ));
     host.shutdown().await;
 }
 

@@ -48,6 +48,8 @@ switch/helper/light on/off commands, supported cover Open/Close/Stop, bounded
 numbers and cover positions through instance-bound plugin controls. Numeric
 changes require explicit Apply within the advertised bounds and step; position
 writes require a separate selection. Cover capabilities update the available actions.
+Each entity's state and explicitly selected controls appear together in a card;
+equal friendly names do not merge entities, and discovery remains read-only.
 Displayed state follows Home Assistant updates rather than assuming a service
 call changed the device.
 The worker owns its REST/WebSocket connection and isolated token. Other HA

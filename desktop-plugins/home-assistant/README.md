@@ -1,13 +1,24 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.7.0, requiring host API `^1.5`.
+`inverter-desktop.home-assistant`, version 0.8.0, requiring host API `^1.6`.
 Connection status and selected entity states are read-only by default. Optional
 sensor-prefix discovery fills unused state slots without granting actions. Explicit
 optional action lists enable fixed button presses, scene activation, media
 transport, on/off controls, cover Open/Close/Stop, bounded numbers and cover positions. There is
 no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
 camera authority or dependency on the bundled HA client.
+
+Each selected entity's state and explicitly enabled controls appear in one
+desktop card. The worker links controls to the existing state contribution with
+`state_id`, using exact configured entity ownership. Equal friendly names do not
+merge entities. Cover transport and position controls share the same state card;
+read-only selections and discoveries remain without controls. The flat snapshot,
+stable contribution/action IDs and 32-state/31-control limits are unchanged.
+Availability and capability changes withdraw or restore controls under the same
+state anchor; grouping adds no service authority and does not alter input revisions.
+Appliance role layouts, entity-picker UI and legacy configuration migration remain
+separate work.
 
 The existing desktop HA integration remains bundled until its remaining features
 have package parity. Android and iOS contain neither this worker nor the shared
