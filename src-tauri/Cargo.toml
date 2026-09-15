@@ -63,6 +63,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 semver = "1"
+tokio = { version = "1", features = ["test-util"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Dialog selections are SAF content URIs; this existing transitive dependency

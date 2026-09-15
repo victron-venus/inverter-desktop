@@ -227,7 +227,7 @@ assets, imports or runtime capabilities into Android/iOS.
 - [x] Run relevant frontend, native, worker, packaging and mobile tests, strict
       lint, fresh frontend/release builds and staging with serialized local load.
       Complete independent source, authorization and acceptance reviews.
-- [ ] Push the separate PR, resolve comments in English, pass final-head CI and
+- [x] Push the separate PR, resolve comments in English, pass final-head CI and
       synchronize clean main after the authorized merge.
 
 Local acceptance passes: 51 HA worker unit tests, 56 action subprocess tests,
@@ -264,8 +264,45 @@ storage through upgrade, editor save and reread. Empty numeric selections no
 longer add 50 bytes to an existing envelope or redundant keys to storage;
 one-byte overflow still fails. Other schemas retain default delivery semantics.
 Independent host, frontend, worker, JSON parsing, settings, installed-fixture and
-documentation reviews have no open findings. Hosted checks and the merge receipt
-remain pending for this separate PR.
+documentation reviews have no open findings. PR #436 passed all 41 executed
+checks on final head `870c6a2` (three conditional checks skipped), received
+approval on that exact head and merged as `4d6f016`. The canonical checkout
+fast-forwarded cleanly to that merge with an identical tested source tree;
+all six stashes and the private local guide remained intact.
+
+### Post-merge checkpoint: deterministic media idle-time acceptance
+
+The release workflow on `4d6f016` exposed a scheduling-dependent failure in
+`progressive_progress_survives_idle_limit_but_stall_retries`: 406 native tests
+passed, one failed and eight dedicated acceptance scenarios were intentionally
+excluded from the ordinary suite. The failed assertion received `Network`
+instead of a completed clip. This aggregate error does not distinguish a
+late response header from a late progressive body frame. The fixture held its
+first connection for 160 ms before accepting the retry, leaving about 45 ms
+of the next 100 ms read deadline, and used wall-clock 30 ms chunk sleeps.
+
+- [x] Inspect the exact failed job log and independently review both the fixture
+      and the production read-timeout/reset behavior before changing code.
+- [x] Replace wall-clock pacing with a paused test clock and explicit socket/file
+      progress, while keeping real HTTP transfer and media-file ownership.
+- [x] Prove the stalled connection is closed by the client after its idle limit,
+      accept exactly one retry, and persist each progressive byte before advancing
+      time. Require exact final bytes after total progress exceeds the idle limit.
+- [x] Keep production transfer policy and implementation unchanged; limit time
+      control to test dependencies and bound external I/O waits by real time.
+- [x] Run the focused regression, the native media suite, strict Clippy and
+      formatting; independently review the correction and record the evidence.
+- [ ] Push the correction PR, address English review comments, merge only after
+      final-head checks pass, and verify the resulting main workflows.
+
+The failed post-merge job is
+[release Rust job 104286699022](https://github.com/victron-venus/inverter-desktop/actions/runs/34940110259/job/104286699022).
+The corrected exact regression and all 16 native media tests pass locally.
+Strict all-target Clippy and Rust formatting pass. Independent review verifies
+actual media-file identity, timer settling before the idle/backoff transitions,
+120 ms of progressive transfer against the 100 ms idle bound, two observed GETs,
+exact final bytes and complete owned-file cleanup. Hosted correction checks and
+the follow-up merge receipt remain pending.
 
 Discovery, appliance/weather presentation, other camera adapters, legacy
 configuration migration, removal of bundled desktop integrations and production
