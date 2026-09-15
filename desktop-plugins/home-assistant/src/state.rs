@@ -428,7 +428,7 @@ impl Book {
                 let label = format!("{verb}{}", bounded(&entity.title, 128 - verb.len()));
                 items.push(json!({"kind":"action","id":action.id,
                     "title":entity.title,"action_id":action.id,
-                    "label":label,"params":{}}));
+                    "label":label,"params":{},"state_id":entity.item["id"]}));
             }
         }
         if self.link.borrow().connected {
@@ -448,7 +448,7 @@ impl Book {
                 let constraints = &observation.constraints;
                 items.push(json!({"kind":"number_input","id":input.action.id,
                     "title":entity.title,"action_id":input.action.id,"label":label,
-                    "unit":constraints.unit,"input_revision":input.token(),
+                    "state_id":entity.item["id"],"unit":constraints.unit,"input_revision":input.token(),
                     "value_scaled":observation.value,"min_scaled":constraints.min,
                     "max_scaled":constraints.max,"step_scaled":constraints.step,
                     "decimal_places":constraints.decimal_places}));
@@ -477,6 +477,126 @@ pub async fn publish(shared: Shared, output: Output) -> Result<(), &'static str>
 mod tests {
     use super::*;
     use crate::config::configured_actions;
+
+    fn assert_grouped_frame(frame: &Value, config: &crate::config::Validated) {
+        let items = frame["items"].as_array().unwrap();
+        let controls = config
+            .actions()
+            .into_iter()
+            .chain(config.inputs())
+            .collect::<Vec<_>>();
+        for item in items {
+            if matches!(item["kind"].as_str(), Some("action" | "number_input")) {
+                let control = controls
+                    .iter()
+                    .find(|control| item["action_id"] == control.id)
+                    .unwrap();
+                let index = config
+                    .entities
+                    .iter()
+                    .position(|entity| *entity == control.entity)
+                    .unwrap();
+                assert_eq!(item["state_id"], format!("entity-{index}"));
+                let state = items
+                    .iter()
+                    .find(|state| state["id"] == item["state_id"])
+                    .unwrap();
+                assert!(matches!(
+                    state["kind"].as_str(),
+                    Some("text" | "metric" | "status")
+                ));
+            } else {
+                assert!(item.get("state_id").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn grouping_uses_explicit_identity_without_changing_admission_or_read_only_rows() {
+        let config: crate::config::Configuration = serde_json::from_value(json!({
+            "revision":"grouped-identity", "values":{"ha_base_url":"http://localhost",
+                "watch_entities":"number.read_only,number.a,button.b,button.a,button.b",
+                "action_entities":"button.a,button.b", "number_entities":"number.a",
+                "discovery_prefixes":"sensor."}, "secrets":{"ha_token":"fixture"}
+        }))
+        .unwrap();
+        let config = config.validate().unwrap();
+        let shared = Book::with_discovery(
+            &config.entities,
+            &config.actions(),
+            &config.inputs(),
+            &config.discovery_prefixes,
+        );
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        for entity in &config.entities {
+            let mut state = number_state("0");
+            state["entity_id"] = json!(entity);
+            state["attributes"]["friendly_name"] = json!("Same title");
+            book.live(entity, Some(&state));
+        }
+        book.discovery_snapshot(&[json!({"entity_id":"sensor.discovered","state":"0","attributes":{"friendly_name":"Same title"}})]);
+        let frame = book.frame();
+        assert_grouped_frame(&frame, &config);
+        assert_eq!(frame["items"].as_array().unwrap().len(), 9);
+        assert_eq!(input_item(&book, "ha-action-0")["state_id"], "entity-3");
+        assert_eq!(input_item(&book, "ha-action-1")["state_id"], "entity-2");
+        let number = input_item(&book, "ha-number-0-set");
+        assert_eq!(number["state_id"], "entity-1");
+        let params = json!({"input_revision":number["input_revision"],"value_scaled":0});
+        assert!(book.action_target("ha-action-0").is_none());
+        assert_eq!(
+            book.input_target("ha-number-0-set", &params).err(),
+            Some("unavailable")
+        );
+        book.mark_published();
+        assert_eq!(
+            book.action_target("ha-action-0").unwrap().entity,
+            "button.a"
+        );
+        assert_eq!(
+            book.action_target("ha-action-1").unwrap().entity,
+            "button.b"
+        );
+        assert_eq!(
+            book.input_target("ha-number-0-set", &params)
+                .unwrap()
+                .0
+                .entity,
+            "number.a"
+        );
+        for id in [
+            "entity-0",
+            "entity-1",
+            "entity-2",
+            "entity-3",
+            "discovery-0",
+        ] {
+            assert!(book.action_target(id).is_none());
+            assert_eq!(book.input_target(id, &params).err(), Some("invalid_action"));
+        }
+        book.disconnected();
+        assert_grouped_frame(&book.frame(), &config);
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            book.input_target("ha-number-0-set", &params).err(),
+            Some("unavailable")
+        );
+        book.begin_session();
+        book.connected();
+        book.initial("number.a", Some(&number_state("0")));
+        assert_grouped_frame(&book.frame(), &config);
+        assert_eq!(
+            input_item(&book, "ha-number-0-set")["state_id"],
+            number["state_id"]
+        );
+        assert_ne!(
+            input_item(&book, "ha-number-0-set")["input_revision"],
+            number["input_revision"]
+        );
+        assert!(book.action_target("ha-action-0").is_none());
+    }
 
     #[test]
     fn late_initial_state_cannot_replace_live_or_deleted_state() {
@@ -575,7 +695,7 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert_eq!(
             actions[0],
-            json!({"kind":"action","id":"ha-action-0","title":"A name","action_id":"ha-action-0","label":"Press A name","params":{}})
+            json!({"kind":"action","id":"ha-action-0","title":"A name","action_id":"ha-action-0","label":"Press A name","params":{},"state_id":"entity-0"})
         );
         assert_eq!(actions[1]["label"], "Activate A name");
         assert!(book.action_target("ha-action-0").is_none());
@@ -680,7 +800,7 @@ mod tests {
         {
             assert_eq!(
                 items[7 + offset],
-                json!({"kind":"action","id":format!("ha-media-0-{verb}"),"title":"Living room","action_id":format!("ha-media-0-{verb}"),"label":label,"params":{}})
+                json!({"kind":"action","id":format!("ha-media-0-{verb}"),"title":"Living room","action_id":format!("ha-media-0-{verb}"),"label":label,"params":{},"state_id":"entity-2"})
             );
         }
         book.mark_published();
@@ -773,7 +893,7 @@ mod tests {
                         items[5 + index * 2 + offset],
                         json!({
                             "kind":"action","id":id,"action_id":id,"title":"Room control",
-                            "label":format!("Turn {verb} Room control"),"params":{}
+                            "label":format!("Turn {verb} Room control"),"params":{},"state_id":format!("entity-{index}")
                         })
                     );
                     assert_eq!(book.action_target(&id).unwrap().entity, *name);
@@ -930,7 +1050,7 @@ mod tests {
                 let id = format!("ha-cover-0-{verb}");
                 assert_eq!(
                     items[14 + offset],
-                    json!({"kind":"action","id":id,"action_id":id,"title":"Shade","label":label,"params":{}})
+                    json!({"kind":"action","id":id,"action_id":id,"title":"Shade","label":label,"params":{},"state_id":"entity-4"})
                 );
                 assert_eq!(book.action_target(&id).unwrap().entity, "cover.shade");
             }
@@ -1153,6 +1273,7 @@ mod tests {
                 }
                 book.frame()
             };
+            assert_grouped_frame(&frame, &config);
             let items = frame["items"].as_array().unwrap();
             assert_eq!(items.len(), 64);
             assert_eq!(
@@ -1241,6 +1362,7 @@ mod tests {
                 }
                 book.frame()
             };
+            assert_grouped_frame(&frame, &config);
             let items = frame["items"].as_array().unwrap();
             let action_buttons = action_count + 3 * media_count + 2 * binary_count;
             assert_eq!(items.len(), 33 + action_buttons);
@@ -1499,6 +1621,7 @@ mod tests {
             }
             book.frame()
         };
+        assert_grouped_frame(&frame, &config);
         let items = frame["items"].as_array().unwrap();
         assert_eq!(items.len(), 64);
         assert_eq!(
@@ -1786,6 +1909,7 @@ mod tests {
                 }
                 book.frame()
             };
+            assert_grouped_frame(&frame, &config);
             let items = frame["items"].as_array().unwrap();
             assert_eq!(items.len(), 64);
             assert_eq!(

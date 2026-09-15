@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.5.0";
+pub const HOST_API_VERSION: &str = "1.6.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -173,6 +173,9 @@ pub enum DashboardContribution {
     Action {
         id: String,
         title: String,
+        /// Presentation-only reference to a read-only item in this snapshot.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state_id: Option<String>,
         action_id: String,
         label: String,
         params: Value,
@@ -180,6 +183,9 @@ pub enum DashboardContribution {
     NumberInput {
         id: String,
         title: String,
+        /// Presentation-only reference; never part of a numeric grant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state_id: Option<String>,
         action_id: String,
         label: String,
         unit: Option<String>,
@@ -192,7 +198,7 @@ pub enum DashboardContribution {
     },
 }
 
-/// Numeric authority excludes observed value and presentation-only name/label.
+/// Numeric authority excludes observed value and presentation-only name/label/group.
 /// Comparing every constraint also protects against a worker reusing a revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NumberInputGrant {
@@ -589,8 +595,20 @@ impl DashboardContribution {
         }
     }
 
+    fn state_id(&self) -> Option<&str> {
+        match self {
+            Self::Action { state_id, .. } | Self::NumberInput { state_id, .. } => {
+                state_id.as_deref()
+            }
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         token(self.id(), "contribution id")?;
+        if let Some(state_id) = self.state_id() {
+            token(state_id, "contribution state id")?;
+        }
         let title = match self {
             Self::Text {
                 title, text: body, ..
@@ -667,10 +685,27 @@ pub fn validate_contributions(items: &[DashboardContribution]) -> Result<(), Str
     let mut ids = HashSet::new();
     let mut actionable = HashSet::new();
     let mut numeric = HashSet::new();
+    // Resolve references from the complete replacement snapshot, independent of
+    // order. Read-only anchors cannot form nested groups or grant actions.
+    let states: HashSet<_> = items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                DashboardContribution::Text { .. }
+                    | DashboardContribution::Metric { .. }
+                    | DashboardContribution::Status { .. }
+            )
+        })
+        .map(DashboardContribution::id)
+        .collect();
     for item in items {
         item.validate()?;
         if !ids.insert(item.id()) {
             return Err("duplicate dashboard contribution id".into());
+        }
+        if item.state_id().is_some_and(|id| !states.contains(id)) {
+            return Err("control state id must reference a read-only contribution".into());
         }
         match item {
             DashboardContribution::NumberInput { action_id, .. } => {
@@ -1213,6 +1248,7 @@ mod tests {
         assert!(DashboardContribution::Action {
             id: "action".into(),
             title: "Title".into(),
+            state_id: None,
             action_id: "do-work".into(),
             label: "Run".into(),
             params: json!(["unsupported"]),
@@ -1237,6 +1273,119 @@ mod tests {
             "max_scaled":25,"step_scaled":5,"decimal_places":1
         }))
         .unwrap()
+    }
+
+    fn static_card() -> DashboardContribution {
+        serde_json::from_value(json!({
+            "kind":"action","id":"turn-on","title":"Switch",
+            "action_id":"switch-on","label":"Turn on","params":{}
+        }))
+        .unwrap()
+    }
+
+    fn with_state_id(item: DashboardContribution, state_id: Value) -> DashboardContribution {
+        let mut value = serde_json::to_value(item).unwrap();
+        value["state_id"] = state_id;
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn entity_card_references_round_trip_without_changing_legacy_wire_shape() {
+        let anchors = [
+            text_card("state"),
+            serde_json::from_value(json!({
+                "kind":"metric","id":"state","title":"Temperature","value":21.5
+            }))
+            .unwrap(),
+            serde_json::from_value(json!({
+                "kind":"status","id":"state","title":"Switch","value":"On","tone":"success"
+            }))
+            .unwrap(),
+        ];
+        for control in [static_card(), numeric_card()] {
+            assert!(serde_json::to_value(&control)
+                .unwrap()
+                .get("state_id")
+                .is_none());
+            let absent = with_state_id(control.clone(), Value::Null);
+            assert_eq!(absent, control);
+            assert!(serde_json::to_value(absent)
+                .unwrap()
+                .get("state_id")
+                .is_none());
+            let grouped = with_state_id(control, json!("state"));
+            for anchor in &anchors {
+                // References can precede their anchor on the wire.
+                let frame = WorkerMessage::Contributions {
+                    items: vec![grouped.clone(), anchor.clone()],
+                };
+                let bytes = serde_json::to_vec(&frame).unwrap();
+                assert_eq!(parse_worker_frame(&bytes).unwrap(), frame);
+            }
+        }
+    }
+
+    #[test]
+    fn entity_cards_reject_dangling_recursive_and_malformed_references() {
+        for control in [static_card(), numeric_card()] {
+            for state_id in [
+                "".to_owned(),
+                "../state".to_owned(),
+                "state name".to_owned(),
+                "x".repeat(129),
+                "missing".to_owned(),
+                control.id().to_owned(),
+            ] {
+                let grouped = with_state_id(control.clone(), json!(state_id));
+                assert!(validate_contributions(&[text_card("state"), grouped]).is_err());
+            }
+            for target in [static_card(), numeric_card()] {
+                if target.id() == control.id() {
+                    continue;
+                }
+                let grouped = with_state_id(control.clone(), json!(target.id()));
+                assert!(validate_contributions(&[target, grouped]).is_err());
+            }
+            for invalid in [json!(true), json!(1), json!([]), json!({})] {
+                let mut value = serde_json::to_value(&control).unwrap();
+                value["state_id"] = invalid;
+                assert!(serde_json::from_value::<DashboardContribution>(value).is_err());
+            }
+        }
+        // Read-only items cannot themselves acquire parent links or controls.
+        let mut readonly = serde_json::to_value(text_card("state")).unwrap();
+        readonly["state_id"] = json!("other");
+        assert!(serde_json::from_value::<DashboardContribution>(readonly).is_err());
+        // An anchor from a previous snapshot cannot satisfy a new reference.
+        validate_contributions(&[text_card("state")]).unwrap();
+        let grouped = with_state_id(static_card(), json!("state"));
+        assert!(validate_contributions(&[grouped]).is_err());
+    }
+
+    #[test]
+    fn entity_card_members_keep_snapshot_count_and_frame_bounds() {
+        let anchor = "s".repeat(128);
+        let mut items = vec![text_card(&anchor)];
+        for index in 1..MAX_CONTRIBUTIONS {
+            let mut value = serde_json::to_value(static_card()).unwrap();
+            value["id"] = json!(format!("action-{index}"));
+            value["state_id"] = json!(anchor);
+            items.push(serde_json::from_value(value).unwrap());
+        }
+        validate_worker_message(&WorkerMessage::Contributions {
+            items: items.clone(),
+        })
+        .unwrap();
+        items.push(text_card("another-state"));
+        assert!(validate_contributions(&items).is_err());
+        items.pop();
+        for item in &mut items {
+            if let DashboardContribution::Action { params, .. } = item {
+                *params = json!({"value":"x".repeat(2048)});
+            }
+        }
+        validate_contributions(&items).unwrap();
+        assert!(validate_worker_message(&WorkerMessage::Contributions { items }).is_err());
     }
 
     #[test]
@@ -1329,6 +1478,7 @@ mod tests {
         let static_action = DashboardContribution::Action {
             id: "preset".into(),
             title: "Preset".into(),
+            state_id: None,
             action_id: "set-temperature".into(),
             label: "Set".into(),
             params: json!({"input_revision":"input-1","value_scaled":0}),
@@ -1349,16 +1499,16 @@ mod tests {
     }
 
     #[test]
-    fn host_api_15_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
-        assert_eq!(HOST_API_VERSION, "1.5.0");
-        for requirement in ["^1.3", "^1.4", "^1.5"] {
+    fn host_api_16_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
+        assert_eq!(HOST_API_VERSION, "1.6.0");
+        for requirement in ["^1.0", "^1.3", "^1.4", "^1.5", "^1.6"] {
             let mut manifest = manifest();
             manifest.host_api = requirement.into();
             manifest.validate().unwrap();
         }
-        assert!(validate_versions(1, "1.5.0").is_ok());
-        assert!(validate_versions(1, "1.4.0").is_err());
-        assert!(validate_versions(2, "1.5.0").is_err());
+        assert!(validate_versions(1, "1.6.0").is_ok());
+        assert!(validate_versions(1, "1.5.0").is_err());
+        assert!(validate_versions(2, "1.6.0").is_err());
     }
 
     #[test]

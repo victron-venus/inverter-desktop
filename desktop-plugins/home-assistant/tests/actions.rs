@@ -82,9 +82,9 @@ impl Worker {
                 let text = String::from_utf8(bytes).unwrap();
                 assert!(!text.contains(TOKEN));
                 assert!(!text.contains(PRIVATE_BODY));
-                sender
-                    .try_send(serde_json::from_str(&text).unwrap())
-                    .expect("bounded test output");
+                let frame = serde_json::from_str(&text).unwrap();
+                assert_state_links(&frame);
+                sender.try_send(frame).expect("bounded test output");
             }
         });
         let stderr = thread::spawn(move || {
@@ -143,7 +143,7 @@ impl Worker {
         assert_eq!(
             self.next(),
             json!({"type":"ready","protocol_version":1,
-            "host_api_version":"1.5.0","plugin_id":"inverter-desktop.home-assistant"})
+            "host_api_version":"1.6.0","plugin_id":"inverter-desktop.home-assistant"})
         );
         self.send(frame);
         assert_eq!(
@@ -225,8 +225,28 @@ impl Drop for Worker {
     }
 }
 
+fn assert_state_links(frame: &Value) {
+    if frame["type"] != "contributions" {
+        return;
+    }
+    let items = frame["items"].as_array().unwrap();
+    for control in items {
+        if matches!(control["kind"].as_str(), Some("action" | "number_input")) {
+            let state_id = control["state_id"].as_str().expect("explicit state link");
+            assert!(state_id.starts_with("entity-"));
+            let state = items.iter().find(|state| state["id"] == state_id).unwrap();
+            assert!(matches!(
+                state["kind"].as_str(),
+                Some("text" | "metric" | "status")
+            ));
+        } else {
+            assert!(control.get("state_id").is_none());
+        }
+    }
+}
+
 fn hello() -> Value {
-    json!({"type":"hello","protocol_version":1,"host_api_version":"1.5.0",
+    json!({"type":"hello","protocol_version":1,"host_api_version":"1.6.0",
         "plugin_id":"inverter-desktop.home-assistant"})
 }
 
@@ -2530,7 +2550,7 @@ fn numeric_service(fixture: &TcpListener, domain: &str, method: &str, body: &str
 }
 
 #[test]
-fn numeric_controls_are_opt_in_and_api_15_is_required() {
+fn numeric_controls_are_opt_in_and_api_16_is_required() {
     for empty in [false, true] {
         let fixture = listener();
         let mut worker = Worker::start();
@@ -2574,7 +2594,7 @@ fn numeric_controls_are_opt_in_and_api_15_is_required() {
     }
     let mut worker = Worker::start();
     let mut frame = hello();
-    frame["host_api_version"] = json!("1.4.0");
+    frame["host_api_version"] = json!("1.5.0");
     worker.send(frame);
     worker.finish(false);
 }
@@ -3238,6 +3258,8 @@ fn numeric_disconnect_and_new_session_invalidate_previous_input_revisions() {
     let frame = numeric_connected(&mut worker, 2);
     let current = item(&frame, "ha-number-0-set").unwrap();
     assert_ne!(current["input_revision"], previous["input_revision"]);
+    assert_eq!(current["state_id"], "entity-1");
+    assert_eq!(current["state_id"], previous["state_id"]);
     numeric_action(&mut worker, "previous-session", &previous, 0, 5000);
     worker.error("previous-session", "unavailable");
     numeric_action(&mut worker, "new-session", current, 0, 5000);
@@ -3944,5 +3966,132 @@ fn discovery_and_maximum_explicit_controls_fit_the_actual_64_contribution_frame(
     );
     worker.error("discovery-no-service", "invalid_action");
     no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn grouped_controls_follow_explicit_identity_across_duplicate_titles_and_live_withdrawal() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = discovery_configuration(
+        &fixture,
+        "sensor.barrier,cover.shade,number.second,switch.read_only,number.first,cover.shade",
+        Some("sensor.discovered"),
+    );
+    for (field, value) in [
+        ("action_entities", "button.first,scene.first"),
+        ("media_player_entities", "media_player.den"),
+        ("binary_entities", "switch.first"),
+        ("cover_entities", "cover.shade"),
+        ("number_entities", "number.first,number.second,number.first"),
+        ("cover_position_entities", "cover.shade"),
+    ] {
+        config["configuration"]["values"][field] = json!(value);
+    }
+    let (mut socket, mut snapshot) = start_discovery(&mut worker, &fixture, config);
+    for name in [
+        "cover.shade",
+        "number.second",
+        "switch.read_only",
+        "number.first",
+        "button.first",
+        "scene.first",
+        "media_player.den",
+        "switch.first",
+    ] {
+        let mut state = match name.split_once('.').unwrap().0 {
+            "cover" => position_entity(name, "closed", json!(15), json!(20)),
+            "number" => number_entity(name, "-0.3"),
+            "switch" => entity(name, "off"),
+            "media_player" => entity(name, "paused"),
+            _ => entity(name, "unknown"),
+        };
+        state["attributes"]["friendly_name"] = json!("Same name");
+        live(&mut socket, name, Some(state));
+    }
+    let mut discovered = entity("sensor.discovered_same_name", "off");
+    discovered["attributes"]["friendly_name"] = json!("Same name");
+    respond(&mut snapshot, 200, json!([discovered]));
+    worker.until(|frame| frame["type"] == "contributions" && discovery_items(frame).len() == 1);
+    let frame = numeric_barrier(&mut worker, &mut socket, 2);
+    let mapping = [
+        ("ha-action-0", "entity-5"),
+        ("ha-action-1", "entity-6"),
+        ("ha-media-0-play", "entity-7"),
+        ("ha-media-0-pause", "entity-7"),
+        ("ha-media-0-stop", "entity-7"),
+        ("ha-binary-0-on", "entity-8"),
+        ("ha-binary-0-off", "entity-8"),
+        ("ha-cover-0-open", "entity-1"),
+        ("ha-cover-0-close", "entity-1"),
+        ("ha-cover-0-stop", "entity-1"),
+        ("ha-number-0-set", "entity-4"),
+        ("ha-number-1-set", "entity-2"),
+        ("ha-cover-position-0-set", "entity-1"),
+    ];
+    assert_eq!(frame["items"].as_array().unwrap().len(), 24);
+    assert_eq!(actions(&frame).len() + inputs(&frame).len(), mapping.len());
+    for (id, state_id) in mapping {
+        let control = item(&frame, id).unwrap();
+        assert_eq!(control["state_id"], state_id);
+        assert_eq!(control["title"], "Same name");
+        assert_eq!(item(&frame, state_id).unwrap()["title"], "Same name");
+    }
+    assert!(frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["state_id"] != "entity-3"));
+    let first = item(&frame, "ha-number-0-set").unwrap().clone();
+    let second = item(&frame, "ha-number-1-set").unwrap().clone();
+    let position = item(&frame, "ha-cover-position-0-set").unwrap().clone();
+    worker.action("grouped-button", "ha-action-0", 5000);
+    let mut response = service(&fixture, "button", "button.first");
+    respond(&mut response, 200, json!([]));
+    worker.success("grouped-button");
+    numeric_action(&mut worker, "grouped-second", &second, 0, 5000);
+    let mut response = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.second","value":0.0}"#,
+    );
+    respond(&mut response, 200, json!([]));
+    worker.success("grouped-second");
+    worker.send(action_frame(
+        "group-is-not-authority",
+        "ha-action-0",
+        json!({"state_id":"entity-3"}),
+        5000,
+    ));
+    worker.error("group-is-not-authority", "invalid_action");
+    live(&mut socket, "number.first", None);
+    let mut state = position_entity("cover.shade", "opening", json!(4), json!(60));
+    state["attributes"]["friendly_name"] = json!("Renamed shade");
+    live(&mut socket, "cover.shade", Some(state));
+    let frame = numeric_barrier(&mut worker, &mut socket, 3);
+    assert!(item(&frame, "ha-number-0-set").is_none());
+    assert!(item(&frame, "ha-cover-0-open").is_none());
+    assert_eq!(item(&frame, "entity-4").unwrap()["value"], "Unavailable");
+    assert_eq!(item(&frame, "ha-number-1-set").unwrap(), &second);
+    let current_position = item(&frame, "ha-cover-position-0-set").unwrap();
+    assert_eq!(current_position["state_id"], position["state_id"]);
+    assert_eq!(
+        current_position["input_revision"],
+        position["input_revision"]
+    );
+    assert_eq!(current_position["title"], "Renamed shade");
+    numeric_action(&mut worker, "withdrawn-group", &first, 0, 5000);
+    worker.error("withdrawn-group", "unavailable");
+    let mut restored = number_entity("number.first", "0");
+    restored["attributes"]["friendly_name"] = json!("Renamed number");
+    live(&mut socket, "number.first", Some(restored));
+    let frame = numeric_barrier(&mut worker, &mut socket, 4);
+    let restored = item(&frame, "ha-number-0-set").unwrap();
+    assert_eq!(restored["state_id"], first["state_id"]);
+    assert_ne!(restored["input_revision"], first["input_revision"]);
+    assert_eq!(restored["title"], "Renamed number");
+    assert_eq!(item(&frame, "ha-number-1-set").unwrap(), &second);
+    no_request(&fixture, Duration::from_millis(50));
     worker.stop(false);
 }

@@ -1,58 +1,35 @@
 <template>
-  <div v-if="plugins.length" class="flex flex-col gap-1.5">
-    <section v-for="plugin in plugins" :key="plugin.plugin_id" class="classic-card">
+  <div v-if="panels.length" class="flex flex-col gap-1.5">
+    <section
+      v-for="{ plugin, cards } in panels"
+      :key="JSON.stringify([plugin.plugin_id, plugin.instance_id])"
+      class="classic-card"
+      :data-plugin-id="plugin.plugin_id"
+    >
       <div class="classic-header break-words">{{ plugin.plugin_id }}</div>
       <output v-if="!canAct(plugin)" class="block px-2 py-1 text-[10px] text-muted">
         {{ $t('plugins.unavailable') }}
       </output>
       <div class="p-1 flex flex-col gap-1">
         <div
-          v-for="item in plugin.contributions"
-          :key="item.id"
-          class="px-1 py-0.5 min-w-0 break-words"
+          v-for="card in cards"
+          :key="card.item.id"
+          :data-card-id="card.item.id"
+          :data-state-card="card.controls.length ? card.item.id : undefined"
+          class="px-1 py-0.5 min-w-0 break-words flex flex-wrap items-start gap-1"
+          :class="{ 'classic-card p-1.5': card.controls.length }"
         >
-          <p class="text-[10px] font-medium text-muted">{{ item.title }}</p>
-          <p v-if="item.kind === 'text'" class="text-[11px] text-main whitespace-pre-wrap">
-            {{ item.text }}
-          </p>
-          <p v-else-if="item.kind === 'metric'" class="text-[11px] font-semibold text-main tabular">
-            {{ item.value }}{{ item.unit }}
-          </p>
-          <output
-            v-else-if="item.kind === 'status'"
-            class="text-[11px] font-semibold"
-            :class="statusClass[item.tone]"
-          >
-            {{ item.value }}
-          </output>
-          <template v-else-if="item.kind === 'action'">
-            <UiButton
-              size="sm"
-              :disabled="!canAct(plugin)"
-              :loading="pendingActions.has(actionKey(plugin.plugin_id, plugin.instance_id, item))"
-              :aria-label="`${item.title}: ${item.label}`"
-              @click="runAction(plugin.plugin_id, plugin.instance_id, item)"
-            >
-              {{ item.label }}
-            </UiButton>
-            <p
-              v-if="failedActions.has(actionKey(plugin.plugin_id, plugin.instance_id, item))"
-              role="alert"
-              class="text-[10px] text-consumption mt-0.5"
-            >
-              {{ $t('plugins.actionFailed') }}
-            </p>
-          </template>
-          <PluginNumberInput
-            v-else-if="item.kind === 'number_input'"
-            :key="`${plugin.instance_id}:${item.id}`"
-            :input="item"
+          <PluginContribution
+            v-for="(item, index) in [card.item, ...card.controls]"
+            :key="item.id"
+            :item="item"
+            :show-title="index === 0"
+            :class="{ 'w-full': index === 0 || item.kind === 'number_input' }"
             :disabled="!canAct(plugin)"
-            :pending="
-              pendingActions.has(numberInputKey(plugin.plugin_id, plugin.instance_id, item))
-            "
-            :failed="failedActions.has(numberInputKey(plugin.plugin_id, plugin.instance_id, item))"
-            @submit="
+            :pending="pendingActions.has(operationKey(plugin, item))"
+            :failed="failedActions.has(operationKey(plugin, item))"
+            @action="(action) => runAction(plugin.plugin_id, plugin.instance_id, action)"
+            @number="
               (input, value) => runNumberInput(plugin.plugin_id, plugin.instance_id, input, value)
             "
           />
@@ -63,10 +40,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import UiButton from '../../../components/UiButton.vue'
-import PluginNumberInput from './PluginNumberInput.vue'
+import { contributionCards } from './contributionCards'
+import PluginContribution from './PluginContribution.vue'
+import type { DashboardContribution, PluginSnapshot } from './types'
 import { createPluginDashboard } from './usePluginDashboard'
 
 const { t: $t } = useI18n()
@@ -81,12 +59,17 @@ const {
   numberInputKey,
   runNumberInput,
 } = dashboard
-const statusClass = {
-  neutral: 'text-main',
-  success: 'text-battery',
-  warning: 'text-solar',
-  error: 'text-consumption',
+const panels = computed(() =>
+  plugins.value.map((plugin) => ({ plugin, cards: contributionCards(plugin.contributions) }))
+)
+
+function operationKey(plugin: PluginSnapshot, item: DashboardContribution): string {
+  if (item.kind === 'action') return actionKey(plugin.plugin_id, plugin.instance_id, item)
+  if (item.kind === 'number_input')
+    return numberInputKey(plugin.plugin_id, plugin.instance_id, item)
+  return ''
 }
+
 onMounted(() => void dashboard.start())
 onUnmounted(dashboard.stop)
 </script>

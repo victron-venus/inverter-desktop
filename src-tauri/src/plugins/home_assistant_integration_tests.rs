@@ -818,7 +818,8 @@ async fn until(mut predicate: impl FnMut() -> bool) {
 }
 
 fn items(host: &PluginHost) -> Vec<Value> {
-    host.snapshots()
+    let items: Vec<Value> = host
+        .snapshots()
         .into_iter()
         .filter(|snapshot| snapshot.plugin_id == PLUGIN && snapshot.state == WorkerState::Running)
         .flat_map(|snapshot| {
@@ -827,7 +828,39 @@ fn items(host: &PluginHost) -> Vec<Value> {
                 .into_iter()
                 .map(|item| serde_json::to_value(item).unwrap())
         })
-        .collect()
+        .collect();
+    // Exercise the actual worker's references on every observed replacement,
+    // including reconnect, unavailable state, settings restart and discovery.
+    for item in &items {
+        if matches!(item["kind"].as_str(), Some("action" | "number_input")) {
+            let state_id = item["state_id"]
+                .as_str()
+                .expect("every HA control must name its explicit state card");
+            assert!(items.iter().any(|state| state["id"] == state_id
+                && matches!(state["kind"].as_str(), Some("text" | "metric" | "status"))));
+        } else {
+            assert!(
+                item.get("state_id").is_none(),
+                "read-only items cannot group controls"
+            );
+        }
+    }
+    items
+}
+
+fn assert_group(host: &PluginHost, state_id: &str, expected: &[&str]) {
+    let current = items(host);
+    assert!(current.iter().any(|item| item["id"] == state_id
+        && matches!(item["kind"].as_str(), Some("text" | "metric" | "status"))));
+    let controls: Vec<_> = current
+        .iter()
+        .filter(|item| item["state_id"] == state_id)
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        controls, expected,
+        "controls must retain exact entity ownership and order"
+    );
 }
 
 async fn connection(host: &PluginHost) {
@@ -1581,6 +1614,17 @@ async fn signed_home_assistant_package_actions() {
         assert_eq!(action["params"], json!({}));
         assert!(!action["label"].as_str().unwrap().is_empty());
     }
+    assert_group(&host, "entity-0", &[]);
+    assert_group(&host, "entity-1", &["ha-action-0"]);
+    assert_group(&host, "entity-2", &["ha-action-1"]);
+    for entity in ["button.do_not_supply_charger", "scene.evening"] {
+        origin.event(entity, Some(entity_state(entity, "unknown", "Same device")));
+    }
+    item_value(&host, "entity-1", "title", json!("Same device")).await;
+    item_value(&host, "entity-2", "title", json!("Same device")).await;
+    assert_group(&host, "entity-1", &["ha-action-0"]);
+    assert_group(&host, "entity-2", &["ha-action-1"]);
+    // Identical titles must not merge service targets or acquire core MQTT flags.
     for action_id in ["ha-action-0", "ha-action-1"] {
         assert_eq!(
             submit_action(&host, &first_instance, action_id, epoch)
@@ -2931,6 +2975,20 @@ async fn signed_home_assistant_package_numeric() {
     let first_instance = instance(&host);
     let number = numeric_input(&host, "ha-number-0-set");
     let position = numeric_input(&host, "ha-cover-position-0-set");
+    assert_group(&host, "entity-0", &[]);
+    assert_group(
+        &host,
+        "entity-1",
+        &[
+            "ha-cover-0-open",
+            "ha-cover-0-close",
+            "ha-cover-0-stop",
+            "ha-cover-position-0-set",
+        ],
+    );
+    assert_group(&host, "entity-2", &["ha-number-0-set"]);
+    assert_group(&host, "entity-3", &[]);
+    assert_group(&host, "entity-4", &[]);
     assert_eq!(number["value_scaled"], -3);
     assert_eq!(number["min_scaled"], -5);
     assert_eq!(number["max_scaled"], 5);
@@ -3155,6 +3213,7 @@ async fn signed_home_assistant_package_numeric() {
     );
     until(|| numeric_inputs(&host).len() == 2).await;
     let restored_number = numeric_input(&host, "ha-number-0-set");
+    assert_group(&host, "entity-2", &["ha-number-0-set"]);
     assert_ne!(
         restored_number["input_revision"],
         changed_number["input_revision"]
@@ -3198,6 +3257,16 @@ async fn signed_home_assistant_package_numeric() {
     );
     until(|| numeric_inputs(&host).len() == 2).await;
     let restored_position = numeric_input(&host, "ha-cover-position-0-set");
+    assert_group(
+        &host,
+        "entity-1",
+        &[
+            "ha-cover-0-open",
+            "ha-cover-0-close",
+            "ha-cover-0-stop",
+            "ha-cover-position-0-set",
+        ],
+    );
     assert_ne!(
         restored_position["input_revision"],
         position["input_revision"]
@@ -3274,6 +3343,8 @@ async fn signed_home_assistant_package_numeric() {
     assert!(actions(&host).is_empty());
     let next_number = numeric_input(&host, "ha-number-0-set");
     let next_position = numeric_input(&host, "ha-cover-position-0-set");
+    assert_group(&host, "entity-1", &["ha-number-0-set"]);
+    assert_group(&host, "entity-2", &["ha-cover-position-0-set"]);
     assert_eq!(
         host.action_in_epoch(
             PLUGIN,

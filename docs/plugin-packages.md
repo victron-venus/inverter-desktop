@@ -122,8 +122,11 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.7 retains host API
-`^1.5` and keeps service actions disabled unless `action_entities` explicitly
+worker supplies connection status and state cards. Version 0.8 requires host API
+`^1.6` to group each selected entity's state and explicitly authorized controls
+through validated `state_id` references. Existing IDs, parameters and numeric
+revisions retain their authority; equal friendly names do not merge entities.
+The worker keeps service actions disabled unless `action_entities` explicitly
 selects literal `button.*` or `scene.*` targets, `media_player_entities` selects
 literal media players, `binary_entities` selects literal switches, input booleans
 or lights, `cover_entities` selects literal covers, `number_entities` selects
