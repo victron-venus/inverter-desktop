@@ -191,14 +191,14 @@ struct FullConfig {
     auth_password: Option<String>,
     auth_biometric: Option<bool>,
 
-    /// When true, prefer remote inverter-gateway (Cloudflare Access + bearer) over LAN-only MQTT path (future live data).
+    /// Enable remote inverter-gateway as a data source alongside configured MQTT.
     #[serde(default)]
     gateway_enabled: bool,
-    /// Public HTTPS base URL, e.g. https://victron.example.com (no trailing slash required).
+    /// Direct or Cloudflare-protected HTTPS base URL (no trailing slash required).
     gateway_url: Option<String>,
-    /// Cloudflare Access Service Token Client ID (CF-Access-Client-Id).
+    /// Optional Cloudflare Access Service Token Client ID (CF-Access-Client-Id).
     gateway_access_client_id: Option<String>,
-    /// Cloudflare Access Service Token Client Secret (CF-Access-Client-Secret).
+    /// Optional Cloudflare Access Service Token Client Secret (CF-Access-Client-Secret).
     gateway_access_client_secret: Option<String>,
     /// Gateway API bearer (Authorization: Bearer … / GATEWAY_API_TOKEN).
     gateway_api_token: Option<String>,
@@ -1038,6 +1038,8 @@ async fn connect_gateway(
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
 ) -> Result<(), String> {
+    let url = gateway::validate_base_url(&url)?;
+    gateway::validate_access_credentials(&access_client_id, &access_client_secret)?;
     let lifecycle = app.state::<InverterLifecycle>();
     // Serialize shutdown, startup and slot installation across Tauri command threads.
     let _lifecycle = lifecycle
@@ -1120,7 +1122,7 @@ struct GatewayHealthResult {
     mqtt_connected: Option<bool>,
 }
 
-/// Probe remote inverter-gateway `/health` with Cloudflare Access + optional bearer.
+/// Probe remote inverter-gateway `/health` with optional Cloudflare Access and bearer.
 #[tauri::command]
 async fn test_gateway_connection(
     url: String,
@@ -1129,22 +1131,16 @@ async fn test_gateway_connection(
     api_token: Option<String>,
 ) -> Result<GatewayHealthResult, String> {
     let base = gateway::validate_base_url(&url)?;
-    if access_client_id.trim().is_empty() || access_client_secret.trim().is_empty() {
-        return Err("Cloudflare Access Client ID and Secret are required".into());
-    }
     let health_url = format!("{}/health", base);
     let client = gateway::http_client()?;
-    let mut req = client
-        .get(&health_url)
-        .header("CF-Access-Client-Id", access_client_id.trim())
-        .header("CF-Access-Client-Secret", access_client_secret.trim())
-        .header("User-Agent", "inverter-desktop/gateway-test");
-    if let Some(tok) = api_token {
-        let tok = tok.trim();
-        if !tok.is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", tok));
-        }
-    }
+    let req = gateway::authenticated_request(
+        client
+            .get(&health_url)
+            .header("User-Agent", "inverter-desktop/gateway-test"),
+        &access_client_id,
+        &access_client_secret,
+        api_token.as_deref().unwrap_or_default(),
+    )?;
     let resp = req
         .send()
         .await

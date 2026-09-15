@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   chooseStartupSource,
+  gatewayConfigError,
   isIgwConfigured,
   isMqttConfigured,
   MQTT_CONNECT_WATCHDOG_MS,
@@ -21,30 +22,55 @@ describe('isMqttConfigured', () => {
 })
 
 describe('isIgwConfigured', () => {
-  it('requires enabled + url + access credentials', () => {
+  const native = {
+    gateway_enabled: true,
+    gateway_url: 'https://igw.example',
+    gateway_api_token: 'read-token',
+  }
+
+  it.each([undefined, null, '', '  '])(
+    'accepts native HTTPS with absent Access fields (%s)',
+    (empty) => {
+      expect(
+        isIgwConfigured({
+          ...native,
+          gateway_access_client_id: empty,
+          gateway_access_client_secret: empty,
+        })
+      ).toBe(true)
+    }
+  )
+
+  it('accepts paired Access credentials and leaves bearer requirements to the server', () => {
     expect(
       isIgwConfigured({
-        gateway_enabled: true,
-        gateway_url: 'https://igw.example',
+        ...native,
+        gateway_api_token: null,
         gateway_access_client_id: 'id',
         gateway_access_client_secret: 'secret',
       })
     ).toBe(true)
-    expect(
-      isIgwConfigured({
-        gateway_enabled: true,
-        gateway_url: 'https://igw.example',
-        gateway_access_client_id: 'id',
-      })
-    ).toBe(false)
-    expect(
-      isIgwConfigured({
-        gateway_enabled: false,
-        gateway_url: 'https://igw.example',
-        gateway_access_client_id: 'id',
-        gateway_access_client_secret: 'secret',
-      })
-    ).toBe(false)
+    expect(isIgwConfigured({ ...native, gateway_api_token: null })).toBe(true)
+  })
+
+  it.each([
+    { gateway_access_client_id: 'id', gateway_access_client_secret: undefined },
+    { gateway_access_client_id: null, gateway_access_client_secret: 'secret' },
+    { gateway_access_client_id: 'id', gateway_access_client_secret: '  ' },
+    { gateway_access_client_id: '  ', gateway_access_client_secret: 'secret' },
+  ])('rejects incomplete Access credentials', (pair) => {
+    const config = { ...native, ...pair }
+    expect(isIgwConfigured(config)).toBe(false)
+    expect(gatewayConfigError(config)).toBe(
+      'Provide both Cloudflare Access fields or leave both blank'
+    )
+  })
+
+  it('requires an enabled gateway and non-empty URL', () => {
+    expect(isIgwConfigured({ ...native, gateway_enabled: false })).toBe(false)
+    expect(isIgwConfigured({ gateway_enabled: true })).toBe(false)
+    expect(isIgwConfigured({ ...native, gateway_url: '  ' })).toBe(false)
+    expect(gatewayConfigError({ gateway_url: '  ' })).toBe('Gateway URL is required')
   })
 })
 

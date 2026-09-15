@@ -9,6 +9,7 @@ export type ConnectionConfigSlice = {
   gateway_url?: string | null
   gateway_access_client_id?: string | null
   gateway_access_client_secret?: string | null
+  gateway_api_token?: string | null
 }
 
 /** Cerbo LAN MQTT looks configured (host present). */
@@ -16,14 +17,21 @@ export function isMqttConfigured(config: ConnectionConfigSlice): boolean {
   return Boolean(config.mqtt_host?.trim())
 }
 
-/** Remote IGW looks configured (enabled + URL + Access credentials). */
+/** Cloudflare Access is optional; a partially supplied pair is never usable. */
+export function gatewayConfigError(config: ConnectionConfigSlice): string | null {
+  if (!config.gateway_url?.trim()) return 'Gateway URL is required'
+  if (
+    Boolean(config.gateway_access_client_id?.trim()) !==
+    Boolean(config.gateway_access_client_secret?.trim())
+  ) {
+    return 'Provide both Cloudflare Access fields or leave both blank'
+  }
+  return null
+}
+
+/** Enabled IGW with a URL and either no Access credentials or a complete pair. */
 export function isIgwConfigured(config: ConnectionConfigSlice): boolean {
-  return Boolean(
-    config.gateway_enabled &&
-    config.gateway_url?.trim() &&
-    config.gateway_access_client_id?.trim() &&
-    config.gateway_access_client_secret?.trim()
-  )
+  return Boolean(config.gateway_enabled) && gatewayConfigError(config) === null
 }
 
 export type StartupSource = 'mqtt' | 'igw' | 'none'

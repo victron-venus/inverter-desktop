@@ -9,7 +9,7 @@ export default {
     uptime: 'Uptime',
     desktop: 'Desktop',
     control: 'Control',
-    tipIgw: 'Remote inverter-gateway via Cloudflare Access',
+    tipIgw: 'Inverter-gateway over HTTPS',
     tipMqtt: 'Cerbo GX LAN MQTT live data',
   },
   sections: {

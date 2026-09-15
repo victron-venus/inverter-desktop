@@ -1,4 +1,4 @@
-//! Remote inverter-gateway client (Cloudflare Access + bearer).
+//! Remote inverter-gateway client (bearer + optional Cloudflare Access).
 //! When `gateway_enabled`, the desktop polls `/v1/snapshot` and maps Cerbo
 //! leaf paths into `InverterState` for the same UI events as LAN MQTT.
 
@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter};
 
 const POLL_INTERVAL_SECS: u64 = 2;
 
-/// Gateway credentials are intended for the public HTTPS endpoint, not its HTTP origin.
+/// Gateway credentials require HTTPS, including when connecting directly to the origin.
 pub(crate) fn validate_base_url(input: &str) -> Result<String, String> {
     let input = input.trim();
     if input.is_empty() {
@@ -58,6 +58,39 @@ pub(crate) fn http_client() -> Result<reqwest::Client, String> {
     http_client_builder()?
         .build()
         .map_err(|e| format!("gateway http client: {e}"))
+}
+
+pub(crate) fn validate_access_credentials(
+    access_id: &str,
+    access_secret: &str,
+) -> Result<(), String> {
+    if access_id.trim().is_empty() != access_secret.trim().is_empty() {
+        return Err(
+            "Provide both Cloudflare Access Client ID and Secret, or leave both empty for direct HTTPS"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Cloudflare service credentials belong to clients using an Access-protected URL.
+/// With the Access fields empty, only the configured IGW bearer token is added.
+pub(crate) fn authenticated_request(
+    mut request: reqwest::RequestBuilder,
+    access_id: &str,
+    access_secret: &str,
+    api_token: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    validate_access_credentials(access_id, access_secret)?;
+    if !access_id.trim().is_empty() {
+        request = request
+            .header("CF-Access-Client-Id", access_id.trim())
+            .header("CF-Access-Client-Secret", access_secret.trim());
+    }
+    if !api_token.trim().is_empty() {
+        request = request.bearer_auth(api_token.trim());
+    }
+    Ok(request)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -507,14 +540,14 @@ async fn fetch_snapshot(
 ) -> Result<GatewaySnapshot, String> {
     let base = validate_base_url(base)?;
     let url = format!("{base}/v1/snapshot");
-    let mut req = client
-        .get(&url)
-        .header("CF-Access-Client-Id", access_id)
-        .header("CF-Access-Client-Secret", access_secret)
-        .header("User-Agent", "inverter-desktop/gateway");
-    if !api_token.is_empty() {
-        req = req.header("Authorization", format!("Bearer {api_token}"));
-    }
+    let req = authenticated_request(
+        client
+            .get(&url)
+            .header("User-Agent", "inverter-desktop/gateway"),
+        access_id,
+        access_secret,
+        api_token,
+    )?;
     let resp = req
         .send()
         .await
@@ -544,16 +577,15 @@ async fn post_command(
     let base = validate_base_url(base)?;
     let url = format!("{}/v1/commands/{}", base, name.trim_matches('/'));
     let client = http_client()?;
-    let mut req = client
-        .post(&url)
-        .header("CF-Access-Client-Id", access_id)
-        .header("CF-Access-Client-Secret", access_secret)
-        .header("User-Agent", "inverter-desktop/gateway")
-        .header("Content-Type", "application/json")
-        .json(&body);
-    if !api_token.is_empty() {
-        req = req.header("Authorization", format!("Bearer {api_token}"));
-    }
+    let req = authenticated_request(
+        client
+            .post(&url)
+            .header("User-Agent", "inverter-desktop/gateway")
+            .json(&body),
+        access_id,
+        access_secret,
+        api_token,
+    )?;
     let resp = req
         .send()
         .await
@@ -611,9 +643,7 @@ pub fn start_gateway_client(
     api_token: String,
 ) -> Result<GatewayClient, String> {
     let base = validate_base_url(&url)?;
-    if access_client_id.trim().is_empty() || access_client_secret.trim().is_empty() {
-        return Err("Cloudflare Access Client ID and Secret are required".into());
-    }
+    validate_access_credentials(&access_client_id, &access_client_secret)?;
 
     let state = Arc::new(Mutex::new(InverterState::default()));
     let stop = Arc::new(AtomicBool::new(false));
@@ -709,6 +739,88 @@ pub(crate) fn idle_test_client() -> GatewayClient {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_gateway_requests_omit_cloudflare_headers() {
+        let client = http_client().unwrap();
+        for (method, path) in [
+            (reqwest::Method::GET, "/health"),
+            (reqwest::Method::GET, "/v1/snapshot"),
+            (
+                reqwest::Method::POST,
+                "/v1/commands/acknowledge_all_notifications",
+            ),
+        ] {
+            let request = authenticated_request(
+                client.request(method.clone(), format!("https://gateway.example.com{path}")),
+                " ",
+                "\t",
+                " read-token ",
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+            assert_eq!(request.method(), method);
+            assert_eq!(request.headers()["Authorization"], "Bearer read-token");
+            assert!(!request.headers().contains_key("CF-Access-Client-Id"));
+            assert!(!request.headers().contains_key("CF-Access-Client-Secret"));
+        }
+    }
+
+    #[test]
+    fn cloudflare_gateway_requests_preserve_complete_service_credentials() {
+        let client = http_client().unwrap();
+        let request = authenticated_request(
+            client.get("https://gateway.example.com/v1/snapshot"),
+            " access-id ",
+            " access-secret ",
+            " api-token ",
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert_eq!(request.headers()["CF-Access-Client-Id"], "access-id");
+        assert_eq!(
+            request.headers()["CF-Access-Client-Secret"],
+            "access-secret"
+        );
+        assert_eq!(request.headers()["Authorization"], "Bearer api-token");
+        let without_bearer = authenticated_request(
+            client.get("https://gateway.example.com/health"),
+            "access-id",
+            "access-secret",
+            " ",
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert!(!without_bearer.headers().contains_key("Authorization"));
+    }
+
+    #[tokio::test]
+    async fn all_gateway_operations_reject_incomplete_cloudflare_credentials() {
+        let client = http_client().unwrap();
+        let base = "https://127.0.0.1:1";
+        for (id, secret) in [("id", " "), ("", "secret")] {
+            assert!(fetch_snapshot(&client, base, id, secret, "token")
+                .await
+                .unwrap_err()
+                .contains("Provide both Cloudflare"));
+            assert!(post_command(base, id, secret, "token", "test", json!({}))
+                .await
+                .unwrap_err()
+                .contains("Provide both Cloudflare"));
+            assert!(crate::test_gateway_connection(
+                base.into(),
+                id.into(),
+                secret.into(),
+                Some("token".into())
+            )
+            .await
+            .unwrap_err()
+            .contains("Provide both Cloudflare"));
+        }
+    }
 
     #[test]
     fn gateway_url_requires_https_and_separate_credentials() {

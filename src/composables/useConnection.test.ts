@@ -79,6 +79,61 @@ async function connectAndDisable() {
 }
 
 describe('inverter transport configuration lifecycle', () => {
+  it.each([null, undefined, '', '  '])(
+    'connects native IGW with Rust string arguments when Access is %s',
+    async (empty) => {
+      boundary.getConfig.mockResolvedValue({
+        ...disabled(),
+        gateway_enabled: true,
+        gateway_url: ' https://igw.example:9151 ',
+        gateway_access_client_id: empty,
+        gateway_access_client_secret: empty,
+        gateway_api_token: ' read-token ',
+      })
+      await connection.connectMqtt()
+      expect(boundary.invoke).toHaveBeenCalledWith('connect_gateway', {
+        url: 'https://igw.example:9151',
+        accessClientId: '',
+        accessClientSecret: '',
+        apiToken: 'read-token',
+      })
+      expect(boundary.invoke).not.toHaveBeenCalledWith('connect_mqtt', expect.anything())
+      expect(dataSource.value).toBe('igw')
+    }
+  )
+
+  it('keeps paired Access compatible without requiring a bearer token', async () => {
+    boundary.getConfig.mockResolvedValue({
+      ...disabled(),
+      gateway_enabled: true,
+      gateway_url: 'https://igw.example',
+      gateway_access_client_id: ' client-id ',
+      gateway_access_client_secret: ' client-secret ',
+      gateway_api_token: null,
+    })
+    await connection.connectMqtt()
+    expect(boundary.invoke).toHaveBeenCalledWith('connect_gateway', {
+      url: 'https://igw.example',
+      accessClientId: 'client-id',
+      accessClientSecret: 'client-secret',
+      apiToken: null,
+    })
+  })
+
+  it.each([
+    { gateway_access_client_id: 'client-id', gateway_access_client_secret: null },
+    { gateway_access_client_id: undefined, gateway_access_client_secret: 'client-secret' },
+  ])('does not dispatch an incomplete Access pair', async (pair) => {
+    boundary.getConfig.mockResolvedValue({
+      ...disabled(),
+      gateway_enabled: true,
+      gateway_url: 'https://igw.example',
+      ...pair,
+    })
+    await connection.connectMqtt()
+    expect(boundary.invoke).not.toHaveBeenCalledWith('connect_gateway', expect.anything())
+  })
+
   it('passes explicit TLS to both reachability probes and live/recovery connections', async () => {
     boundary.getConfig.mockResolvedValue({
       ...configured(),
