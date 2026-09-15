@@ -152,6 +152,8 @@ for selected `switch.*`, `input_boolean.*` and `light.*` entities. Keep observed
 state separate from command submission and preserve core inverter-control MQTT
 ownership. No generic toggle, arbitrary service parameters or lighting options
 are introduced. Start from the verified PR #429 merge on main at `7e5ad18`.
+The branch also incorporates PR #430 on main at `723c41e`; the combined native,
+frontend, mobile and installed-package paths have been revalidated.
 
 - [x] Add optional `binary_entities`, empty by default, with at most eight unique
       literal IDs from the three supported domains. Append new watch targets
@@ -187,7 +189,7 @@ are introduced. Start from the verified PR #429 merge on main at `7e5ad18`.
 
 Local acceptance passed: 32 unit tests, 37 action subprocess tests, 16
 read/protocol subprocess tests and three macOS TLS scenarios. Worker and native
-all-target Clippy pass. The default native suite passes 384 tests; all six
+all-target Clippy pass. The default native suite passes 398 tests; all six
 separately selected installed-package scenarios pass with actual release workers
 (two Frigate, four HA). The binary fixture verifies ten exact admitted POSTs,
 HA-confirmed state, stale-instance/preset rejection, stalled-command teardown,
@@ -195,9 +197,11 @@ independent charger-flag telemetry in both states and zero core MQTT commands.
 
 The actual HA 0.4 release worker builds and stages successfully. Packaging and
 mobile boundary suites pass 27 and 29 tests, with packaging Pylint 10/10.
-The fresh desktop frontend build includes typechecking. Project Biome exits
-successfully with the same 71 warnings and 84 informational diagnostics as the
-unchanged canonical-main frontend. Independent source, fixture, CI-selection and
+The combined frontend passes 311 tests, 17 mobile tests and five build-profile
+checks. Both frontend builds include typechecking; the final output is desktop.
+Ten Android local-build script tests also pass. Project Biome exits successfully
+with 79 warnings and 84 informational diagnostics in frontend sources identical
+to the merged main base. Independent source, fixture, CI-selection and
 compatibility reviews found no open issues. Old configurations retain the exact
 32 KiB validation boundary when the new field is omitted or empty. Real encoded
 63/64-contribution cases preserve the 64 KiB frame limit with escaped bounded
