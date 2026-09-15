@@ -10,6 +10,44 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const QUEUE_CAPACITY: usize = 2;
 
+/// Keep JSON objects distinct from numbers when a consuming worker enables
+/// serde_json's arbitrary_precision feature. Its reserved internal map key must
+/// never be accepted from an external JSON object. Callers bound bytes first.
+pub fn reject_reserved_number_keys(bytes: &[u8]) -> Result<(), &'static str> {
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        loop {
+            match bytes.get(index) {
+                Some(b'\\') => index += 2,
+                Some(b'"') => {
+                    index += 1;
+                    break;
+                }
+                Some(_) => index += 1,
+                None => return Err("invalid JSON string"),
+            }
+        }
+        let end = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+            index += 1;
+        }
+        if bytes.get(index) == Some(&b':') {
+            let key: String =
+                serde_json::from_slice(&bytes[start..end]).map_err(|_| "invalid JSON key")?;
+            if key == "$serde_json::private::Number" {
+                return Err("reserved JSON number key");
+            }
+        }
+    }
+    Ok(())
+}
+
 // Deliberately no Debug: Configuration contains plaintext credentials.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -184,6 +222,7 @@ pub fn read_frame<R: BufRead, C: DeserializeOwned>(
             if frame.last() == Some(&b'\r') {
                 frame.pop();
             }
+            reject_reserved_number_keys(&frame)?;
             let decoded = serde_json::from_slice(&frame).map_err(|_| "invalid host frame")?;
             validate_command(&decoded)?;
             return Ok(Some(decoded));

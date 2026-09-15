@@ -69,6 +69,7 @@ async fn service(
     client: reqwest::Client,
     configuration: Arc<Validated>,
     action: ConfiguredAction,
+    body: Value,
     request_id: String,
     deadline: Instant,
 ) -> Completed {
@@ -84,11 +85,12 @@ async fn service(
     }
     let mut authentication_rejected = false;
     let operation = async {
-        // Only the selected literal entity enters this immutable service body.
+        // The body was derived from the selected literal entity and either an
+        // immutable preset or an exactly validated published numeric grant.
         let mut response = client
             .post(configuration.service_url(action.operation))
             .bearer_auth(&configuration.token)
-            .json(&json!({"entity_id":action.entity}))
+            .json(&body)
             .timeout(deadline.saturating_duration_since(Instant::now()))
             .send()
             .await
@@ -145,6 +147,7 @@ pub async fn run(
 ) -> Result<(), &'static str> {
     let client = network::http_client()?;
     let configured_actions = configuration.actions();
+    let configured_inputs = configuration.inputs();
     let mut connection = book
         .lock()
         .map_err(|_| "state unavailable")?
@@ -205,7 +208,8 @@ pub async fn run(
                         }
                         history.remember(request_id.clone(), false);
                         let known = configured_actions.iter().any(|action| action.id == action_id);
-                        if !known || params != json!({}) || !(1..=30_000).contains(&deadline_ms) {
+                        let input = configured_inputs.iter().any(|input| input.id == action_id);
+                        if (!known && !input) || (known && params != json!({})) || !(1..=30_000).contains(&deadline_ms) {
                             responses.push_back(error(&request_id, "invalid_action", "The action does not match its configured preset."));
                             continue;
                         }
@@ -215,17 +219,35 @@ pub async fn run(
                             responses.push_back(error(&request_id, "timeout", "The request expired before submission."));
                             continue;
                         }
-                        let target = book.lock().map_err(|_| "state unavailable")?.action_target(&action_id);
-                        let Some(action) = target.filter(|_| received_at >= admitted_after) else {
+                        if received_at < admitted_after {
                             responses.push_back(error(&request_id, "unavailable", "The selected Home Assistant action is unavailable."));
                             continue;
+                        }
+                        let target = {
+                            let book = book.lock().map_err(|_| "state unavailable")?;
+                            if input {
+                                book.input_target(&action_id, &params)
+                            } else {
+                                book.action_target(&action_id)
+                                    .map(|action| {
+                                        let body = json!({"entity_id":action.entity});
+                                        (action, body)
+                                    }).ok_or("unavailable")
+                            }
+                        };
+                        let (action, body) = match target {
+                            Ok(target) => target,
+                            Err(code) => {
+                                responses.push_back(error(&request_id, code, "The numeric input or selected Home Assistant action is no longer eligible."));
+                                continue;
+                            }
                         };
                         if active.len() == MAX_ACTIVE {
                             responses.push_back(error(&request_id, "overloaded", "Two Home Assistant operations are already pending."));
                             continue;
                         }
                         let (cancel, registration) = futures_util::future::AbortHandle::new_pair();
-                        let operation = service(client.clone(), configuration.clone(), action, request_id.clone(), deadline);
+                        let operation = service(client.clone(), configuration.clone(), action, body, request_id.clone(), deadline);
                         let id = request_id.clone();
                         pending.push(async move {
                             (id, futures_util::future::Abortable::new(operation, registration).await.ok())

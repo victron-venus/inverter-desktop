@@ -143,7 +143,7 @@ impl Worker {
         assert_eq!(
             self.next(),
             json!({"type":"ready","protocol_version":1,
-            "host_api_version":"1.4.0","plugin_id":"inverter-desktop.home-assistant"})
+            "host_api_version":"1.5.0","plugin_id":"inverter-desktop.home-assistant"})
         );
         self.send(frame);
         assert_eq!(
@@ -226,7 +226,7 @@ impl Drop for Worker {
 }
 
 fn hello() -> Value {
-    json!({"type":"hello","protocol_version":1,"host_api_version":"1.4.0",
+    json!({"type":"hello","protocol_version":1,"host_api_version":"1.5.0",
         "plugin_id":"inverter-desktop.home-assistant"})
 }
 
@@ -476,6 +476,8 @@ fn initialize_configuration(
         "media_player_entities",
         "binary_entities",
         "cover_entities",
+        "number_entities",
+        "cover_position_entities",
     ] {
         for name in frame["configuration"]["values"][field]
             .as_str()
@@ -516,7 +518,17 @@ fn initialize_configuration(
             .split([',', '\n'])
             .map(str::trim)
             .any(|selected| selected == name);
-        let state = if cover_selected {
+        let selected = |field: &str| {
+            frame["configuration"]["values"][field]
+                .as_str()
+                .unwrap_or("")
+                .split([',', '\n'])
+                .map(str::trim)
+                .any(|selected| selected == name)
+        };
+        let number_selected = selected("number_entities");
+        let position_selected = selected("cover_position_entities");
+        let state = if cover_selected || position_selected {
             "closed"
         } else if binary_selected {
             "off"
@@ -525,7 +537,11 @@ fn initialize_configuration(
         } else {
             "unknown"
         };
-        let value = if cover_selected {
+        let value = if number_selected {
+            number_entity(name, "-0.3")
+        } else if position_selected {
+            position_entity(name, state, json!(15), json!(20))
+        } else if cover_selected {
             cover_entity(name, state, json!(11))
         } else {
             entity(name, state)
@@ -2430,5 +2446,808 @@ fn cover_cancellation_and_deadlines_never_send_stop_and_share_two_active_slots()
     respond(&mut stop, 200, json!([]));
     worker.success("explicit-cover-stop");
     no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+fn number_entity(name: &str, state: &str) -> Value {
+    json!({"entity_id":name,"state":state,"attributes":{"friendly_name":name,"min":-0.5,"max":0.5,"step":0.1,"unit_of_measurement":"kW"}})
+}
+
+fn position_entity(name: &str, state: &str, features: Value, position: Value) -> Value {
+    let mut entity = cover_entity(name, state, features);
+    entity["attributes"]["current_position"] = position;
+    entity
+}
+
+fn numeric_configuration(
+    fixture: &TcpListener,
+    numbers: Option<&str>,
+    positions: Option<&str>,
+) -> Value {
+    let mut config = configuration(fixture, "sensor.barrier", None);
+    if let Some(numbers) = numbers {
+        config["configuration"]["values"]["number_entities"] = json!(numbers);
+    }
+    if let Some(positions) = positions {
+        config["configuration"]["values"]["cover_position_entities"] = json!(positions);
+    }
+    config
+}
+
+fn inputs(frame: &Value) -> Vec<&Value> {
+    frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "number_input")
+        .collect()
+}
+
+fn numeric_connected(worker: &mut Worker, count: usize) -> Value {
+    worker.until(|frame| {
+        frame["type"] == "contributions"
+            && item(frame, "connection").is_some_and(|item| item["value"] == "Connected")
+            && inputs(frame).len() == count
+    })
+}
+
+fn numeric_barrier(worker: &mut Worker, socket: &mut WebSocket<TcpStream>, serial: usize) -> Value {
+    live(
+        socket,
+        "sensor.barrier",
+        Some(entity("sensor.barrier", &serial.to_string())),
+    );
+    worker.until(|frame| {
+        frame["type"] == "contributions"
+            && item(frame, "entity-0")
+                .is_some_and(|item| item["value"].as_f64() == Some(serial as f64))
+    })
+}
+
+fn numeric_action(
+    worker: &mut Worker,
+    request: &str,
+    descriptor: &Value,
+    value: i64,
+    deadline: u64,
+) {
+    worker.send(action_frame(
+        request,
+        descriptor["action_id"].as_str().unwrap(),
+        json!({"input_revision":descriptor["input_revision"],"value_scaled":value}),
+        deadline,
+    ));
+}
+
+fn numeric_service(fixture: &TcpListener, domain: &str, method: &str, body: &str) -> TcpStream {
+    let request = request(fixture);
+    assert_eq!(
+        request.line,
+        format!("POST /reverse/proxy/ha/api/services/{domain}/{method} HTTP/1.1")
+    );
+    assert_eq!(String::from_utf8(request.body).unwrap(), body);
+    request.stream
+}
+
+#[test]
+fn numeric_controls_are_opt_in_and_api_15_is_required() {
+    for empty in [false, true] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut frame = numeric_configuration(&fixture, empty.then_some(""), empty.then_some(""));
+        frame["configuration"]["values"]["watch_entities"] =
+            json!("sensor.barrier,number.read_only,cover.read_only");
+        frame["configuration"]["values"]["cover_entities"] = json!("cover.read_only");
+        let mut socket = initialize_configuration(&mut worker, &fixture, frame);
+        live(
+            &mut socket,
+            "number.read_only",
+            Some(number_entity("number.read_only", "0.1")),
+        );
+        live(
+            &mut socket,
+            "cover.read_only",
+            Some(position_entity(
+                "cover.read_only",
+                "open",
+                json!(15),
+                json!(90),
+            )),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, 1);
+        assert!(inputs(&frame).is_empty());
+        assert_eq!(actions(&frame).len(), 3);
+        for (request, id) in [
+            ("number", "ha-number-0-set"),
+            ("position", "ha-cover-position-0-set"),
+        ] {
+            worker.send(action_frame(
+                request,
+                id,
+                json!({"input_revision":"invented","value_scaled":0}),
+                5000,
+            ));
+            worker.error(request, "invalid_action");
+        }
+        no_request(&fixture, Duration::from_millis(50));
+        worker.stop(false);
+    }
+    let mut worker = Worker::start();
+    let mut frame = hello();
+    frame["host_api_version"] = json!("1.4.0");
+    worker.send(frame);
+    worker.finish(false);
+}
+
+#[test]
+fn numeric_services_send_exact_decimals_and_positions_preserving_old_actions_and_observed_state() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = numeric_configuration(&fixture, Some("number.limit"), Some("cover.shade"));
+    config["configuration"]["values"]["action_entities"] = json!("button.a,scene.b");
+    config["configuration"]["values"]["media_player_entities"] = json!("media_player.a");
+    config["configuration"]["values"]["binary_entities"] = json!("switch.a");
+    config["configuration"]["values"]["cover_entities"] = json!("cover.shade");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = numeric_connected(&mut worker, 2);
+    assert_eq!(
+        actions(&frame)
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "ha-action-0",
+            "ha-action-1",
+            "ha-media-0-play",
+            "ha-media-0-pause",
+            "ha-media-0-stop",
+            "ha-binary-0-on",
+            "ha-binary-0-off",
+            "ha-cover-0-open",
+            "ha-cover-0-close",
+            "ha-cover-0-stop"
+        ]
+    );
+    let number = item(&frame, "ha-number-0-set").unwrap().clone();
+    let cover = item(&frame, "ha-cover-position-0-set").unwrap().clone();
+    assert_eq!(number["label"], "Set number.limit");
+    assert_eq!(cover["label"], "Set position cover.shade");
+    assert_eq!(
+        (
+            number["value_scaled"].as_i64(),
+            number["decimal_places"].as_u64()
+        ),
+        (Some(-3), Some(1))
+    );
+    numeric_action(&mut worker, "number-write", &number, -2, 5000);
+    let mut pending = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.limit","value":-0.2}"#,
+    );
+    let during = numeric_barrier(&mut worker, &mut socket, 1);
+    assert_eq!(
+        item(&during, "ha-number-0-set").unwrap()["value_scaled"],
+        -3
+    );
+    respond(
+        &mut pending,
+        200,
+        json!([number_entity("number.limit", "0.5")]),
+    );
+    worker.success("number-write");
+    let after = numeric_barrier(&mut worker, &mut socket, 2);
+    assert_eq!(item(&after, "ha-number-0-set").unwrap()["value_scaled"], -3);
+    numeric_action(&mut worker, "position-write", &cover, 37, 5000);
+    let mut pending = numeric_service(
+        &fixture,
+        "cover",
+        "set_cover_position",
+        r#"{"entity_id":"cover.shade","position":37}"#,
+    );
+    respond(
+        &mut pending,
+        200,
+        json!([position_entity(
+            "cover.shade",
+            "open",
+            json!(15),
+            json!(100)
+        )]),
+    );
+    worker.success("position-write");
+    let after = numeric_barrier(&mut worker, &mut socket, 3);
+    assert_eq!(
+        item(&after, "ha-cover-position-0-set").unwrap()["value_scaled"],
+        20
+    );
+    live(
+        &mut socket,
+        "number.limit",
+        Some(number_entity("number.limit", "-0.2")),
+    );
+    live(
+        &mut socket,
+        "cover.shade",
+        Some(position_entity(
+            "cover.shade",
+            "opening",
+            json!(15),
+            json!(37),
+        )),
+    );
+    let observed = numeric_barrier(&mut worker, &mut socket, 4);
+    assert_eq!(
+        item(&observed, "ha-number-0-set").unwrap()["value_scaled"],
+        -2
+    );
+    assert_eq!(
+        item(&observed, "ha-number-0-set").unwrap()["input_revision"],
+        number["input_revision"]
+    );
+    assert_eq!(
+        item(&observed, "ha-cover-position-0-set").unwrap()["value_scaled"],
+        37
+    );
+    assert_eq!(
+        item(&observed, "ha-cover-position-0-set").unwrap()["input_revision"],
+        cover["input_revision"]
+    );
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn numeric_decimal_exponents_and_precision_are_exact_without_rounding_metadata() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        numeric_configuration(&fixture, Some("number.a"), None),
+    );
+    numeric_connected(&mut worker, 1);
+    let mut state: Value = serde_json::from_str(r#"{"entity_id":"number.a","state":"-3e-1","attributes":{"min":-5e-1,"max":5e-1,"step":1e-1}}"#).unwrap();
+    live(&mut socket, "number.a", Some(state.clone()));
+    let frame = numeric_barrier(&mut worker, &mut socket, 1);
+    let descriptor = item(&frame, "ha-number-0-set").unwrap();
+    numeric_action(&mut worker, "scientific", descriptor, 1, 5000);
+    let mut response = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.1}"#,
+    );
+    respond(&mut response, 200, json!([]));
+    worker.success("scientific");
+    state["attributes"]["step"] = serde_json::from_str("0.10000000000000001").unwrap();
+    live(&mut socket, "number.a", Some(state.clone()));
+    let frame = numeric_barrier(&mut worker, &mut socket, 2);
+    assert!(inputs(&frame).is_empty());
+    assert_eq!(item(&frame, "entity-1").unwrap()["kind"], "metric");
+    state["attributes"]["step"] = serde_json::from_str("1e-6").unwrap();
+    state["state"] = json!("1e-6");
+    live(&mut socket, "number.a", Some(state.clone()));
+    let frame = numeric_barrier(&mut worker, &mut socket, 3);
+    let descriptor = item(&frame, "ha-number-0-set").unwrap();
+    assert_eq!(descriptor["decimal_places"], 6);
+    numeric_action(&mut worker, "microunit", descriptor, 1, 5000);
+    let mut response = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.000001}"#,
+    );
+    respond(&mut response, 200, json!([]));
+    worker.success("microunit");
+    state["attributes"]["step"] = serde_json::from_str("1e-7").unwrap();
+    live(&mut socket, "number.a", Some(state));
+    let frame = numeric_barrier(&mut worker, &mut socket, 4);
+    assert!(inputs(&frame).is_empty());
+    worker.stop(false);
+}
+
+#[test]
+fn numeric_revisions_reject_stale_constraints_unit_changes_and_revoke_restore() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        numeric_configuration(&fixture, Some("number.a"), Some("cover.a")),
+    );
+    let frame = numeric_connected(&mut worker, 2);
+    let original = item(&frame, "ha-number-0-set").unwrap().clone();
+    let mut state = number_entity("number.a", "-0.2");
+    live(&mut socket, "number.a", Some(state.clone()));
+    let frame = numeric_barrier(&mut worker, &mut socket, 1);
+    assert_eq!(
+        item(&frame, "ha-number-0-set").unwrap()["input_revision"],
+        original["input_revision"]
+    );
+    state["attributes"]["min"] = json!(-0.4);
+    state["attributes"]["max"] = json!(0.4);
+    state["attributes"]["step"] = json!(0.2);
+    live(&mut socket, "number.a", Some(state.clone()));
+    let frame = numeric_barrier(&mut worker, &mut socket, 2);
+    let changed = item(&frame, "ha-number-0-set").unwrap().clone();
+    assert_ne!(changed["input_revision"], original["input_revision"]);
+    numeric_action(&mut worker, "stale-bounds", &original, 0, 5000);
+    worker.error("stale-bounds", "unavailable");
+    numeric_action(&mut worker, "off-grid", &changed, 1, 5000);
+    worker.error("off-grid", "invalid_action");
+    state["attributes"]["unit_of_measurement"] = json!("W");
+    live(&mut socket, "number.a", Some(state.clone()));
+    let frame = numeric_barrier(&mut worker, &mut socket, 3);
+    let unit_changed = item(&frame, "ha-number-0-set").unwrap().clone();
+    assert_ne!(unit_changed["input_revision"], changed["input_revision"]);
+    numeric_action(&mut worker, "stale-unit", &changed, 0, 5000);
+    worker.error("stale-unit", "unavailable");
+    live(&mut socket, "number.a", None);
+    live(&mut socket, "number.a", Some(state));
+    let frame = numeric_barrier(&mut worker, &mut socket, 4);
+    let restored = item(&frame, "ha-number-0-set").unwrap();
+    assert_ne!(restored["input_revision"], unit_changed["input_revision"]);
+    numeric_action(&mut worker, "stale-restore", &unit_changed, 0, 5000);
+    worker.error("stale-restore", "unavailable");
+    numeric_action(&mut worker, "current", restored, 0, 5000);
+    let mut response = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.0}"#,
+    );
+    respond(&mut response, 200, json!([]));
+    worker.success("current");
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn malformed_number_and_cover_position_metadata_withdraw_only_the_affected_input() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        numeric_configuration(&fixture, Some("number.a"), Some("cover.a")),
+    );
+    numeric_connected(&mut worker, 2);
+    let mut serial = 0;
+    let valid = number_entity("number.a", "-0.3");
+    let mut invalid = vec![None];
+    for value in [
+        json!("unknown"),
+        json!("unavailable"),
+        json!("0.01"),
+        json!("100"),
+        json!("NaN"),
+        json!("1e999"),
+        json!(1),
+        Value::Null,
+    ] {
+        let mut state = valid.clone();
+        state["state"] = value;
+        invalid.push(Some(state));
+    }
+    for (field, value) in [
+        ("min", json!("-0.5")),
+        ("min", json!(1)),
+        ("max", Value::Null),
+        ("step", json!(0)),
+        ("step", json!(-1)),
+        ("step", json!(false)),
+        ("step", json!([])),
+        ("step", json!({})),
+        ("unit_of_measurement", json!(17)),
+    ] {
+        let mut state = valid.clone();
+        state["attributes"][field] = value;
+        invalid.push(Some(state));
+    }
+    let mut missing = valid.clone();
+    missing["attributes"].as_object_mut().unwrap().remove("min");
+    invalid.push(Some(missing));
+    for state in invalid {
+        live(&mut socket, "number.a", state);
+        serial += 1;
+        let frame = numeric_barrier(&mut worker, &mut socket, serial);
+        assert!(item(&frame, "ha-number-0-set").is_none());
+        assert!(item(&frame, "ha-cover-position-0-set").is_some());
+        live(&mut socket, "number.a", Some(valid.clone()));
+        serial += 1;
+        let frame = numeric_barrier(&mut worker, &mut socket, serial);
+        assert_eq!(inputs(&frame).len(), 2);
+    }
+    let valid = position_entity("cover.a", "closed", json!(4), json!(20));
+    let mut invalid = vec![None];
+    for value in [
+        json!("unknown"),
+        json!("unavailable"),
+        json!("OPEN"),
+        json!("closed "),
+        json!(20),
+    ] {
+        let mut state = valid.clone();
+        state["state"] = value;
+        invalid.push(Some(state));
+    }
+    for (field, value) in [
+        ("current_position", json!(-1)),
+        ("current_position", json!(101)),
+        ("current_position", json!(20.0)),
+        ("current_position", json!("20")),
+        ("current_position", json!(true)),
+        ("current_position", Value::Null),
+        ("supported_features", json!(11)),
+        ("supported_features", json!(4.0)),
+        ("supported_features", json!(-1)),
+        ("supported_features", json!("4")),
+    ] {
+        let mut state = valid.clone();
+        state["attributes"][field] = value;
+        invalid.push(Some(state));
+    }
+    let mut missing = valid.clone();
+    missing["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("current_position");
+    invalid.push(Some(missing));
+    for state in invalid {
+        live(&mut socket, "cover.a", state);
+        serial += 1;
+        let frame = numeric_barrier(&mut worker, &mut socket, serial);
+        assert!(item(&frame, "ha-cover-position-0-set").is_none());
+        assert!(item(&frame, "ha-number-0-set").is_some());
+        live(&mut socket, "cover.a", Some(valid.clone()));
+        serial += 1;
+        assert_eq!(
+            inputs(&numeric_barrier(&mut worker, &mut socket, serial)).len(),
+            2
+        );
+    }
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn numeric_parameters_are_exact_bounded_and_cannot_supply_services_or_targets() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        numeric_configuration(&fixture, Some("number.a"), Some("cover.a")),
+    );
+    let frame = numeric_connected(&mut worker, 2);
+    let descriptor = item(&frame, "ha-number-0-set").unwrap();
+    let revision = descriptor["input_revision"].clone();
+    for (index, params) in [
+        json!({}),
+        json!({"input_revision":revision}),
+        json!({"value_scaled":0}),
+        json!({"input_revision":revision,"value_scaled":0,"entity_id":"number.other"}),
+        json!({"input_revision":revision,"value_scaled":0,"service":"toggle"}),
+        json!({"input_revision":revision,"value_scaled":"0"}),
+        json!({"input_revision":revision,"value_scaled":0.0}),
+        json!({"input_revision":revision,"value_scaled":false}),
+        json!({"input_revision":revision,"value_scaled":null}),
+        json!({"input_revision":revision,"value_scaled":1000000000000001_i64}),
+        json!({"input_revision":revision,"value_scaled":i64::MIN}),
+        json!({"input_revision":revision,"value_scaled":6}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = format!("invalid-{index}");
+        worker.send(action_frame(&request, "ha-number-0-set", params, 5000));
+        worker.error(&request, "invalid_action");
+    }
+    for (index, id) in [
+        "ha-number-00-set",
+        "ha-number-1-set",
+        "ha-number-0-value",
+        "ha-cover-position-00-set",
+        "ha-cover-position-0-open",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = format!("id-{index}");
+        worker.send(action_frame(
+            &request,
+            id,
+            json!({"input_revision":revision,"value_scaled":0}),
+            5000,
+        ));
+        worker.error(&request, "invalid_action");
+    }
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn numeric_lists_enforce_domains_shared_reservations_and_watch_limits() {
+    let list = |domain: &str, count| {
+        (0..count)
+            .map(|i| format!("{domain}.e{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    for (field, value) in [
+        ("number_entities", "input_number.a".into()),
+        ("number_entities", "number.*".into()),
+        ("cover_position_entities", "light.a".into()),
+        ("cover_position_entities", "cover.a/escape".into()),
+        ("number_entities", list("number", 5)),
+        ("cover_position_entities", list("cover", 5)),
+        ("number_entities", " ".repeat(4097)),
+        ("cover_position_entities", " ".repeat(4097)),
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut frame = numeric_configuration(&fixture, None, None);
+        frame["configuration"]["values"][field] = json!(value);
+        worker.send(hello());
+        worker.next();
+        worker.send(frame);
+        worker.finish(false);
+    }
+    for watch_overflow in [false, true] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut frame =
+            numeric_configuration(&fixture, Some(&list("number", 4)), Some(&list("cover", 4)));
+        if watch_overflow {
+            frame["configuration"]["values"]["watch_entities"] = json!(list("sensor", 25));
+        } else {
+            frame["configuration"]["values"]["action_entities"] = json!(list("button", 12));
+            frame["configuration"]["values"]["media_player_entities"] =
+                json!(list("media_player", 4));
+        }
+        worker.send(hello());
+        worker.next();
+        worker.send(frame);
+        worker.finish(false);
+    }
+}
+
+#[test]
+fn numeric_maximum_combination_publishes_64_bounded_contributions_and_deduplicated_ids() {
+    let list = |domain: &str, count| {
+        (0..count)
+            .map(|i| format!("{domain}.e{i}"))
+            .collect::<Vec<_>>()
+    };
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let numbers = list("number", 4);
+    let positions = list("cover", 4);
+    let mut config = numeric_configuration(
+        &fixture,
+        Some(&format!("{},number.e0", numbers.join(","))),
+        Some(&format!("{},cover.e0", positions.join(","))),
+    );
+    let mut watch = vec!["sensor.barrier".to_owned()];
+    watch.extend(list("sensor", 8));
+    config["configuration"]["values"]["watch_entities"] = json!(watch.join(","));
+    config["configuration"]["values"]["action_entities"] = json!(list("button", 11).join(","));
+    config["configuration"]["values"]["media_player_entities"] =
+        json!(list("media_player", 4).join(","));
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    numeric_connected(&mut worker, 8);
+    for name in numbers.iter().chain(&positions) {
+        let mut state = if name.starts_with("number.") {
+            number_entity(name, "0")
+        } else {
+            position_entity(name, "closed", json!(4), json!(100))
+        };
+        state["attributes"]["friendly_name"] = json!("\\\"".repeat(128));
+        state["attributes"]["unit_of_measurement"] = json!("\\\"".repeat(32));
+        live(&mut socket, name, Some(state));
+    }
+    let frame = numeric_barrier(&mut worker, &mut socket, 1);
+    let items = frame["items"].as_array().unwrap();
+    assert_eq!(items.len(), 64);
+    assert_eq!(inputs(&frame).len(), 8);
+    assert_eq!(actions(&frame).len(), 23);
+    assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
+    for index in 0..4 {
+        assert!(item(&frame, &format!("ha-number-{index}-set")).is_some());
+        assert!(item(&frame, &format!("ha-cover-position-{index}-set")).is_some());
+    }
+    worker.stop(false);
+}
+
+#[test]
+fn numeric_and_static_actions_share_slots_cancellation_deadlines_and_unknown_outcomes() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = numeric_configuration(&fixture, Some("number.a"), Some("cover.a"));
+    config["configuration"]["values"]["action_entities"] = json!("button.a");
+    let _socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = numeric_connected(&mut worker, 2);
+    let number = item(&frame, "ha-number-0-set").unwrap();
+    let cover = item(&frame, "ha-cover-position-0-set").unwrap();
+    numeric_action(&mut worker, "pending-number", number, 0, 5000);
+    let first = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.0}"#,
+    );
+    worker.action("pending-button", "ha-action-0", 5000);
+    let second = service(&fixture, "button", "button.a");
+    numeric_action(&mut worker, "third", cover, 40, 5000);
+    worker.error("third", "overloaded");
+    no_request(&fixture, Duration::from_millis(50));
+    worker.send(json!({"type":"cancel","request_id":"pending-number"}));
+    worker.error("pending-number", "outcome_unknown");
+    drop(first);
+    numeric_action(&mut worker, "deadline", cover, 41, 250);
+    let expired = numeric_service(
+        &fixture,
+        "cover",
+        "set_cover_position",
+        r#"{"entity_id":"cover.a","position":41}"#,
+    );
+    worker.error("deadline", "outcome_unknown");
+    drop(expired);
+    numeric_action(&mut worker, "lost", number, 1, 5000);
+    let lost = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.1}"#,
+    );
+    drop(lost);
+    worker.error("lost", "outcome_unknown");
+    no_request(&fixture, Duration::from_millis(150));
+    worker.send(json!({"type":"cancel","request_id":"pending-button"}));
+    worker.error("pending-button", "outcome_unknown");
+    drop(second);
+    numeric_action(&mut worker, "eof", cover, 42, 5000);
+    let pending = numeric_service(
+        &fixture,
+        "cover",
+        "set_cover_position",
+        r#"{"entity_id":"cover.a","position":42}"#,
+    );
+    worker.stop(true);
+    drop(pending);
+    no_request(&fixture, Duration::from_millis(50));
+}
+
+#[test]
+fn numeric_authentication_rejection_cancels_sibling_and_withdraws_inputs() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        numeric_configuration(&fixture, Some("number.a"), Some("cover.a")),
+    );
+    let frame = numeric_connected(&mut worker, 2);
+    let number = item(&frame, "ha-number-0-set").unwrap();
+    let cover = item(&frame, "ha-cover-position-0-set").unwrap();
+    numeric_action(&mut worker, "number", number, 0, 5000);
+    let mut rejected = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.0}"#,
+    );
+    numeric_action(&mut worker, "cover", cover, 50, 5000);
+    let sibling = numeric_service(
+        &fixture,
+        "cover",
+        "set_cover_position",
+        r#"{"entity_id":"cover.a","position":50}"#,
+    );
+    respond(&mut rejected, 401, json!({"private":PRIVATE_BODY}));
+    worker.error("number", "outcome_unknown");
+    worker.error("cover", "outcome_unknown");
+    let frame = worker.until(|frame| {
+        frame["type"] == "contributions"
+            && item(frame, "connection")
+                .is_some_and(|item| item["value"] == "Authentication rejected")
+    });
+    assert!(inputs(&frame).is_empty());
+    numeric_action(&mut worker, "revoked", number, 0, 5000);
+    worker.error("revoked", "unavailable");
+    drop(sibling);
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+#[test]
+fn raw_numeric_parameter_objects_cannot_impersonate_integer_coefficients() {
+    for key in [
+        "$serde_json::private::Number",
+        r"\u0024serde_json::private::Number",
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let _socket = initialize_configuration(
+            &mut worker,
+            &fixture,
+            numeric_configuration(&fixture, Some("number.a"), None),
+        );
+        let frame = numeric_connected(&mut worker, 1);
+        let revision = item(&frame, "ha-number-0-set").unwrap()["input_revision"]
+            .as_str()
+            .unwrap();
+        let raw = format!(
+            r#"{{"type":"action","request_id":"spoof","action_id":"ha-number-0-set","params":{{"input_revision":"{revision}","value_scaled":{{"{key}":"0"}}}},"deadline_ms":5000}}"#
+        );
+        let input = worker.input.as_mut().unwrap();
+        writeln!(input, "{raw}").unwrap();
+        input.flush().unwrap();
+        worker.finish(false);
+        no_request(&fixture, Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn numeric_disconnect_and_new_session_invalidate_previous_input_revisions() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        numeric_configuration(&fixture, Some("number.a"), Some("cover.a")),
+    );
+    let frame = numeric_connected(&mut worker, 2);
+    let previous = item(&frame, "ha-number-0-set").unwrap().clone();
+    numeric_action(&mut worker, "disconnect-pending", &previous, 0, 5000);
+    let pending = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.0}"#,
+    );
+    drop(socket);
+    worker.error("disconnect-pending", "outcome_unknown");
+    let frame = worker.until(|frame| {
+        frame["type"] == "contributions"
+            && item(frame, "connection").is_some_and(|item| item["value"] == "Disconnected")
+    });
+    assert!(inputs(&frame).is_empty());
+    numeric_action(&mut worker, "disconnected", &previous, 0, 5000);
+    worker.error("disconnected", "unavailable");
+    drop(pending);
+    let _socket = authorize(&fixture, true);
+    for _ in 0..3 {
+        let mut req = request(&fixture);
+        let name = req
+            .line
+            .strip_prefix("GET /reverse/proxy/ha/api/states/")
+            .unwrap()
+            .strip_suffix(" HTTP/1.1")
+            .unwrap();
+        let value = match name {
+            "number.a" => number_entity(name, "-0.3"),
+            "cover.a" => position_entity(name, "closed", json!(15), json!(20)),
+            "sensor.barrier" => entity(name, "unknown"),
+            _ => panic!("unexpected target"),
+        };
+        respond(&mut req.stream, 200, value);
+    }
+    let frame = numeric_connected(&mut worker, 2);
+    let current = item(&frame, "ha-number-0-set").unwrap();
+    assert_ne!(current["input_revision"], previous["input_revision"]);
+    numeric_action(&mut worker, "previous-session", &previous, 0, 5000);
+    worker.error("previous-session", "unavailable");
+    numeric_action(&mut worker, "new-session", current, 0, 5000);
+    let mut response = numeric_service(
+        &fixture,
+        "number",
+        "set_value",
+        r#"{"entity_id":"number.a","value":0.0}"#,
+    );
+    respond(&mut response, 200, json!([]));
+    worker.success("new-session");
     worker.stop(false);
 }

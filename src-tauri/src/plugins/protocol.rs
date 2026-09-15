@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.4.0";
+pub const HOST_API_VERSION: &str = "1.5.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -18,6 +18,7 @@ pub const MAX_CONTRIBUTIONS: usize = 64;
 pub const MAX_ACTION_PARAMS_BYTES: usize = 4 * 1024;
 pub const MAX_ACTION_RESULT_BYTES: usize = 16 * 1024;
 pub const MAX_ACTION_DEADLINE_MS: u64 = 60_000;
+pub const MAX_SCALED_COEFFICIENT: i64 = 1_000_000_000_000_000;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 pub const MAX_NOTIFICATION_TITLE_BYTES: usize = 128;
@@ -176,6 +177,63 @@ pub enum DashboardContribution {
         label: String,
         params: Value,
     },
+    NumberInput {
+        id: String,
+        title: String,
+        action_id: String,
+        label: String,
+        unit: Option<String>,
+        input_revision: String,
+        value_scaled: i64,
+        min_scaled: i64,
+        max_scaled: i64,
+        step_scaled: i64,
+        decimal_places: u8,
+    },
+}
+
+/// Numeric authority excludes observed value and presentation-only name/label.
+/// Comparing every constraint also protects against a worker reusing a revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NumberInputGrant {
+    pub id: String,
+    pub action_id: String,
+    pub unit: Option<String>,
+    pub input_revision: String,
+    pub min_scaled: i64,
+    pub max_scaled: i64,
+    pub step_scaled: i64,
+    pub decimal_places: u8,
+}
+
+fn scaled_coefficient(value: i64) -> bool {
+    (-MAX_SCALED_COEFFICIENT..=MAX_SCALED_COEFFICIENT).contains(&value)
+}
+
+fn scaled_value(value: i64, minimum: i64, maximum: i64, step: i64) -> bool {
+    scaled_coefficient(value)
+        && step > 0
+        && value >= minimum
+        && value <= maximum
+        && value
+            .checked_sub(minimum)
+            .is_some_and(|delta| delta % step == 0)
+}
+
+impl NumberInputGrant {
+    pub fn accepts(&self, params: &Value) -> bool {
+        params.as_object().is_some_and(|params| {
+            params.len() == 2
+                && params.get("input_revision").and_then(Value::as_str)
+                    == Some(self.input_revision.as_str())
+                && params
+                    .get("value_scaled")
+                    .and_then(Value::as_i64)
+                    .is_some_and(|value| {
+                        scaled_value(value, self.min_scaled, self.max_scaled, self.step_scaled)
+                    })
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -500,7 +558,34 @@ impl DashboardContribution {
             Self::Text { id, .. }
             | Self::Metric { id, .. }
             | Self::Status { id, .. }
-            | Self::Action { id, .. } => id,
+            | Self::Action { id, .. }
+            | Self::NumberInput { id, .. } => id,
+        }
+    }
+
+    pub(crate) fn number_input_grant(&self) -> Option<NumberInputGrant> {
+        match self {
+            Self::NumberInput {
+                id,
+                action_id,
+                unit,
+                input_revision,
+                min_scaled,
+                max_scaled,
+                step_scaled,
+                decimal_places,
+                ..
+            } => Some(NumberInputGrant {
+                id: id.clone(),
+                action_id: action_id.clone(),
+                unit: unit.clone(),
+                input_revision: input_revision.clone(),
+                min_scaled: *min_scaled,
+                max_scaled: *max_scaled,
+                step_scaled: *step_scaled,
+                decimal_places: *decimal_places,
+            }),
+            _ => None,
         }
     }
 
@@ -540,6 +625,36 @@ impl DashboardContribution {
                 validate_action_params(params)?;
                 title
             }
+            Self::NumberInput {
+                title,
+                action_id,
+                label: action_label,
+                unit,
+                input_revision,
+                value_scaled,
+                min_scaled,
+                max_scaled,
+                step_scaled,
+                decimal_places,
+                ..
+            } => {
+                token(action_id, "action_id")?;
+                token(input_revision, "input revision")?;
+                label(action_label, "action label", 128)?;
+                if let Some(unit) = unit {
+                    label(unit, "numeric unit", 32)?;
+                }
+                if *decimal_places > 6
+                    || !scaled_coefficient(*min_scaled)
+                    || !scaled_coefficient(*max_scaled)
+                    || !scaled_coefficient(*step_scaled)
+                    || min_scaled > max_scaled
+                    || !scaled_value(*value_scaled, *min_scaled, *max_scaled, *step_scaled)
+                {
+                    return Err("invalid numeric input bounds or observed value".into());
+                }
+                title
+            }
         };
         label(title, "contribution title", 128)
     }
@@ -550,10 +665,28 @@ pub fn validate_contributions(items: &[DashboardContribution]) -> Result<(), Str
         return Err("too many dashboard contributions".into());
     }
     let mut ids = HashSet::new();
+    let mut actionable = HashSet::new();
+    let mut numeric = HashSet::new();
     for item in items {
         item.validate()?;
         if !ids.insert(item.id()) {
             return Err("duplicate dashboard contribution id".into());
+        }
+        match item {
+            DashboardContribution::NumberInput { action_id, .. } => {
+                if !actionable.insert(action_id) {
+                    return Err("numeric action ids must be unique".into());
+                }
+                numeric.insert(action_id);
+            }
+            DashboardContribution::Action { action_id, .. } => {
+                if numeric.contains(action_id) {
+                    return Err("numeric action ids must be unique".into());
+                }
+                // Existing static aliases may intentionally share one action id.
+                actionable.insert(action_id);
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -1094,6 +1227,138 @@ mod tests {
             })
             .collect();
         assert!(validate_worker_message(&WorkerMessage::Contributions { items }).is_err());
+    }
+
+    fn numeric_card() -> DashboardContribution {
+        serde_json::from_value(json!({
+            "kind":"number_input","id":"temperature-input","title":"Temperature",
+            "action_id":"set-temperature","label":"Set temperature","unit":"°C",
+            "input_revision":"input-1","value_scaled":-15,"min_scaled":-25,
+            "max_scaled":25,"step_scaled":5,"decimal_places":1
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn numeric_inputs_validate_integer_bounds_grid_metadata_and_wire_shape() {
+        let card = numeric_card();
+        card.validate().unwrap();
+        let message = WorkerMessage::Contributions {
+            items: vec![card.clone()],
+        };
+        let encoded = serde_json::to_vec(&message).unwrap();
+        assert_eq!(parse_worker_frame(&encoded).unwrap(), message);
+        for (field, invalid) in [
+            ("value_scaled", json!(-26)),
+            ("value_scaled", json!(-24)),
+            ("value_scaled", json!(30)),
+            ("value_scaled", json!(1.0)),
+            ("value_scaled", json!("5")),
+            ("value_scaled", json!(true)),
+            ("value_scaled", json!(i64::MIN)),
+            ("min_scaled", json!(i64::MIN)),
+            ("max_scaled", json!(i64::MAX)),
+            ("min_scaled", json!(30)),
+            ("step_scaled", json!(0)),
+            ("step_scaled", json!(-5)),
+            ("step_scaled", json!(MAX_SCALED_COEFFICIENT + 1)),
+            ("decimal_places", json!(7)),
+            ("decimal_places", json!(-1)),
+            ("input_revision", json!("../input")),
+            ("input_revision", json!("")),
+            ("unit", json!("x".repeat(33))),
+            ("label", json!("x".repeat(129))),
+            ("title", json!("x".repeat(129))),
+            ("params", json!({})),
+            ("url", json!("https://example.test")),
+        ] {
+            let mut value = serde_json::to_value(&card).unwrap();
+            value[field] = invalid;
+            assert!(
+                !serde_json::from_value::<DashboardContribution>(value)
+                    .is_ok_and(|item| item.validate().is_ok()),
+                "accepted {field}"
+            );
+        }
+        for places in 0..=6 {
+            let mut value = serde_json::to_value(&card).unwrap();
+            value["decimal_places"] = json!(places);
+            value["min_scaled"] = json!(-MAX_SCALED_COEFFICIENT);
+            value["max_scaled"] = json!(MAX_SCALED_COEFFICIENT);
+            value["step_scaled"] = json!(MAX_SCALED_COEFFICIENT);
+            value["value_scaled"] = json!(0);
+            serde_json::from_value::<DashboardContribution>(value)
+                .unwrap()
+                .validate()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn numeric_requests_allow_only_matching_revision_and_integer_grid_values() {
+        let grant = numeric_card().number_input_grant().unwrap();
+        for value in [-25, -20, -15, 0, 25] {
+            assert!(grant.accepts(&json!({"input_revision":"input-1","value_scaled":value})));
+        }
+        for params in [
+            json!({}),
+            json!({"input_revision":"input-1"}),
+            json!({"input_revision":"stale","value_scaled":0}),
+            json!({"input_revision":"input-1","value_scaled":0,"entity_id":"number.other"}),
+            json!({"input_revision":"input-1","value_scaled":0,"service":"set_value"}),
+            json!({"input_revision":"input-1","value_scaled":0.0}),
+            json!({"input_revision":"input-1","value_scaled":"0"}),
+            json!({"input_revision":"input-1","value_scaled":true}),
+            json!({"input_revision":"input-1","value_scaled":-24}),
+            json!({"input_revision":"input-1","value_scaled":30}),
+            json!({"input_revision":"input-1","value_scaled":i64::MIN}),
+            json!([]),
+            Value::Null,
+        ] {
+            assert!(!grant.accepts(&params));
+        }
+    }
+
+    #[test]
+    fn numeric_action_ids_cannot_alias_any_action_but_static_aliases_remain_valid() {
+        let numeric = numeric_card();
+        let mut second = numeric.clone();
+        if let DashboardContribution::NumberInput { id, .. } = &mut second {
+            *id = "other-input".into();
+        }
+        let static_action = DashboardContribution::Action {
+            id: "preset".into(),
+            title: "Preset".into(),
+            action_id: "set-temperature".into(),
+            label: "Set".into(),
+            params: json!({"input_revision":"input-1","value_scaled":0}),
+        };
+        for items in [
+            vec![numeric.clone(), second],
+            vec![numeric.clone(), static_action.clone()],
+            vec![static_action.clone(), numeric],
+        ] {
+            assert!(validate_contributions(&items).is_err());
+        }
+        let mut alias = static_action.clone();
+        if let DashboardContribution::Action { id, params, .. } = &mut alias {
+            *id = "another-preset".into();
+            *params = json!({"value":42});
+        }
+        validate_contributions(&[static_action, alias]).unwrap();
+    }
+
+    #[test]
+    fn host_api_15_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
+        assert_eq!(HOST_API_VERSION, "1.5.0");
+        for requirement in ["^1.3", "^1.4", "^1.5"] {
+            let mut manifest = manifest();
+            manifest.host_api = requirement.into();
+            manifest.validate().unwrap();
+        }
+        assert!(validate_versions(1, "1.5.0").is_ok());
+        assert!(validate_versions(1, "1.4.0").is_err());
+        assert!(validate_versions(2, "1.5.0").is_err());
     }
 
     #[test]

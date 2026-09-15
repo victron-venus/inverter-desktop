@@ -7,17 +7,20 @@
 use super::generation::{GenerationLease, RevokeOnDrop};
 use super::protocol::{
     encode_host_frame, parse_worker_frame, validate_handshake, validate_host_message,
-    validate_plugin_id, DashboardContribution, HostMessage, HttpVideoGrant, WorkerConfiguration,
-    WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    validate_plugin_id, DashboardContribution, HostMessage, HttpVideoGrant, NumberInputGrant,
+    WorkerConfiguration, WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
+use std::future::poll_fn;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -171,6 +174,7 @@ pub struct WorkerSpec {
 
 struct WorkerEntry {
     snapshot: Mutex<PluginSnapshot>,
+    numeric: Arc<Mutex<HashMap<String, Arc<NumericLease>>>>,
     commands: mpsc::Sender<Control>,
     stop: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
@@ -187,6 +191,14 @@ struct WorkerEntry {
 
 impl WorkerEntry {
     fn revoke_generation(&self) {
+        for (_, lease) in self
+            .numeric
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+        {
+            lease.revoked.send_replace(true);
+        }
         if let Some(lease) = self
             .generation_lease
             .lock()
@@ -273,6 +285,39 @@ impl WorkerEntry {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Called under authority, like snapshot replacement and action admission.
+    fn replace_contributions(&self, items: Vec<DashboardContribution>) {
+        let mut registry = self.numeric.lock().unwrap_or_else(|e| e.into_inner());
+        let mut next = HashMap::new();
+        for grant in items
+            .iter()
+            .filter_map(DashboardContribution::number_input_grant)
+        {
+            let previous = registry.remove(&grant.action_id);
+            let lease = match previous {
+                Some(previous) if previous.grant == grant => previous,
+                previous => {
+                    if let Some(previous) = previous {
+                        previous.revoked.send_replace(true);
+                    }
+                    Arc::new(NumericLease {
+                        grant,
+                        revoked: watch::channel(false).0,
+                    })
+                }
+            };
+            next.insert(lease.grant.action_id.clone(), lease);
+        }
+        for previous in registry.values() {
+            previous.revoked.send_replace(true);
+        }
+        *registry = next;
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contributions = items;
     }
 
     fn update(&self, update: impl FnOnce(&mut PluginSnapshot)) {
@@ -598,6 +643,7 @@ impl PluginHost {
         let (stop, stop_receiver) = watch::channel(false);
         let (finished, done) = watch::channel(false);
         let entry = Arc::new(WorkerEntry {
+            numeric: Arc::new(Mutex::new(HashMap::new())),
             snapshot: Mutex::new(PluginSnapshot {
                 plugin_id: spec.plugin_id.clone(),
                 state: WorkerState::Starting,
@@ -723,13 +769,29 @@ impl PluginHost {
             if !authority.enabled || authority.epoch != epoch || entry.epoch != epoch {
                 return Err(PluginError::Unavailable);
             }
+            let current = entry.snapshot();
+            if current.state != WorkerState::Running
+                || current.instance_id.as_deref() != Some(instance_id)
+            {
+                return Err(PluginError::Unavailable);
+            }
+            if !advertises(&current.contributions, action_id, &params) {
+                return Err(PluginError::UnknownAction);
+            }
+            let numeric = entry
+                .numeric
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(action_id)
+                .cloned();
             entry
                 .commands
                 .try_send(Control::Action {
                     request_id: request_id.clone(),
-                    generation: snapshot.generation,
+                    generation: current.generation,
                     action_id: action_id.to_owned(),
                     params,
+                    numeric,
                     cancellation,
                     deadline,
                     reply,
@@ -915,7 +977,38 @@ async fn wait_stopped(entry: &WorkerEntry) {
 }
 
 fn advertises(items: &[DashboardContribution], action_id: &str, params: &Value) -> bool {
-    items.iter().any(|item| matches!(item, DashboardContribution::Action { action_id: id, params: advertised, .. } if id == action_id && advertised == params))
+    items.iter().any(|item| match item {
+        DashboardContribution::Action {
+            action_id: id,
+            params: advertised,
+            ..
+        } => id == action_id && advertised == params,
+        _ => item
+            .number_input_grant()
+            .is_some_and(|grant| grant.action_id == action_id && grant.accepts(params)),
+    })
+}
+
+struct NumericLease {
+    grant: NumberInputGrant,
+    revoked: watch::Sender<bool>,
+}
+
+struct NumericWriteGuard {
+    lease: Arc<NumericLease>,
+    registry: Arc<Mutex<HashMap<String, Arc<NumericLease>>>>,
+    rejected: mpsc::Sender<String>,
+}
+
+fn current_numeric(
+    registry: &HashMap<String, Arc<NumericLease>>,
+    lease: &Arc<NumericLease>,
+    params: &Value,
+) -> bool {
+    registry
+        .get(&lease.grant.action_id)
+        .is_some_and(|current| Arc::ptr_eq(current, lease))
+        && lease.grant.accepts(params)
 }
 
 struct CancelOnDrop {
@@ -939,6 +1032,7 @@ enum Control {
         generation: u64,
         action_id: String,
         params: Value,
+        numeric: Option<Arc<NumericLease>>,
         cancellation: watch::Receiver<bool>,
         deadline: Instant,
         reply: ActionReply,
@@ -961,6 +1055,7 @@ enum Outgoing {
         request_id: String,
         action_id: String,
         params: Value,
+        numeric: Option<NumericWriteGuard>,
         deadline: Instant,
         cancellation: watch::Receiver<bool>,
     },
@@ -1016,6 +1111,7 @@ async fn write_frames<W: AsyncWrite + Unpin>(
                 request_id,
                 action_id,
                 params,
+                numeric,
                 deadline,
                 mut cancellation,
             } => {
@@ -1028,6 +1124,73 @@ async fn write_frames<W: AsyncWrite + Unpin>(
                     || *cancellation.borrow()
                     || Instant::now() >= deadline
                 {
+                    continue;
+                }
+                if let Some(numeric) = numeric {
+                    enum FirstWrite {
+                        Started(Vec<u8>, usize),
+                        Rejected,
+                        Expired,
+                    }
+                    let mut revoked = numeric.lease.revoked.subscribe();
+                    let stop_check = stop.clone();
+                    let cancel_check = cancellation.clone();
+                    let first = tokio::select! {
+                        biased;
+                        _ = stop.changed() => return Ok(()),
+                        _ = cancellation.changed() => return Err("worker_write_cancelled"),
+                        _ = time::sleep_until(deadline) => return Err("worker_write_timeout"),
+                        _ = revoked.changed() => FirstWrite::Rejected,
+                        result = poll_fn(|context| {
+                            // A Pending write has emitted no bytes. Recheck and
+                            // re-encode on every poll, under the same locks used
+                            // for revocation, until the first byte is accepted.
+                            let authority = authority.lock().unwrap_or_else(|e| e.into_inner());
+                            if !authority.enabled || authority.epoch != epoch
+                                || *stop_check.borrow() || *cancel_check.borrow()
+                            {
+                                return Poll::Ready(Err("worker_write_cancelled"));
+                            }
+                            let registry = numeric.registry.lock().unwrap_or_else(|e| e.into_inner());
+                            if !current_numeric(&registry, &numeric.lease, &params) {
+                                return Poll::Ready(Ok(FirstWrite::Rejected));
+                            }
+                            let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+                            if remaining == 0 { return Poll::Ready(Ok(FirstWrite::Expired)); }
+                            let encoded = match encode_host_frame(&HostMessage::Action {
+                                request_id: request_id.clone(), action_id: action_id.clone(),
+                                params: params.clone(), deadline_ms: remaining as u64,
+                            }) {
+                                Ok(encoded) => encoded,
+                                Err(_) => return Poll::Ready(Err("host_frame_invalid")),
+                            };
+                            match std::pin::Pin::new(&mut stdin).poll_write(context, &encoded) {
+                                Poll::Ready(Ok(0) | Err(_)) => Poll::Ready(Err("worker_write_failed")),
+                                Poll::Ready(Ok(count)) => Poll::Ready(Ok(FirstWrite::Started(encoded, count))),
+                                Poll::Pending => Poll::Pending,
+                            }
+                        }) => result?,
+                    };
+                    match first {
+                        FirstWrite::Rejected => {
+                            numeric
+                                .rejected
+                                .try_send(request_id)
+                                .map_err(|_| "worker_write_queue_full")?;
+                        }
+                        FirstWrite::Expired => {}
+                        FirstWrite::Started(encoded, count) => {
+                            // A capability change cannot splice a new frame into
+                            // partial JSON. The worker rechecks after receiving it.
+                            tokio::select! {
+                                biased;
+                                _ = stop.changed() => return Ok(()),
+                                _ = cancellation.changed() => return Err("worker_write_cancelled"),
+                                _ = time::sleep_until(deadline) => return Err("worker_write_timeout"),
+                                result = stdin.write_all(&encoded[count..]) => result.map_err(|_| "worker_write_failed")?,
+                            }
+                        }
+                    }
                     continue;
                 }
                 // Forward only the original request's remaining budget. Queue
@@ -1062,6 +1225,8 @@ async fn write_frames<W: AsyncWrite + Unpin>(
 
 struct WorkerPipes {
     writer: mpsc::Sender<Outgoing>,
+    rejected: mpsc::Receiver<String>,
+    rejection_sender: mpsc::Sender<String>,
     frames: mpsc::Receiver<Result<WorkerMessage, &'static str>>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -1072,6 +1237,7 @@ impl WorkerPipes {
         let stdout = child.stdout.take()?;
         let mut stderr = child.stderr.take()?;
         let (writer, outgoing) = mpsc::channel(PIPE_QUEUE_CAPACITY);
+        let (rejection_sender, rejected) = mpsc::channel(MAX_IN_FLIGHT);
         let (incoming, frames) = mpsc::channel(PIPE_QUEUE_CAPACITY);
         let writer_errors = incoming.clone();
         let authority = entry.authority.clone();
@@ -1102,6 +1268,8 @@ impl WorkerPipes {
         });
         Some(Self {
             writer,
+            rejected,
+            rejection_sender,
             frames,
             tasks: vec![write_task, read_task, stderr_task],
         })
@@ -1369,6 +1537,11 @@ async fn run_generation(
                 if startup != StartupPhase::Running && Instant::now() >= startup_deadline { break Outcome::Failed("worker_startup_timeout"); }
                 expire_pending(&mut pending, pipes);
             }
+            Some(id) = pipes.rejected.recv() => {
+                if let Some(request) = pending.remove(&id) {
+                    let _ = request.reply.send(Err(PluginError::UnknownAction));
+                }
+            }
             frame = pipes.frames.recv() => {
                 if !entry.authorized() { break Outcome::Stopped; }
                 if rate_window.elapsed() >= Duration::from_secs(1) {
@@ -1489,11 +1662,7 @@ fn handle_frame(
             });
         }
         WorkerMessage::Contributions { items } => {
-            entry
-                .snapshot
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contributions = items;
+            entry.replace_contributions(items);
             notify = true;
         }
         WorkerMessage::ActionResult { request_id, value } => {
@@ -1544,6 +1713,7 @@ fn handle_control(
             generation: expected,
             action_id,
             params,
+            numeric,
             cancellation,
             deadline,
             reply,
@@ -1557,7 +1727,21 @@ fn handle_control(
                 Some(PluginError::Unavailable)
             } else if Instant::now() >= deadline {
                 Some(PluginError::DeadlineExceeded)
-            } else if !advertises(&entry.snapshot().contributions, &action_id, &params) {
+            } else if !advertises(&entry.snapshot().contributions, &action_id, &params)
+                || numeric.as_ref().is_some_and(|lease| {
+                    !current_numeric(
+                        &entry.numeric.lock().unwrap_or_else(|e| e.into_inner()),
+                        lease,
+                        &params,
+                    )
+                })
+                || (numeric.is_none()
+                    && entry
+                        .numeric
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .contains_key(&action_id))
+            {
                 Some(PluginError::UnknownAction)
             } else if pending.len() >= MAX_IN_FLIGHT {
                 Some(PluginError::Busy)
@@ -1574,6 +1758,11 @@ fn handle_control(
                     request_id: request_id.clone(),
                     action_id,
                     params,
+                    numeric: numeric.map(|lease| NumericWriteGuard {
+                        lease,
+                        registry: entry.numeric.clone(),
+                        rejected: pipes.rejection_sender.clone(),
+                    }),
                     deadline,
                     cancellation,
                 })

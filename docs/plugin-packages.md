@@ -122,18 +122,23 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.5 requires host API
-`^1.4` and keeps service actions disabled unless `action_entities` explicitly
+worker supplies connection status and state cards. Version 0.6 requires host API
+`^1.5` and keeps service actions disabled unless `action_entities` explicitly
 selects literal `button.*` or `scene.*` targets, `media_player_entities` selects
 literal media players, `binary_entities` selects literal switches, input booleans
-or lights, or `cover_entities` selects literal covers. Fixed button presses, scene
+or lights, `cover_entities` selects literal covers, `number_entities` selects
+literal numbers, or `cover_position_entities` selects literal covers for position writes.
+Fixed button presses, scene
 activation, media-player Play/Pause/Stop, explicit Turn on/Turn off and cover
 Open/Close/Stop are supported. On/off actions require exact observed
 `on` or `off` state, and service responses do not synthesize a state change.
 Cover operations require a known cover state and the corresponding reported
 capability; capability-only updates withdraw or restore controls. Cancellation
-never sends a cover Stop command. Position, tilt and numeric inputs remain pending.
-The combined selection permits 32 watched entities and 31 action buttons, bounded
+never sends a cover Stop command. Numeric inputs use exact bounded decimal grids
+and explicit Apply; changed constraints or eligibility revoke stale submissions.
+Position writes require their own selection and reported set-position support.
+Tilt and other parameterized services remain pending.
+The combined selection permits 32 watched entities and 31 controls, bounded
 to 64 contributions. There is no generic service proxy, core MQTT
 access, camera authority, or inverter flag alias lookup. Initial
 REST reads select individual configured entities; the broader `state_changed`
@@ -143,8 +148,8 @@ behavior and do not sandbox its operating-system access.
 `prepare-plugin-package.py --plugin home-assistant` stages this worker using
 fixed built-in metadata and the same native header/path checks as Frigate. The
 old Frigate staging command remains supported. The small shared
-`desktop-plugins/worker-protocol` library owns bounded stdio framing and flushed
-output only; it has no feature configuration or network clients. Neither worker
+`desktop-plugins/worker-protocol` library owns bounded stdio framing, JSON
+number-object rejection and flushed output; it has no feature configuration or network clients. Neither worker
 is linked into the main executable or mobile build.
 
 The explicit installed-package acceptance uses the actual release worker,

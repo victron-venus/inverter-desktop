@@ -1,6 +1,6 @@
 [package]
 name = "inverter-home-assistant-worker"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -15,7 +15,7 @@ percent-encoding = "=2.3.2"
 reqwest = { version = "=0.13.5", features = ["json"] }
 semver = "=1.0.28"
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = { version = "=1.0.151", features = ["arbitrary_precision"] }
 tokio = { version = "=1.53.1", features = ["rt", "macros", "sync", "time", "net", "io-util"] }
 tokio-tungstenite = { version = "=0.30.0", features = ["rustls-tls-native-roots"] }
 url = "=2.5.8"

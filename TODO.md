@@ -62,8 +62,10 @@ executed checks, with review approved and no open threads.
 [PR #431](https://github.com/victron-venus/inverter-desktop/pull/431) added explicit
 HA on/off controls on main at `ae73fa0`. Its final head `7d75afd` passed all 41
 executed checks, with review approved and no open threads. The current separate
-iteration adds explicit cover Open/Close/Stop using the same bounded worker
-transport and host controls.
+iteration adds bounded numeric inputs for selected HA numbers and cover positions.
+[PR #434](https://github.com/victron-venus/inverter-desktop/pull/434) completed cover
+Open/Close/Stop on main at `c614f07`; all 41 executed checks passed for `f55ace8`,
+with exact-head approval and no unresolved review threads.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -148,7 +150,122 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Next iteration: explicit HA cover controls
+### Current checkpoint: bounded HA numeric inputs
+
+Start from the verified PR #434 merge at `c614f07`. Add one declarative numeric
+input to the desktop host and use it for explicitly selected `number.*` values
+and cover positions. Existing fixed-action presets retain their exact parameter
+authorization. This is an independent PR and does not introduce plugin code,
+assets, imports or runtime capabilities into Android/iOS.
+
+- [x] Define host API 1.5 and a `number_input` contribution with bounded identity,
+      title, label, optional unit, `input_revision`, observed `value_scaled`,
+      `min_scaled`, `max_scaled`, `step_scaled` and `decimal_places`. Keep wire and
+      manifest schema version 1 and compatibility with older ^1.3/^1.4 workers.
+- [x] Use exact scaled integers with absolute coefficients at most 10^15 and
+      decimal precision 0..6. Require minimum <= maximum, positive step, and
+      in-range, grid-aligned observed and requested values. Reject malformed,
+      unsafe, nonfinite or unrepresentable numeric data; preserve state cards
+      when an entity cannot offer a valid numeric input.
+- [x] Authorize exactly `{input_revision, value_scaled}` for numeric inputs.
+      Preserve fixed Action preset equality and reject numeric action-ID
+      collisions with every actionable contribution. Validate current numeric
+      authority at frontend preflight, host enqueue, host control dispatch and
+      immediately before the first pipe byte; retain authentication epochs,
+      worker-instance binding, cancellation and original deadlines.
+- [x] Invalidate queued numeric grants on withdrawal/restoration or changed
+      constraints, even if a worker reuses its revision. Prove this with an
+      actually delayed writer and retain all existing static-action behavior.
+- [x] Render a numeric field and explicit Apply using desktop-only code. Parse
+      decimal drafts exactly; invalid or empty drafts send nothing. Keep drafts,
+      observed state and request results separate. Preserve dirty drafts during
+      ordinary HA updates and require review of changed constraints.
+- [x] Key numeric pending/error state by plugin, instance and action ID rather
+      than draft value or revision. Capability changes must not unlock another
+      pending write or erase an unknown result. Test real component/composable
+      behavior, duplicate clicks, stale instances, changed bounds and restoration.
+- [x] Add separate optional `number_entities` and `cover_position_entities`, each
+      empty by default and limited to four unique literal IDs. Append watched
+      targets after existing selections, preserving IDs and ordered deduplication.
+      Existing `cover_entities` must not gain position-write authority implicitly.
+- [x] Reserve one control slot per numeric input within the combined 31-control,
+      32-watched-entity and 64-contribution limits. Preserve previously accepted
+      configurations and their exact serialized 32 KiB boundary when new fields
+      are omitted or empty. Exercise actual maximum encoded frames.
+- [x] Require current-session number state and valid `min`, `max`, `step` and
+      optional unit metadata. Derive only `number/set_value` with a literal
+      `entity_id` and a validated JSON numeric `value`.
+- [x] Preserve the native startup envelope at the exact previous 32 KiB boundary,
+      not just worker reserialization. Add explicit `omitEmpty` schema semantics
+      only for optional public default-empty strings; preserve effective editor
+      values, use defaults instead of redundant stored keys, and retain all prior
+      schemas' delivery behavior. Opt in only the two new HA numeric fields and
+      test exact storage/envelope boundaries, upgrade/save, nonempty delivery and
+      invalid schemas.
+- [x] Require a known cover state, integer `current_position` in 0..100 and
+      unsigned `supported_features` bit 4. Use fixed bounds 0..100, step 1 and
+      `cover/set_cover_position` with only literal `entity_id` and `position`.
+      Keep Open/Close/Stop and their existing capability rules unchanged.
+- [x] Rotate worker input revisions when bounds, precision, unit or eligibility
+      change, including revocation/restoration and new sessions. Ordinary
+      observed-value updates must not invalidate an edited draft. Recheck the
+      published revision and current constraints before admitting a request.
+- [x] Keep the shared two-request limit, verified TLS, no redirects/retries,
+      original deadlines, cancellation, authentication rejection and private
+      unknown-outcome feedback. Service results never synthesize device state;
+      cancellation never sends a cover Stop command.
+- [x] Add worker unit and actual-process acceptance for decimal/grid boundaries,
+      exact bodies/routes, read-only defaults, malformed metadata, stale revisions,
+      capability changes, prior actions and shared executor behavior.
+- [x] Add installed-release-package acceptance using private HA/MQTT services:
+      exact numeric writes, server-confirmed state, stale parameters/instances,
+      changed constraints, settings replacement and stalled-command teardown.
+      Keep both core charger-flag states live and observe zero core commands.
+- [x] Update host/worker/package metadata and English documentation, including
+      unsupported precision and remaining discovery/household UI limitations.
+      Preserve the empty publisher policy and existing app-signing boundaries.
+- [x] Run relevant frontend, native, worker, packaging and mobile tests, strict
+      lint, fresh frontend/release builds and staging with serialized local load.
+      Complete independent source, authorization and acceptance reviews.
+- [ ] Push the separate PR, resolve comments in English, pass final-head CI and
+      synchronize clean main after the authorized merge.
+
+Local acceptance passes: 51 HA worker unit tests, 56 action subprocess tests,
+16 read/protocol subprocess tests and three macOS TLS scenarios. The shared
+protocol's 10 tests and Frigate's 25 tests pass. Strict all-target Clippy passes
+for the host and all three worker crates. HA 0.6 and Frigate release workers
+build separately; HA 0.6 stages with the final manifest.
+
+All 410 ordinary native tests pass. All eight explicitly selected installed
+release-package scenarios pass with zero failures or ignored selections: two
+Frigate and six HA. The numeric scenario checks ten exact service POSTs,
+HA-confirmed observations, revised constraints, revoked/restored capabilities,
+stale instances and teardown during stalled requests. Independent core MQTT
+telemetry stays live for both charger-flag states with zero core commands.
+
+All 366 frontend tests, 17 mobile tests and five profile tests pass. Fresh desktop
+and mobile builds include typechecking. A focused 17-test rerun passes after a
+test-only lint correction. Project Biome succeeds with the unchanged baseline
+of 79 warnings and 84 informational diagnostics; changed plugin files have no
+lint diagnostics. Prettier checks pass. Packaging and native mobile-boundary
+suites pass 27 and 29 tests, and packaging Pylint rates 10/10.
+All applicable pre-commit hooks pass without skip overrides.
+
+Four new native settings regressions bring that suite to 13 passing tests.
+They exercise the exact 32 KiB startup envelope and real encrypted settings
+storage through upgrade, editor save and reread. Empty numeric selections no
+longer add 50 bytes to an existing envelope or redundant keys to storage;
+one-byte overflow still fails. Other schemas retain default delivery semantics.
+Independent host, frontend, worker, JSON parsing, settings, installed-fixture and
+documentation reviews have no open findings. Hosted checks and the merge receipt
+remain pending for this separate PR.
+
+Discovery, appliance/weather presentation, other camera adapters, legacy
+configuration migration, removal of bundled desktop integrations and production
+package delivery remain separate work. Fixtures do not establish behavior of
+physical HA devices or existing household automations.
+
+### Completed checkpoint: explicit HA cover controls
 
 Extend the independently installed HA package with opt-in Open, Close and Stop
 for selected `cover.*` entities. Start from the verified PR #431 merge on main
@@ -188,7 +305,7 @@ arbitrary position, tilt, speed and numeric input remain a separate UI increment
       Preserve mobile compile/bundle exclusions and the empty publisher policy.
 - [x] Run relevant tests, strict lint, fresh frontend/release builds and staging
       with serialized local load; complete independent subagent reviews.
-- [ ] Push a separate PR, resolve comments in English, pass final-head CI and
+- [x] Push a separate PR, resolve comments in English, pass final-head CI and
       synchronize clean main after the authorized merge.
 
 Local acceptance passes: 39 worker unit tests, 44 action subprocess tests, 16
@@ -209,6 +326,11 @@ installed-fixture, CI-selection and documentation reviews found no open issues.
 Configuration tests cover all 3,825 action-count combinations and preserve old
 IDs and the exact serialized 32 KiB boundary. Real encoder checks cover maximum
 64-item frames, including the single-cover case with more long state values.
+
+PR #434 merged as `c614f07` after all 41 executed checks passed for `f55ace8`,
+with exact-head approval and no unresolved review threads. Canonical main was
+verified clean with the identical tested tree; six stashes and the private project
+guide were preserved. All 18 merged-main checks subsequently passed.
 
 Physical HA devices and actual scheduled automations remain separate acceptance
 work. This iteration does not complete arbitrary cover positioning, numeric
