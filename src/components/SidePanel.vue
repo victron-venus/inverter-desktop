@@ -88,31 +88,33 @@
     <!-- Home Controls -->
     <div
       v-if="showHomeSection !== false && homeButtons.length > 0"
-      class="classic-card flex-1 min-h-0"
+      class="classic-card flex flex-col flex-1 min-h-0"
     >
-      <div class="classic-header flex items-center gap-1.5">
+      <div class="classic-header flex items-center gap-1.5 shrink-0">
         <HomeIcon :size="10" /> {{ $t('sections.home') }}
       </div>
-      <div class="home-btn-grid p-1 overflow-y-auto max-h-[300px]">
-        <UiButton
-          v-for="btn in homeButtons"
-          :key="btn.id"
-          variant="tile"
-          class="home-btn-tile"
-          toggle
-          :active="buttonStates[btn.id] === 'on'"
-          :unavailable="buttonStates[btn.id] === 'unavailable'"
-          :disabled="controlsConnected === false && !isInverterControlFlag(btn.entity)"
-          @click="$emit('send', 'toggle', { entity: btn.entity })"
-        >
-          <component
-            :is="getControlIcon(btn.entity, btn.label)"
-            v-if="getControlIcon?.(btn.entity, btn.label)"
-            :size="12"
-            class="opacity-70 shrink-0"
-          />
-          <span class="home-tile-label">{{ getControlLabel?.(btn.label) ?? btn.label }}</span>
-        </UiButton>
+      <div class="home-btn-scroll p-1 overflow-y-auto max-h-[300px] min-h-0">
+        <div class="home-btn-grid">
+          <UiButton
+            v-for="btn in homeButtons"
+            :key="btn.id"
+            variant="tile"
+            class="home-btn-tile"
+            toggle
+            :active="buttonStates[btn.id] === 'on'"
+            :unavailable="buttonStates[btn.id] === 'unavailable'"
+            :disabled="controlsConnected === false && !isInverterControlFlag(btn.entity)"
+            @click="$emit('send', 'toggle', { entity: btn.entity })"
+          >
+            <component
+              :is="getControlIcon(btn.entity, btn.label)"
+              v-if="getControlIcon?.(btn.entity, btn.label)"
+              :size="12"
+              class="home-tile-icon opacity-70 shrink-0"
+            />
+            <span class="home-tile-label">{{ getControlLabel?.(btn.label) ?? btn.label }}</span>
+          </UiButton>
+        </div>
       </div>
     </div>
 

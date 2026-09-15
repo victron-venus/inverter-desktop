@@ -52,10 +52,7 @@ export function useDashboardFeatures() {
       label
         .replace(/\b(laundry|washer|washing|guard)\b/gi, '')
         .replace(/\s{2,}/g, ' ')
-        .trim()
-        .split(' ')
-        .filter(Boolean)
-        .join('\n'),
+        .trim(),
     getControlIcon: (entity: string, label: string): Component | null => {
       if (entity.split('.')[0] === 'light') return Lightbulb
       if (/laundry|washer|washing/.test(label.toLowerCase())) return WashingMachine
