@@ -341,6 +341,10 @@ impl HomeAssistant {
                     "sensor.dishwasher_duration",
                     "binary_sensor.dishwasher_next_running",
                     "sensor.dishwasher_next_duration",
+                    "sensor.washer_remaining",
+                    "sensor.dryer_remaining",
+                    "sensor.washer_next_remaining",
+                    "sensor.dryer_next_remaining",
                 ]
                 .iter()
                 .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
@@ -595,6 +599,12 @@ async fn serve_connection(
             "200 OK",
             entity_state(entity, "02:00:00", "Next dishwasher runtime"),
         ),
+        "sensor.washer_remaining" => ("200 OK", entity_state(entity, "00:25:00", "Washer")),
+        "sensor.dryer_remaining" => ("200 OK", entity_state(entity, "00:40:00", "Dryer")),
+        "sensor.washer_next_remaining" => {
+            ("200 OK", entity_state(entity, "00:10:00", "Next washer"))
+        }
+        "sensor.dryer_next_remaining" => ("200 OK", entity_state(entity, "00:20:00", "Next dryer")),
         "weather.home" => ("200 OK", weather_state(entity, "sunny")),
         "weather.next" => {
             let mut value = weather_state(entity, "rainy");
@@ -1145,12 +1155,12 @@ async fn configure(
     save_configuration(service, epoch, origin, values, token).await;
 }
 
-async fn configure_dishwasher(
+async fn configure_appliances(
     service: &PackageApplication,
     epoch: u64,
     origin: &HomeAssistant,
     prefix: &str,
-    selections: (&str, &str, &str),
+    selections: (&str, &str, &str, &str, &str),
     token: Option<&str>,
 ) {
     save_configuration(
@@ -1162,6 +1172,8 @@ async fn configure_dishwasher(
             ("watch_entities".into(), json!(selections.0)),
             ("dishwasher_running_entity".into(), json!(selections.1)),
             ("dishwasher_duration_entity".into(), json!(selections.2)),
+            ("washer_remaining_entity".into(), json!(selections.3)),
+            ("dryer_remaining_entity".into(), json!(selections.4)),
         ]),
         token,
     )
@@ -1475,6 +1487,8 @@ async fn signed_home_assistant_package_lifecycle() {
     assert_eq!(view["values"]["watch_entities"], "");
     assert_eq!(view["values"]["dishwasher_running_entity"], "");
     assert_eq!(view["values"]["dishwasher_duration_entity"], "");
+    assert_eq!(view["values"]["washer_remaining_entity"], "");
+    assert_eq!(view["values"]["dryer_remaining_entity"], "");
     assert_eq!(view["secret_present"]["ha_token"], false);
     assert!(view["fields"]
         .as_array()
@@ -1501,12 +1515,12 @@ async fn signed_home_assistant_package_lifecycle() {
     assert_eq!(origin.count("state"), 0);
     core.assert_receives(&broker, 2).await;
 
-    configure_dishwasher(
+    configure_appliances(
         &service,
         epoch,
         &origin,
         FIRST_PREFIX,
-        ("sensor.temperature,\ninput_boolean.do_not_supply_charger,sensor.missing,weather.home,sensor.dishwasher_duration,sensor.temperature", "binary_sensor.dishwasher_running", "sensor.dishwasher_duration"),
+        ("sensor.temperature,\ninput_boolean.do_not_supply_charger,sensor.missing,weather.home,sensor.dishwasher_duration,sensor.temperature", "binary_sensor.dishwasher_running", "sensor.dishwasher_duration", "sensor.washer_remaining", "sensor.dryer_remaining"),
         None,
     )
     .await;
@@ -1530,10 +1544,14 @@ async fn signed_home_assistant_package_lifecycle() {
     )
     .await;
     item_value(&host, "entity-5", "title", json!("Dishwasher")).await;
-    assert_eq!(items(&host).len(), 7);
+    item_value(&host, "entity-6", "text", json!("Remaining time: 00:25:00")).await;
+    item_value(&host, "entity-7", "text", json!("Remaining time: 00:40:00")).await;
+    item_value(&host, "entity-6", "title", json!("Washer")).await;
+    item_value(&host, "entity-7", "title", json!("Dryer")).await;
+    assert_eq!(items(&host).len(), 9);
     assert_eq!(
         origin.count("state"),
-        6,
+        8,
         "deduplicated selected entities only"
     );
     // A literal HA alias remains on while the daemon's canonical flag is false.
@@ -1708,6 +1726,62 @@ async fn signed_home_assistant_package_lifecycle() {
     )
     .await;
     item_value(&host, "entity-5", "title", json!("Renamed dishwasher")).await;
+    // Remaining time is literal source data. Each laundry role changes or
+    // disappears independently, without deriving appliance activity or units.
+    let mut washer = entity_state("sensor.washer_remaining", "0", "Washer");
+    washer["attributes"]["unit_of_measurement"] = json!("min");
+    origin.event("sensor.washer_remaining", Some(washer));
+    item_value(&host, "entity-6", "text", json!("Remaining time: 0")).await;
+    item_value(&host, "entity-7", "text", json!("Remaining time: 00:40:00")).await;
+    for (index, (state, display)) in [
+        ("off", "Idle"),
+        ("idle", "Idle"),
+        ("unknown", "Unknown"),
+        ("unavailable", "Unavailable"),
+        ("1e999", "Unavailable"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        origin.event(
+            "sensor.washer_remaining",
+            Some(entity_state("sensor.washer_remaining", state, "Washer")),
+        );
+        // The raw state changes even if the projected status is unchanged.
+        let serial = 100 + index;
+        origin.event(
+            "sensor.temperature",
+            Some(entity_state(
+                "sensor.temperature",
+                &serial.to_string(),
+                "Temperature",
+            )),
+        );
+        item_value(&host, "entity-0", "value", json!(serial as f64)).await;
+        item_value(&host, "entity-6", "value", json!(display)).await;
+    }
+    origin.event("sensor.dryer_remaining", None);
+    item_value(&host, "entity-7", "value", json!("Unavailable")).await;
+    origin.event(
+        "sensor.washer_remaining",
+        Some(entity_state(
+            "sensor.washer_remaining",
+            "00:05:00",
+            "Renamed washer",
+        )),
+    );
+    origin.event(
+        "sensor.dryer_remaining",
+        Some(entity_state(
+            "sensor.dryer_remaining",
+            "00:15:00",
+            "Renamed dryer",
+        )),
+    );
+    item_value(&host, "entity-6", "text", json!("Remaining time: 00:05:00")).await;
+    item_value(&host, "entity-7", "text", json!("Remaining time: 00:15:00")).await;
+    item_value(&host, "entity-6", "title", json!("Renamed washer")).await;
+    item_value(&host, "entity-7", "title", json!("Renamed dryer")).await;
     let current_instance = instance(&host);
     for action_id in [
         "entity-3",
@@ -1719,6 +1793,12 @@ async fn signed_home_assistant_package_lifecycle() {
         "dishwasher",
         "dishwasher-profile",
         "binary_sensor.dishwasher_running",
+        "entity-6",
+        "entity-7",
+        "washer",
+        "dryer",
+        "sensor.washer_remaining",
+        "sensor.dryer_remaining",
     ] {
         assert_eq!(
             host.action_in_epoch(PLUGIN, &current_instance, action_id, json!({}), WAIT, epoch)
@@ -1729,7 +1809,7 @@ async fn signed_home_assistant_package_lifecycle() {
     }
     assert_eq!(
         origin.count("state"),
-        6,
+        8,
         "weather and profile updates must not add requests or repeat reads"
     );
     assert_eq!(origin.count("service"), 0);
@@ -1742,7 +1822,7 @@ async fn signed_home_assistant_package_lifecycle() {
 
     // Replacing settings rotates the token, preserves the explicit port/prefix,
     // closes the old worker's socket, and replaces the contribution inventory.
-    configure_dishwasher(
+    configure_appliances(
         &service,
         epoch,
         &origin,
@@ -1751,6 +1831,8 @@ async fn signed_home_assistant_package_lifecycle() {
             "sensor.next,weather.next",
             "binary_sensor.dishwasher_next_running",
             "sensor.dishwasher_next_duration",
+            "sensor.washer_next_remaining",
+            "sensor.dryer_next_remaining",
         ),
         Some(&origin.second_token),
     )
@@ -1773,7 +1855,25 @@ async fn signed_home_assistant_package_lifecycle() {
     )
     .await;
     item_value(&host, "entity-3", "text", json!("02:00:00")).await;
-    assert_eq!(items(&host).len(), 5);
+    item_value(&host, "entity-4", "text", json!("Remaining time: 00:10:00")).await;
+    item_value(&host, "entity-5", "text", json!("Remaining time: 00:20:00")).await;
+    assert_eq!(items(&host).len(), 7);
+    origin.event(
+        "sensor.washer_remaining",
+        Some(entity_state(
+            "sensor.washer_remaining",
+            "old-laundry-washer",
+            "Old washer",
+        )),
+    );
+    origin.event(
+        "sensor.dryer_remaining",
+        Some(entity_state(
+            "sensor.dryer_remaining",
+            "old-laundry-dryer",
+            "Old dryer",
+        )),
+    );
     origin.event(
         "binary_sensor.dishwasher_running",
         Some(entity_state(
@@ -1816,6 +1916,11 @@ async fn signed_home_assistant_package_lifecycle() {
     assert!(!serde_json::to_string(&items(&host))
         .unwrap()
         .contains("old-profile"));
+    assert!(!serde_json::to_string(&items(&host))
+        .unwrap()
+        .contains("old-laundry"));
+    item_value(&host, "entity-4", "text", json!("Remaining time: 00:10:00")).await;
+    item_value(&host, "entity-5", "text", json!("Remaining time: 00:20:00")).await;
     item_value(
         &host,
         "entity-2",
@@ -1846,6 +1951,8 @@ async fn signed_home_assistant_package_lifecycle() {
         json!("State: Idle\nRuntime since midnight: 02:00:00"),
     )
     .await;
+    item_value(&host, "entity-4", "text", json!("Remaining time: 00:10:00")).await;
+    item_value(&host, "entity-5", "text", json!("Remaining time: 00:20:00")).await;
     assert!(service.session_changed(false).is_none());
     assert!(items(&host).is_empty());
     origin.no_sockets().await;
@@ -1853,6 +1960,8 @@ async fn signed_home_assistant_package_lifecycle() {
     let next_epoch = service.session_changed(true).unwrap();
     service.restore(next_epoch).await.unwrap();
     connection(&host).await;
+    item_value(&host, "entity-4", "text", json!("Remaining time: 00:10:00")).await;
+    item_value(&host, "entity-5", "text", json!("Remaining time: 00:20:00")).await;
     item_value(
         &host,
         "entity-2",

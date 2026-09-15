@@ -48,6 +48,10 @@ pub struct Values {
     pub dishwasher_running_entity: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub dishwasher_duration_entity: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub washer_remaining_entity: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dryer_remaining_entity: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -66,8 +70,15 @@ pub struct Validated {
     pub number_entities: Vec<String>,
     pub cover_position_entities: Vec<String>,
     pub discovery_prefixes: Vec<String>,
-    pub dishwasher: Option<DishwasherProfile>,
+    pub appliances: ApplianceProfiles,
     pub token: String,
+}
+
+#[derive(Default)]
+pub struct ApplianceProfiles {
+    pub dishwasher: Option<DishwasherProfile>,
+    pub washer_remaining_entity: Option<String>,
+    pub dryer_remaining_entity: Option<String>,
 }
 
 pub struct DishwasherProfile {
@@ -352,6 +363,23 @@ impl Configuration {
                 }
             }
         }
+        let washer_remaining_entity = optional_entity(&self.values.washer_remaining_entity)?;
+        let dryer_remaining_entity = optional_entity(&self.values.dryer_remaining_entity)?;
+        let mut primaries = HashSet::new();
+        if let Some(profile) = &dishwasher {
+            primaries.insert(&profile.running_entity);
+        }
+        for entity in washer_remaining_entity
+            .iter()
+            .chain(&dryer_remaining_entity)
+        {
+            if !primaries.insert(entity) {
+                return Err("duplicate appliance primary");
+            }
+            if !entities.contains(entity) {
+                entities.push(entity.clone());
+            }
+        }
         if entities.len() > MAX_ENTITIES {
             return Err("too many watched entities");
         }
@@ -366,7 +394,11 @@ impl Configuration {
             number_entities,
             cover_position_entities,
             discovery_prefixes,
-            dishwasher,
+            appliances: ApplianceProfiles {
+                dishwasher,
+                washer_remaining_entity,
+                dryer_remaining_entity,
+            },
             token: self.secrets.ha_token,
         })
     }
@@ -436,14 +468,14 @@ fn literal_entity(entity: &str) -> bool {
 
 fn optional_entity(value: &str) -> Result<Option<String>, &'static str> {
     if value.len() > 128 {
-        return Err("invalid dishwasher entity");
+        return Err("invalid appliance entity");
     }
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);
     }
     if !literal_entity(value) {
-        return Err("invalid dishwasher entity");
+        return Err("invalid appliance entity");
     }
     Ok(Some(value.to_owned()))
 }
@@ -1516,7 +1548,7 @@ mod tests {
             value.values.dishwasher_running_entity = format!(" {running} ");
             let config = value.validate().unwrap();
             assert_eq!(config.entities, [running]);
-            let profile = config.dishwasher.as_ref().unwrap();
+            let profile = config.appliances.dishwasher.as_ref().unwrap();
             assert_eq!(profile.running_entity, running);
             assert!(profile.duration_entity.is_none());
             assert!(config.actions().is_empty());
@@ -1553,7 +1585,7 @@ mod tests {
                 }
                 assert_eq!(
                     value.validate().err(),
-                    Some("invalid dishwasher entity"),
+                    Some("invalid appliance entity"),
                     "{malformed}"
                 );
             }
@@ -1666,7 +1698,7 @@ mod tests {
                 MAX_CONFIGURATION_BYTES
             );
             let config = config.validate().unwrap();
-            assert!(config.dishwasher.is_none());
+            assert!(config.appliances.dishwasher.is_none());
             assert_eq!(config.entities, ["light.a", "cover.a", "number.a"]);
             assert_eq!(config.inputs().len(), 2);
         }
@@ -1711,5 +1743,169 @@ mod tests {
                 .err(),
             Some("invalid configuration")
         );
+    }
+
+    #[test]
+    fn laundry_roles_accept_only_optional_single_literal_ids_with_raw_128byte_bounds() {
+        for field in ["washer_remaining_entity", "dryer_remaining_entity"] {
+            for (value, accepted) in [
+                ("".to_owned(), true),
+                (" sensor.remaining ".into(), true),
+                ("number.remaining".into(), true),
+                ("switch.remaining".into(), true),
+                ("weather.remaining".into(), true),
+                ("button.remaining".into(), true),
+                (format!("sensor.{}", "x".repeat(121)), true),
+                (format!("sensor.{} ", "x".repeat(121)), false),
+                (" ".repeat(128), true),
+                (" ".repeat(129), false),
+                ("sensor.a,sensor.a".into(), false),
+                ("sensor.a,".into(), false),
+                ("sensor.a\nsensor.a".into(), false),
+                ("sensor.*".into(), false),
+                ("sensor.".into(), false),
+                ("sensor.a/b".into(), false),
+                ("Sensor.a".into(), false),
+                ("sensor.é".into(), false),
+            ] {
+                let mut config =
+                    serde_json::to_value(configuration("http://localhost", "")).unwrap();
+                config["values"][field] = json!(value);
+                let result = serde_json::from_value::<Configuration>(config)
+                    .unwrap()
+                    .validate();
+                assert_eq!(result.is_ok(), accepted, "{field}: {value}");
+                if let Ok(config) = result {
+                    assert!(config.actions().is_empty());
+                    assert!(config.inputs().is_empty());
+                    assert!(config.appliances.dishwasher.is_none());
+                }
+            }
+            for value in [json!(null), json!(true), json!(12), json!([]), json!({})] {
+                let mut config =
+                    serde_json::to_value(configuration("http://localhost", "")).unwrap();
+                config["values"][field] = value;
+                assert!(serde_json::from_value::<Configuration>(config).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn laundry_rejects_primary_collisions_but_allows_shared_duration_watch_and_control_targets() {
+        for (washer, dryer, primary) in [
+            (" sensor.same ", "sensor.same", ""),
+            ("sensor.same", "", " sensor.same "),
+            ("", " sensor.same ", "sensor.same"),
+        ] {
+            let mut value = configuration("http://localhost", "");
+            value.values.washer_remaining_entity = washer.into();
+            value.values.dryer_remaining_entity = dryer.into();
+            value.values.dishwasher_running_entity = primary.into();
+            assert_eq!(value.validate().err(), Some("duplicate appliance primary"));
+        }
+        let mut value = configuration("http://localhost", "sensor.shared,number.dryer");
+        value.values.action_entities = "button.start".into();
+        value.values.binary_entities = "switch.dishwasher".into();
+        value.values.number_entities = "number.dryer".into();
+        value.values.dishwasher_running_entity = "switch.dishwasher".into();
+        value.values.dishwasher_duration_entity = "sensor.shared".into();
+        value.values.washer_remaining_entity = "sensor.shared".into();
+        value.values.dryer_remaining_entity = "number.dryer".into();
+        let config = value.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            [
+                "sensor.shared",
+                "number.dryer",
+                "button.start",
+                "switch.dishwasher"
+            ]
+        );
+        assert_eq!(config.actions().len(), 3);
+        assert_eq!(config.inputs().len(), 1);
+        let mut value = configuration("http://localhost", "sensor.manual");
+        value.values.dishwasher_running_entity = "binary_sensor.dishwasher".into();
+        value.values.dishwasher_duration_entity = "sensor.runtime".into();
+        value.values.washer_remaining_entity = "sensor.washer".into();
+        value.values.dryer_remaining_entity = "sensor.dryer".into();
+        let config = value.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            [
+                "sensor.manual",
+                "binary_sensor.dishwasher",
+                "sensor.runtime",
+                "sensor.washer",
+                "sensor.dryer"
+            ]
+        );
+    }
+
+    #[test]
+    fn laundry_shares_the_existing_32_entity_capacity_and_deduplicates_selected_reads() {
+        let targets = (0..32)
+            .map(|index| format!("sensor.e{index}"))
+            .collect::<Vec<_>>();
+        let mut value = configuration("http://localhost", &targets.join(","));
+        value.values.washer_remaining_entity = "sensor.e0".into();
+        value.values.dryer_remaining_entity = "sensor.e1".into();
+        assert_eq!(value.validate().unwrap().entities, targets);
+        let mut value = configuration("http://localhost", &targets[..30].join(","));
+        value.values.washer_remaining_entity = "sensor.washer".into();
+        value.values.dryer_remaining_entity = "sensor.dryer".into();
+        assert_eq!(value.validate().unwrap().entities.len(), 32);
+        let mut value = configuration("http://localhost", &targets[..31].join(","));
+        value.values.washer_remaining_entity = "sensor.washer".into();
+        value.values.dryer_remaining_entity = "sensor.dryer".into();
+        assert_eq!(value.validate().err(), Some("too many watched entities"));
+    }
+
+    #[test]
+    fn absent_empty_and_configured_laundry_fields_share_the_previous_32k_configuration_boundary() {
+        for configured in [false, true] {
+            let mut value = json!({"revision":"laundry-size-boundary","values":{
+                "ha_base_url":"http://localhost","watch_entities":"\u{b}".repeat(4096),"action_entities":"\u{b}".repeat(1200),"media_player_entities":"",
+                "dishwasher_running_entity":"binary_sensor.running","dishwasher_duration_entity":"sensor.runtime"},
+                "secrets":{"ha_token":"fixture-token"}});
+            if configured {
+                value["values"]["washer_remaining_entity"] = json!("sensor.washer");
+                value["values"]["dryer_remaining_entity"] = json!("sensor.dryer");
+            }
+            let padding = MAX_CONFIGURATION_BYTES - serde_json::to_vec(&value).unwrap().len();
+            value["secrets"]["ha_token"] = json!(format!("fixture-token{}", "x".repeat(padding)));
+            for explicit_empty in [false, true] {
+                if explicit_empty && !configured {
+                    value["values"]["washer_remaining_entity"] = json!("");
+                    value["values"]["dryer_remaining_entity"] = json!("");
+                }
+                let config: Configuration = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(
+                    serde_json::to_vec(&config).unwrap().len(),
+                    MAX_CONFIGURATION_BYTES
+                );
+                let config = config.validate().unwrap();
+                assert!(config.appliances.dishwasher.is_some());
+                assert_eq!(
+                    config.appliances.washer_remaining_entity.is_some(),
+                    configured
+                );
+                assert_eq!(
+                    config.appliances.dryer_remaining_entity.is_some(),
+                    configured
+                );
+                assert_eq!(config.entities.len(), if configured { 4 } else { 2 });
+            }
+            value["secrets"]["ha_token"] = json!(format!(
+                "{}x",
+                value["secrets"]["ha_token"].as_str().unwrap()
+            ));
+            assert_eq!(
+                serde_json::from_value::<Configuration>(value)
+                    .unwrap()
+                    .validate()
+                    .err(),
+                Some("invalid configuration")
+            );
+        }
     }
 }

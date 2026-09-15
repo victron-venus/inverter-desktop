@@ -122,7 +122,7 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.10 retains host API
+worker supplies connection status and state cards. Version 0.11 retains host API
 `^1.6` to group each selected entity's state and explicitly authorized controls
 through validated `state_id` references. Existing IDs, parameters and numeric
 revisions retain their authority; equal friendly names do not merge entities.
@@ -135,11 +135,23 @@ Optional `dishwasher_running_entity` and `dishwasher_duration_entity` settings
 assign two distinct literal entities to a read-only profile. The duration role
 requires the running role; both are watched within the existing 32-state union.
 The running entity's existing card combines its state and literal runtime since
-midnight, with no inferred unit, conversion or countdown. The ordinary duration
-card remains. Either role's updates refresh the summary, while unknown or
+midnight, with no inferred unit, conversion or countdown. The duration card remains independently visible and may have its own
+explicitly configured remaining-time profile. Either role's updates refresh the summary, while unknown or
 unavailable running state uses the existing status card. The two settings default
 to empty and use `omitEmpty` to preserve prior startup envelopes. This adds no
 service authority, contribution kind, host API or automatic settings migration.
+Optional `washer_remaining_entity` and `dryer_remaining_entity` each assign one
+literal remaining-time source to its existing card. The roles append to the same
+read union, retain complete bounded literals including zero, and use neutral
+idle/unknown/unavailable statuses. They do not infer activity, units or a local
+countdown, and grant no controls. Each primary profile needs a distinct entity;
+sharing a dishwasher duration source is allowed and explicitly projects that
+independently visible duration card too. Both projections update together after
+the same source-ordering guard. Empty defaults use `omitEmpty` and preserve the
+prior 32-KiB configuration/storage boundary; selected values count normally.
+Existing appliance start/pause buttons require separate `action_entities`
+selection. Legacy settings migration and complete bundled UI removal remain open.
+
 The worker keeps service actions disabled unless `action_entities` explicitly
 selects literal `button.*` or `scene.*` targets, `media_player_entities` selects
 literal media players, `binary_entities` selects literal switches, input booleans

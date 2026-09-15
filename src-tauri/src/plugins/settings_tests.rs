@@ -423,12 +423,23 @@ fn omit_empty_preserves_effective_values_and_only_canonicalizes_opted_in_empty_s
 
 const HA_DISHWASHER_ROLES: [&str; 2] = ["dishwasher_running_entity", "dishwasher_duration_entity"];
 
-const HA_OMIT_EMPTY_SELECTIONS: [&str; 5] = [
+const HA_LAUNDRY_ROLES: [&str; 2] = ["washer_remaining_entity", "dryer_remaining_entity"];
+
+const HA_APPLIANCE_ROLES: [&str; 4] = [
+    "dishwasher_running_entity",
+    "dishwasher_duration_entity",
+    "washer_remaining_entity",
+    "dryer_remaining_entity",
+];
+
+const HA_OMIT_EMPTY_SELECTIONS: [&str; 7] = [
     "number_entities",
     "cover_position_entities",
     "discovery_prefixes",
     "dishwasher_running_entity",
     "dishwasher_duration_entity",
+    "washer_remaining_entity",
+    "dryer_remaining_entity",
 ];
 
 fn ha_optional_selection_upgrade(
@@ -459,12 +470,14 @@ fn ha_optional_selection_upgrade(
         secrets: BTreeMap::from([("ha_token".into(), "fixture-token".into())]),
         secret_fields: BTreeSet::from(["ha_token".into()]),
     };
-    // Also exercise the immediately preceding HA schema with active numeric
-    // selections and discovery, rather than only the oldest optional-field set.
+    // Keep selections supported by each preceding schema active, including the
+    // dishwasher profile when only the new laundry roles are absent.
     for (key, value) in [
         ("number_entities", "number.a"),
         ("cover_position_entities", "cover.a"),
         ("discovery_prefixes", "sensor."),
+        ("dishwasher_running_entity", "binary_sensor.dishwasher"),
+        ("dishwasher_duration_entity", "sensor.dishwasher_runtime"),
     ] {
         if !additions.contains(&key) {
             data.values.insert(key.into(), json!(value));
@@ -475,7 +488,11 @@ fn ha_optional_selection_upgrade(
 
 #[test]
 fn ha_optional_selections_preserve_the_exact_previous_worker_configuration_byte_boundary() {
-    for additions in [&HA_OMIT_EMPTY_SELECTIONS[..], &HA_DISHWASHER_ROLES[..]] {
+    for additions in [
+        &HA_OMIT_EMPTY_SELECTIONS[..],
+        &HA_APPLIANCE_ROLES[..],
+        &HA_LAUNDRY_ROLES[..],
+    ] {
         let (metadata, previous, mut data) = ha_optional_selection_upgrade(additions);
         let maximum = super::super::protocol::MAX_CONFIGURATION_BYTES;
         let padding = maximum
@@ -511,7 +528,11 @@ fn ha_optional_selection_upgrade_can_resave_a_previous_settings_record_at_the_st
     use super::super::settings_store::{SettingsStore, MAX_SETTINGS_PLAINTEXT_BYTES};
     use std::sync::Arc;
 
-    for additions in [&HA_OMIT_EMPTY_SELECTIONS[..], &HA_DISHWASHER_ROLES[..]] {
+    for additions in [
+        &HA_OMIT_EMPTY_SELECTIONS[..],
+        &HA_APPLIANCE_ROLES[..],
+        &HA_LAUNDRY_ROLES[..],
+    ] {
         let (metadata, previous, mut data) = ha_optional_selection_upgrade(additions);
         let padding = MAX_SETTINGS_PLAINTEXT_BYTES - serde_json::to_vec(&data).unwrap().len();
         data.secrets
@@ -590,33 +611,63 @@ fn ha_optional_selection_upgrade_can_resave_a_previous_settings_record_at_the_st
 
 #[test]
 fn ha_dishwasher_roles_are_opt_in_and_survive_schema_rollback() {
-    let (metadata, previous, _) = ha_optional_selection_upgrade(&HA_DISHWASHER_ROLES);
+    ha_roles_are_opt_in_and_survive_schema_rollback(
+        HA_DISHWASHER_ROLES,
+        [
+            "binary_sensor.dishwasher_running",
+            "sensor.dishwasher_elapsed",
+        ],
+        &HA_APPLIANCE_ROLES,
+        &[],
+    );
+}
+
+#[test]
+fn ha_laundry_roles_are_opt_in_and_survive_schema_rollback() {
+    ha_roles_are_opt_in_and_survive_schema_rollback(
+        HA_LAUNDRY_ROLES,
+        ["sensor.washer_remaining", "sensor.dryer_remaining"],
+        &HA_LAUNDRY_ROLES,
+        &[
+            ("dishwasher_running_entity", "binary_sensor.dishwasher"),
+            ("dishwasher_duration_entity", "sensor.dishwasher_runtime"),
+        ],
+    );
+}
+
+fn ha_roles_are_opt_in_and_survive_schema_rollback(
+    roles: [&str; 2],
+    selections: [&str; 2],
+    previous_additions: &[&str],
+    retained_roles: &[(&str, &str)],
+) {
+    let (metadata, previous, _) = ha_optional_selection_upgrade(previous_additions);
     let schema = SettingsSchema::compile(&metadata).unwrap();
+    let mut values = BTreeMap::from([
+        ("ha_base_url".into(), json!("https://ha.example.invalid")),
+        ("watch_entities".into(), json!("sensor.existing")),
+        ("action_entities".into(), json!("button.explicit")),
+    ]);
+    for &(key, entity) in retained_roles {
+        values.insert(key.into(), json!(entity));
+    }
     let initial = schema
         .merge(
             "current",
             &SettingsData::default(),
             "current:0",
-            BTreeMap::from([
-                ("ha_base_url".into(), json!("https://ha.example.invalid")),
-                ("watch_entities".into(), json!("sensor.existing")),
-                ("action_entities".into(), json!("button.explicit")),
-            ]),
+            values,
             BTreeMap::from([("ha_token".into(), Some("fixture-token".into()))]),
         )
         .unwrap();
     let mut view = schema.view(&metadata, "current", &initial).unwrap();
     let initial_startup = schema.configuration(&initial).unwrap();
-    for key in HA_DISHWASHER_ROLES {
+    for key in roles {
         assert_eq!(view.values[key], "");
         assert!(!initial.values.contains_key(key));
         assert!(initial_startup.values.get(key).is_none());
     }
-    let selections = [
-        "binary_sensor.dishwasher_running",
-        "sensor.dishwasher_elapsed",
-    ];
-    for (key, entity) in HA_DISHWASHER_ROLES.into_iter().zip(selections) {
+    for (key, entity) in roles.into_iter().zip(selections) {
         view.values.insert(key.into(), json!(entity));
     }
     let selected = schema
@@ -629,26 +680,30 @@ fn ha_dishwasher_roles_are_opt_in_and_survive_schema_rollback() {
         )
         .unwrap();
     let startup = schema.configuration(&selected).unwrap();
-    for (key, entity) in HA_DISHWASHER_ROLES.into_iter().zip(selections) {
+    for (key, entity) in roles.into_iter().zip(selections) {
         assert_eq!(selected.values[key], entity);
         assert_eq!(startup.values[key], entity);
     }
     assert_eq!(startup.values["watch_entities"], "sensor.existing");
     assert_eq!(startup.values["action_entities"], "button.explicit");
     assert_eq!(startup.secrets, initial_startup.secrets);
+    for &(key, entity) in retained_roles {
+        assert_eq!(startup.values[key], entity);
+    }
 
     // A previous worker must not receive unsupported role fields. Its settings
     // editor still preserves the user's explicit selection for a later upgrade.
     let old_view = previous.view(&metadata, "previous", &selected).unwrap();
-    for key in HA_DISHWASHER_ROLES {
+    let old_startup = previous.configuration(&selected).unwrap();
+    for key in roles {
         assert!(!old_view.values.contains_key(key));
-        assert!(previous
-            .configuration(&selected)
-            .unwrap()
-            .values
-            .get(key)
-            .is_none());
+        assert!(old_startup.values.get(key).is_none());
     }
+    for &(key, entity) in retained_roles {
+        assert_eq!(old_view.values[key], entity);
+        assert_eq!(old_startup.values[key], entity);
+    }
+    assert_eq!(old_startup.secrets, initial_startup.secrets);
     let resaved = previous
         .merge(
             "previous",
@@ -660,7 +715,7 @@ fn ha_dishwasher_roles_are_opt_in_and_survive_schema_rollback() {
         .unwrap();
     assert!(resaved == selected);
     let mut restored_view = schema.view(&metadata, "restored", &resaved).unwrap();
-    for (key, entity) in HA_DISHWASHER_ROLES.into_iter().zip(selections) {
+    for (key, entity) in roles.into_iter().zip(selections) {
         assert_eq!(restored_view.values[key], entity);
         assert_eq!(schema.configuration(&resaved).unwrap().values[key], entity);
         restored_view.values.insert(key.into(), json!(""));
@@ -674,7 +729,7 @@ fn ha_dishwasher_roles_are_opt_in_and_survive_schema_rollback() {
             BTreeMap::new(),
         )
         .unwrap();
-    for key in HA_DISHWASHER_ROLES {
+    for key in roles {
         assert!(!cleared.values.contains_key(key));
         assert!(schema
             .configuration(&cleared)
@@ -687,5 +742,12 @@ fn ha_dishwasher_roles_are_opt_in_and_survive_schema_rollback() {
             ""
         );
     }
+    assert_eq!(cleared.values, initial.values);
+    assert_eq!(cleared.secret_fields, initial.secret_fields);
+    assert_ne!(cleared.revision, resaved.revision);
+    assert_eq!(
+        schema.configuration(&cleared).unwrap().values,
+        initial_startup.values
+    );
     assert_eq!(cleared.secrets, initial.secrets);
 }

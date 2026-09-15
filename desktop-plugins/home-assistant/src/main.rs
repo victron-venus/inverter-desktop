@@ -64,7 +64,7 @@ async fn session(
         &configuration.actions(),
         &configuration.inputs(),
         &configuration.discovery_prefixes,
-        configuration.dishwasher.as_ref(),
+        &configuration.appliances,
     );
     tokio::select! {
         result=actions::run(incoming,output,configuration.clone(),book.clone())=>result,
