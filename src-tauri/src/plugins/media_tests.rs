@@ -240,46 +240,171 @@ async fn revocation_cancels_stalled_body_without_opening_a_window() {
         .unwrap();
 }
 
-#[tokio::test]
+async fn frozen_io<T>(phase: &str, operation: impl std::future::Future<Output = T>) -> T {
+    let started = std::time::Instant::now();
+    let virtual_started = tokio::time::Instant::now();
+    tokio::pin!(operation);
+    loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "fixture I/O stalled: {phase}"
+        );
+        tokio::select! {
+            biased;
+            result = &mut operation => {
+                assert_eq!(tokio::time::Instant::now(), virtual_started);
+                return result;
+            }
+            // Stay runnable so external socket and disk waits cannot advance test time.
+            _ = tokio::task::yield_now() => {}
+        }
+    }
+}
+
+async fn frozen_request(stream: &mut tokio::net::TcpStream) -> String {
+    frozen_io("request headers", async {
+        let mut bytes = [0; 8192];
+        let mut length = 0;
+        while !bytes[..length].ends_with(b"\r\n\r\n") {
+            assert!(length < bytes.len(), "request headers exceed fixture bound");
+            let received = stream.read(&mut bytes[length..]).await.unwrap();
+            assert_ne!(received, 0, "request closed before its header delimiter");
+            length += received;
+        }
+        String::from_utf8(bytes[..length].to_vec()).unwrap()
+    })
+    .await
+}
+
+async fn frozen_prefix(path: &std::path::Path, expected: &[u8]) {
+    frozen_io("persisted response prefix", async {
+        loop {
+            let path = path.to_owned();
+            let bytes = tokio::task::spawn_blocking(move || fs::read(path))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                expected.starts_with(&bytes),
+                "unexpected partial response bytes"
+            );
+            if bytes == expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn progressive_progress_survives_idle_limit_but_stall_retries() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        for attempt in 0..2 {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut input = [0; 8192];
-            assert!(stream.read(&mut input).await.unwrap() > 0);
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n")
-                .await
-                .unwrap();
-            if attempt == 0 {
-                stream.write_all(b"x").await.unwrap();
-                sleep(Duration::from_millis(160)).await;
-            } else {
-                for byte in b"video" {
-                    stream.write_all(&[*byte]).await.unwrap();
-                    sleep(Duration::from_millis(30)).await;
-                }
-            }
-        }
-    });
-    let (_directory, service, mut events) = service(policy()).await;
+    let limits = policy();
+    let (directory, service, mut events) =
+        frozen_io("initialize media service", service(limits.clone())).await;
     service.try_submit(request(&base, lease())).unwrap();
-    let clip = ready(&mut events).await;
-    assert_eq!(clip.error, None);
+
+    let (mut stalled, _) = frozen_io("first connection", listener.accept())
+        .await
+        .unwrap();
+    let media_directory = directory.path().join("media");
+    let mut files = frozen_io(
+        "locate partial clip",
+        tokio::task::spawn_blocking(move || {
+            fs::read_dir(media_directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(files.len(), 1);
+    let path = files.pop().unwrap();
+    let mut requests = vec![frozen_request(&mut stalled).await];
+    frozen_io(
+        "incomplete response",
+        stalled.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nx"),
+    )
+    .await
+    .unwrap();
+    frozen_prefix(&path, b"x").await;
+    // Let ready tasks and the blocking disk write settle before advancing to the
+    // idle timer. Immediate advance could run before the next read timer is armed.
+    sleep(limits.read_timeout + Duration::from_millis(1)).await;
+    let mut closed = [0; 1];
     assert_eq!(
-        service
-            .read_range(&clip.media_id, &clip.window_label, None, false)
+        frozen_io("idle timeout closes client", stalled.read(&mut closed))
             .await
-            .unwrap()
-            .bytes,
-        b"video"
+            .unwrap(),
+        0
     );
-    server.await.unwrap();
+    drop(stalled);
+    sleep(limits.delays[0]).await;
+
+    let (mut progressive, _) = frozen_io("retry connection", listener.accept())
+        .await
+        .unwrap();
+    requests.push(frozen_request(&mut progressive).await);
+    frozen_io(
+        "retry headers",
+        progressive.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n"),
+    )
+    .await
+    .unwrap();
+    let progress_started = tokio::time::Instant::now();
+    for (index, byte) in b"video".iter().enumerate() {
+        if index != 0 {
+            tokio::time::advance(Duration::from_millis(30)).await;
+        }
+        frozen_io("progressive body byte", progressive.write_all(&[*byte]))
+            .await
+            .unwrap();
+        frozen_prefix(&path, &b"video"[..=index]).await;
+    }
+    assert_eq!(progress_started.elapsed(), Duration::from_millis(120));
+    assert!(progress_started.elapsed() > limits.read_timeout);
+    frozen_io("finish response", progressive.shutdown())
+        .await
+        .unwrap();
+    drop(progressive);
+    let clip = frozen_io("ready clip", ready(&mut events)).await;
+    assert_eq!(clip.error, None);
+    let bytes = frozen_io(
+        "read completed clip",
+        service.read_range(&clip.media_id, &clip.window_label, None, false),
+    )
+    .await
+    .unwrap();
+    assert_eq!(bytes.bytes, b"video");
+    assert_eq!(bytes.status, 200);
+    drop(bytes);
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|request| request.starts_with("GET /api/events/test/clip.mp4 HTTP/1.1\r\n")));
+    assert_eq!(
+        listener.into_std().unwrap().accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
     service.window_failed(&clip.media_id);
-    idle(&service).await;
-    service.shutdown().await.unwrap();
+    frozen_io("media cleanup", async {
+        while service.has_owned_work() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    frozen_io("service shutdown", service.shutdown())
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read_dir(directory.path().join("media"))
+            .unwrap()
+            .count(),
+        0
+    );
 }
 
 #[tokio::test]
