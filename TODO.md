@@ -72,7 +72,7 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
-### Current checkpoint: explicit read-only dishwasher profile
+### Completed checkpoint: explicit read-only dishwasher profile
 
 Start from verified main `d7492c1`. Preserve the bundled dishwasher's explicitly
 configured running state and runtime since midnight in one existing HA worker
@@ -114,7 +114,7 @@ roles, migrate saved settings, add actions or claim a remaining-time countdown.
 - [x] Run formatting, strict Clippy, appropriate worker/native/process/installed
       checks, frontend checks/builds, packaging and mobile-boundary validation.
       Independently review implementation, fixtures and documentation.
-- [ ] Push a separate PR, address comments in English, pass final-head checks,
+- [x] Push a separate PR, address comments in English, pass final-head checks,
       merge as authorized and verify clean canonical main and its source CI.
 
 Local validation passed on the `d7492c1` baseline: 198 HA worker tests (96 unit,
@@ -142,6 +142,25 @@ A disposable fixture using the production renderer passed light/dark review at
 strings and disconnect clearing, without horizontal overflow or browser errors.
 This does not establish production HA/device acceptance or Linux/Windows native
 graphical acceptance. Remaining appliance profiles and automatic migration stay open.
+
+Functional delivery merged in
+[PR #446](https://github.com/victron-venus/inverter-desktop/pull/446): reviewed
+head `374e349` passed all 41 executed checks, with three auxiliary checks skipped,
+exact-head approval and no unresolved review threads. Merge `1fa25bc` has the
+same tree as the reviewed head. The canonical checkout was fast-forwarded to
+clean `main`; all six pre-existing stashes and the private ignored `AGENTS.md`
+were preserved.
+
+Post-merge source validation passed all six workflows and all 17 jobs on
+`1fa25bc`: [CI](https://github.com/victron-venus/inverter-desktop/actions/runs/35014359046),
+[Unit Tests](https://github.com/victron-venus/inverter-desktop/actions/runs/35014359647),
+[CodeQL](https://github.com/victron-venus/inverter-desktop/actions/runs/35014359276),
+[Code Quality](https://github.com/victron-venus/inverter-desktop/actions/runs/35014356988),
+[Cargo Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/35014359382)
+and [Cargo Security Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/35014359501).
+These source checks do not assert completion of release installers or production
+device acceptance. Remaining appliance profiles, modern forecast retrieval,
+legacy migration and bundled feature removal stay open.
 
 ### Completed checkpoint: bounded HA weather summaries
 
