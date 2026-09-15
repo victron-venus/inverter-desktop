@@ -253,6 +253,10 @@ All applicable pre-commit hooks pass without skip overrides.
 The branch also incorporates PR #435 on main at `0962bd7`; all 366 frontend
 tests, 17 mobile tests, both typechecked builds, lint and formatting pass again
 on the combined tree.
+The two Sonar Web:S6819 findings are addressed with native numeric status
+outputs. All 164 plugin UI tests pass, followed by the focused 17 tests after a
+type-safe assertion correction, a fresh desktop typechecked build, plugin lint
+and project formatting checks.
 
 Four new native settings regressions bring that suite to 13 passing tests.
 They exercise the exact 32 KiB startup envelope and real encrypted settings

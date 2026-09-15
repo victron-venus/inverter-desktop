@@ -32,9 +32,9 @@
         {{ $t('plugins.manager.numericApply') }}
       </UiButton>
     </div>
-    <p v-if="needsReview" :id="`${fieldId}-review`" role="status" class="text-[10px] text-muted">
+    <output v-if="needsReview" :id="`${fieldId}-review`" class="text-[10px] text-muted">
       {{ $t('plugins.manager.numericChanged') }}
-    </p>
+    </output>
     <p
       v-else-if="dirty && invalid"
       :id="`${fieldId}-invalid`"
@@ -55,9 +55,9 @@
     <p v-if="failed" role="alert" class="text-[10px] text-consumption">
       {{ $t('plugins.actionFailed') }}
     </p>
-    <p v-if="!valid" role="status" class="text-[10px] text-muted">
+    <output v-if="!valid" class="text-[10px] text-muted">
       {{ $t('plugins.unavailable') }}
-    </p>
+    </output>
   </form>
 </template>
 

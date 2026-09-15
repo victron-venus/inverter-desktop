@@ -162,7 +162,11 @@ describe('desktop numeric editor', () => {
     await publish([replacement])
     expect(view.find('input').element.value).toBe('0.35')
     expect(view.find('button[type="submit"]').attributes('disabled')).toBeDefined()
-    expect(view.find('[role="status"]').text()).toContain('available settings have changed')
+    const feedback = view.find('output[id$="-review"]')
+    expect(feedback.text()).toContain('available settings have changed')
+    expect(view.find('input').attributes('aria-describedby')?.split(' ')).toContain(
+      feedback.attributes('id')
+    )
     expect(view.text()).not.toContain('input_revision')
     await view.find('form').trigger('submit')
     expect(calls()).toHaveLength(0)
@@ -215,7 +219,7 @@ describe('desktop numeric editor', () => {
     expect(view.find('button[type="submit"]').attributes('disabled')).toBeDefined()
     await view.find('form').trigger('submit')
     expect(calls()).toHaveLength(0)
-    expect(view.find('[role="status"]').text()).toContain('available settings have changed')
+    expect(view.find('output[id$="-review"]').text()).toContain('available settings have changed')
   })
 
   it('resets a draft when a new worker instance reuses the same contribution ID', async () => {
