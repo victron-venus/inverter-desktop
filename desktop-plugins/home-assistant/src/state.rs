@@ -109,6 +109,15 @@ fn contribution(index: usize, entity: &str, state: Option<&Value>) -> Value {
         return json!({"kind":"status","id":format!("entity-{index}"),"title":title,
             "value":if value=="unknown" {"Unknown"} else {"Unavailable"},"tone":"neutral"});
     }
+    if entity
+        .split_once('.')
+        .is_some_and(|(domain, _)| domain == "weather")
+    {
+        return crate::weather::summary(value, &state["attributes"]).map_or_else(
+            || unavailable(index, &title, "Unavailable"),
+            |text| json!({"kind":"text","id":format!("entity-{index}"),"title":title,"text":text}),
+        );
+    }
     if let Some(number) = value
         .parse::<f64>()
         .ok()
@@ -596,6 +605,193 @@ mod tests {
             number["input_revision"]
         );
         assert!(book.action_target("ha-action-0").is_none());
+    }
+
+    fn weather_state(condition: &str, temperature: Value) -> Value {
+        json!({"entity_id":"weather.home","state":condition,"attributes":{
+            "friendly_name":"Home weather","temperature":temperature,"temperature_unit":"°C",
+            "forecast":[{"datetime":"2026-09-16","condition":"cloudy","temperature":23,"templow":14}]
+        }})
+    }
+
+    #[test]
+    fn weather_initial_and_attribute_only_live_updates_preserve_identity_and_current_state() {
+        let shared = Book::new(&["weather.home".into()], &[], &[]);
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        book.initial("weather.home", Some(&weather_state("sunny", json!(21))));
+        assert_eq!(
+            book.frame()["items"][1],
+            json!({"kind":"text","id":"entity-0","title":"Home weather",
+            "text":"Condition: sunny; Temperature: 21 °C\nForecast: 2026-09-16, Condition: cloudy, High: 23 °C, Low: 14 °C"})
+        );
+        let revision = book.revision;
+        let mut current = weather_state("sunny", json!(18));
+        current["attributes"]["forecast"][0]["templow"] = json!(10);
+        book.live("weather.home", Some(&current));
+        assert_ne!(book.revision, revision);
+        let frame = book.frame();
+        assert!(frame["items"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Temperature: 18 °C"));
+        assert!(frame["items"][1]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("Low: 10 °C"));
+        book.initial("weather.home", Some(&weather_state("rainy", json!(30))));
+        assert_eq!(
+            book.frame(),
+            frame,
+            "late initial weather cannot replace live details"
+        );
+        let revision = book.revision;
+        current["attributes"]["private_metadata"] = json!("must not appear");
+        book.live("weather.home", Some(&current));
+        assert_eq!(
+            book.revision, revision,
+            "unprojected attributes do not trigger publication"
+        );
+        book.mark_published();
+        for id in ["entity-0", "weather.home", "ha-action-0"] {
+            assert!(book.action_target(id).is_none());
+        }
+    }
+
+    #[test]
+    fn weather_unknown_unavailable_deletion_and_disconnect_withdraw_all_details() {
+        let shared = Book::new(&["weather.home".into()], &[], &[]);
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        for (state, expected) in [("unknown", "Unknown"), ("unavailable", "Unavailable")] {
+            book.live("weather.home", Some(&weather_state("sunny", json!(21))));
+            book.live("weather.home", Some(&weather_state(state, json!(21))));
+            assert_eq!(
+                book.frame()["items"][1],
+                json!({"kind":"status","id":"entity-0","title":"Home weather","value":expected,"tone":"neutral"})
+            );
+        }
+        book.live("weather.home", Some(&weather_state("sunny", json!(21))));
+        book.live("weather.home", None);
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        assert!(book.frame()["items"][1].get("text").is_none());
+        book.initial("weather.home", Some(&weather_state("rainy", json!(22))));
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        book.live("weather.home", Some(&weather_state("rainy", json!(22))));
+        book.disconnected();
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        assert!(book.frame()["items"][1].get("text").is_none());
+        book.begin_session();
+        book.connected();
+        assert_eq!(book.frame()["items"][1]["value"], "Waiting");
+        book.initial("weather.home", Some(&weather_state("snowy", json!(-5))));
+        assert!(book.frame()["items"][1]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Condition: snowy; Temperature: -5 °C"));
+        book.authentication_rejected();
+        assert!(book.frame()["items"][1].get("text").is_none());
+    }
+
+    #[test]
+    fn weather_projection_is_exact_domain_only_and_never_creates_discovery_or_control_grants() {
+        for (entity, observed, expected) in [
+            (
+                "sensor.weather",
+                "21",
+                json!({"kind":"metric","id":"entity-0","title":"Home weather","value":21.0,"unit":"kW"}),
+            ),
+            (
+                "button.weather",
+                "sunny",
+                json!({"kind":"text","id":"entity-0","title":"Home weather","text":"sunny"}),
+            ),
+            (
+                "weathered.home",
+                "sunny",
+                json!({"kind":"text","id":"entity-0","title":"Home weather","text":"sunny"}),
+            ),
+            (
+                "weather.home",
+                "21",
+                json!({"kind":"text","id":"entity-0","title":"Home weather","text":"Condition: 21; Temperature: 21 °C\nForecast: 2026-09-16, Condition: cloudy, High: 23 °C, Low: 14 °C"}),
+            ),
+        ] {
+            let mut state = weather_state(observed, json!(21));
+            state["entity_id"] = json!(entity);
+            state["attributes"]["unit_of_measurement"] = json!("kW");
+            assert_eq!(contribution(0, entity, Some(&state)), expected);
+        }
+        let shared = Book::with_discovery(&["weather.home".into()], &[], &[], &["sensor.".into()]);
+        let mut book = shared.lock().unwrap();
+        book.begin_session();
+        book.connected();
+        book.discovery_snapshot(&[
+            weather_state("sunny", json!(21)),
+            json!({"entity_id":"weather.other","state":"sunny"}),
+        ]);
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 2);
+        let mut malformed = weather_state("sunny", json!(21));
+        malformed["entity_id"] = json!("weather.other");
+        book.live("weather.home", Some(&malformed));
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        malformed["entity_id"] = json!("weather.home");
+        malformed["state"] = json!(false);
+        book.live("weather.home", Some(&malformed));
+        assert_eq!(book.frame()["items"][1]["value"], "Unavailable");
+        book.mark_published();
+        assert!(book.action_target("entity-0").is_none());
+    }
+
+    #[tokio::test]
+    async fn thirty_two_weather_items_stay_within_the_actual_utf8_and_escaped_frame_limits() {
+        let entities = (0..32)
+            .map(|index| format!("weather.house_{index}"))
+            .collect::<Vec<_>>();
+        let shared = Book::new(&entities, &[], &[]);
+        let frame = {
+            let mut book = shared.lock().unwrap();
+            book.connected();
+            for (index, name) in entities.iter().enumerate() {
+                let mut state = weather_state(&"\\\"".repeat(64), json!(21));
+                state["entity_id"] = json!(name);
+                state["attributes"]["friendly_name"] = json!("☀\n".repeat(128));
+                state["attributes"]["forecast"] = json!((0..5).map(|day| json!({
+                    "datetime":format!("2026-09-{:02}", day + 16), "condition":"\\\"".repeat(64),
+                    "temperature":12345678901234567890123456789012_i128,"templow":-10
+                })).collect::<Vec<_>>());
+                book.live(name, Some(&state));
+                assert_eq!(
+                    book.frame()["items"][index + 1]["id"],
+                    format!("entity-{index}")
+                );
+            }
+            book.frame()
+        };
+        let items = frame["items"].as_array().unwrap();
+        assert_eq!(items.len(), 33);
+        for item in &items[1..] {
+            assert_eq!(item["kind"], "text");
+            let text = item["text"].as_str().unwrap();
+            assert!(
+                text.len() <= 512
+                    && text
+                        .chars()
+                        .all(|character| character == '\n' || !character.is_control())
+            );
+            assert!(item["title"].as_str().unwrap().len() <= 128);
+            assert!(item.get("state_id").is_none());
+            assert!(item.get("action_id").is_none());
+        }
+        assert!(
+            serde_json::to_vec(&frame).unwrap().len() < inverter_worker_protocol::MAX_FRAME_BYTES
+        );
+        Output::with_writer(std::io::sink())
+            .send(frame)
+            .await
+            .unwrap();
     }
 
     #[test]

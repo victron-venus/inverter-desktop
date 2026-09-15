@@ -1,7 +1,7 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.8.0, requiring host API `^1.6`.
+`inverter-desktop.home-assistant`, version 0.9.0, requiring host API `^1.6`.
 Connection status and selected entity states are read-only by default. Optional
 sensor-prefix discovery fills unused state slots without granting actions. Explicit
 optional action lists enable fixed button presses, scene activation, media
@@ -140,6 +140,39 @@ coalesced to four per second, independently of socket reads and heartbeat checks
 Authentication rejection stops reconnect attempts until settings restart the
 worker; network failures reconnect with a bounded delay.
 
+## Read-only weather summaries
+
+Add a literal `weather.*` entity to `watch_entities` to display its observed
+condition and temperature in one existing text card. Temperature values must be
+finite JSON numbers, and the entity must supply an explicit `temperature_unit`.
+Numbers retain their parsed JSON number token, limited to 32 bytes. Conditions are
+limited to 128 UTF-8 bytes and units to 32; empty, invalid or overlong fields are
+omitted rather than partially displayed. Invalid main conditions show Unavailable.
+Control characters are removed before applying field byte limits; surrounding
+whitespace is trimmed from accepted fields. No float formatting rounds a value.
+The worker does not assume Celsius, use a sensor's `unit_of_measurement`, convert
+units or grant any weather controls. Friendly names and stable state IDs follow
+the same rules as other explicit selections. Weather is not included in sensor
+discovery.
+
+When the state already contains a legacy `attributes.forecast` array, the worker
+examines only its first five entries. It displays valid supplied date labels,
+conditions and finite high/low temperatures with the entity's explicit unit.
+Dates must be calendar-valid dates or zoned timestamps. Each complete forecast
+entry starts on a new line and is included only if it fits the 512 UTF-8 byte
+summary limit. Malformed fields are omitted; temperature values are kept whole
+and no extra state slots are allocated.
+Attribute-only updates replace the card, including removal of a previously
+observed temperature or forecast. Unknown, unavailable, missing and disconnected
+entities use the existing status card instead of retaining weather details.
+
+Modern Home Assistant [forecasts use a separate API](https://developers.home-assistant.io/docs/core/entity/weather/)
+and are not part of the entity state. This compatibility projection neither
+retrieves nor promises a forecast when the state lacks one. Separate forecast
+subscriptions and the bundled forecast layout remain pending. All weather data
+comes from the same initial REST state read and filtered `state_changed` updates;
+there are no added network requests, endpoints, subscriptions or service calls.
+
 ## Read-only sensor discovery
 
 Discovery is disabled by default. When prefixes are configured and explicit
@@ -177,7 +210,7 @@ update or the next connection's snapshot. Disconnect clears discovered state,
 and reconnect resamples the collection. Discovery failures do not change explicit
 action IDs, presets, numeric grants or core transport ownership.
 
-This slice does not add an entity picker, appliance summaries, weather forecasts,
+This slice does not add an entity picker, appliance summaries, forecast retrieval,
 grouped household layouts or automatic migration of bundled HA settings. The
 bundled desktop integration remains available while that parity work continues.
 
