@@ -25,3 +25,23 @@ Cloudflare account. Settings and first-run setup use the same validation policy.
 
 When MQTT and IGW are both configured, the existing connection policy still
 prefers reachable MQTT and uses IGW for failover.
+
+Header controls (DRY, ESS and inverter-control flags) and Water mode controls use
+the active inverter connection. With IGW active, they use authenticated HTTPS
+commands. A flag toggle first reads its current state; if that state is missing,
+the app asks you to wait for telemetry. Failed commands are not automatically
+retried or sent through another transport.
+
+IGW snapshots include controller settings and status, the Grid submeter, native
+EV battery/power readings, and Water pump/valve states and modes. Explicit device
+instances in the app take precedence over the controller's UI configuration.
+Missing or disconnected devices do not silently select another instance, and
+expired controller data is cleared. Water controls require a gateway that
+advertises Water mode support.
+
+Setpoint Override also uses the active connection. Its HTTPS path requires IGW's
+`setpoint_override` capability and a known controller status. The app waits up to
+five seconds for the controller to acknowledge the same request ID and value,
+including an explicit stop. A queued request alone is not confirmation. If a
+response is lost, check the current status before trying again; writes are not
+retried automatically. Missing status is shown as unknown, not as stopped.

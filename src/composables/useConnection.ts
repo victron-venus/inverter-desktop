@@ -80,6 +80,11 @@ function gatewayConnectArgs(config: AppConfig) {
     accessClientId: (config.gateway_access_client_id || '').trim(),
     accessClientSecret: (config.gateway_access_client_secret || '').trim(),
     apiToken: (config.gateway_api_token || '').trim() || null,
+    waterTankInstance: config.water_tank_instance ?? null,
+    waterPumpInstance: config.water_pump_instance ?? null,
+    waterValveInstance: config.water_valve_instance ?? null,
+    evInstance: config.ev_instance ?? null,
+    evchargerInstance: config.evcharger_instance ?? null,
   }
 }
 

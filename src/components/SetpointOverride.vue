@@ -9,14 +9,17 @@
       aria-label="Setpoint override"
       aria-haspopup="dialog"
       :aria-expanded="opened"
-      :aria-pressed="active"
+      :aria-pressed="ready ? active : undefined"
       @click="openDialog"
     >
       <SlidersHorizontal :size="11" aria-hidden="true" />
     </button>
     <output v-if="active" class="text-[9px] text-accent tabular whitespace-nowrap">
-      {{ status.value }} W · 2s
+      {{ status?.value }} W · 2s
     </output>
+    <span v-if="!ready && !loading" class="text-[9px] text-text-secondary" role="status">
+      Status unknown
+    </span>
     <span
       v-if="error && !opened"
       class="text-[9px] text-consumption truncate max-w-28"
@@ -105,8 +108,8 @@ interface OverrideStatus {
 
 const props = defineProps<{ currentSetpoint?: number }>()
 const dialogId = `setpoint-override-${useId()}`
-const status = ref<OverrideStatus>({ value: null, last_error: null })
-const active = computed(() => status.value.value !== null)
+const status = ref<OverrideStatus | null>(null)
+const active = computed(() => status.value !== null && status.value.value !== null)
 const opened = ref(false)
 const draft = ref('')
 const ready = ref(false)
@@ -116,12 +119,13 @@ const inputError = ref<string | null>(null)
 const commandError = ref<string | null>(null)
 const loadError = ref<string | null>(null)
 const error = computed(
-  () => inputError.value || commandError.value || status.value.last_error || loadError.value
+  () => inputError.value || commandError.value || status.value?.last_error || loadError.value
 )
 const trigger = ref<HTMLButtonElement>()
 const input = ref<HTMLInputElement>()
 const dialog = ref<HTMLDialogElement>()
 let unlisten: UnlistenFn | undefined
+let unlistenConnection: UnlistenFn | undefined
 let disposed = false
 let eventRevision = 0
 
@@ -129,10 +133,25 @@ function describeError(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+function receiveStatus(result: OverrideStatus | null) {
+  status.value = result
+  ready.value = result !== null
+  loadError.value =
+    result === null ? 'Setpoint override status is unavailable. Retry to refresh.' : null
+}
+
 async function refreshStatus() {
   const revision = eventRevision
-  const result = await invoke<OverrideStatus>('get_setpoint_override')
-  if (!disposed && eventRevision === revision) status.value = result
+  try {
+    const result = await invoke<OverrideStatus | null>('get_setpoint_override')
+    if (!disposed && eventRevision === revision) receiveStatus(result)
+  } catch (cause) {
+    // A newer live event wins over both an old getter value and its failure.
+    if (disposed || eventRevision !== revision) return
+    receiveStatus(null)
+    loadError.value = describeError(cause)
+    throw cause
+  }
 }
 
 async function initialize() {
@@ -141,28 +160,42 @@ async function initialize() {
   loadError.value = null
   try {
     if (!unlisten) {
-      const unsubscribe = await listen<OverrideStatus>('setpoint-override-update', (event) => {
-        if (disposed) return
-        eventRevision += 1
-        status.value = event.payload
-      })
+      const unsubscribe = await listen<OverrideStatus | null>(
+        'setpoint-override-update',
+        (event) => {
+          if (disposed) return
+          eventRevision += 1
+          receiveStatus(event.payload)
+        }
+      )
       if (disposed) {
         unsubscribe()
         return
       }
       unlisten = unsubscribe
     }
+    if (!unlistenConnection) {
+      const unsubscribe = await listen<boolean>('mqtt-connection-status', (event) => {
+        if (disposed || event.payload !== false) return
+        eventRevision += 1
+        receiveStatus(null)
+      })
+      if (disposed) {
+        unsubscribe()
+        return
+      }
+      unlistenConnection = unsubscribe
+    }
     await refreshStatus()
-    if (!disposed) ready.value = true
   } catch (cause) {
-    if (!disposed) loadError.value = describeError(cause)
+    if (!disposed && !ready.value) loadError.value = describeError(cause)
   } finally {
     if (!disposed) loading.value = false
   }
 }
 
 async function openDialog() {
-  const value = status.value.value ?? props.currentSetpoint
+  const value = status.value?.value ?? props.currentSetpoint
   draft.value = value === undefined || !Number.isFinite(value) ? '' : String(value)
   inputError.value = null
   commandError.value = null
@@ -205,24 +238,24 @@ function submit() {
 }
 
 async function apply(value: number | null) {
-  if (saving.value) return
+  if (!ready.value || saving.value) return
   saving.value = true
   commandError.value = null
   inputError.value = null
   let succeeded = false
+  const revision = eventRevision
   try {
     const result = await invoke<OverrideStatus>('set_setpoint_override', { value })
     if (disposed) return
-    status.value = result
+    if (eventRevision === revision) receiveStatus(result)
     // Reconcile events that raced the command response without allowing an
     // older getter response to overwrite a newer background error/update.
     try {
       await refreshStatus()
-      loadError.value = null
     } catch (cause) {
       if (!disposed) loadError.value = describeError(cause)
     }
-    succeeded = !status.value.last_error && !loadError.value
+    succeeded = ready.value && !status.value?.last_error && !loadError.value
   } catch (cause) {
     if (!disposed) commandError.value = describeError(cause)
   } finally {
@@ -260,6 +293,7 @@ onMounted(initialize)
 onUnmounted(() => {
   disposed = true
   unlisten?.()
+  unlistenConnection?.()
 })
 </script>
 
