@@ -50,8 +50,10 @@ hosted worker/host/security/mobile artifact checks passing for
 [the final PR head](https://github.com/victron-venus/inverter-desktop/commit/ed3aadd5f27260c6e4334c018d016d36f2154837).
 [PR #426](https://github.com/victron-venus/inverter-desktop/pull/426) completed direct
 Frigate clips and owned video windows on main, with macOS native playback and all
-hosted checks passing. The current iteration adds an independent read-only HA
-worker and reuses only bounded process transport across the separate packages.
+hosted checks passing. [PR #427](https://github.com/victron-venus/inverter-desktop/pull/427)
+completed the independent read-only HA worker on main at `3d731a3`. The current
+iteration adds explicitly selected HA button/scene actions and instance-bound
+dashboard dispatch, reusing the separate workers and bounded process transport.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -136,7 +138,76 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Next iteration: standalone Home Assistant read-only worker
+### Next iteration: explicit HA button and scene actions
+
+Keep the default HA package read-only. Add explicitly selected `button.press` and
+`scene.turn_on` actions through existing declarative plugin buttons, preserving
+the legacy POST mappings without importing core flag aliases or MQTT fallbacks.
+The read-only worker was delivered in PR #427; this iteration builds on it.
+
+- [x] Add optional `action_entities` (empty by default), at most 16 unique literal
+      `button.*`/`scene.*` IDs. Watch the ordered union with `watch_entities`, at
+      most 32 entities total; read selection alone never enables an action.
+- [x] Add strict bounded Action/Cancel decoding to the shared stdio protocol.
+      Preserve independent EOF/Shutdown delivery and Frigate rejection of actions.
+- [x] Advertise one fixed, self-contained action per configured target only while
+      HA is connected and the target exists and is not unavailable. Unknown
+      button/scene state before first use remains actionable. Use immutable empty
+      params; resolve the entity and fixed service exclusively inside the worker.
+- [x] Send exactly one authenticated, TLS-verified, non-redirecting service POST
+      beneath the configured URL prefix. Bound concurrency, response bytes and
+      original request deadlines; never retry a submitted service operation.
+- [x] Keep live reads and heartbeat responsive during pending actions. Correlate
+      success/error, reject changed params/unadvertised actions, handle Cancel,
+      and prevent queued work after disconnect/auth rejection/settings restart.
+      Cancellation cannot undo an operation already accepted by HA.
+- [x] Bind native dashboard clicks to an opaque actual worker-instance identity,
+      including reinstall with reused generation counters. Preserve exact preset
+      equality and reject stale clicks before the replacement worker sees them.
+- [x] Forward only the remaining original deadline after host queue pressure,
+      preserving request identity and params. Exercise the real bounded pipe
+      writer, submillisecond expiry and cancellation during partial frames.
+- [x] Reject stale clicked descriptors rather than substituting new parameters.
+      Scope pending/error feedback to the actual instance and action identity;
+      coalesce snapshot refreshes and explain unknown service outcomes without
+      encouraging automatic retries. Verify accessible action names.
+- [x] Exercise real subprocess service behavior, no-retry after lost responses,
+      deadline/cancel/EOF/output pressure, read-only defaults and literal targets
+      against disposable HA fixtures. Preserve all read/TLS/Frigate regressions.
+- [x] Exercise an actual installed signed package, native action admission,
+      configuration replacement during a stalled service request and removal,
+      alongside independent MQTT flags. Use disposable trust and private services.
+- [x] Update package version/manifest, English documentation and this checklist;
+      run serialized lint/tests/builds and desktop/mobile boundaries.
+- [ ] Resolve PR comments in English, pass final-head CI, merge and synchronize main.
+
+Local admission checks pass 36 native runtime tests, including reinstall with
+reused generation counters, reduced budgets after queue pressure and expiry
+before pipe delivery. Frontend changes pass 58 focused tests (26 dashboard,
+32 manager), typecheck, scoped lint and formatting. The shared protocol passes
+nine unit tests and strict Clippy. The action worker passes 21 unit tests and
+20 real subprocess scenarios, including the reviewed late-poll deadline regression
+and repeated cancellation/deadline acceptance. Packaging and mobile-native
+boundary suites pass 27 and 29 tests. The complete frontend suite passes 308 tests,
+plus eight mobile tests and five build-profile checks. The complete native suite
+passes 384 tests. All four separately selected installed-package scenarios pass:
+Frigate events/clips and HA reads/actions, using actual release worker binaries,
+disposable package trust and private services. The new action fixture confirms
+exactly six explicit service POSTs, closes stalled work during settings replacement,
+disable and uninstall, rejects stale instances/presets, and observes zero core MQTT
+commands while independently consuming both values of the real charger flag.
+
+Strict all-target Clippy passes for the host and all worker crates. Both frontend
+profiles build, and actual native release workers pass staging checks. The first
+full native compilation exhausted local disk space; after removing only task
+intermediate build files, the complete native and installed-package runs passed.
+PR review, final-head CI and merge receipts remain the delivery gate.
+
+No production HA service or physical appliance is exercised by these fixtures.
+Stateful toggles, number/cover inputs, media controls, discovery, full appliance
+layout and legacy migration remain subsequent parity work.
+
+### Completed checkpoint: standalone Home Assistant read-only worker
 
 Implement the first independently installable HA slice: connection status and
 live state for an explicit, bounded list of entities. Preserve the bundled HA
@@ -178,7 +249,7 @@ parity. Core inverter-control flags and transports never depend on this worker.
       existing behavior rather than rely only on compilation.
 - [x] Complete independent reviews, serialized local verification, English docs
       and checklist updates. Add a simultaneous HA-on/core-off regression.
-- [ ] Pass final-head hosted checks and resolve review comments, then merge the
+- [x] Pass final-head hosted checks and resolve review comments, then merge the
       separate HA worker PR and synchronize canonical main after PR #426.
 
 Local checks now pass strict all-target Clippy and 14 HA unit tests, 16 actual
@@ -201,8 +272,11 @@ Both real release workers and native-header staging pass, including the retained
 Frigate staging CLI. The installed-package fixtures verify HA settings restart,
 disable, logout and uninstall alongside an independent core MQTT connection,
 and preserve Frigate motion/clip behavior after transport extraction. Hosted
-checks and reviewed PR delivery remain pending; these results do not claim a
-production HA installation. Hosted Android setup exposed an unavailable `tools`
+checks and reviewed PR delivery completed at head `dabb0f1`, merged as `3d731a3`
+in PR #427. All product checks passed, including desktop worker/host checks and
+Android APK/AAB/iOS IPA inspection; review had no unresolved threads. Canonical
+main was synchronized cleanly with the identical tested tree, preserved private
+files and all six stashes. These results do not claim a production HA installation. Hosted Android setup exposed an unavailable `tools`
 package in the pinned setup action default. All three Android CI/release setup
 steps now request `platform-tools` explicitly and retain their subsequent required
 SDK/NDK installation, build and artifact-inspection gates.

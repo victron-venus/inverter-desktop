@@ -22,6 +22,18 @@ pub enum HostFrame<C> {
     Configuration {
         configuration: C,
     },
+    Action {
+        request_id: String,
+        action_id: String,
+        params: Value,
+        deadline_ms: u64,
+        /// Start the relative deadline when stdin is decoded, before dispatch.
+        #[serde(skip, default = "std::time::Instant::now")]
+        received_at: std::time::Instant,
+    },
+    Cancel {
+        request_id: String,
+    },
     Shutdown {},
 }
 
@@ -172,10 +184,61 @@ pub fn read_frame<R: BufRead, C: DeserializeOwned>(
             if frame.last() == Some(&b'\r') {
                 frame.pop();
             }
-            return serde_json::from_slice(&frame)
-                .map(Some)
-                .map_err(|_| "invalid host frame");
+            let decoded = serde_json::from_slice(&frame).map_err(|_| "invalid host frame")?;
+            validate_command(&decoded)?;
+            return Ok(Some(decoded));
         }
+    }
+}
+
+fn valid_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.:-".contains(&byte))
+}
+
+fn bounded_params(value: &Value, depth: usize, nodes: &mut usize) -> bool {
+    *nodes += 1;
+    if depth > 8 || *nodes > 512 {
+        return false;
+    }
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .all(|value| bounded_params(value, depth + 1, nodes)),
+        Value::Object(values) => values
+            .values()
+            .all(|value| bounded_params(value, depth + 1, nodes)),
+        _ => true,
+    }
+}
+
+fn validate_command<C>(frame: &HostFrame<C>) -> Result<(), &'static str> {
+    let valid = match frame {
+        HostFrame::Action {
+            request_id,
+            action_id,
+            params,
+            deadline_ms,
+            ..
+        } => {
+            valid_token(request_id)
+                && valid_token(action_id)
+                && (1..=30_000).contains(deadline_ms)
+                && params.is_object()
+                && serde_json::to_vec(params).is_ok_and(|bytes| bytes.len() <= 4096)
+                && bounded_params(params, 0, &mut 0)
+        }
+        HostFrame::Cancel { request_id } => valid_token(request_id),
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err("invalid host frame")
     }
 }
 

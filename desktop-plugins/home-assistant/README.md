@@ -1,17 +1,18 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.1.0, using host API `^1.3`. This first
-slice provides connection status and state contributions for an explicit entity
-watch list. It has no Home Assistant service actions, camera media, core MQTT/IGW
-connection, inverter-control aliases, or dependency on the bundled HA client.
+`inverter-desktop.home-assistant`, version 0.2.0, requiring host API `^1.4`.
+Connection status and selected entity states are read-only by default. An explicit
+optional action list enables fixed button presses and scene activation. There is
+no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
+camera authority or dependency on the bundled HA client.
 
 The existing desktop HA integration remains bundled until its remaining features
 have package parity. Android and iOS contain neither this worker nor the shared
 worker protocol library, its package metadata, or the desktop plugin manager.
 The production publisher policy remains empty, so installation is disabled in
-shipped builds. This work creates no production publisher keys and adds no application or
-worker code-signing/notarization prerequisite. Package signatures use the existing
+shipped builds. This work creates no production publisher keys and adds no
+application or worker code-signing/notarization prerequisite. Package signatures use the existing
 native archive pipeline and an externally supplied publisher key.
 
 ## Configuration and read scope
@@ -28,21 +29,28 @@ the core telemetry connection.
   is added automatically. Credentials, query strings, fragments, whitespace,
   backslashes and ambiguous path segments are rejected. Safe encoded prefixes
   such as `space%20prefix` are preserved; encoded separators, dot segments,
-  double escapes and control characters are rejected. HTTPS uses certificate verification and the matching secure
-  WebSocket scheme. Redirects are not followed.
+  double escapes and control characters are rejected. HTTPS uses certificate
+  verification and the matching secure WebSocket scheme. Redirects are not followed.
 - `watch_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
-  Separate up to 32 unique entity IDs with commas or newlines. Blank entries are
-  ignored and duplicate IDs count once. Each ID is at most 128 bytes with two
-  nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
+  Separate entity IDs with commas or newlines. Blank entries are ignored and
+  duplicate IDs count once. The ordered union with action targets is limited to
+  32 entities: watched IDs come first, followed by previously unseen action IDs.
+  Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
+- `action_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
+  Explicitly select up to 16 unique literal `button.*` or `scene.*` IDs separated
+  by commas or newlines. Targets are also watched within the total 32-entity
+  limit. Only this list enables actions; selecting an entity for reads never does.
+  Other domains and arbitrary service definitions are rejected.
 - `ha_token`: required write-only token, 1–4,096 bytes of visible ASCII without
   whitespace or control characters. It is not read from core configuration or
   placed in arguments, inherited environment, dashboard contributions or logs.
-  The worker only reads, but the token retains its account's Home Assistant
-  permissions; this package does not create a restricted server-side token.
+  The token retains its account's Home Assistant permissions; this package does
+  not create a restricted server-side token. Reads and explicitly selected
+  button/scene actions use that token.
 
-With a nonempty watch list, initial REST reads request only
+With a nonempty combined selection, initial REST reads request only
 `/api/states/<entity_id>` beneath the configured prefix. The worker never requests
 the all-entity REST collection or WebSocket `get_states`. Live updates use
 `subscribe_events` with `event_type: state_changed`. **That server stream covers
@@ -50,9 +58,10 @@ all entities**: the worker immediately discards unwatched entities and retains
 only its configured list. This is local filtering, not a claim of server-side
 subscription filtering or token-level access restriction.
 
-An empty watch list still establishes the authenticated WebSocket connection for
-connection status, but makes no entity REST reads or event subscription. A change
-to the watch list is applied through the normal settings restart. Entity state
+When both lists are empty, the worker still establishes the authenticated
+WebSocket connection for connection status, but makes no entity REST reads or
+event subscription. A change
+to either list is applied through the normal settings restart. Entity state
 and labels are bounded plain data; the host renders contributions, and the worker
 supplies no frontend code or arbitrary navigation URLs.
 
@@ -63,6 +72,40 @@ and unavailable states. Disconnect clears stale values. Dashboard updates are
 coalesced to four per second, independently of socket reads and heartbeat checks.
 Authentication rejection stops reconnect attempts until settings restart the
 worker; network failures reconnect with a bounded delay.
+
+## Explicit button and scene actions
+
+A configured `button.*` target offers a press button; a `scene.*` target offers
+activation. Labels identify the selected target. The worker publishes the action
+only while HA is connected and that entity has been observed and is not deleted
+or unavailable. An `unknown` state before first button/scene use is valid. The
+worker rechecks availability at dispatch, independently of the host's Running
+state, and resolves the target from configuration rather than caller parameters.
+
+Each preset has empty params and a stable `ha-action-<index>` ID in configured
+action order. The fixed request is POST `<base>/api/services/button/press` or
+`<base>/api/services/scene/turn_on`, with only `{"entity_id":"<literal target>"}`
+in its JSON body. Explicit URL ports/prefixes and verified TLS are preserved.
+Redirects and automatic HTTP retries are disabled. No action uses the legacy
+`perform_action` path, core alias resolution or a fallback to MQTT.
+
+At most two service requests can be active; additional requests are rejected
+without a service backlog. Responses are limited to 1 MiB and never forwarded to
+the dashboard. The worker honors the original 1–30,000 ms deadline from receipt
+(the app normally supplies five seconds, minus time spent in host queues),
+correlates results, and keeps live reads and heartbeat running during a stalled POST. Cancellation, disconnect,
+authentication rejection and worker teardown stop pending local work.
+
+A timeout, dropped response or cancellation can follow an operation HA already
+accepted. The worker never retries a service POST automatically or claims that
+cancellation undoes it. The dashboard reports that the result could not be
+confirmed and asks the user to check state. State cards continue to follow HA
+updates, rather than assuming the HTTP result proves a physical device change.
+
+Host API 1.4 binds each dashboard click to the actual displayed worker instance
+and exact preset. A settings restart or reinstall cannot redirect an old click
+to a newly configured target, even if a generation counter or action ID repeats.
+Empty action configuration preserves the existing read-only behavior.
 
 The wire behavior follows the official
 [WebSocket API](https://developers.home-assistant.io/docs/api/websocket/) and
@@ -135,7 +178,7 @@ platform verifier continues using OS trust, and the fixture expects rejection of
 that disposable CA after WSS authentication. This does not establish successful
 HTTPS against a production HA installation on those platforms.
 
-The separately selected native acceptance test requires an actual compiled
+The separately selected native acceptance tests require an actual compiled
 worker, a fresh desktop frontend build, and a private Mosquitto executable for
 an independent core telemetry probe. It supplies its own temporary HTTP and
 WebSocket HA fixture; no production Home Assistant is contacted:
@@ -146,6 +189,7 @@ MOSQUITTO_BIN=/absolute/path/mosquitto \
 CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --lib \
   plugins::home_assistant_integration_tests::signed_home_assistant_package_lifecycle \
   -- --exact --ignored --test-threads=1
+# Repeat with signed_home_assistant_package_actions for selected service actions.
 ```
 
 Ordinary native tests do not build another crate or silently launch this external

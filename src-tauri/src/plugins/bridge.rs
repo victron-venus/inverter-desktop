@@ -290,6 +290,7 @@ pub(crate) fn get_plugin_snapshot(
 #[tauri::command]
 pub(crate) async fn plugin_action(
     plugin_id: String,
+    instance_id: String,
     action_id: String,
     params: Value,
     app: tauri::AppHandle,
@@ -302,6 +303,7 @@ pub(crate) async fn plugin_action(
         .host
         .action_in_epoch(
             &plugin_id,
+            &instance_id,
             &action_id,
             params,
             Duration::from_secs(5),

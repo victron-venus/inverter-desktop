@@ -766,7 +766,9 @@ async fn queued_writes_recheck_deadline_cancellation_and_revoked_epoch() {
             .unwrap();
         outgoing
             .send(Outgoing::Action {
-                encoded: b"must never be written\n".to_vec(),
+                request_id: "expired-request".into(),
+                action_id: "echo".into(),
+                params: json!({"marker":"must never be written"}),
                 deadline: Instant::now()
                     + if invalidation == "deadline" {
                         Duration::from_millis(20)
@@ -816,6 +818,95 @@ async fn queued_writes_recheck_deadline_cancellation_and_revoked_epoch() {
 }
 
 #[tokio::test]
+async fn a_queued_action_forwards_only_its_original_remaining_budget() {
+    let (writer, mut reader) = tokio::io::duplex(8);
+    let (outgoing, receiver) = mpsc::channel(4);
+    let (_stop, stop_receiver) = watch::channel(false);
+    let authority = Arc::new(Mutex::new(Authority {
+        enabled: true,
+        epoch: 7,
+    }));
+    let (_cancel, cancellation) = watch::channel(false);
+    let first_frame = b"control frame blocks the action until the reader drains\n".to_vec();
+    outgoing
+        .send(Outgoing::Control(first_frame.clone()))
+        .await
+        .unwrap();
+    let params =
+        json!({"nested":{"literal":"button.fixed","values":[1,true,null]},"text":"unchanged"});
+    let original_budget = Duration::from_secs(2);
+    let deadline = Instant::now() + original_budget;
+    outgoing
+        .send(Outgoing::Action {
+            request_id: "queued-request".into(),
+            action_id: "fixed-action".into(),
+            params: params.clone(),
+            deadline,
+            cancellation,
+        })
+        .await
+        .unwrap();
+    drop(outgoing);
+    let task = tokio::spawn(write_frames(writer, receiver, stop_receiver, authority, 7));
+    time::sleep(Duration::from_millis(100)).await;
+    let remaining_at_release = deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis() as u64;
+    let mut actual = Vec::new();
+    time::timeout(Duration::from_secs(2), reader.read_to_end(&mut actual))
+        .await
+        .unwrap()
+        .unwrap();
+    task.await.unwrap().unwrap();
+    assert!(actual.starts_with(&first_frame));
+    let action: HostMessage = serde_json::from_slice(&actual[first_frame.len()..]).unwrap();
+    match action {
+        HostMessage::Action {
+            request_id,
+            action_id,
+            params: actual_params,
+            deadline_ms,
+        } => {
+            assert_eq!(request_id, "queued-request");
+            assert_eq!(action_id, "fixed-action");
+            assert_eq!(actual_params, params);
+            assert!((1..=remaining_at_release).contains(&deadline_ms));
+            assert!(deadline_ms < original_budget.as_millis() as u64);
+        }
+        _ => panic!("expected the queued action"),
+    }
+}
+
+#[tokio::test]
+async fn an_action_with_less_than_one_millisecond_remaining_is_not_written() {
+    let (writer, mut reader) = tokio::io::duplex(1024);
+    let (outgoing, receiver) = mpsc::channel(1);
+    let (_stop, stop_receiver) = watch::channel(false);
+    let (_cancel, cancellation) = watch::channel(false);
+    let authority = Arc::new(Mutex::new(Authority {
+        enabled: true,
+        epoch: 7,
+    }));
+    outgoing
+        .send(Outgoing::Action {
+            request_id: "submillisecond-request".into(),
+            action_id: "echo".into(),
+            params: json!({}),
+            deadline: Instant::now() + Duration::from_micros(500),
+            cancellation,
+        })
+        .await
+        .unwrap();
+    drop(outgoing);
+    write_frames(writer, receiver, stop_receiver, authority, 7)
+        .await
+        .unwrap();
+    let mut actual = Vec::new();
+    reader.read_to_end(&mut actual).await.unwrap();
+    assert!(actual.is_empty());
+}
+
+#[tokio::test]
 async fn interruption_mid_action_frame_closes_writer_instead_of_writing_next_frame() {
     for invalidation in ["deadline", "cancel"] {
         let (writer, mut reader) = tokio::io::duplex(8);
@@ -828,7 +919,9 @@ async fn interruption_mid_action_frame_closes_writer_instead_of_writing_next_fra
         let (cancel, cancellation) = watch::channel(false);
         outgoing
             .send(Outgoing::Action {
-                encoded: b"first action cannot complete while reader is stalled\n".to_vec(),
+                request_id: "partial-request".into(),
+                action_id: "echo".into(),
+                params: json!({"marker":"first action cannot complete while reader is stalled"}),
                 deadline: Instant::now()
                     + if invalidation == "deadline" {
                         Duration::from_millis(20)
@@ -864,7 +957,7 @@ async fn interruption_mid_action_frame_closes_writer_instead_of_writing_next_fra
         );
         let mut actual = Vec::new();
         reader.read_to_end(&mut actual).await.unwrap();
-        assert_eq!(actual, b"first ac");
+        assert_eq!(actual, b"{\"type\":");
     }
 }
 
@@ -966,10 +1059,12 @@ async fn an_old_session_action_cannot_reach_a_replacement_worker() {
     host.start(spec("normal")).await.unwrap();
     ready(&host).await;
     let old_epoch = host.authority_epoch();
+    let old_instance = host.snapshots()[0].instance_id.clone().unwrap();
     // Keep this caller unpolled until logout and a new login have replaced the
     // worker. If dispatched, this advertised action would terminate that child.
     let old_request = host.action_in_epoch(
         TEST_PLUGIN,
+        &old_instance,
         "crash",
         json!({}),
         Duration::from_secs(2),
@@ -987,6 +1082,7 @@ async fn an_old_session_action_cannot_reach_a_replacement_worker() {
     assert_eq!(
         host.action_in_epoch(
             TEST_PLUGIN,
+            replacement.instance_id.as_deref().unwrap(),
             "echo",
             json!({}),
             Duration::from_secs(2),
@@ -1001,6 +1097,55 @@ async fn an_old_session_action_cannot_reach_a_replacement_worker() {
     assert_eq!(after.restart_count, replacement.restart_count);
     assert_eq!(after.state, WorkerState::Running);
     host.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_displayed_action_cannot_target_a_reinstalled_worker_with_reused_counters() {
+    let host = PluginHost::default();
+    host.start(spec("normal")).await.unwrap();
+    let first = ready(&host).await;
+    let epoch = host.authority_epoch();
+    let first_instance = first.instance_id.as_deref().unwrap();
+    // Delay polling until reinstall. Both workers advertise the same empty
+    // preset, so parameter equality and the reused counter cannot reject it.
+    let stale_click = host.action_in_epoch(
+        TEST_PLUGIN,
+        first_instance,
+        "crash",
+        json!({}),
+        Duration::from_secs(2),
+        epoch,
+    );
+    host.remove(TEST_PLUGIN).await.unwrap();
+    host.start(spec("normal")).await.unwrap();
+    let replacement = ready(&host).await;
+    assert_eq!(replacement.generation, first.generation);
+    assert_eq!(host.authority_epoch(), epoch);
+    assert_ne!(replacement.instance_id, first.instance_id);
+    assert_eq!(stale_click.await.unwrap_err(), PluginError::Unavailable);
+    assert_eq!(
+        host.action_in_epoch(
+            TEST_PLUGIN,
+            replacement.instance_id.as_deref().unwrap(),
+            "echo",
+            json!({}),
+            Duration::from_secs(2),
+            epoch,
+        )
+        .await
+        .unwrap()["ok"],
+        true
+    );
+    let after = host.snapshots().pop().unwrap();
+    assert_eq!(after.instance_id, replacement.instance_id);
+    assert_eq!(after.generation, replacement.generation);
+    assert_eq!(after.restart_count, 0);
+    assert_eq!(after.state, WorkerState::Running);
+    host.shutdown().await;
+    assert!(host
+        .snapshots()
+        .iter()
+        .all(|entry| entry.instance_id.is_none()));
 }
 
 #[tokio::test]

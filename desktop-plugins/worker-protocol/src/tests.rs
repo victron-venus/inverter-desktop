@@ -65,6 +65,89 @@ fn configuration_deserialization_remains_owned_by_each_worker() {
 }
 
 #[test]
+fn action_and_cancel_are_strict_bounded_and_stamp_original_receipt() {
+    let before = std::time::Instant::now();
+    let valid = json!({"type":"action","request_id":"request-1","action_id":"ha-action-0","params":{},"deadline_ms":5000});
+    let decode = |value: Value| {
+        let mut bytes = serde_json::to_vec(&value).unwrap();
+        bytes.push(b'\n');
+        read_frame::<_, Configuration>(&mut Cursor::new(bytes))
+    };
+    match decode(valid.clone()).unwrap() {
+        Some(HostFrame::Action {
+            request_id,
+            action_id,
+            params,
+            deadline_ms,
+            received_at,
+        }) => {
+            assert_eq!(request_id, "request-1");
+            assert_eq!(action_id, "ha-action-0");
+            assert_eq!(params, json!({}));
+            assert_eq!(deadline_ms, 5000);
+            assert!(received_at >= before);
+            assert!(received_at <= std::time::Instant::now());
+        }
+        _ => panic!("expected action"),
+    }
+    for (field, value) in [
+        ("request_id", json!("../bad")),
+        ("request_id", json!("a".repeat(129))),
+        ("action_id", json!("")),
+        ("params", json!(null)),
+        ("params", json!([])),
+        ("params", json!({"secret":"a".repeat(4096)})),
+        ("params", json!({"nested":[[[[[[[[[]]]]]]]]]})),
+        ("params", json!({"nodes":vec![0; 513]})),
+        ("deadline_ms", json!(0)),
+        ("deadline_ms", json!(30001)),
+        ("deadline_ms", json!(-1)),
+        ("deadline_ms", json!(0.5)),
+        ("received_at", json!(0)),
+        ("extra", json!(true)),
+    ] {
+        let mut frame = valid.clone();
+        frame[field] = value;
+        assert!(decode(frame).is_err(), "must reject {field}");
+    }
+    for deadline in [1, 30000] {
+        let mut frame = valid.clone();
+        frame["deadline_ms"] = json!(deadline);
+        assert!(decode(frame).is_ok());
+    }
+    assert!(
+        matches!(decode(json!({"type":"cancel","request_id":"request-1"})).unwrap(), Some(HostFrame::Cancel { request_id }) if request_id == "request-1")
+    );
+    for frame in [
+        json!({"type":"cancel","request_id":""}),
+        json!({"type":"cancel","request_id":"request-1","extra":true}),
+        json!({"type":"cancel"}),
+    ] {
+        assert!(decode(frame).is_err());
+    }
+}
+
+#[test]
+fn action_pressure_cannot_hide_shutdown_or_eof() {
+    let action = b"{\"type\":\"action\",\"request_id\":\"1\",\"action_id\":\"ha-action-0\",\"params\":{},\"deadline_ms\":5000}\n";
+    for (suffix, expected) in [
+        (
+            b"{\"type\":\"shutdown\"}\n".as_slice(),
+            StopReason::Shutdown,
+        ),
+        (b"".as_slice(), StopReason::Eof),
+    ] {
+        let mut bytes = action.repeat(QUEUE_CAPACITY);
+        bytes.extend_from_slice(suffix);
+        let (sender, incoming) = mpsc::channel::<HostFrame<Configuration>>(QUEUE_CAPACITY);
+        let (stop, stopped) = watch::channel(StopReason::Running);
+        read_frames(Cursor::new(bytes), sender, stop);
+        assert!(*stopped.borrow() == expected);
+        assert_eq!(incoming.len(), QUEUE_CAPACITY);
+    }
+}
+
+#[test]
 fn reader_shutdown_bypasses_a_full_bounded_command_queue() {
     let hello = b"{\"type\":\"hello\",\"protocol_version\":1,\"host_api_version\":\"1.3.0\",\"plugin_id\":\"any.worker\"}\n";
     let mut input = hello.repeat(QUEUE_CAPACITY);

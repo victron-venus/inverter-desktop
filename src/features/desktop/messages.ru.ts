@@ -4,7 +4,8 @@ export default {
   plugins: {
     manager: pluginManagerMessages,
     unavailable: 'Временно недоступно',
-    actionFailed: 'Не удалось выполнить действие. Попробуйте ещё раз.',
+    actionFailed:
+      'Не удалось подтвердить действие. Возможно, оно выполнено. Проверьте текущее состояние перед дальнейшими действиями.',
   },
   actions: {
     cameraMotion: 'Движение камер',
