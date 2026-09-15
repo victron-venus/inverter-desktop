@@ -19,6 +19,7 @@ use camera::download_camera_clip;
 #[cfg(desktop)]
 use camera::{is_camera_video_label, remove_camera_clip_file};
 mod gateway;
+mod gateway_actions;
 #[cfg(desktop)]
 mod ha_api;
 mod inverter_control;
@@ -408,23 +409,32 @@ async fn perform_action(
     payload: serde_json::Value,
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
 ) -> Result<(), String> {
-    #[cfg(mobile)]
-    let _ = app;
-    info!("perform_action: action={}, payload={}", action, payload);
+    info!("perform_action: action={}", action);
 
-    // Water control goes only through dbus-pump's writable /Mode via the GX
-    // MQTT-API (single control plane) - never straight to Home Assistant.
+    // Water writes remain on the GX /Mode control plane through the active
+    // transport. Validate before integer conversion; malformed input must not
+    // silently turn into Auto or wrap to another mode.
     if action == "water_mode" {
-        let which = payload.get("which").and_then(|v| v.as_str()).unwrap_or("");
-        let mode = payload.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        let (which, mode) = gateway_actions::water_payload(&payload)?;
+        if let Some(auth) = active_gateway_auth(&gateway_client)? {
+            let config = load_config(&app)?;
+            return gateway_actions::perform(
+                &auth,
+                &action,
+                payload,
+                configured_gateway_instances(&config),
+            )
+            .await;
+        }
         let client = mqtt_client
             .0
             .lock()
-            .map_err(|e| format!("Internal error: {}", e))?;
+            .map_err(|e| format!("Internal error: {e}"))?;
         return match client.as_ref() {
-            Some(c) => c.set_water_mode(which, mode),
-            None => Err("MQTT client not connected".to_string()),
+            Some(client) => client.set_water_mode(which, mode),
+            None => Err("Neither MQTT nor IGW is connected".into()),
         };
     }
 
@@ -444,8 +454,8 @@ async fn perform_action(
         let entity_id = payload.get("entity").and_then(|v| v.as_str());
 
         // HA REST is for home devices (garage, recliner, laundry, EV, covers, …).
-        // Inverter-control flags always go to Cerbo MQTT — ha_use_direct_api does
-        // not apply to them (inverter-control no longer reads HA for those 7).
+        // Inverter-control flags use the active MQTT or IGW transport. The
+        // optional HA adapter does not own these seven daemon flags.
         let ha_direct = config.ha_use_direct_api
             && config.ha_url.is_some()
             && config.ha_longlived_token.is_some();
@@ -546,17 +556,44 @@ async fn perform_action(
         }
     }
 
-    info!("perform_action: MQTT command action={}", action);
-    let client = mqtt_client
+    perform_inverter_action(&action, payload, &mqtt_client, &gateway_client).await
+}
+
+fn active_gateway_auth(client: &GatewayState) -> Result<Option<gateway::GatewayHttpAuth>, String> {
+    Ok(client
         .0
         .lock()
-        .map_err(|e| format!("Internal error: {}", e))?;
-    let client = client
+        .map_err(|e| format!("Internal error: {e}"))?
         .as_ref()
-        .ok_or_else(|| "MQTT client not connected".to_string())?;
+        .map(GatewayClient::http_auth))
+}
 
+fn configured_gateway_instances(config: &FullConfig) -> gateway::GatewayInstances {
+    gateway::GatewayInstances {
+        water_tank: config.water_tank_instance,
+        water_pump: config.water_pump_instance,
+        water_valve: config.water_valve_instance,
+        ev: config.ev_instance,
+        evcharger: config.evcharger_instance,
+    }
+}
+
+async fn perform_inverter_action(
+    action: &str,
+    payload: serde_json::Value,
+    mqtt: &MqttState,
+    gateway: &GatewayState,
+) -> Result<(), String> {
+    // Active slots select the transport, not saved gateway_enabled (MQTT can be
+    // preferred while IGW is configured for failover). Never retry a failed POST
+    // on MQTT: the gateway may already have accepted the command.
+    if let Some(auth) = active_gateway_auth(gateway)? {
+        return gateway_actions::perform(&auth, action, payload, Default::default()).await;
+    }
+    let client = mqtt.0.lock().map_err(|e| format!("Internal error: {e}"))?;
+    let client = client.as_ref().ok_or("Neither MQTT nor IGW is connected")?;
     client
-        .publish_command(&action, payload)
+        .publish_command(action, payload)
         .map_err(|e| e.to_string())
 }
 
@@ -1028,12 +1065,18 @@ async fn connect_mqtt_impl(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn connect_gateway(
     url: String,
     access_client_id: String,
     access_client_secret: String,
     api_token: Option<String>,
+    water_tank_instance: Option<u32>,
+    water_pump_instance: Option<u32>,
+    water_valve_instance: Option<u32>,
+    ev_instance: Option<u32>,
+    evcharger_instance: Option<u32>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
@@ -1078,6 +1121,13 @@ async fn connect_gateway(
             access_client_id,
             access_client_secret,
             api_token.unwrap_or_default(),
+            gateway::GatewayInstances {
+                water_tank: water_tank_instance,
+                water_pump: water_pump_instance,
+                water_valve: water_valve_instance,
+                ev: ev_instance,
+                evcharger: evcharger_instance,
+            },
         )?;
         *gw = Some(client);
         info!("connect_gateway: gateway client started host={host_for_log}");
@@ -2483,5 +2533,84 @@ mod inverter_disconnect_tests {
         assert!(mqtt.0.lock().unwrap().is_none());
         assert!(gateway.0.lock().unwrap().is_none());
         stop_inverter_clients(&mqtt, &gateway, &InverterLifecycle::default()).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod inverter_action_routing_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn mqtt_slot() -> MqttState {
+        MqttState(Arc::new(Mutex::new(Some(MqttClient::new(
+            "localhost".into(),
+            1883,
+            None,
+            None,
+            "route-test".into(),
+        )))))
+    }
+
+    #[tokio::test]
+    async fn gateway_slot_routes_header_actions_without_a_mqtt_client() {
+        let gateway = GatewayState(Arc::new(Mutex::new(Some(gateway::idle_test_client()))));
+        let mqtt = MqttState(Arc::new(Mutex::new(None)));
+        // The idle fixture deliberately has no URL; reaching its HTTPS validation
+        // proves routing without dispatching a request or touching real devices.
+        for (action, body) in [
+            ("dry_run", json!({"value":true})),
+            ("ess_mode", json!({})),
+            ("toggle", json!({"entity":"only_charging","state":"on"})),
+        ] {
+            let error = perform_inverter_action(action, body, &mqtt, &gateway)
+                .await
+                .unwrap_err();
+            assert_eq!(error, "Gateway URL is required");
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_failure_does_not_fall_back_to_present_mqtt_slot() {
+        let gateway = GatewayState(Arc::new(Mutex::new(Some(gateway::idle_test_client()))));
+        let error = perform_inverter_action("ess_mode", json!({}), &mqtt_slot(), &gateway)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Gateway URL is required");
+    }
+
+    #[tokio::test]
+    async fn mqtt_selection_preserves_its_command_path_and_disconnected_error() {
+        let gateway = GatewayState(Arc::new(Mutex::new(None)));
+        let error =
+            perform_inverter_action("dry_run", json!({"value":false}), &mqtt_slot(), &gateway)
+                .await
+                .unwrap_err();
+        // Existing MQTT client exists but its broker slot has not connected.
+        assert_eq!(error, "MQTT client not connected");
+        let absent = MqttState(Arc::new(Mutex::new(None)));
+        assert_eq!(
+            perform_inverter_action("ess_mode", json!({}), &absent, &gateway)
+                .await
+                .unwrap_err(),
+            "Neither MQTT nor IGW is connected"
+        );
+    }
+
+    #[test]
+    fn gateway_selection_receives_the_same_explicit_instances_as_mqtt() {
+        let config = FullConfig {
+            water_tank_instance: Some(21),
+            water_pump_instance: Some(7),
+            water_valve_instance: Some(9),
+            ev_instance: Some(22),
+            evcharger_instance: Some(40),
+            ..FullConfig::default()
+        };
+        let instances = configured_gateway_instances(&config);
+        assert_eq!(instances.water_tank, Some(21));
+        assert_eq!(instances.water_pump, Some(7));
+        assert_eq!(instances.water_valve, Some(9));
+        assert_eq!(instances.ev, Some(22));
+        assert_eq!(instances.evcharger, Some(40));
     }
 }

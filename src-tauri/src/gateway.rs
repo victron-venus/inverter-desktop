@@ -3,7 +3,8 @@
 //! leaf paths into `InverterState` for the same UI events as LAN MQTT.
 
 use crate::mqtt::{
-    inverter_state_name, voltage_soc, Battery, InverterState, MpptCharger, PvInverter,
+    inverter_state_name, voltage_soc, Battery, DiscoveredInstance, InverterState, MpptCharger,
+    PvInverter,
 };
 use log::{info, warn};
 use serde::Deserialize;
@@ -51,6 +52,7 @@ fn http_client_builder() -> Result<reqwest::ClientBuilder, String> {
         // Reqwest strips standard Authorization on redirects, but not CF Access headers.
         // Even same-origin redirects should be fixed in the configured base URL.
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(25)))
 }
 
@@ -96,6 +98,10 @@ pub(crate) fn authenticated_request(
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GatewaySnapshot {
     #[serde(default)]
+    pub inverter: Option<serde_json::Map<String, Value>>,
+    #[serde(default)]
+    pub capabilities: HashMap<String, Value>,
+    #[serde(default)]
     pub system: HashMap<String, Value>,
     #[serde(default)]
     pub vebus: HashMap<String, Value>,
@@ -108,7 +114,6 @@ pub struct GatewaySnapshot {
     #[serde(default)]
     pub tank: HashMap<String, Value>,
     #[serde(default)]
-    #[allow(dead_code)]
     pub pump: HashMap<String, Value>,
     #[serde(default)]
     pub ev: HashMap<String, Value>,
@@ -151,6 +156,7 @@ impl GatewayClient {
             access_client_id: self.access_client_id.clone(),
             access_client_secret: self.access_client_secret.clone(),
             api_token: self.api_token.clone(),
+            stopped: self.stop.clone(),
         }
     }
 }
@@ -161,24 +167,288 @@ pub struct GatewayHttpAuth {
     pub access_client_id: String,
     pub access_client_secret: String,
     pub api_token: String,
+    stopped: Arc<AtomicBool>,
+}
+
+impl GatewayHttpAuth {
+    pub(crate) fn ensure_active(&self) -> Result<(), String> {
+        if self.stopped.load(Ordering::SeqCst) {
+            Err("Gateway connection changed; retry the action on the current connection".into())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub async fn acknowledge_all_notifications_http(auth: &GatewayHttpAuth) -> Result<(), String> {
-    post_command(
+    send_command(auth, "acknowledge_all_notifications", json!({})).await
+}
+
+/// One fresh authenticated snapshot for command validation; never retries a write.
+pub(crate) async fn command_snapshot(auth: &GatewayHttpAuth) -> Result<GatewaySnapshot, String> {
+    auth.ensure_active()?;
+    fetch_snapshot(
+        &http_client()?,
         &auth.base,
         &auth.access_client_id,
         &auth.access_client_secret,
         &auth.api_token,
-        "acknowledge_all_notifications",
-        json!({}),
     )
     .await
+}
+
+pub(crate) async fn send_command(
+    auth: &GatewayHttpAuth,
+    name: &str,
+    body: Value,
+) -> Result<(), String> {
+    auth.ensure_active()?;
+    post_command(auth, name, body).await
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct GatewayInstances {
+    pub water_tank: Option<u32>,
+    pub water_pump: Option<u32>,
+    pub water_valve: Option<u32>,
+    pub ev: Option<u32>,
+    pub evcharger: Option<u32>,
+}
+
+/// Explicit local choices win over controller presentation defaults. A missing
+/// selected device stays unknown: silently selecting a different pump is unsafe.
+pub(crate) fn snapshot_instances(
+    snap: &GatewaySnapshot,
+    configured: GatewayInstances,
+) -> GatewayInstances {
+    let ui = snap.inverter.as_ref().and_then(|v| v.get("ui_config"));
+    let choice = |section: &str, key: &str| {
+        ui.and_then(|v| v.get(section))
+            .and_then(|v| v.get(key))
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+    };
+    GatewayInstances {
+        water_tank: configured
+            .water_tank
+            .or_else(|| choice("water", "tank_instance"))
+            .or_else(|| device_instances(&snap.tank).into_iter().next()),
+        water_pump: configured
+            .water_pump
+            .or_else(|| choice("water", "pump_instance"))
+            .or(Some(1)),
+        water_valve: configured
+            .water_valve
+            .or_else(|| choice("water", "valve_instance"))
+            .or(Some(2)),
+        ev: configured
+            .ev
+            .or_else(|| choice("ev", "instance"))
+            .or(Some(22)),
+        evcharger: configured
+            .evcharger
+            .or_else(|| choice("ev", "evcharger_instance"))
+            .or(Some(40)),
+    }
+}
+
+fn device_instances(map: &HashMap<String, Value>) -> Vec<u32> {
+    let mut ids: Vec<u32> = map
+        .iter()
+        .filter(|(_, value)| !value.is_null())
+        .filter_map(|(path, _)| path.split('/').next()?.parse().ok())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn device_connected(map: &HashMap<String, Value>, instance: u32) -> bool {
+    match map.get(&format!("{instance}/Connected")) {
+        None => true, // Older native producers did not publish Connected.
+        Some(value) => num(value) == Some(1.0),
+    }
+}
+
+fn water_device_connected(map: &HashMap<String, Value>, instance: u32) -> bool {
+    match map.get(&format!("{instance}/Connected")) {
+        None => true,
+        Some(value) => value.as_u64() == Some(1),
+    }
+}
+
+fn mode(map: &HashMap<String, Value>, instance: u32) -> Option<u8> {
+    map.get(&format!("{instance}/Mode"))?
+        .as_u64()
+        .filter(|v| *v <= 2)
+        .map(|v| v as u8)
+}
+
+fn map_water_ev(snap: &GatewaySnapshot, configured: GatewayInstances, st: &mut InverterState) {
+    let selected = snapshot_instances(snap, configured);
+    let mut discovery = Vec::new();
+    for (kind, map) in [
+        ("tank", &snap.tank),
+        ("pump", &snap.pump),
+        ("ev", &snap.ev),
+        ("evcharger", &snap.evcharger),
+    ] {
+        for instance in device_instances(map) {
+            let name = ["CustomName", "ProductName"].iter().find_map(|leaf| {
+                map.get(&format!("{instance}/{leaf}"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_owned)
+            });
+            discovery.push(DiscoveredInstance {
+                instance,
+                kind: kind.into(),
+                name,
+            });
+        }
+    }
+    st.discovered_water_ev = Some(discovery);
+    if let Some(i) = selected
+        .water_tank
+        .filter(|i| water_device_connected(&snap.tank, *i))
+    {
+        // dbus-pump and Cerbo tank Level are percentages, including 0.5%.
+        st.water_level = path_num(&snap.tank, &format!("{i}/Level"));
+    }
+    for (instance, valve) in [(selected.water_pump, false), (selected.water_valve, true)] {
+        if let Some(i) = instance.filter(|i| water_device_connected(&snap.pump, *i)) {
+            // The existing water status buttons are controls. Match IGW's
+            // target guards before exposing them; do not guess an unknown Mode.
+            let Some(current_mode) = mode(&snap.pump, i) else {
+                continue;
+            };
+            if snap.capabilities.get("water_mode").and_then(Value::as_bool) != Some(true) {
+                continue;
+            }
+            let value = path_num(&snap.pump, &format!("{i}/State"))
+                .filter(|v| *v == 0.0 || *v == 1.0)
+                .map(|v| v == 1.0);
+            if valve {
+                st.water_valve = value;
+                st.water_valve_mode = Some(current_mode);
+            } else {
+                st.pump_switch = value;
+                st.water_pump_mode = Some(current_mode);
+            }
+        }
+    }
+    if let Some(i) = selected.ev.filter(|i| device_connected(&snap.ev, *i)) {
+        st.ev_present = device_instances(&snap.ev).contains(&i);
+        st.car_soc = path_num(&snap.ev, &format!("{i}/Soc"));
+        st.car_charging_power = path_num(&snap.ev, &format!("{i}/Ac/Power"));
+    }
+    if let Some(i) = selected
+        .evcharger
+        .filter(|i| device_connected(&snap.evcharger, *i))
+    {
+        st.evcharger_present = device_instances(&snap.evcharger).contains(&i);
+        st.ev_charging_power = path_num(&snap.evcharger, &format!("{i}/Ac/Power"));
+        st.ev_power = st.ev_charging_power;
+        // Compatibility with older dbus-ev producers using evcharger/Soc.
+        // Explicit disconnection/nulls from a selected EV are authoritative;
+        // another device's SOC must not make that vehicle look connected.
+        if st.car_soc.is_none() && snap.ev.is_empty() {
+            st.car_soc = path_num(&snap.evcharger, &format!("{i}/Soc"));
+        }
+    }
+}
+
+fn bool_value(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(v) => Some(*v),
+        Value::Number(v) if v.as_i64() == Some(0) => Some(false),
+        Value::Number(v) if v.as_i64() == Some(1) => Some(true),
+        Value::String(v) => match v.to_ascii_lowercase().as_str() {
+            "true" | "1" | "on" | "online" => Some(true),
+            "false" | "0" | "off" | "offline" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn map_controller(snap: &GatewaySnapshot, st: &mut InverterState) {
+    // IGW expires the controller separately from native Cerbo devices. None
+    // must clear controls even if the rest of the gateway remains connected.
+    st.booleans = Some(HashMap::new());
+    st.grid_using_backup = Some(false);
+    let Some(controller) = snap.inverter.as_ref() else {
+        return;
+    };
+    let field = |name: &str| controller.get(name).cloned().unwrap_or(Value::Null);
+    st.booleans = Some(
+        controller
+            .get("booleans")
+            .and_then(Value::as_object)
+            .map(|flags| {
+                flags
+                    .iter()
+                    .filter_map(|(k, v)| bool_value(v).map(|v| (k.clone(), v)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    );
+    st.dry_run = controller.get("dry_run").and_then(bool_value);
+    st.ess_mode = serde_json::from_value(field("ess_mode")).ok();
+    st.ui_config = serde_json::from_value(field("ui_config")).ok();
+    st.features = serde_json::from_value(field("features")).ok();
+    st.version = serde_json::from_value(field("version")).ok();
+    st.uptime = serde_json::from_value(field("uptime")).ok();
+    st.ha_connected = controller.get("ha_connected").and_then(bool_value);
+    st.daily_stats = serde_json::from_value(field("daily_stats")).ok();
+    st.solar_forecast = serde_json::from_value(field("solar_forecast")).ok();
+    st.setpoint_override = serde_json::from_value(field("setpoint_override")).ok();
+    st.grid_backup = serde_json::from_value(field("grid_backup")).ok();
+    st.grid_using_backup = Some(
+        controller
+            .get("grid_using_backup")
+            .and_then(bool_value)
+            .unwrap_or(false),
+    );
+    // Polling a cached controller every two seconds must not renew a stale
+    // submeter. The measurement timestamp is stable across repeated snapshots.
+    st.grid_backup_observed_at = st
+        .grid_backup
+        .as_ref()
+        .and_then(|v| v.measurement_time)
+        .filter(|v| v.is_finite());
+}
+
+fn invalidate_gateway_controls(st: &mut InverterState) {
+    let empty = snapshot_to_state(&GatewaySnapshot::default());
+    st.gateway_snapshot = Some(true);
+    st.booleans = empty.booleans;
+    st.dry_run = None;
+    st.ess_mode = None;
+    st.ui_config = None;
+    st.features = None;
+    st.grid_backup = None;
+    st.grid_using_backup = Some(false);
+    st.grid_backup_observed_at = None;
+    st.setpoint_override = None;
+    st.water_level = None;
+    st.pump_switch = None;
+    st.water_valve = None;
+    st.water_pump_mode = None;
+    st.water_valve_mode = None;
+    st.car_soc = None;
+    st.car_charging_power = None;
+    st.ev_charging_power = None;
+    st.ev_power = None;
+    st.ev_present = false;
+    st.evcharger_present = false;
 }
 
 fn num(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse().ok(),
+        Value::String(s) => s.parse::<f64>().ok().filter(|v| v.is_finite()),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         _ => None,
     }
@@ -190,7 +460,17 @@ fn path_num(map: &HashMap<String, Value>, path: &str) -> Option<f64> {
 
 /// Map gateway snapshot leaf maps into dashboard InverterState.
 pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
-    let mut st = InverterState::default();
+    snapshot_to_state_with_instances(snap, GatewayInstances::default())
+}
+
+fn snapshot_to_state_with_instances(
+    snap: &GatewaySnapshot,
+    instances: GatewayInstances,
+) -> InverterState {
+    let mut st = InverterState {
+        gateway_snapshot: Some(true),
+        ..InverterState::default()
+    };
 
     let g1 = path_num(&snap.system, "0/Ac/Grid/L1/Power");
     let g2 = path_num(&snap.system, "0/Ac/Grid/L2/Power");
@@ -451,22 +731,6 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
         st.battery_soc = batt_v.map(voltage_soc);
     }
 
-    // Water tank level (first tank with Level)
-    let mut tank_insts: Vec<u32> = snap
-        .tank
-        .keys()
-        .filter_map(|k| k.split('/').next()?.parse().ok())
-        .collect();
-    tank_insts.sort_unstable();
-    tank_insts.dedup();
-    for inst in tank_insts {
-        if let Some(level) = path_num(&snap.tank, &format!("{inst}/Level")) {
-            // Victron Level is often 0..1 fraction
-            st.water_level = Some(if level <= 1.0 { level * 100.0 } else { level });
-            break;
-        }
-    }
-
     // Active loads from acload
     let mut load_insts: Vec<u32> = snap
         .acload
@@ -505,28 +769,8 @@ pub fn snapshot_to_state(snap: &GatewaySnapshot) -> InverterState {
         }
     }
 
-    // EV charger power (first with Ac/Power)
-    let mut evc_insts: Vec<u32> = snap
-        .evcharger
-        .keys()
-        .filter_map(|k| k.split('/').next()?.parse().ok())
-        .collect();
-    evc_insts.sort_unstable();
-    evc_insts.dedup();
-    for inst in &evc_insts {
-        if let Some(p) = path_num(&snap.evcharger, &format!("{inst}/Ac/Power")) {
-            st.ev_charging_power = Some(p);
-            st.ev_power = Some(p);
-            st.evcharger_present = true;
-            break;
-        }
-    }
-    if !evc_insts.is_empty() {
-        st.evcharger_present = true;
-    }
-    if !snap.ev.is_empty() {
-        st.ev_present = true;
-    }
+    map_water_ev(snap, instances, &mut st);
+    map_controller(snap, &mut st);
 
     st
 }
@@ -566,15 +810,8 @@ async fn fetch_snapshot(
     serde_json::from_str(&body).map_err(|e| format!("gateway snapshot JSON: {e}"))
 }
 
-async fn post_command(
-    base: &str,
-    access_id: &str,
-    access_secret: &str,
-    api_token: &str,
-    name: &str,
-    body: Value,
-) -> Result<(), String> {
-    let base = validate_base_url(base)?;
+async fn post_command(auth: &GatewayHttpAuth, name: &str, body: Value) -> Result<(), String> {
+    let base = validate_base_url(&auth.base)?;
     let url = format!("{}/v1/commands/{}", base, name.trim_matches('/'));
     let client = http_client()?;
     let req = authenticated_request(
@@ -582,10 +819,11 @@ async fn post_command(
             .post(&url)
             .header("User-Agent", "inverter-desktop/gateway")
             .json(&body),
-        access_id,
-        access_secret,
-        api_token,
+        &auth.access_client_id,
+        &auth.access_client_secret,
+        &auth.api_token,
     )?;
+    auth.ensure_active()?;
     let resp = req
         .send()
         .await
@@ -635,12 +873,13 @@ fn preserve_battery_time_to_go(prev: &InverterState, next: &mut InverterState) {
     }
 }
 
-pub fn start_gateway_client(
+pub(crate) fn start_gateway_client(
     app: AppHandle,
     url: String,
     access_client_id: String,
     access_client_secret: String,
     api_token: String,
+    instances: GatewayInstances,
 ) -> Result<GatewayClient, String> {
     let base = validate_base_url(&url)?;
     validate_access_credentials(&access_client_id, &access_client_secret)?;
@@ -686,7 +925,7 @@ pub fn start_gateway_client(
             .await
             {
                 Ok(snap) => {
-                    let mut mapped = snapshot_to_state(&snap);
+                    let mut mapped = snapshot_to_state_with_instances(&snap, instances);
                     if let Ok(mut g) = state_c.lock() {
                         preserve_battery_time_to_go(&g, &mut mapped);
                         *g = mapped.clone();
@@ -700,6 +939,10 @@ pub fn start_gateway_client(
                 }
                 Err(e) => {
                     warn!("gateway poll failed: {e}");
+                    if let Ok(mut cached) = state_c.lock() {
+                        invalidate_gateway_controls(&mut cached);
+                        let _ = app.emit("mqtt-state-update", cached.clone());
+                    }
                     if connected_emitted {
                         connected_emitted = false;
                         let _ = app.emit("mqtt-connection-status", false);
@@ -806,10 +1049,20 @@ mod tests {
                 .await
                 .unwrap_err()
                 .contains("Provide both Cloudflare"));
-            assert!(post_command(base, id, secret, "token", "test", json!({}))
-                .await
-                .unwrap_err()
-                .contains("Provide both Cloudflare"));
+            assert!(send_command(
+                &GatewayHttpAuth {
+                    base: base.into(),
+                    access_client_id: id.into(),
+                    access_client_secret: secret.into(),
+                    api_token: "token".into(),
+                    stopped: Arc::new(AtomicBool::new(false))
+                },
+                "test",
+                json!({})
+            )
+            .await
+            .unwrap_err()
+            .contains("Provide both Cloudflare"));
             assert!(crate::test_gateway_connection(
                 base.into(),
                 id.into(),
@@ -857,12 +1110,20 @@ mod tests {
             .await
             .unwrap_err()
             .contains("requires HTTPS"));
-        assert!(
-            post_command(url, "id", "secret", "token", "test", json!({}))
-                .await
-                .unwrap_err()
-                .contains("requires HTTPS")
-        );
+        assert!(send_command(
+            &GatewayHttpAuth {
+                base: url.into(),
+                access_client_id: "id".into(),
+                access_client_secret: "secret".into(),
+                api_token: "token".into(),
+                stopped: Arc::new(AtomicBool::new(false))
+            },
+            "test",
+            json!({})
+        )
+        .await
+        .unwrap_err()
+        .contains("requires HTTPS"));
         assert!(crate::test_gateway_connection(
             url.into(),
             "id".into(),
@@ -1111,5 +1372,279 @@ mod tests {
             json.get("solar_total").and_then(|v| v.as_f64()),
             Some(1250.0)
         );
+    }
+    fn complete_snapshot() -> GatewaySnapshot {
+        // Synthetic values only; no captured names, VINs or household telemetry.
+        serde_json::from_value(json!({
+            "inverter": {
+                "booleans": {"only_charging": true, "no_feed": false, "house_support": 1,
+                    "charge_battery": "on", "do_not_supply_charger": "off",
+                    "set_limit_to_ev_charger": false, "minimize_charging": true},
+                "dry_run": false, "ess_mode": {"mode_name": "External control", "is_external": true},
+                "ui_config": {"water": {"tank_instance": 21, "pump_instance": 7, "valve_instance": 8},
+                    "ev": {"instance": 23, "evcharger_instance": 41},
+                    "header_toggles": [{"id":"no_feed","label":"No feed","entity":"no_feed"}]},
+                "grid_backup": {"enabled": true, "available": true, "service": "test.grid",
+                    "name": "Test submeter", "power": 123.0, "measurement_time": 1700000000.0, "age_seconds": 7.0},
+                "grid_using_backup": false,
+                "setpoint_override": {"value": 100},
+                "daily_stats": {"grid_kwh": 2.0}, "solar_forecast": {"today_kwh": 3.0}
+            },
+            "capabilities": {"water_mode": true},
+            "tank": {"21/Level": 0.5, "21/Connected": 1, "21/CustomName": "Test tank"},
+            "pump": {"7/State": 1, "7/Mode": 0, "7/Connected": 1,
+                "8/State": 0, "8/Mode": 2, "8/Connected": 1,
+                "1/State": 0, "1/Mode": 1, "2/State": 1, "2/Mode": 1},
+            "ev": {"23/Soc": 0, "23/Ac/Power": 0, "23/Connected": 1},
+            "evcharger": {"41/Ac/Power": 12, "41/Connected": 1}
+        })).unwrap()
+    }
+
+    #[test]
+    fn maps_controller_and_native_ev_water_from_one_snapshot() {
+        let state = snapshot_to_state(&complete_snapshot());
+        assert_eq!(state.gateway_snapshot, Some(true));
+        assert_eq!(state.booleans.as_ref().unwrap().len(), 7);
+        assert!(state.booleans.as_ref().unwrap()["only_charging"]);
+        assert!(!state.booleans.as_ref().unwrap()["do_not_supply_charger"]);
+        assert_eq!(state.dry_run, Some(false));
+        assert_eq!(state.ess_mode.as_ref().unwrap().is_external, Some(true));
+        assert_eq!(
+            state
+                .ui_config
+                .as_ref()
+                .unwrap()
+                .header_toggles
+                .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(state.water_level, Some(0.5));
+        assert_eq!(state.pump_switch, Some(true));
+        assert_eq!(state.water_valve, Some(false));
+        assert_eq!(state.water_pump_mode, Some(0));
+        assert_eq!(state.water_valve_mode, Some(2));
+        assert_eq!(state.car_soc, Some(0.0));
+        assert_eq!(state.car_charging_power, Some(0.0));
+        assert_eq!(state.ev_charging_power, Some(12.0));
+        assert!(state.ev_present && state.evcharger_present);
+        assert_eq!(state.discovered_water_ev.as_ref().unwrap().len(), 7);
+        assert_eq!(state.grid_backup.as_ref().unwrap().power, Some(123.0));
+        assert_eq!(state.grid_using_backup, Some(false));
+        assert_eq!(state.setpoint_override.as_ref().unwrap().value, Some(100));
+    }
+
+    #[test]
+    fn configured_instances_win_over_controller_and_missing_choices_do_not_fallback() {
+        let snap = complete_snapshot();
+        let state = snapshot_to_state_with_instances(
+            &snap,
+            GatewayInstances {
+                water_tank: Some(99),
+                water_pump: Some(1),
+                water_valve: Some(2),
+                ev: Some(99),
+                evcharger: Some(99),
+            },
+        );
+        assert_eq!(state.water_level, None);
+        assert_eq!(state.pump_switch, Some(false));
+        assert_eq!(state.water_valve, Some(true));
+        assert_eq!(state.water_pump_mode, Some(1));
+        assert_eq!(state.car_soc, None);
+        assert_eq!(state.car_charging_power, None);
+        assert_eq!(state.ev_charging_power, None);
+        assert!(!state.ev_present && !state.evcharger_present);
+    }
+
+    #[test]
+    fn disconnected_or_null_native_devices_clear_previous_values() {
+        for connected in [json!(0), Value::Null] {
+            let mut snap = complete_snapshot();
+            for (map, instance) in [
+                (&mut snap.tank, 21),
+                (&mut snap.pump, 7),
+                (&mut snap.ev, 23),
+                (&mut snap.evcharger, 41),
+            ] {
+                map.insert(format!("{instance}/Connected"), connected.clone());
+            }
+            let state = snapshot_to_state(&snap);
+            assert_eq!(state.water_level, None);
+            assert_eq!(state.pump_switch, None);
+            assert_eq!(state.water_pump_mode, None);
+            assert_eq!(state.car_soc, None);
+            assert_eq!(state.car_charging_power, None);
+            assert_eq!(state.ev_charging_power, None);
+            assert!(!state.ev_present && !state.evcharger_present);
+        }
+    }
+
+    #[test]
+    fn null_native_leaves_remain_unknown_and_zero_is_preserved() {
+        let mut snap = complete_snapshot();
+        snap.pump.insert("7/State".into(), Value::Null);
+        snap.pump.insert("7/Mode".into(), json!(1.5));
+        snap.ev.insert("23/Soc".into(), Value::Null);
+        let state = snapshot_to_state(&snap);
+        assert_eq!(state.pump_switch, None);
+        assert_eq!(state.water_pump_mode, None);
+        assert_eq!(state.car_soc, None);
+        assert_eq!(state.car_charging_power, Some(0.0));
+    }
+
+    #[test]
+    fn expired_controller_clears_flags_and_submeter_but_keeps_native_devices() {
+        let mut snap = complete_snapshot();
+        snap.inverter = None;
+        let state = snapshot_to_state_with_instances(
+            &snap,
+            GatewayInstances {
+                ev: Some(23),
+                water_pump: Some(7),
+                ..GatewayInstances::default()
+            },
+        );
+        assert!(state.booleans.as_ref().unwrap().is_empty());
+        assert_eq!(state.dry_run, None);
+        assert!(state.ess_mode.is_none());
+        assert!(state.grid_backup.is_none());
+        assert_eq!(state.grid_backup_observed_at, None);
+        assert_eq!(state.grid_using_backup, Some(false));
+        assert_eq!(state.car_soc, Some(0.0));
+        assert_eq!(state.pump_switch, Some(true));
+    }
+
+    #[test]
+    fn repeated_backup_snapshots_never_renew_measurement_timestamp() {
+        let snap = complete_snapshot();
+        let first = snapshot_to_state(&snap);
+        let repeated = snapshot_to_state(&snap);
+        assert_eq!(first.grid_backup_observed_at, Some(1700000000.0));
+        assert_eq!(
+            first.grid_backup_observed_at,
+            repeated.grid_backup_observed_at
+        );
+        let mut absent_time = snap;
+        absent_time.inverter.as_mut().unwrap()["grid_backup"]["measurement_time"] = Value::Null;
+        assert_eq!(
+            snapshot_to_state(&absent_time).grid_backup_observed_at,
+            None
+        );
+    }
+
+    #[test]
+    fn controller_never_overwrites_cerbo_owned_power_soc_or_ev() {
+        let mut snap = complete_snapshot();
+        let controller = snap.inverter.as_mut().unwrap();
+        for key in [
+            "gt",
+            "g1",
+            "battery_soc",
+            "battery_power",
+            "car_soc",
+            "water_level",
+        ] {
+            controller.insert(key.into(), json!(9999));
+        }
+        snap.system.insert("0/Ac/Grid/L1/Power".into(), json!(45));
+        let state = snapshot_to_state(&snap);
+        assert_eq!(state.gt, Some(45.0));
+        assert_eq!(state.battery_soc, None);
+        assert_eq!(state.battery_power, None);
+        assert_eq!(state.car_soc, Some(0.0));
+        assert_eq!(state.water_level, Some(0.5));
+    }
+
+    #[test]
+    fn poll_failure_invalidates_controls_without_erasing_unrelated_state() {
+        let mut state = snapshot_to_state(&complete_snapshot());
+        state.ha_direct_connected = Some(true);
+        state.washer_power = Some(true);
+        state.gt = Some(42.0);
+        invalidate_gateway_controls(&mut state);
+        assert!(state.booleans.as_ref().unwrap().is_empty());
+        assert!(state.grid_backup.is_none());
+        assert_eq!(state.car_soc, None);
+        assert_eq!(state.pump_switch, None);
+        assert_eq!(state.ha_direct_connected, Some(true));
+        assert_eq!(state.washer_power, Some(true));
+        assert_eq!(state.gt, Some(42.0));
+    }
+
+    #[tokio::test]
+    async fn stopped_gateway_auth_rejects_snapshot_and_commands_before_network() {
+        let client = idle_test_client();
+        let auth = client.http_auth();
+        assert!(auth.ensure_active().is_ok());
+        client.stop();
+        assert!(command_snapshot(&auth)
+            .await
+            .unwrap_err()
+            .contains("connection changed"));
+        assert!(send_command(&auth, "ess_mode", json!({}))
+            .await
+            .unwrap_err()
+            .contains("connection changed"));
+    }
+    #[test]
+    fn legacy_charger_soc_only_applies_when_native_ev_namespace_is_absent() {
+        let mut snap = complete_snapshot();
+        snap.evcharger.insert("41/Soc".into(), json!(55));
+        let missing_selected = snapshot_to_state_with_instances(
+            &snap,
+            GatewayInstances {
+                ev: Some(99),
+                ..Default::default()
+            },
+        );
+        assert_eq!(missing_selected.car_soc, None);
+        assert!(!missing_selected.ev_present);
+        for connected in [json!(0), Value::Null] {
+            snap.ev.insert("23/Connected".into(), connected);
+            let state = snapshot_to_state(&snap);
+            assert_eq!(state.car_soc, None);
+            assert!(!state.ev_present);
+            assert!(state.evcharger_present);
+        }
+        // An explicit EV tombstone also must not resurrect another SOC.
+        snap.ev = HashMap::from([("23/Soc".into(), Value::Null)]);
+        assert_eq!(snapshot_to_state(&snap).car_soc, None);
+        // Older producers have no ev/<instance> namespace at all.
+        snap.ev.clear();
+        assert_eq!(snapshot_to_state(&snap).car_soc, Some(55.0));
+    }
+    #[test]
+    fn water_display_matches_strict_gateway_command_target_guards() {
+        for connected in [json!(true), json!("1"), json!(1.0), Value::Null, json!(0)] {
+            let mut snap = complete_snapshot();
+            snap.pump.insert("7/Connected".into(), connected);
+            let state = snapshot_to_state(&snap);
+            assert_eq!(state.pump_switch, None);
+            assert_eq!(state.water_pump_mode, None);
+        }
+        for mode in [
+            json!(true),
+            json!("1"),
+            json!(1.0),
+            Value::Null,
+            json!(3),
+            json!(-1),
+        ] {
+            let mut snap = complete_snapshot();
+            snap.pump.insert("7/Mode".into(), mode);
+            let state = snapshot_to_state(&snap);
+            assert_eq!(state.pump_switch, None);
+            assert_eq!(state.water_pump_mode, None);
+        }
+        let mut snap = complete_snapshot();
+        snap.pump.remove("7/Connected");
+        assert_eq!(snapshot_to_state(&snap).pump_switch, Some(true));
+        snap.capabilities.clear();
+        let state = snapshot_to_state(&snap);
+        assert_eq!(state.pump_switch, None);
+        assert_eq!(state.water_pump_mode, None);
+        assert_eq!(state.water_level, Some(0.5));
     }
 }
