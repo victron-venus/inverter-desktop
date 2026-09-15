@@ -206,17 +206,25 @@ describe('desktop worker dashboard', () => {
     }
   )
 
-  it('compares nested JSON parameters by content and keeps separate operations independent', async () => {
+  it('compares nested JSON and distinct Unicode keys by content while keeping separate operations independent', async () => {
     const value = dashboard()
     const first = {
       ...action,
-      params: { target: { entity: 'button.first', area: 'home' }, values: [1, 2] },
+      params: {
+        target: { entity: 'button.first', area: 'home' },
+        values: [1, 2],
+        labels: { '\u00e9': 'composed', 'e\u0301': 'decomposed' },
+      },
     }
     const alias = {
       ...first,
       id: 'alias',
       title: 'Same operation',
-      params: { values: [1, 2], target: { area: 'home', entity: 'button.first' } },
+      params: {
+        labels: { 'e\u0301': 'decomposed', '\u00e9': 'composed' },
+        values: [1, 2],
+        target: { area: 'home', entity: 'button.first' },
+      },
     }
     const second = {
       ...first,
@@ -236,6 +244,10 @@ describe('desktop worker dashboard', () => {
     await value.runAction(snapshot.plugin_id, snapshot.instance_id, {
       ...first,
       params: { ...first.params, values: [2, 1] },
+    })
+    await value.runAction(snapshot.plugin_id, snapshot.instance_id, {
+      ...first,
+      params: { ...first.params, labels: { '\u00e9': 'decomposed', 'e\u0301': 'composed' } },
     })
     expect(actionCalls()).toHaveLength(1)
     native.invoke.mockReturnValueOnce(pendingSecond.promise)

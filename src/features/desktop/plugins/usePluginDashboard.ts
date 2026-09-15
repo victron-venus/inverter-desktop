@@ -9,10 +9,20 @@ function canonical(value: unknown): string {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) return item
     return Object.fromEntries(
       Object.keys(item)
-        .sort()
+        .sort((left, right) => {
+          // Distinct Unicode spellings remain distinct JSON keys.
+          if (left < right) return -1
+          if (left > right) return 1
+          return 0
+        })
         .map((key) => [key, item[key]])
     )
   })
+}
+
+function actionKey(pluginId: string, instanceId: string | null, action: ActionContribution) {
+  // Display-only changes must not unlock a pending operation or hide its error.
+  return canonical([pluginId, instanceId, action.action_id, action.params])
 }
 
 /** Each mounted dashboard owns its subscriptions; the native host owns worker processes. */
@@ -143,11 +153,6 @@ export function createPluginDashboard() {
       }
     })()
     return startup
-  }
-
-  function actionKey(pluginId: string, instanceId: string | null, action: ActionContribution) {
-    // Display-only changes must not unlock a pending operation or hide its error.
-    return canonical([pluginId, instanceId, action.action_id, action.params])
   }
 
   function canAct(plugin: PluginSnapshot) {
