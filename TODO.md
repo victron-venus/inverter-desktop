@@ -55,9 +55,12 @@ completed the independent read-only HA worker on main at `3d731a3`.
 [PR #428](https://github.com/victron-venus/inverter-desktop/pull/428) adds explicitly
 selected HA button/scene actions and instance-bound dashboard dispatch on main
 at `f91598c`. All 41 executed checks passed for final head `c13489d`, including
-Android/iOS artifact boundaries; review was approved with no open threads. The
-current separate iteration adds selected media Play/Pause/Stop using the same
-bounded worker transport and host controls.
+Android/iOS artifact boundaries; review was approved with no open threads.
+[PR #429](https://github.com/victron-venus/inverter-desktop/pull/429) added selected
+media Play/Pause/Stop on main at `7e5ad18`. Its final head `3d1a188` passed all 41
+executed checks, with review approved and no open threads. The current separate
+iteration adds explicit HA on/off controls using the same bounded worker transport
+and host controls.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -142,12 +145,87 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Next iteration: explicit HA media-player transport
+### Next iteration: explicit HA on/off controls
+
+Extend the independently installed HA package with explicit Turn on and Turn off
+for selected `switch.*`, `input_boolean.*` and `light.*` entities. Keep observed
+state separate from command submission and preserve core inverter-control MQTT
+ownership. No generic toggle, arbitrary service parameters or lighting options
+are introduced. Start from the verified PR #429 merge on main at `7e5ad18`.
+The branch also incorporates PR #430 on main at `723c41e`; the combined native,
+frontend, mobile and installed-package paths have been revalidated.
+
+- [x] Add optional `binary_entities`, empty by default, with at most eight unique
+      literal IDs from the three supported domains. Append new watch targets
+      after existing watch/button/scene/media selections; preserve existing IDs
+      and all previously accepted configurations.
+- [x] Preserve the 32-entity watch limit and bound combined action buttons to 31:
+      one per button/scene, three per media player and two per on/off target.
+      Exercise the maximum 64 contributions through the actual bounded encoder.
+- [x] Publish immutable `ha-binary-<index>-on/off` presets with empty parameters.
+      Derive fixed domain-specific `turn_on`/`turn_off` routes and literal entity
+      bodies from validated configuration. Reject arbitrary domains, targets,
+      parameters, core aliases and MQTT fallback.
+- [x] Offer and admit commands only for exact observed `on` or `off` state in the
+      current connected session. Withdraw missing/deleted/unknown/unavailable or
+      malformed targets. Keep both absolute commands available for either state.
+      A service response must never synthesize a new entity state.
+- [x] Retain original deadlines, cancellation, two-request concurrency, verified
+      TLS, no redirects/retries, authentication rejection and unknown-outcome
+      feedback. Preserve existing button/scene/media behavior.
+- [x] Add actual-worker process acceptance for all six routes, read-only
+      defaults, configuration bounds, state confirmation, literal flag-like IDs,
+      invalid parameters and withdrawn actions.
+- [x] Exercise the actual installed release package with private HA/MQTT
+      services: exact writes, state confirmation, stale-instance rejection,
+      settings replacement and stalled-command teardown. Keep the independent
+      core charger flag live in both states and observe zero MQTT commands.
+- [x] Update version/manifest, packaging contracts and English documentation.
+      Preserve mobile exclusions and the empty production publisher policy.
+- [x] Run relevant tests, lint, fresh frontend/release builds and staging with
+      serialized local load; complete independent subagent reviews.
+- [ ] Push a separate PR, resolve comments in English, pass final-head CI and
+      synchronize clean main after the authorized merge.
+
+Local acceptance passed: 32 unit tests, 37 action subprocess tests, 16
+read/protocol subprocess tests and three macOS TLS scenarios. Worker and native
+all-target Clippy pass. The default native suite passes 398 tests; all six
+separately selected installed-package scenarios pass with actual release workers
+(two Frigate, four HA). The binary fixture verifies ten exact admitted POSTs,
+HA-confirmed state, stale-instance/preset rejection, stalled-command teardown,
+independent charger-flag telemetry in both states and zero core MQTT commands.
+
+The actual HA 0.4 release worker builds and stages successfully. Packaging and
+mobile boundary suites pass 27 and 29 tests, with packaging Pylint 10/10.
+The combined frontend passes 311 tests, 17 mobile tests and five build-profile
+checks. Both frontend builds include typechecking; the final output is desktop.
+Ten Android local-build script tests also pass. Project Biome exits successfully
+with 79 warnings and 84 informational diagnostics in frontend sources identical
+to the merged main base. Independent source, fixture, CI-selection and
+compatibility reviews found no open issues. Old configurations retain the exact
+32 KiB validation boundary when the new field is omitted or empty. Real encoded
+63/64-contribution cases preserve the 64 KiB frame limit with escaped bounded
+fields and valid binary states. No application signing or publisher keys are added.
+
+One Windows CI run failed the retained empty-body video retry scenario while the
+parallel check at the same head passed. Its assertion hid the transfer-error
+category, so the original cause is not established. The test server now reads
+bounded header chunks instead of one socket operation per byte, success assertions
+report only safe error enums, and the retry scenario checks exact served bytes
+and complete file cleanup. Transfer deadlines, retry counts and production code
+are unchanged. The exact scenario, all 16 media tests and strict native Clippy
+pass locally; final Windows acceptance remains part of the current-head CI gate.
+
+Physical HA devices, actual scheduled automations, number/cover inputs, discovery,
+appliance/weather presentation, remaining camera adapters and legacy migration
+remain separate acceptance work.
+
+### Completed checkpoint: explicit HA media-player transport
 
 Extend the independent HA package with opt-in Play/Pause/Stop for literal
 `media_player.*` targets. Reuse the existing declarative actions and host API 1.4;
-keep core inverter-control flags on their existing MQTT path. This branch is synchronized
-with the verified PR #428 merge on main at `f91598c`.
+keep core inverter-control flags on their existing MQTT path. PR #429 merged as
+`7e5ad18` with an identical tested tree and a clean synchronized canonical main.
 
 - [x] Add optional `media_player_entities`, empty by default, limited to four
       unique literal media-player IDs. Preserve the combined 32-entity watch limit
@@ -171,7 +249,7 @@ with the verified PR #428 merge on main at `f91598c`.
       Preserve mobile exclusion and the empty production publisher policy.
 - [x] Run serialized relevant tests, lint, release staging and all installed-package
       scenarios. Review with subagents and mark only verified work complete.
-- [ ] Push a separate PR, resolve comments in English, pass final-head CI and
+- [x] Push a separate PR, resolve comments in English, pass final-head CI and
       synchronize clean main after the authorized merge.
 
 Local worker validation passes 25 unit tests and strict all-target Clippy. The

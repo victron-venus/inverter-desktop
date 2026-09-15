@@ -441,6 +441,14 @@ fn media_configuration(
     frame
 }
 
+fn binary_configuration(fixture: &TcpListener, watch: &str, selected: Option<&str>) -> Value {
+    let mut frame = configuration(fixture, watch, None);
+    if let Some(selected) = selected {
+        frame["configuration"]["values"]["binary_entities"] = json!(selected);
+    }
+    frame
+}
+
 fn initialize_configuration(
     worker: &mut Worker,
     fixture: &TcpListener,
@@ -448,7 +456,12 @@ fn initialize_configuration(
 ) -> WebSocket<TcpStream> {
     worker.configure_frame(frame.clone());
     let mut names = Vec::new();
-    for field in ["watch_entities", "action_entities", "media_player_entities"] {
+    for field in [
+        "watch_entities",
+        "action_entities",
+        "media_player_entities",
+        "binary_entities",
+    ] {
         for name in frame["configuration"]["values"][field]
             .as_str()
             .unwrap_or("")
@@ -476,7 +489,15 @@ fn initialize_configuration(
             "ordered union must not read duplicates"
         );
         assert!(request.body.is_empty());
-        let state = if name.starts_with("media_player.") {
+        let binary_selected = frame["configuration"]["values"]["binary_entities"]
+            .as_str()
+            .unwrap_or("")
+            .split([',', '\n'])
+            .map(str::trim)
+            .any(|selected| selected == name);
+        let state = if binary_selected {
+            "off"
+        } else if name.starts_with("media_player.") {
             "paused"
         } else {
             "unknown"
@@ -1473,6 +1494,442 @@ fn media_auth_rejection_cancels_sibling_and_revokes_all_action_families() {
         worker.action(request, action, 5000);
         worker.error(request, "unavailable");
     }
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+#[test]
+fn binary_omitted_and_empty_selection_keep_observed_on_off_entities_read_only() {
+    for selected in [None, Some("")] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let names = [
+            "switch.selected",
+            "input_boolean.do_not_supply_charger",
+            "light.selected",
+        ];
+        let mut socket = initialize_configuration(
+            &mut worker,
+            &fixture,
+            binary_configuration(&fixture, &names.join(","), selected),
+        );
+        for name in names {
+            live(&mut socket, name, Some(entity(name, "on")));
+        }
+        let frame =
+            worker.until(|frame| item(frame, "entity-2").is_some_and(|item| item["text"] == "on"));
+        assert!(actions(&frame).is_empty());
+        for operation in ["on", "off"] {
+            worker.action(operation, &format!("ha-binary-0-{operation}"), 5000);
+            worker.error(operation, "invalid_action");
+        }
+        no_request(&fixture, Duration::from_millis(100));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn binary_all_six_fixed_routes_preserve_other_action_ids_and_literal_flag_targets() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let names = [
+        "switch.inverter_on",
+        "input_boolean.do_not_supply_charger",
+        "light.reading",
+    ];
+    let mut config = media_configuration(
+        &fixture,
+        "sensor.power,input_boolean.do_not_supply_charger",
+        Some("scene.evening,button.trigger"),
+        Some("media_player.television"),
+    );
+    config["configuration"]["values"]["binary_entities"] = json!(names.join(","));
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = connected(&mut worker, 11);
+    for (index, name) in [
+        "sensor.power",
+        names[1],
+        "scene.evening",
+        "button.trigger",
+        "media_player.television",
+        names[0],
+        names[2],
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(
+            item(&frame, &format!("entity-{index}")).unwrap()["title"],
+            *name
+        );
+    }
+    assert_eq!(
+        item(&frame, "ha-action-0").unwrap()["title"],
+        "scene.evening"
+    );
+    assert_eq!(
+        item(&frame, "ha-action-1").unwrap()["title"],
+        "button.trigger"
+    );
+    assert_eq!(
+        item(&frame, "ha-media-0-play").unwrap()["title"],
+        "media_player.television"
+    );
+    for (index, name) in names.iter().enumerate() {
+        let domain = name.split_once('.').unwrap().0;
+        for operation in ["on", "off"] {
+            let id = format!("ha-binary-{index}-{operation}");
+            let preset = item(&frame, &id).unwrap();
+            assert_eq!(preset["action_id"], id);
+            assert_eq!(preset["params"], json!({}));
+            assert_eq!(preset["label"], format!("Turn {operation} {name}"));
+            worker.action(&id, &id, 5000);
+            let mut pending = exact_service(&fixture, domain, &format!("turn_{operation}"), name);
+            respond(&mut pending, 200, json!([]));
+            worker.success(&id);
+        }
+        live(&mut socket, name, Some(entity(name, "on")));
+    }
+    let on = worker.until(|frame| item(frame, "entity-6").is_some_and(|item| item["text"] == "on"));
+    assert_eq!(
+        actions(&on).len(),
+        11,
+        "both absolute commands remain available while on"
+    );
+    for (id, domain, operation, name) in [
+        ("ha-action-0", "scene", "turn_on", "scene.evening"),
+        ("ha-action-1", "button", "press", "button.trigger"),
+        (
+            "ha-media-0-play",
+            "media_player",
+            "media_play",
+            "media_player.television",
+        ),
+    ] {
+        worker.action(id, id, 5000);
+        let mut pending = exact_service(&fixture, domain, operation, name);
+        respond(&mut pending, 200, json!([]));
+        worker.success(id);
+    }
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+fn success_without_state_change(worker: &mut Worker, request: &str, expected: &str) {
+    let until = Instant::now() + WAIT;
+    loop {
+        let frame = worker
+            .frames
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .unwrap();
+        if frame["type"] == "action_result" {
+            assert_eq!(
+                frame,
+                json!({"type":"action_result","request_id":request,"value":{}})
+            );
+            break;
+        }
+        assert_eq!(frame["type"], "contributions");
+        assert_eq!(item(&frame, "entity-0").unwrap()["text"], expected);
+    }
+    // Inspect every snapshot across a publication interval, including any that
+    // arrived before the result; never discard an optimistic state update.
+    let until = Instant::now() + Duration::from_millis(400);
+    loop {
+        match worker
+            .frames
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+        {
+            Ok(frame) => {
+                assert_eq!(frame["type"], "contributions");
+                assert_eq!(item(&frame, "entity-0").unwrap()["text"], expected);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(error) => panic!("worker must remain alive after success: {error}"),
+        }
+    }
+}
+
+#[test]
+fn binary_success_and_response_state_do_not_replace_observed_state_before_server_event() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let name = "input_boolean.do_not_supply_charger";
+    let mut socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        binary_configuration(&fixture, "", Some(name)),
+    );
+    let initial = connected(&mut worker, 2);
+    assert_eq!(item(&initial, "entity-0").unwrap()["text"], "off");
+    for (operation, observed) in [("on", "off"), ("off", "on")] {
+        let id = format!("ha-binary-0-{operation}");
+        worker.action(&id, &id, 5000);
+        let mut pending = exact_service(
+            &fixture,
+            "input_boolean",
+            &format!("turn_{operation}"),
+            name,
+        );
+        respond(&mut pending, 200, json!([entity(name, operation)]));
+        success_without_state_change(&mut worker, &id, observed);
+        live(&mut socket, name, Some(entity(name, operation)));
+        let updated = worker
+            .until(|frame| item(frame, "entity-0").is_some_and(|item| item["text"] == operation));
+        assert_eq!(actions(&updated).len(), 2);
+    }
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+#[test]
+fn binary_missing_deleted_unknown_and_malformed_states_withdraw_both_commands() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let name = "switch.selected";
+    worker.configure_frame(binary_configuration(&fixture, "", Some(name)));
+    let mut socket = authorize(&fixture, true);
+    let mut initial = request(&fixture);
+    assert_eq!(
+        initial.line,
+        "GET /reverse/proxy/ha/api/states/switch.selected HTTP/1.1"
+    );
+    connected(&mut worker, 0);
+    worker.action("waiting", "ha-binary-0-on", 5000);
+    worker.error("waiting", "unavailable");
+    respond(
+        &mut initial.stream,
+        404,
+        json!({"message":"Entity not found"}),
+    );
+    worker
+        .until(|frame| item(frame, "entity-0").is_some_and(|item| item["value"] == "Unavailable"));
+    worker.action("missing", "ha-binary-0-on", 5000);
+    worker.error("missing", "unavailable");
+    let mut invalid = [
+        json!("unknown"),
+        json!("unavailable"),
+        json!("ON"),
+        json!("off "),
+        json!(""),
+        json!("playing"),
+        json!(true),
+        json!(1),
+        Value::Null,
+    ]
+    .into_iter()
+    .map(|state| Some(json!({"entity_id":name,"state":state})))
+    .collect::<Vec<_>>();
+    invalid.push(Some(json!({"entity_id":name})));
+    invalid.push(None);
+    for (index, invalid) in invalid.into_iter().enumerate() {
+        live(
+            &mut socket,
+            name,
+            Some(entity(name, if index % 2 == 0 { "on" } else { "off" })),
+        );
+        connected(&mut worker, 2);
+        live(&mut socket, name, invalid);
+        connected(&mut worker, 0);
+        for operation in ["on", "off"] {
+            let id = format!("withdrawn-{index}-{operation}");
+            worker.action(&id, &format!("ha-binary-0-{operation}"), 5000);
+            worker.error(&id, "unavailable");
+        }
+        no_request(&fixture, Duration::ZERO);
+    }
+    worker.stop(false);
+}
+
+#[test]
+fn binary_invalid_configuration_rejects_domains_counts_union_and_combined_action_budget() {
+    let fixture = listener();
+    let nine = (0..9)
+        .map(|index| format!("switch.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let overlong = " ".repeat(4097);
+    let mut invalid = [
+        "sensor.selected",
+        "button.selected",
+        "scene.selected",
+        "media_player.selected",
+        "input_number.selected",
+        "switch.invalid/path",
+        "Switch.upper",
+        nine.as_str(),
+        overlong.as_str(),
+    ]
+    .into_iter()
+    .map(|selected| binary_configuration(&fixture, "", Some(selected)))
+    .collect::<Vec<_>>();
+    let watch = (0..32)
+        .map(|index| format!("sensor.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    invalid.push(binary_configuration(&fixture, &watch, Some("switch.extra")));
+    let buttons = (0..16)
+        .map(|index| format!("button.b{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let media = (0..4)
+        .map(|index| format!("media_player.p{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut overflow = media_configuration(&fixture, "", Some(&buttons), Some(&media));
+    overflow["configuration"]["values"]["binary_entities"] = json!("switch.one,light.two");
+    invalid.push(overflow);
+    for frame in invalid {
+        let mut worker = Worker::start();
+        worker.send(hello());
+        assert_eq!(worker.next()["type"], "ready");
+        worker.send(frame);
+        worker.finish(false);
+        assert!(worker.frames.try_iter().next().is_none());
+        no_request(&fixture, Duration::ZERO);
+    }
+}
+
+#[test]
+fn binary_eight_unique_targets_and_31_mixed_actions_fit_64_bounded_contributions() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let watch = (0..11)
+        .map(|index| format!("sensor.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let buttons = (0..12)
+        .map(|index| format!("button.b{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let binary = (0..8)
+        .map(|index| format!("switch.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut config = media_configuration(
+        &fixture,
+        &watch,
+        Some(&buttons),
+        Some("media_player.selected"),
+    );
+    config["configuration"]["values"]["binary_entities"] =
+        json!(format!("{binary},switch.s0,\nswitch.s7"));
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = connected(&mut worker, 31);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 64);
+    for (id, expected) in [
+        ("entity-22", "button.b11"),
+        ("entity-23", "media_player.selected"),
+        ("entity-24", "switch.s0"),
+        ("entity-31", "switch.s7"),
+        ("ha-action-11", "button.b11"),
+        ("ha-media-0-stop", "media_player.selected"),
+        ("ha-binary-7-off", "switch.s7"),
+    ] {
+        assert_eq!(item(&frame, id).unwrap()["title"], expected);
+    }
+    for value in frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["id"].as_str().unwrap().starts_with("entity-"))
+    {
+        let name = value["title"].as_str().unwrap();
+        let state = if name.starts_with("sensor.") {
+            "\\".repeat(512)
+        } else if name.starts_with("switch.") {
+            "on".into()
+        } else {
+            "playing".into()
+        };
+        let mut value = entity(name, &state);
+        value["attributes"]["friendly_name"] = json!("\"".repeat(128));
+        live(&mut socket, name, Some(value));
+    }
+    let bounded = worker.until(|frame| {
+        item(frame, "entity-31").is_some_and(|item| item["title"] == "\"".repeat(128))
+    });
+    assert_eq!(bounded["items"].as_array().unwrap().len(), 64);
+    assert!(serde_json::to_vec(&bounded).unwrap().len() + 1 < MAX_FRAME);
+    let mut ids = HashSet::new();
+    for value in bounded["items"].as_array().unwrap() {
+        assert!(ids.insert(value["id"].as_str().unwrap()));
+        assert!(value["title"].as_str().unwrap().len() <= 128);
+        if value["kind"] == "action" {
+            assert_eq!(value["params"], json!({}));
+            assert!(value["label"].as_str().unwrap().len() <= 128);
+        }
+    }
+    worker.action("last-binary", "ha-binary-7-off", 5000);
+    let mut pending = exact_service(&fixture, "switch", "turn_off", "switch.s7");
+    respond(&mut pending, 200, json!([]));
+    worker.success("last-binary");
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+#[test]
+fn binary_changed_params_and_unadvertised_actions_never_issue_service_requests() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        binary_configuration(&fixture, "", Some("light.selected")),
+    );
+    connected(&mut worker, 2);
+    for (index, action, params) in [
+        (0, "ha-binary-0-on", json!({"entity_id":"light.other"})),
+        (1, "ha-binary-0-on", json!({"service":"switch.turn_off"})),
+        (2, "ha-binary-0-on", json!({"brightness":255})),
+        (3, "ha-binary-0-toggle", json!({})),
+        (4, "ha-binary-1-on", json!({})),
+        (5, "ha-binary-00-on", json!({})),
+        (6, "ha-binary-0-turn_on", json!({})),
+        (7, "light.turn_on", json!({})),
+    ] {
+        let request = format!("binary-invalid-{index}");
+        worker.send(action_frame(&request, action, params, 5000));
+        worker.error(&request, "invalid_action");
+        no_request(&fixture, Duration::ZERO);
+    }
+    worker.stop(false);
+}
+
+#[test]
+fn binary_transport_preserves_no_retry_deadlines_and_shared_two_request_limit() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = binary_configuration(&fixture, "", Some("switch.selected"));
+    config["configuration"]["values"]["action_entities"] = json!("button.selected");
+    let _socket = initialize_configuration(&mut worker, &fixture, config);
+    connected(&mut worker, 3);
+    worker.action("binary-lost", "ha-binary-0-on", 5000);
+    drop(exact_service(
+        &fixture,
+        "switch",
+        "turn_on",
+        "switch.selected",
+    ));
+    worker.error("binary-lost", "outcome_unknown");
+    no_request(&fixture, Duration::from_millis(1200));
+    worker.action("binary-lost", "ha-binary-0-on", 5000);
+    worker.error("binary-lost", "invalid_action");
+    let started = Instant::now();
+    worker.action("binary-deadline", "ha-binary-0-off", 250);
+    let _deadline = exact_service(&fixture, "switch", "turn_off", "switch.selected");
+    worker.error("binary-deadline", "outcome_unknown");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    worker.action("binary-pending", "ha-binary-0-on", 5000);
+    let _binary = exact_service(&fixture, "switch", "turn_on", "switch.selected");
+    worker.action("button-pending", "ha-action-0", 5000);
+    let mut button = service(&fixture, "button", "button.selected");
+    worker.action("binary-overloaded", "ha-binary-0-off", 5000);
+    worker.error("binary-overloaded", "overloaded");
+    worker.send(json!({"type":"cancel","request_id":"binary-pending"}));
+    worker.error("binary-pending", "outcome_unknown");
+    respond(&mut button, 200, json!([]));
+    worker.success("button-pending");
     no_request(&fixture, Duration::from_millis(100));
     worker.stop(false);
 }

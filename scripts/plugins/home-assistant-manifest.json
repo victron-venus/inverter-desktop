@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "host_api": "^1.4",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",
@@ -21,7 +21,7 @@
       "watch_entities": {
         "type": "string",
         "title": "Entities to watch",
-        "description": "Entity IDs separated by commas or newlines. The ordered union with action targets is limited to 32 entities; read selection alone never enables writes.",
+        "description": "Entity IDs separated by commas or newlines. The ordered union with action targets is limited to 32 entities. All action lists together allow 31 buttons: one per button/scene, three per media player and two per on/off target. Read selection alone never enables writes.",
         "maxLength": 4096,
         "default": ""
       },
@@ -44,6 +44,13 @@
         "type": "string",
         "title": "Media players to control",
         "description": "Optional explicit media_player.* IDs, up to four, separated by commas or newlines. Targets are also watched. Offers Play, Pause and Stop. Leave blank to disable media actions.",
+        "maxLength": 4096,
+        "default": ""
+      },
+      "binary_entities": {
+        "type": "string",
+        "title": "Switches, helpers and lights to control",
+        "description": "Optional explicit switch.*, input_boolean.* and light.* IDs, up to eight, separated by commas or newlines. Targets are also watched. Offers Turn on and Turn off while Home Assistant reports on or off. Leave blank to disable these actions.",
         "maxLength": 4096,
         "default": ""
       }

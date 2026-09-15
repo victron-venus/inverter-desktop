@@ -43,7 +43,7 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 if "windows" in target:
                     binary += ".exe"
                 self.assertEqual(manifest["plugin_id"], "inverter-desktop.home-assistant")
-                self.assertEqual(manifest["version"], "0.3.0")
+                self.assertEqual(manifest["version"], "0.4.0")
                 self.assertEqual(manifest["host_api"], "^1.4")
                 self.assertEqual(manifest["target"], target)
                 self.assertEqual(manifest["entrypoint"], f"bin/{binary}")
@@ -67,7 +67,8 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         fields = schema["properties"]
         self.assertEqual(set(fields), {
-            "ha_base_url", "watch_entities", "action_entities", "media_player_entities", "ha_token",
+            "ha_base_url", "watch_entities", "action_entities", "media_player_entities",
+            "binary_entities", "ha_token",
         })
         self.assertTrue(all(field["type"] == "string" for field in fields.values()))
         self.assertEqual(fields["ha_base_url"]["maxLength"], 2048)
@@ -78,6 +79,9 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertEqual(fields["media_player_entities"]["default"], "")
         self.assertEqual(fields["media_player_entities"]["maxLength"], 4096)
         self.assertNotIn("media_player_entities", schema["required"])
+        self.assertEqual(fields["binary_entities"]["default"], "")
+        self.assertEqual(fields["binary_entities"]["maxLength"], 4096)
+        self.assertNotIn("binary_entities", schema["required"])
         self.assertNotIn("minLength", fields["watch_entities"])
         self.assertTrue(fields["ha_token"]["writeOnly"])
         self.assertEqual(fields["ha_token"]["minLength"], 1)

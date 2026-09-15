@@ -36,6 +36,17 @@ const MEDIA_TARGETS: [&str; 5] = [
     "media_player.unavailable",
     "media_player.next",
 ];
+const BINARY_TARGETS: [&str; 9] = [
+    "switch.do_not_supply_charger",
+    "input_boolean.do_not_supply_charger",
+    "light.study",
+    "switch.unknown",
+    "input_boolean.unavailable",
+    "light.invalid",
+    "switch.missing",
+    "light.missing",
+    "switch.next",
+];
 
 #[derive(Clone)]
 struct Request {
@@ -64,6 +75,7 @@ impl Observations {
 #[derive(Clone)]
 struct ServiceControl {
     media_enabled: bool,
+    binary_enabled: bool,
     stall_next: Arc<AtomicBool>,
     pending: Arc<AtomicUsize>,
     release: broadcast::Sender<()>,
@@ -73,6 +85,7 @@ impl ServiceControl {
     fn new() -> Self {
         Self {
             media_enabled: false,
+            binary_enabled: false,
             stall_next: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             release: broadcast::channel(4).0,
@@ -85,17 +98,32 @@ impl ServiceControl {
             ..Self::new()
         }
     }
+
+    fn binary() -> Self {
+        Self {
+            binary_enabled: true,
+            ..Self::new()
+        }
+    }
 }
 
-fn fixture_services(target: &str, media_enabled: bool) -> &'static [&'static str] {
+fn fixture_services(target: &str, control: &ServiceControl) -> &'static [&'static str] {
     match target {
         "button.do_not_supply_charger" => &["button/press"],
         "scene.evening" | "scene.next" => &["scene/turn_on"],
-        target if media_enabled && MEDIA_TARGETS.contains(&target) => &[
+        target if control.media_enabled && MEDIA_TARGETS.contains(&target) => &[
             "media_player/media_play",
             "media_player/media_pause",
             "media_player/media_stop",
         ],
+        target if control.binary_enabled && BINARY_TARGETS.contains(&target) => {
+            match target.split_once('.').map(|(domain, _)| domain) {
+                Some("switch") => &["switch/turn_on", "switch/turn_off"],
+                Some("input_boolean") => &["input_boolean/turn_on", "input_boolean/turn_off"],
+                Some("light") => &["light/turn_on", "light/turn_off"],
+                _ => &[],
+            }
+        }
         _ => &[],
     }
 }
@@ -233,7 +261,14 @@ impl HomeAssistant {
                     && MEDIA_TARGETS
                         .iter()
                         .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
-                assert!(readonly || action_target || media_target);
+                let binary_target = self
+                    .services
+                    .as_ref()
+                    .is_some_and(|control| control.binary_enabled)
+                    && BINARY_TARGETS
+                        .iter()
+                        .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
+                assert!(readonly || action_target || media_target || binary_target);
             }
             if request.operation == "service" {
                 assert!(
@@ -243,7 +278,7 @@ impl HomeAssistant {
                 let body = request.body.as_ref().unwrap();
                 let expected = fixture_services(
                     body["entity_id"].as_str().unwrap(),
-                    self.services.as_ref().unwrap().media_enabled,
+                    self.services.as_ref().unwrap(),
                 );
                 assert_eq!(body.as_object().unwrap().len(), 1);
                 assert!(expected
@@ -425,6 +460,27 @@ async fn serve_connection(
         entity
             if services
                 .as_ref()
+                .is_some_and(|control| control.binary_enabled)
+                && BINARY_TARGETS.contains(&entity) =>
+        {
+            match entity {
+                "switch.missing" | "light.missing" => {
+                    ("404 Not Found", json!({"message":"Entity not found"}))
+                }
+                _ => {
+                    let state = match entity {
+                        "switch.unknown" => "unknown",
+                        "input_boolean.unavailable" => "unavailable",
+                        "light.invalid" => "idle",
+                        _ => "off",
+                    };
+                    ("200 OK", entity_state(entity, state, entity))
+                }
+            }
+        }
+        entity
+            if services
+                .as_ref()
                 .is_some_and(|control| control.media_enabled)
                 && MEDIA_TARGETS.contains(&entity) =>
         {
@@ -480,7 +536,7 @@ async fn serve_service(
         .map_err(|_| ())?;
     let body: Value = serde_json::from_slice(&bytes[headers.len()..]).map_err(|_| ())?;
     let target = body["entity_id"].as_str().ok_or(())?;
-    if !fixture_services(target, control.media_enabled)
+    if !fixture_services(target, &control)
         .iter()
         .any(|service| path == format!("{prefix}api/services/{service}"))
         || body != json!({"entity_id":target})
@@ -835,6 +891,28 @@ async fn configure_media(
                 json!("button.do_not_supply_charger"),
             ),
             ("media_player_entities".into(), json!(entities)),
+        ]),
+        token,
+    )
+    .await;
+}
+
+async fn configure_binary(
+    service: &PackageApplication,
+    epoch: u64,
+    origin: &HomeAssistant,
+    prefix: &str,
+    entities: &str,
+    token: Option<&str>,
+) {
+    save_configuration(
+        service,
+        epoch,
+        origin,
+        BTreeMap::from([
+            ("ha_base_url".into(), json!(origin.base(prefix))),
+            ("watch_entities".into(), json!("sensor.temperature")),
+            ("binary_entities".into(), json!(entities)),
         ]),
         token,
     )
@@ -1666,6 +1744,363 @@ async fn signed_home_assistant_package_media() {
     assert_eq!(
         origin.count("service"),
         8,
+        "each admitted call sends one fixed POST"
+    );
+    assert!(host.snapshots().is_empty());
+    assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
+    assert!(fs::read_dir(root.join("store/settings"))
+        .unwrap()
+        .next()
+        .is_none());
+    core.assert_receives(&broker, 6).await;
+    commands.assert_live_without_commands(6).await;
+    origin.assert_safe();
+    service.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires explicitly built INVERTER_HOME_ASSISTANT_WORKER and local MOSQUITTO_BIN; CI runs this acceptance test"]
+async fn signed_home_assistant_package_binary() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let broker = Broker::new(&root).await;
+    let core = CoreTelemetry::new(broker.port);
+    let commands = CommandProbe::new(broker.port).await;
+    let controls = ServiceControl::binary();
+    let origin = HomeAssistant::with_services(Some(controls.clone())).await;
+    let (service, host, epoch) = install(&root).await;
+    let view = serde_json::to_value(service.get_settings(PLUGIN, epoch).await.unwrap()).unwrap();
+    for field in [
+        "action_entities",
+        "media_player_entities",
+        "binary_entities",
+    ] {
+        assert_eq!(view["values"][field], "");
+    }
+
+    configure(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        Some(BINARY_TARGETS[1]),
+        Some(&origin.first_token),
+    )
+    .await;
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    item_value(&host, "entity-0", "text", json!("on")).await;
+    no_secrets(&host, &origin);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &instance(&host),
+            "ha-binary-0-off",
+            json!({}),
+            WAIT,
+            epoch,
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 0, "reading never grants control");
+    core.assert_receives(&broker, 1).await;
+    commands.assert_live_without_commands(1).await;
+
+    configure_binary(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        &BINARY_TARGETS[..8].join(","),
+        None,
+    )
+    .await;
+    connection(&host).await;
+    until(|| actions(&host).len() == 6).await;
+    for (index, field, value) in [
+        (1, "text", "off"),
+        (2, "text", "on"),
+        (3, "text", "off"),
+        (4, "value", "Unknown"),
+        (5, "value", "Unavailable"),
+        (6, "text", "idle"),
+        (7, "value", "Unavailable"),
+        (8, "value", "Unavailable"),
+    ] {
+        item_value(&host, &format!("entity-{index}"), field, json!(value)).await;
+    }
+    let first_instance = instance(&host);
+    let advertised = actions(&host);
+    for index in 0..8 {
+        for operation in ["on", "off"] {
+            let id = format!("ha-binary-{index}-{operation}");
+            if index < 3 {
+                let action = advertised
+                    .iter()
+                    .find(|item| item["action_id"] == id)
+                    .unwrap();
+                assert_eq!(action["id"], id);
+                assert_eq!(action["params"], json!({}));
+            } else {
+                assert!(!advertised.iter().any(|item| item["action_id"] == id));
+                assert_eq!(
+                    host.action_in_epoch(PLUGIN, &first_instance, &id, json!({}), WAIT, epoch,)
+                        .await
+                        .unwrap_err(),
+                    PluginError::UnknownAction
+                );
+            }
+        }
+    }
+    for (action_id, params) in [
+        ("ha-binary-0-toggle", json!({})),
+        ("ha-binary-8-on", json!({})),
+        (
+            "ha-binary-0-on",
+            json!({"entity_id":BINARY_TARGETS[1],"service":"turn_off"}),
+        ),
+    ] {
+        assert_eq!(
+            host.action_in_epoch(PLUGIN, &first_instance, action_id, params, WAIT, epoch)
+                .await
+                .unwrap_err(),
+            PluginError::UnknownAction
+        );
+    }
+    assert_eq!(origin.count("service"), 0);
+
+    for (index, domain, initial, operations) in [
+        (0, "switch", "off", ["on", "off"]),
+        (1, "input_boolean", "on", ["off", "on"]),
+        (2, "light", "off", ["on", "off"]),
+    ] {
+        let mut confirmed = initial;
+        for (offset, operation) in operations.iter().enumerate() {
+            let request_index = index * 2 + offset;
+            assert_eq!(
+                submit_action(
+                    &host,
+                    &first_instance,
+                    &format!("ha-binary-{index}-{operation}"),
+                    epoch,
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                json!({})
+            );
+            assert_service(
+                &origin,
+                request_index,
+                FIRST_PREFIX,
+                &format!("{domain}/turn_{operation}"),
+                BINARY_TARGETS[index],
+            );
+            // A subsequent server event forces a fresh contribution frame. A
+            // successful POST alone must not change the displayed target state.
+            let marker = 30 + request_index;
+            origin.event(
+                "sensor.temperature",
+                Some(entity_state(
+                    "sensor.temperature",
+                    &marker.to_string(),
+                    "Temperature",
+                )),
+            );
+            item_value(&host, "entity-0", "value", json!(marker as f64)).await;
+            assert!(items(&host).iter().any(|item| {
+                item["id"] == format!("entity-{}", index + 1) && item["text"] == confirmed
+            }));
+            origin.event(
+                BINARY_TARGETS[index],
+                Some(entity_state(
+                    BINARY_TARGETS[index],
+                    operation,
+                    "Binary target",
+                )),
+            );
+            item_value(
+                &host,
+                &format!("entity-{}", index + 1),
+                "text",
+                json!(operation),
+            )
+            .await;
+            confirmed = operation;
+        }
+    }
+    assert_eq!(origin.count("service"), 6);
+    core.assert_receives(&broker, 2).await;
+    commands.assert_live_without_commands(2).await;
+
+    for state in [
+        Some("unknown"),
+        Some("unavailable"),
+        Some("idle"),
+        Some("ON"),
+        None,
+    ] {
+        origin.event(
+            BINARY_TARGETS[0],
+            state.map(|state| entity_state(BINARY_TARGETS[0], state, "Binary target")),
+        );
+        until(|| actions(&host).len() == 4).await;
+        for operation in ["on", "off"] {
+            assert_eq!(
+                host.action_in_epoch(
+                    PLUGIN,
+                    &first_instance,
+                    &format!("ha-binary-0-{operation}"),
+                    json!({}),
+                    WAIT,
+                    epoch,
+                )
+                .await
+                .unwrap_err(),
+                PluginError::UnknownAction
+            );
+        }
+        origin.event(
+            BINARY_TARGETS[0],
+            Some(entity_state(BINARY_TARGETS[0], "off", "Binary target")),
+        );
+        until(|| actions(&host).len() == 6).await;
+    }
+    assert_eq!(origin.count("service"), 6);
+    controls.stall_next.store(true, Ordering::Release);
+    let replaced_action = submit_action(&host, &first_instance, "ha-binary-0-on", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert!(!replaced_action.is_finished());
+    assert_service(
+        &origin,
+        6,
+        FIRST_PREFIX,
+        "switch/turn_on",
+        BINARY_TARGETS[0],
+    );
+    core.assert_receives(&broker, 3).await;
+    commands.assert_live_without_commands(3).await;
+
+    // The server has received the POST. Replacement cancels local waiting and
+    // closes old sockets; it cannot promise to undo an already accepted effect.
+    assert_eq!(controls.pending.load(Ordering::Acquire), 1);
+    configure_binary(
+        &service,
+        epoch,
+        &origin,
+        SECOND_PREFIX,
+        BINARY_TARGETS[8],
+        Some(&origin.second_token),
+    )
+    .await;
+    connection(&host).await;
+    until(|| actions(&host).len() == 2 && instance(&host) != first_instance).await;
+    until(|| {
+        controls.pending.load(Ordering::Acquire) == 0 && origin.active.load(Ordering::Acquire) == 1
+    })
+    .await;
+    assert!(timeout(WAIT, replaced_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    let second_instance = instance(&host);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-binary-0-on",
+            json!({}),
+            WAIT,
+            epoch,
+        )
+        .await
+        .unwrap_err(),
+        PluginError::Unavailable
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &second_instance,
+            "ha-binary-1-off",
+            json!({}),
+            WAIT,
+            epoch,
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 7);
+    assert_eq!(
+        submit_action(&host, &second_instance, "ha-binary-0-on", epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_service(
+        &origin,
+        7,
+        SECOND_PREFIX,
+        "switch/turn_on",
+        BINARY_TARGETS[8],
+    );
+    no_private_data(&host, &origin);
+    core.assert_receives(&broker, 4).await;
+    commands.assert_live_without_commands(4).await;
+
+    controls.stall_next.store(true, Ordering::Release);
+    let disabled_action = submit_action(&host, &second_instance, "ha-binary-0-off", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_service(
+        &origin,
+        8,
+        SECOND_PREFIX,
+        "switch/turn_off",
+        BINARY_TARGETS[8],
+    );
+    service.set_enabled(PLUGIN, false, epoch).await.unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, disabled_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert!(items(&host).is_empty());
+    core.assert_receives(&broker, 5).await;
+    commands.assert_live_without_commands(5).await;
+
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    until(|| actions(&host).len() == 2).await;
+    let final_instance = instance(&host);
+    assert_ne!(final_instance, second_instance);
+    controls.stall_next.store(true, Ordering::Release);
+    let removed_action = submit_action(&host, &final_instance, "ha-binary-0-on", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_service(
+        &origin,
+        9,
+        SECOND_PREFIX,
+        "switch/turn_on",
+        BINARY_TARGETS[8],
+    );
+    service
+        .uninstall_with_settings(PLUGIN, true, epoch)
+        .await
+        .unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, removed_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert_eq!(
+        origin.count("service"),
+        10,
         "each admitted call sends one fixed POST"
     );
     assert!(host.snapshots().is_empty());

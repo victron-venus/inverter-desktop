@@ -10,6 +10,7 @@ fn configuration(base: &str) -> Validated {
         entities: vec!["sensor.selected".into()],
         action_entities: vec![],
         media_player_entities: vec![],
+        binary_entities: vec![],
         token: "fixture-token-only".into(),
     }
 }

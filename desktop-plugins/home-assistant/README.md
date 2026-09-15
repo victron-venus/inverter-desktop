@@ -1,10 +1,10 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.3.0, requiring host API `^1.4`.
+`inverter-desktop.home-assistant`, version 0.4.0, requiring host API `^1.4`.
 Connection status and selected entity states are read-only by default. Explicit
-optional action lists enable fixed button presses, scene activation and media
-transport. There is
+optional action lists enable fixed button presses, scene activation, media
+transport and on/off controls. There is
 no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
 camera authority or dependency on the bundled HA client.
 
@@ -36,7 +36,7 @@ the core telemetry connection.
   Separate entity IDs with commas or newlines. Blank entries are ignored and
   duplicate IDs count once. The ordered union with action targets is limited to
   32 entities: watched IDs come first, followed by previously unseen button/scene
-  targets and then media-player targets.
+  targets, media-player targets and finally on/off targets.
   Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
@@ -50,12 +50,24 @@ the core telemetry connection.
   by commas or newlines. Each selected player offers Play, Pause and Stop and is
   watched within the shared 32-entity limit. This list does not alter button/scene
   action indices. Watching a media player alone grants no transport actions.
+- `binary_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
+  Explicitly select up to eight unique literal `switch.*`, `input_boolean.*` or
+  `light.*` IDs separated by commas or newlines. Targets are also watched. Each
+  offers Turn on and Turn off while its observed state is exactly `on` or `off`.
+  Other domains, generic toggle, brightness and color settings are not supported.
+  Selecting one of these entities only in `watch_entities` grants no write access.
 - `ha_token`: required write-only token, 1–4,096 bytes of visible ASCII without
   whitespace or control characters. It is not read from core configuration or
   placed in arguments, inherited environment, dashboard contributions or logs.
   The token retains its account's Home Assistant permissions; this package does
   not create a restricted server-side token. Reads and explicitly selected
-  button/scene/media actions use that token.
+  button/scene/media/on-off actions use that token.
+
+All three action lists together may produce at most 31 action buttons: count one
+per button or scene, three per media player and two per on/off target. Alongside
+connection status and up to 32 state cards, this keeps each snapshot within the
+host's 64-contribution limit. Duplicate IDs count once within their list. All
+previous configurations without `binary_entities` remain within this budget.
 
 With a nonempty combined selection, initial REST reads request only
 `/api/states/<entity_id>` beneath the configured prefix. The worker never requests
@@ -65,7 +77,7 @@ all entities**: the worker immediately discards unwatched entities and retains
 only its configured list. This is local filtering, not a claim of server-side
 subscription filtering or token-level access restriction.
 
-When all three lists are empty, the worker still establishes the authenticated
+When all four lists are empty, the worker still establishes the authenticated
 WebSocket connection for connection status, but makes no entity REST reads or
 event subscription. A change
 to any list is applied through the normal settings restart. Entity state
@@ -112,7 +124,7 @@ updates, rather than assuming the HTTP result proves a physical device change.
 Host API 1.4 binds each dashboard click to the actual displayed worker instance
 and exact preset. A settings restart or reinstall cannot redirect an old click
 to a newly configured target, even if a generation counter or action ID repeats.
-Both action lists must be empty to preserve the existing read-only behavior.
+All three action lists must be empty to preserve the existing read-only behavior.
 
 ## Explicit media-player transport
 
@@ -130,10 +142,38 @@ remaining deadline, cancellation, no-retry and unknown-outcome handling describe
 above. A successful response does not establish physical playback or undo effects
 after cancellation.
 
-At the configured limits, connection status, 32 state cards, 16 button/scene
-actions and 12 media actions produce at most 61 contributions. The maximum
-combined snapshot must also fit the existing 64 KiB frame limit. Media transport
-needs no new host UI contribution, permission or protocol version.
+Without on/off targets, connection status, 32 state cards, 16 button/scene actions
+and 12 media actions produce at most 61 contributions. The combined limits above
+allow up to 64 when on/off controls are selected. The maximum snapshot must also
+fit the existing 64 KiB frame limit. These actions need no new host UI
+contribution, permission or protocol version.
+
+## Explicit on/off controls
+
+Each selected switch, helper or light supplies `ha-binary-<index>-on` and
+`ha-binary-<index>-off`, in configured order, without changing existing button,
+scene or media IDs. Both commands remain available when HA reports either exact
+`on` or `off` state. Missing, deleted, unknown, unavailable or malformed states
+withdraw both actions, as does a disconnected session. The worker rechecks the
+current state when admitting a command.
+
+Each preset has empty parameters. The worker chooses one of six fixed routes:
+`switch/turn_on`, `switch/turn_off`, `input_boolean/turn_on`,
+`input_boolean/turn_off`, `light/turn_on` or `light/turn_off`, beneath
+`<base>/api/services/`. The JSON body contains only the literal `entity_id`.
+These match the official [switch actions](https://www.home-assistant.io/integrations/switch/#list-of-actions),
+[input boolean actions](https://www.home-assistant.io/integrations/input_boolean/#list-of-actions)
+and [light actions](https://www.home-assistant.io/integrations/light/).
+
+Commands set an explicit state; they never infer an inverse state or call
+`toggle`. A successful HTTP response does not modify the displayed state. Only
+HA reads and state events update that value, so an accepted request whose device
+has not changed still shows the previous state. All commands share the established
+concurrency, deadline, cancellation, authentication and no-retry rules.
+
+An HA entity named `input_boolean.do_not_supply_charger` remains a literal HA
+target. It is never resolved as an inverter-control alias or published to a core
+MQTT topic. Any behavior attached to that entity inside HA remains owned by HA.
 
 The wire behavior follows the official
 [WebSocket API](https://developers.home-assistant.io/docs/api/websocket/) and
@@ -217,7 +257,8 @@ MOSQUITTO_BIN=/absolute/path/mosquitto \
 CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --lib \
   plugins::home_assistant_integration_tests::signed_home_assistant_package_lifecycle \
   -- --exact --ignored --test-threads=1
-# Repeat with signed_home_assistant_package_actions for selected service actions.
+# Repeat with signed_home_assistant_package_actions, signed_home_assistant_package_media
+# and signed_home_assistant_package_binary for their respective selected actions.
 ```
 
 Ordinary native tests do not build another crate or silently launch this external

@@ -98,13 +98,20 @@ async fn broker(responses: Vec<Vec<u8>>) -> (String, JoinHandle<Vec<String>>) {
                 .await
                 .unwrap()
                 .unwrap();
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") {
-                let byte = stream.read_u8().await.unwrap();
-                request.push(byte);
-                assert!(request.len() < 8192);
+            // Read available header bytes together so serving a local response
+            // does not require one socket operation per byte on Windows.
+            let mut request = [0; 8192];
+            let mut length = 0;
+            while !request[..length].ends_with(b"\r\n\r\n") {
+                let received = stream.read(&mut request[length..]).await.unwrap();
+                assert_ne!(received, 0, "request closed before its header delimiter");
+                length += received;
+                assert!(
+                    length < request.len(),
+                    "request headers exceed fixture bound"
+                );
             }
-            requests.push(String::from_utf8(request).unwrap());
+            requests.push(String::from_utf8(request[..length].to_vec()).unwrap());
             stream.write_all(&response).await.unwrap();
             stream.shutdown().await.unwrap();
         }
@@ -124,7 +131,7 @@ async fn retries_pending_recording_empty_and_truncated_body_then_serves_exact_by
     let (directory, service, mut events) = service(policy()).await;
     service.try_submit(request(&base, lease())).unwrap();
     let clip = ready(&mut events).await;
-    assert!(clip.error.is_none());
+    assert_eq!(clip.error, None);
     let bytes = service
         .read_range(&clip.media_id, &clip.window_label, None, false)
         .await
@@ -151,14 +158,27 @@ async fn retries_pending_recording_empty_and_truncated_body_then_serves_exact_by
 #[tokio::test]
 async fn empty_body_is_retried_and_file_is_replaced_before_success() {
     let (base, server) = broker(vec![response("200 OK", b""), response("200 OK", b"video")]).await;
-    let (_directory, service, mut events) = service(policy()).await;
+    let (directory, service, mut events) = service(policy()).await;
     service.try_submit(request(&base, lease())).unwrap();
     let clip = ready(&mut events).await;
-    assert!(clip.error.is_none());
+    assert_eq!(clip.error, None);
+    let bytes = service
+        .read_range(&clip.media_id, &clip.window_label, None, false)
+        .await
+        .unwrap();
+    assert_eq!(bytes.bytes, b"video");
+    assert_eq!(bytes.status, 200);
+    drop(bytes);
     assert_eq!(server.await.unwrap().len(), 2);
     service.window_failed(&clip.media_id);
     idle(&service).await;
     service.shutdown().await.unwrap();
+    assert_eq!(
+        fs::read_dir(directory.path().join("media"))
+            .unwrap()
+            .count(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -247,7 +267,7 @@ async fn progressive_progress_survives_idle_limit_but_stall_retries() {
     let (_directory, service, mut events) = service(policy()).await;
     service.try_submit(request(&base, lease())).unwrap();
     let clip = ready(&mut events).await;
-    assert!(clip.error.is_none());
+    assert_eq!(clip.error, None);
     assert_eq!(
         service
             .read_range(&clip.media_id, &clip.window_label, None, false)
