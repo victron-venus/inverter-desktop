@@ -51,9 +51,13 @@ hosted worker/host/security/mobile artifact checks passing for
 [PR #426](https://github.com/victron-venus/inverter-desktop/pull/426) completed direct
 Frigate clips and owned video windows on main, with macOS native playback and all
 hosted checks passing. [PR #427](https://github.com/victron-venus/inverter-desktop/pull/427)
-completed the independent read-only HA worker on main at `3d731a3`. The current
-iteration adds explicitly selected HA button/scene actions and instance-bound
-dashboard dispatch, reusing the separate workers and bounded process transport.
+completed the independent read-only HA worker on main at `3d731a3`.
+[PR #428](https://github.com/victron-venus/inverter-desktop/pull/428) adds explicitly
+selected HA button/scene actions and instance-bound dashboard dispatch on main
+at `f91598c`. All 41 executed checks passed for final head `c13489d`, including
+Android/iOS artifact boundaries; review was approved with no open threads. The
+current separate iteration adds selected media Play/Pause/Stop using the same
+bounded worker transport and host controls.
 
 **The embedded production publisher policy is still empty, so installation is
 disabled in the shipped configuration.** This checkpoint does not introduce new
@@ -138,7 +142,61 @@ timestamps across Windows APIs while retaining full open-handle change checks.
 Older Windows Python uses its matching creation-time fallback. Packaging tests
 now run in all three desktop worker jobs, in addition to actual release staging.
 
-### Next iteration: explicit HA button and scene actions
+### Next iteration: explicit HA media-player transport
+
+Extend the independent HA package with opt-in Play/Pause/Stop for literal
+`media_player.*` targets. Reuse the existing declarative actions and host API 1.4;
+keep core inverter-control flags on their existing MQTT path. This branch is synchronized
+with the verified PR #428 merge on main at `f91598c`.
+
+- [x] Add optional `media_player_entities`, empty by default, limited to four
+      unique literal media-player IDs. Preserve the combined 32-entity watch limit
+      and existing button/scene action indices and defaults.
+- [x] Advertise three immutable empty-preset actions for each connected, observed
+      player. Withdraw actions for missing, deleted, unknown or unavailable state.
+      Resolve Play/Pause/Stop to fixed `media_play`, `media_pause` and `media_stop`
+      services entirely inside the worker, with the selected entity as the only
+      request-body field.
+- [x] Reuse bounded concurrency, original deadlines, cancellation, verified TLS,
+      prefix handling, authentication rejection and unknown-outcome feedback.
+      Preserve the no-retry rule and prohibit arbitrary service names or MQTT
+      fallback. Check maximum combined contribution count and encoded frame size.
+- [x] Exercise actual worker subprocesses for defaults, literal targets, exact
+      methods/paths/body, lifecycle availability, rejected caller parameters,
+      duplicate limits, no retries and independence of existing button/scene IDs.
+- [x] Exercise the actual installed signed package with private HA/MQTT services
+      and disposable trust. Prove exact media POSTs, stale-instance rejection,
+      teardown during a stalled command and absence of core command-topic traffic.
+- [x] Update package version/manifest, packaging contracts and English docs.
+      Preserve mobile exclusion and the empty production publisher policy.
+- [x] Run serialized relevant tests, lint, release staging and all installed-package
+      scenarios. Review with subagents and mark only verified work complete.
+- [ ] Push a separate PR, resolve comments in English, pass final-head CI and
+      synchronize clean main after the authorized merge.
+
+Local worker validation passes 25 unit tests and strict all-target Clippy. The
+maximum mixed snapshot exercises the real output encoder with 61 contributions
+and worst-case escaped bounded fields. Packaging and mobile boundaries pass 27
+and 29 tests; packaging Pylint scores 10/10. All 29 action subprocess scenarios
+pass, including nine media cases; 16 read/protocol and three macOS TLS scenarios
+also pass. The actual HA 0.3 release worker builds and passes native staging.
+All five installed-package scenarios pass with actual release workers: two
+Frigate and three HA scenarios. The media fixture proves eight exact admitted
+POSTs, stale-instance/parameter rejection, teardown of stalled commands and no
+core MQTT commands while independent charger-flag telemetry remains live.
+
+The first combined local run had startup failures in the existing Frigate clip
+and HA read-only scenarios. Both exact reruns and the subsequent combined
+five-scenario run passed with unchanged deadlines and binaries; no root cause
+was established. Test-only installer diagnostics now retain the host-owned state
+and error code if this recurs, without worker output or credentials. The initial
+failures are not described as a fixed production defect.
+
+No production HA or physical media player is invoked by automated fixtures.
+Stateful home toggles, number/cover inputs, discovery, weather/appliance layout
+and legacy configuration migration remain later parity work.
+
+### Completed checkpoint: explicit HA button and scene actions
 
 Keep the default HA package read-only. Add explicitly selected `button.press` and
 `scene.turn_on` actions through existing declarative plugin buttons, preserving
@@ -179,7 +237,7 @@ The read-only worker was delivered in PR #427; this iteration builds on it.
       alongside independent MQTT flags. Use disposable trust and private services.
 - [x] Update package version/manifest, English documentation and this checklist;
       run serialized lint/tests/builds and desktop/mobile boundaries.
-- [ ] Resolve PR comments in English, pass final-head CI, merge and synchronize main.
+- [x] Resolve PR comments in English, pass final-head CI, merge and synchronize main.
 
 Local admission checks pass 36 native runtime tests, including reinstall with
 reused generation counters, reduced budgets after queue pressure and expiry
@@ -201,7 +259,13 @@ Strict all-target Clippy passes for the host and all worker crates. Both fronten
 profiles build, and actual native release workers pass staging checks. The first
 full native compilation exhausted local disk space; after removing only task
 intermediate build files, the complete native and installed-package runs passed.
-PR review, final-head CI and merge receipts remain the delivery gate.
+Sonar review follow-up uses an explicit total code-unit comparator and covers
+distinct composed/decomposed Unicode keys. Final head `c13489d` passed all 41
+executed GitHub checks (three intentional skips), including native/package,
+desktop workers on three operating systems, security/dependency checks and both
+mobile artifacts. PR #428 was approved with no unresolved threads and merged as
+`f91598c`. Canonical main is clean with an identical tested tree; private files
+and all six existing stashes were preserved.
 
 No production HA service or physical appliance is exercised by these fixtures.
 Stateful toggles, number/cover inputs, media controls, discovery, full appliance

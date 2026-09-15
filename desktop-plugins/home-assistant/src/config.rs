@@ -5,6 +5,7 @@ use url::Url;
 
 pub const MAX_ENTITIES: usize = 32;
 pub const MAX_ACTION_ENTITIES: usize = 16;
+pub const MAX_MEDIA_PLAYER_ENTITIES: usize = 4;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
 // Configuration and credentials deliberately have no Debug implementation.
@@ -24,6 +25,8 @@ pub struct Values {
     pub watch_entities: String,
     #[serde(default)]
     pub action_entities: String,
+    #[serde(default)]
+    pub media_player_entities: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -36,7 +39,82 @@ pub struct Validated {
     pub base: Url,
     pub entities: Vec<String>,
     pub action_entities: Vec<String>,
+    pub media_player_entities: Vec<String>,
     pub token: String,
+}
+
+#[derive(Clone, Copy)]
+pub enum Operation {
+    Press,
+    Activate,
+    Play,
+    Pause,
+    Stop,
+}
+
+impl Operation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Press => "Press ",
+            Self::Activate => "Activate ",
+            Self::Play => "Play ",
+            Self::Pause => "Pause ",
+            Self::Stop => "Stop ",
+        }
+    }
+
+    pub fn allows_unknown(self) -> bool {
+        matches!(self, Self::Press | Self::Activate)
+    }
+
+    fn path(self) -> &'static str {
+        match self {
+            Self::Press => "api/services/button/press",
+            Self::Activate => "api/services/scene/turn_on",
+            Self::Play => "api/services/media_player/media_play",
+            Self::Pause => "api/services/media_player/media_pause",
+            Self::Stop => "api/services/media_player/media_stop",
+        }
+    }
+}
+
+/// Derived only from validated configuration; the host never supplies a target
+/// or service through action parameters.
+#[derive(Clone)]
+pub struct ConfiguredAction {
+    pub id: String,
+    pub entity: String,
+    pub operation: Operation,
+}
+
+pub fn configured_actions(actions: &[String], media_players: &[String]) -> Vec<ConfiguredAction> {
+    let mut configured = Vec::new();
+    for (index, entity) in actions.iter().enumerate() {
+        let operation = match entity.split_once('.') {
+            Some(("button", _)) => Operation::Press,
+            Some(("scene", _)) => Operation::Activate,
+            _ => continue,
+        };
+        configured.push(ConfiguredAction {
+            id: format!("ha-action-{index}"),
+            entity: entity.clone(),
+            operation,
+        });
+    }
+    for (index, entity) in media_players.iter().enumerate() {
+        for (verb, operation) in [
+            ("play", Operation::Play),
+            ("pause", Operation::Pause),
+            ("stop", Operation::Stop),
+        ] {
+            configured.push(ConfiguredAction {
+                id: format!("ha-media-{index}-{verb}"),
+                entity: entity.clone(),
+                operation,
+            });
+        }
+    }
+    configured
 }
 
 impl Configuration {
@@ -68,7 +146,15 @@ impl Configuration {
         {
             return Err("invalid HA action entities");
         }
-        for entity in &action_entities {
+        let media_player_entities = entity_list(&self.values.media_player_entities)?;
+        if media_player_entities.len() > MAX_MEDIA_PLAYER_ENTITIES
+            || media_player_entities
+                .iter()
+                .any(|entity| !entity.starts_with("media_player."))
+        {
+            return Err("invalid HA media player entities");
+        }
+        for entity in action_entities.iter().chain(&media_player_entities) {
             if !entities.contains(entity) {
                 entities.push(entity.clone());
             }
@@ -80,6 +166,7 @@ impl Configuration {
             base: base_url(&self.values.ha_base_url)?,
             entities,
             action_entities,
+            media_player_entities,
             token: self.secrets.ha_token,
         })
     }
@@ -185,13 +272,14 @@ impl Validated {
         url
     }
 
-    pub fn service_url(&self, entity: &str) -> Option<Url> {
-        let path = match entity.split_once('.')? {
-            ("button", _) => "api/services/button/press",
-            ("scene", _) => "api/services/scene/turn_on",
-            _ => return None,
-        };
-        self.base.join(path).ok()
+    pub fn actions(&self) -> Vec<ConfiguredAction> {
+        configured_actions(&self.action_entities, &self.media_player_entities)
+    }
+
+    pub fn service_url(&self, operation: Operation) -> Url {
+        self.base
+            .join(operation.path())
+            .expect("validated URL and fixed service path")
     }
 }
 
@@ -307,14 +395,14 @@ mod tests {
             ["button.second", "scene.night", "button.first"]
         );
         assert_eq!(
-            config.service_url("button.second").unwrap().as_str(),
+            config.service_url(Operation::Press).as_str(),
             "https://ha.example:8443/proxy/ha/api/services/button/press"
         );
         assert_eq!(
-            config.service_url("scene.night").unwrap().as_str(),
+            config.service_url(Operation::Activate).as_str(),
             "https://ha.example:8443/proxy/ha/api/services/scene/turn_on"
         );
-        assert!(config.service_url("sensor.a").is_none());
+        assert_eq!(config.actions().len(), 3);
         for actions in [
             "switch.a",
             "input_boolean.do_not_supply_charger",
@@ -347,5 +435,107 @@ mod tests {
         let mut config = configuration("http://localhost", "");
         config.values.action_entities = list("scene", 17);
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn media_selection_preserves_union_order_existing_indices_and_fixed_service_mapping() {
+        let mut config = configuration(
+            "https://ha.example:8443/proxy/ha",
+            "media_player.den,sensor.a,button.first",
+        );
+        assert!(config.values.media_player_entities.is_empty());
+        config.values.action_entities = "scene.evening,button.first,scene.evening".into();
+        config.values.media_player_entities =
+            "media_player.den,\nmedia_player.office,media_player.den".into();
+        let config = config.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            [
+                "media_player.den",
+                "sensor.a",
+                "button.first",
+                "scene.evening",
+                "media_player.office"
+            ]
+        );
+        assert_eq!(config.action_entities, ["scene.evening", "button.first"]);
+        assert_eq!(
+            config.media_player_entities,
+            ["media_player.den", "media_player.office"]
+        );
+        let actions = config.actions();
+        assert_eq!(actions.len(), 8);
+        assert_eq!(actions[0].id, "ha-action-0");
+        assert_eq!(actions[0].entity, "scene.evening");
+        assert_eq!(
+            config.service_url(actions[0].operation).as_str(),
+            "https://ha.example:8443/proxy/ha/api/services/scene/turn_on"
+        );
+        assert_eq!(actions[1].id, "ha-action-1");
+        assert_eq!(actions[1].entity, "button.first");
+        assert_eq!(
+            config.service_url(actions[1].operation).as_str(),
+            "https://ha.example:8443/proxy/ha/api/services/button/press"
+        );
+        for (index, entity) in config.media_player_entities.iter().enumerate() {
+            for (offset, verb) in ["play", "pause", "stop"].into_iter().enumerate() {
+                let action = &actions[2 + index * 3 + offset];
+                assert_eq!(action.id, format!("ha-media-{index}-{verb}"));
+                assert_eq!(&action.entity, entity);
+                assert_eq!(
+                    config.service_url(action.operation).as_str(),
+                    format!(
+                        "https://ha.example:8443/proxy/ha/api/services/media_player/media_{verb}"
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn media_domain_count_and_combined_watch_limits_are_enforced() {
+        for selection in [
+            "button.a",
+            "scene.a",
+            "media_playerx.a",
+            "media_player.*",
+            "media_player.Upper",
+            "media_player.a/b",
+            "media_player.a.b",
+            "media_player.",
+        ] {
+            let mut config = configuration("http://localhost", "");
+            config.values.media_player_entities = selection.into();
+            assert!(config.validate().is_err());
+        }
+        let list = |domain: &str, count| {
+            (0..count)
+                .map(|index| format!("{domain}.e{index}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let mut config = configuration("http://localhost", "");
+        config.values.media_player_entities = list("media_player", 5);
+        assert!(config.validate().is_err());
+        let mut config = configuration("http://localhost", &list("sensor", 12));
+        config.values.action_entities = list("button", 16);
+        config.values.media_player_entities =
+            format!("{},media_player.e0", list("media_player", 4));
+        let config = config.validate().unwrap();
+        assert_eq!(config.entities.len(), MAX_ENTITIES);
+        assert_eq!(
+            config.media_player_entities.len(),
+            MAX_MEDIA_PLAYER_ENTITIES
+        );
+        assert_eq!(config.actions().len(), 28);
+        let mut config = configuration("http://localhost", &list("sensor", 13));
+        config.values.action_entities = list("scene", 16);
+        config.values.media_player_entities = list("media_player", 4);
+        assert!(config.validate().is_err());
+        let config = configuration("http://localhost", "media_player.read_only")
+            .validate()
+            .unwrap();
+        assert!(config.media_player_entities.is_empty());
+        assert!(config.actions().is_empty());
     }
 }

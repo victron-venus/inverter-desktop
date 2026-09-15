@@ -1,3 +1,4 @@
+use crate::config::ConfiguredAction;
 use inverter_worker_protocol::Output;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -20,7 +21,7 @@ pub struct Book {
     tone: &'static str,
     revision: u64,
     published: Option<u64>,
-    actions: Vec<String>,
+    actions: Vec<ConfiguredAction>,
     advertised: Vec<bool>,
     link: watch::Sender<Connection>,
 }
@@ -30,6 +31,7 @@ struct Entity {
     live_seen: bool,
     item: Value,
     actionable: bool,
+    unknown: bool,
     title: String,
 }
 
@@ -85,7 +87,7 @@ fn contribution(index: usize, entity: &str, state: Option<&Value>) -> Value {
 }
 
 impl Book {
-    pub fn new(entities: &[String], actions: &[String]) -> Shared {
+    pub fn new(entities: &[String], actions: &[ConfiguredAction]) -> Shared {
         let (link, _) = watch::channel(Connection::default());
         Arc::new(Mutex::new(Self {
             entities: entities
@@ -96,6 +98,7 @@ impl Book {
                     live_seen: false,
                     item: unavailable(index, name, "Waiting"),
                     actionable: false,
+                    unknown: false,
                     title: name.clone(),
                 })
                 .collect(),
@@ -184,10 +187,12 @@ impl Book {
                     .as_str()
                     .is_some_and(|value| value != "unavailable")
         });
+        let unknown = state.is_some_and(|state| state["state"].as_str() == Some("unknown"));
         entity.title = item["title"].as_str().unwrap_or(name).to_owned();
-        if entity.item != item || entity.actionable != actionable {
+        if entity.item != item || entity.actionable != actionable || entity.unknown != unknown {
             entity.item = item;
             entity.actionable = actionable;
+            entity.unknown = unknown;
             self.revision = self.revision.wrapping_add(1);
         }
     }
@@ -196,22 +201,25 @@ impl Book {
         if !self.link.borrow().connected {
             return None;
         }
-        let name = self.actions.get(index)?;
-        self.entities
-            .iter()
-            .find(|entity| entity.name == *name && entity.actionable)
+        let action = self.actions.get(index)?;
+        self.entities.iter().find(|entity| {
+            entity.name == action.entity
+                && entity.actionable
+                && (!entity.unknown || action.operation.allows_unknown())
+        })
     }
 
     /// Recheck both publication and current entity availability at admission.
-    pub fn action_target(&self, action_id: &str) -> Option<String> {
-        let index =
-            self.actions.iter().enumerate().find_map(|(index, _)| {
-                (action_id == format!("ha-action-{index}")).then_some(index)
-            })?;
+    pub fn action_target(&self, action_id: &str) -> Option<ConfiguredAction> {
+        let index = self
+            .actions
+            .iter()
+            .position(|action| action.id == action_id)?;
         if !self.advertised[index] {
             return None;
         }
-        Some(self.action_entity(index)?.name.clone())
+        self.action_entity(index)?;
+        Some(self.actions[index].clone())
     }
 
     fn mark_published(&mut self) {
@@ -229,14 +237,11 @@ impl Book {
         items.extend(self.entities.iter().map(|entity| entity.item.clone()));
         for index in 0..self.actions.len() {
             if let Some(entity) = self.action_entity(index) {
-                let verb = if entity.name.starts_with("button.") {
-                    "Press "
-                } else {
-                    "Activate "
-                };
+                let action = &self.actions[index];
+                let verb = action.operation.label();
                 let label = format!("{verb}{}", bounded(&entity.title, 128 - verb.len()));
-                items.push(json!({"kind":"action","id":format!("ha-action-{index}"),
-                    "title":entity.title,"action_id":format!("ha-action-{index}"),
+                items.push(json!({"kind":"action","id":action.id,
+                    "title":entity.title,"action_id":action.id,
                     "label":label,"params":{}}));
             }
         }
@@ -262,6 +267,7 @@ pub async fn publish(shared: Shared, output: Output) -> Result<(), &'static str>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::configured_actions;
 
     #[test]
     fn late_initial_state_cannot_replace_live_or_deleted_state() {
@@ -348,7 +354,7 @@ mod tests {
             "scene.night".into(),
             "button.read_only".into(),
         ];
-        let state = Book::new(&names, &names[..2]);
+        let state = Book::new(&names, &configured_actions(&names[..2], &[]));
         let mut book = state.lock().unwrap();
         for name in &names {
             book.initial(name, Some(&json!({"entity_id":name,"state":"unknown","attributes":{"friendly_name":"A name"}})));
@@ -366,8 +372,9 @@ mod tests {
         assert!(book.action_target("ha-action-0").is_none());
         book.mark_published();
         assert_eq!(
-            book.action_target("ha-action-0").as_deref(),
-            Some("button.first")
+            book.action_target("ha-action-0")
+                .map(|action| action.entity),
+            Some("button.first".into())
         );
         assert!(book.action_target("ha-action-00").is_none());
         assert!(book.action_target("ha-action-2").is_none());
@@ -397,7 +404,7 @@ mod tests {
         let names = (0..16)
             .map(|index| format!("scene.e{index}"))
             .collect::<Vec<_>>();
-        let state = Book::new(&names, &names);
+        let state = Book::new(&names, &configured_actions(&names, &[]));
         let mut book = state.lock().unwrap();
         book.connected();
         for name in &names {
@@ -419,5 +426,169 @@ mod tests {
             assert!(!label.contains('\n'));
             assert_eq!(action["params"], json!({}));
         }
+    }
+
+    #[test]
+    fn media_actions_require_observed_known_state_and_preserve_button_scene_behavior() {
+        let names = [
+            "button.first".into(),
+            "scene.evening".into(),
+            "media_player.den".into(),
+            "media_player.read_only".into(),
+        ];
+        let actions = configured_actions(&names[..2], &names[2..3]);
+        let state = Book::new(&names, &actions);
+        let mut book = state.lock().unwrap();
+        book.connected();
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 5);
+        for name in &names {
+            book.initial(name, Some(&json!({"entity_id":name,"state":"unknown"})));
+        }
+        book.mark_published();
+        assert!(book.action_target("ha-action-0").is_some());
+        assert!(book.action_target("ha-action-1").is_some());
+        assert!(book.action_target("ha-media-0-play").is_none());
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 7);
+        book.live("media_player.den", Some(&json!({"entity_id":"media_player.den","state":"playing","attributes":{"friendly_name":"Living room"}})));
+        book.live(
+            "media_player.read_only",
+            Some(&json!({"entity_id":"media_player.read_only","state":"paused"})),
+        );
+        assert!(
+            book.action_target("ha-media-0-play").is_none(),
+            "new availability must be published first"
+        );
+        let frame = book.frame();
+        let items = frame["items"].as_array().unwrap();
+        assert_eq!(items.len(), 10);
+        for (offset, (verb, label)) in [
+            ("play", "Play Living room"),
+            ("pause", "Pause Living room"),
+            ("stop", "Stop Living room"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                items[7 + offset],
+                json!({"kind":"action","id":format!("ha-media-0-{verb}"),"title":"Living room","action_id":format!("ha-media-0-{verb}"),"label":label,"params":{}})
+            );
+        }
+        book.mark_published();
+        for verb in ["play", "pause", "stop"] {
+            assert_eq!(
+                book.action_target(&format!("ha-media-0-{verb}"))
+                    .unwrap()
+                    .entity,
+                "media_player.den"
+            );
+        }
+        for id in [
+            "ha-media-00-play",
+            "ha-media-0-toggle",
+            "ha-media-1-play",
+            "ha-action-2",
+        ] {
+            assert!(book.action_target(id).is_none());
+        }
+        for value in ["unknown", "unavailable"] {
+            book.live(
+                "media_player.den",
+                Some(&json!({"entity_id":"media_player.den","state":value})),
+            );
+            for verb in ["play", "pause", "stop"] {
+                assert!(book.action_target(&format!("ha-media-0-{verb}")).is_none());
+            }
+        }
+        book.live("media_player.den", None);
+        book.initial(
+            "media_player.den",
+            Some(&json!({"entity_id":"media_player.den","state":"paused"})),
+        );
+        assert!(
+            book.action_target("ha-media-0-play").is_none(),
+            "late REST state cannot revive a deleted player"
+        );
+        book.live(
+            "media_player.den",
+            Some(&json!({"entity_id":"media_player.den","state":"idle"})),
+        );
+        book.mark_published();
+        assert!(book.action_target("ha-media-0-play").is_some());
+        book.disconnected();
+        assert!(book.action_target("ha-media-0-play").is_none());
+        book.begin_session();
+        book.connected();
+        assert!(
+            book.action_target("ha-media-0-play").is_none(),
+            "reconnection needs fresh observed state"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn maximum_combined_escaped_contributions_fit_the_real_output_frame_limit() {
+        let literal = |domain: &str, index: usize| {
+            let suffix = format!("_{index}");
+            format!(
+                "{domain}.{}{suffix}",
+                "x".repeat(128 - domain.len() - 1 - suffix.len())
+            )
+        };
+        let watched = (0..12)
+            .map(|index| literal("sensor", index))
+            .collect::<Vec<_>>();
+        let actions = (0..16)
+            .map(|index| literal(if index % 2 == 0 { "button" } else { "scene" }, index))
+            .collect::<Vec<_>>();
+        let media = (0..4)
+            .map(|index| literal("media_player", index))
+            .collect::<Vec<_>>();
+        let config: crate::config::Configuration = serde_json::from_value(json!({
+            "revision":"maximum-combined",
+            "values":{"ha_base_url":"http://localhost/ha/","watch_entities":watched.join(","),"action_entities":actions.join(","),"media_player_entities":media.join(",")},
+            "secrets":{"ha_token":"fixture-token"}
+        })).unwrap();
+        let config = config.validate().unwrap();
+        assert_eq!(config.entities.len(), 32);
+        assert!(config.entities.iter().all(|entity| entity.len() == 128));
+        let state = Book::new(&config.entities, &config.actions());
+        let frame = {
+            let mut book = state.lock().unwrap();
+            book.connected();
+            for entity in &config.entities {
+                // Quotes and backslashes take two JSON bytes per retained byte;
+                // fill every title/text allowance with that worst escaping cost.
+                book.live(entity, Some(&json!({"entity_id":entity,"state":"\\\"".repeat(1024),"attributes":{"friendly_name":"\\\"".repeat(256)}})));
+            }
+            book.frame()
+        };
+        let items = frame["items"].as_array().unwrap();
+        assert_eq!(items.len(), 61);
+        assert!(items.len() <= 64);
+        assert_eq!(
+            items.iter().filter(|item| item["kind"] == "action").count(),
+            28
+        );
+        let ids = items
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), items.len());
+        for item in &items[1..33] {
+            assert_eq!(item["title"].as_str().unwrap().len(), 128);
+            assert_eq!(item["text"].as_str().unwrap().len(), 512);
+        }
+        for item in &items[33..] {
+            assert_eq!(item["title"].as_str().unwrap().len(), 128);
+            assert_eq!(item["label"].as_str().unwrap().len(), 128);
+            assert_eq!(item["params"], json!({}));
+        }
+        let encoded = serde_json::to_vec(&frame).unwrap();
+        assert!(encoded.len() < inverter_worker_protocol::MAX_FRAME_BYTES);
+        // Exercise the actual transport encoder, queue and completed flush too.
+        Output::with_writer(std::io::sink())
+            .send(frame)
+            .await
+            .unwrap();
     }
 }

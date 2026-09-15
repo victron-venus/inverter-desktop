@@ -29,6 +29,13 @@ const WAIT: Duration = Duration::from_secs(15);
 const FIRST_PREFIX: &str = "/proxy/ha/";
 const SECOND_PREFIX: &str = "/updated%20ha/";
 const PRIVATE_ATTRIBUTE: &str = "private-attribute-must-never-reach-host";
+const MEDIA_TARGETS: [&str; 5] = [
+    "media_player.do_not_supply_charger",
+    "media_player.living_room",
+    "media_player.unknown",
+    "media_player.unavailable",
+    "media_player.next",
+];
 
 #[derive(Clone)]
 struct Request {
@@ -56,6 +63,7 @@ impl Observations {
 
 #[derive(Clone)]
 struct ServiceControl {
+    media_enabled: bool,
     stall_next: Arc<AtomicBool>,
     pending: Arc<AtomicUsize>,
     release: broadcast::Sender<()>,
@@ -64,10 +72,31 @@ struct ServiceControl {
 impl ServiceControl {
     fn new() -> Self {
         Self {
+            media_enabled: false,
             stall_next: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             release: broadcast::channel(4).0,
         }
+    }
+
+    fn media() -> Self {
+        Self {
+            media_enabled: true,
+            ..Self::new()
+        }
+    }
+}
+
+fn fixture_services(target: &str, media_enabled: bool) -> &'static [&'static str] {
+    match target {
+        "button.do_not_supply_charger" => &["button/press"],
+        "scene.evening" | "scene.next" => &["scene/turn_on"],
+        target if media_enabled && MEDIA_TARGETS.contains(&target) => &[
+            "media_player/media_play",
+            "media_player/media_pause",
+            "media_player/media_stop",
+        ],
+        _ => &[],
     }
 }
 
@@ -197,7 +226,14 @@ impl HomeAssistant {
                     ]
                     .iter()
                     .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
-                assert!(readonly || action_target);
+                let media_target = self
+                    .services
+                    .as_ref()
+                    .is_some_and(|control| control.media_enabled)
+                    && MEDIA_TARGETS
+                        .iter()
+                        .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
+                assert!(readonly || action_target || media_target);
             }
             if request.operation == "service" {
                 assert!(
@@ -205,13 +241,14 @@ impl HomeAssistant {
                     "read-only fixture forbids services"
                 );
                 let body = request.body.as_ref().unwrap();
-                let expected = match body["entity_id"].as_str().unwrap() {
-                    "button.do_not_supply_charger" => "api/services/button/press",
-                    "scene.evening" | "scene.next" => "api/services/scene/turn_on",
-                    _ => panic!("unselected service target"),
-                };
+                let expected = fixture_services(
+                    body["entity_id"].as_str().unwrap(),
+                    self.services.as_ref().unwrap().media_enabled,
+                );
                 assert_eq!(body.as_object().unwrap().len(), 1);
-                assert!(request.path.ends_with(expected));
+                assert!(expected
+                    .iter()
+                    .any(|service| request.path.ends_with(&format!("api/services/{service}"))));
             }
         }
     }
@@ -385,6 +422,19 @@ async fn serve_connection(
         "button.do_not_supply_charger" | "scene.evening" | "scene.next" if services.is_some() => {
             ("200 OK", entity_state(entity, "unknown", entity))
         }
+        entity
+            if services
+                .as_ref()
+                .is_some_and(|control| control.media_enabled)
+                && MEDIA_TARGETS.contains(&entity) =>
+        {
+            let state = match entity {
+                "media_player.unknown" => "unknown",
+                "media_player.unavailable" => "unavailable",
+                _ => "idle",
+            };
+            ("200 OK", entity_state(entity, state, entity))
+        }
         _ => return Err(()),
     };
     let mut consumed = vec![0; headers.len()];
@@ -430,12 +480,11 @@ async fn serve_service(
         .map_err(|_| ())?;
     let body: Value = serde_json::from_slice(&bytes[headers.len()..]).map_err(|_| ())?;
     let target = body["entity_id"].as_str().ok_or(())?;
-    let service = match target {
-        "button.do_not_supply_charger" => "button/press",
-        "scene.evening" | "scene.next" => "scene/turn_on",
-        _ => return Err(()),
-    };
-    if path != format!("{prefix}api/services/{service}") || body != json!({"entity_id":target}) {
+    if !fixture_services(target, control.media_enabled)
+        .iter()
+        .any(|service| path == format!("{prefix}api/services/{service}"))
+        || body != json!({"entity_id":target})
+    {
         return Err(());
     }
     active.fetch_add(1, Ordering::AcqRel);
@@ -766,6 +815,32 @@ async fn configure_actions(
     .await;
 }
 
+async fn configure_media(
+    service: &PackageApplication,
+    epoch: u64,
+    origin: &HomeAssistant,
+    prefix: &str,
+    entities: &str,
+    token: Option<&str>,
+) {
+    save_configuration(
+        service,
+        epoch,
+        origin,
+        BTreeMap::from([
+            ("ha_base_url".into(), json!(origin.base(prefix))),
+            ("watch_entities".into(), json!("sensor.temperature")),
+            (
+                "action_entities".into(),
+                json!("button.do_not_supply_charger"),
+            ),
+            ("media_player_entities".into(), json!(entities)),
+        ]),
+        token,
+    )
+    .await;
+}
+
 async fn save_configuration(
     service: &PackageApplication,
     epoch: u64,
@@ -832,6 +907,18 @@ fn submit_action(
         )
         .await
     })
+}
+
+fn assert_service(origin: &HomeAssistant, index: usize, prefix: &str, service: &str, entity: &str) {
+    let observed = origin.observed.lock().unwrap();
+    let request = observed
+        .requests
+        .iter()
+        .filter(|request| request.operation == "service")
+        .nth(index)
+        .expect("expected an admitted service POST");
+    assert_eq!(request.path, format!("{prefix}api/services/{service}"));
+    assert_eq!(request.body, Some(json!({"entity_id":entity})));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1252,6 +1339,334 @@ async fn signed_home_assistant_package_actions() {
         origin.count("service"),
         6,
         "each explicit admitted call sends exactly one POST"
+    );
+    assert!(host.snapshots().is_empty());
+    assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
+    assert!(fs::read_dir(root.join("store/settings"))
+        .unwrap()
+        .next()
+        .is_none());
+    core.assert_receives(&broker, 6).await;
+    commands.assert_live_without_commands(6).await;
+    origin.assert_safe();
+    service.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires explicitly built INVERTER_HOME_ASSISTANT_WORKER and local MOSQUITTO_BIN; CI runs this acceptance test"]
+async fn signed_home_assistant_package_media() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let broker = Broker::new(&root).await;
+    let core = CoreTelemetry::new(broker.port);
+    let commands = CommandProbe::new(broker.port).await;
+    let controls = ServiceControl::media();
+    let origin = HomeAssistant::with_services(Some(controls.clone())).await;
+    let (service, host, epoch) = install(&root).await;
+    let view = serde_json::to_value(service.get_settings(PLUGIN, epoch).await.unwrap()).unwrap();
+    assert_eq!(view["values"]["media_player_entities"], "");
+    assert_eq!(view["values"]["action_entities"], "");
+
+    configure(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        Some(MEDIA_TARGETS[0]),
+        Some(&origin.first_token),
+    )
+    .await;
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    item_value(&host, "entity-0", "text", json!("idle")).await;
+    no_secrets(&host, &origin);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &instance(&host),
+            "ha-media-0-play",
+            json!({}),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(
+        origin.count("service"),
+        0,
+        "read selection never grants media control"
+    );
+    core.assert_receives(&broker, 1).await;
+    commands.assert_live_without_commands(1).await;
+
+    configure_media(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        &MEDIA_TARGETS[..4].join(","),
+        None,
+    )
+    .await;
+    connection(&host).await;
+    until(|| actions(&host).len() == 7).await;
+    for (entity, status) in [
+        (MEDIA_TARGETS[2], "Unknown"),
+        (MEDIA_TARGETS[3], "Unavailable"),
+    ] {
+        until(|| {
+            items(&host)
+                .iter()
+                .any(|item| item["title"] == entity && item["value"] == status)
+        })
+        .await;
+    }
+    let first_instance = instance(&host);
+    let advertised = actions(&host);
+    assert!(advertised
+        .iter()
+        .any(|item| item["action_id"] == "ha-action-0"));
+    for index in 0..2 {
+        for operation in ["play", "pause", "stop"] {
+            let id = format!("ha-media-{index}-{operation}");
+            let item = advertised
+                .iter()
+                .find(|item| item["action_id"] == id)
+                .unwrap();
+            assert_eq!(item["id"], id);
+            assert_eq!(item["params"], json!({}));
+        }
+    }
+    for index in 2..4 {
+        for operation in ["play", "pause", "stop"] {
+            assert!(
+                !advertised
+                    .iter()
+                    .any(|item| item["action_id"] == format!("ha-media-{index}-{operation}")),
+                "unknown and unavailable players must not expose actions"
+            );
+        }
+    }
+    for (index, operation) in ["play", "pause", "stop"].iter().enumerate() {
+        assert_eq!(
+            submit_action(
+                &host,
+                &first_instance,
+                &format!("ha-media-0-{operation}"),
+                epoch
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            json!({})
+        );
+        assert_service(
+            &origin,
+            index,
+            FIRST_PREFIX,
+            &format!("media_player/media_{operation}"),
+            MEDIA_TARGETS[0],
+        );
+    }
+    // Existing button/scene indices stay independent of the new media namespace.
+    assert_eq!(
+        submit_action(&host, &first_instance, "ha-action-0", epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_service(
+        &origin,
+        3,
+        FIRST_PREFIX,
+        "button/press",
+        "button.do_not_supply_charger",
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-media-0-play",
+            json!({"entity_id":MEDIA_TARGETS[1],"service":"media_stop"}),
+            WAIT,
+            epoch,
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 4);
+    core.assert_receives(&broker, 2).await;
+    commands.assert_live_without_commands(2).await;
+
+    for state in [Some("unknown"), Some("unavailable"), None] {
+        origin.event(
+            MEDIA_TARGETS[0],
+            state.map(|state| entity_state(MEDIA_TARGETS[0], state, "Media target")),
+        );
+        until(|| actions(&host).len() == 4).await;
+        assert_eq!(
+            host.action_in_epoch(
+                PLUGIN,
+                &first_instance,
+                "ha-media-0-play",
+                json!({}),
+                WAIT,
+                epoch
+            )
+            .await
+            .unwrap_err(),
+            PluginError::UnknownAction
+        );
+        origin.event(
+            MEDIA_TARGETS[0],
+            Some(entity_state(MEDIA_TARGETS[0], "paused", "Media target")),
+        );
+        until(|| actions(&host).len() == 7).await;
+    }
+    assert_eq!(origin.count("service"), 4);
+    controls.stall_next.store(true, Ordering::Release);
+    let replaced_action = submit_action(&host, &first_instance, "ha-media-0-stop", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert!(!replaced_action.is_finished());
+    assert_service(
+        &origin,
+        4,
+        FIRST_PREFIX,
+        "media_player/media_stop",
+        MEDIA_TARGETS[0],
+    );
+    origin.event(
+        "sensor.temperature",
+        Some(entity_state("sensor.temperature", "24", "Temperature")),
+    );
+    item_value(&host, "entity-0", "value", json!(24.0)).await;
+    core.assert_receives(&broker, 3).await;
+    commands.assert_live_without_commands(3).await;
+
+    // The service was already submitted. Replacing settings stops local waiting
+    // and closes the old sockets without claiming to reverse any player effect.
+    assert_eq!(controls.pending.load(Ordering::Acquire), 1);
+    assert!(!replaced_action.is_finished());
+    configure_media(
+        &service,
+        epoch,
+        &origin,
+        SECOND_PREFIX,
+        MEDIA_TARGETS[4],
+        Some(&origin.second_token),
+    )
+    .await;
+    connection(&host).await;
+    until(|| actions(&host).len() == 4 && instance(&host) != first_instance).await;
+    until(|| {
+        controls.pending.load(Ordering::Acquire) == 0 && origin.active.load(Ordering::Acquire) == 1
+    })
+    .await;
+    assert!(timeout(WAIT, replaced_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    let second_instance = instance(&host);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-media-0-play",
+            json!({}),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::Unavailable
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &second_instance,
+            "ha-media-1-pause",
+            json!({}),
+            WAIT,
+            epoch
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 5);
+    assert_eq!(
+        submit_action(&host, &second_instance, "ha-media-0-play", epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_service(
+        &origin,
+        5,
+        SECOND_PREFIX,
+        "media_player/media_play",
+        MEDIA_TARGETS[4],
+    );
+    no_private_data(&host, &origin);
+    core.assert_receives(&broker, 4).await;
+    commands.assert_live_without_commands(4).await;
+
+    controls.stall_next.store(true, Ordering::Release);
+    let disabled_action = submit_action(&host, &second_instance, "ha-media-0-stop", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_service(
+        &origin,
+        6,
+        SECOND_PREFIX,
+        "media_player/media_stop",
+        MEDIA_TARGETS[4],
+    );
+    service.set_enabled(PLUGIN, false, epoch).await.unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, disabled_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert!(items(&host).is_empty());
+    core.assert_receives(&broker, 5).await;
+    commands.assert_live_without_commands(5).await;
+
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    until(|| actions(&host).len() == 4).await;
+    let final_instance = instance(&host);
+    assert_ne!(final_instance, second_instance);
+    controls.stall_next.store(true, Ordering::Release);
+    let removed_action = submit_action(&host, &final_instance, "ha-media-0-pause", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_service(
+        &origin,
+        7,
+        SECOND_PREFIX,
+        "media_player/media_pause",
+        MEDIA_TARGETS[4],
+    );
+    service
+        .uninstall_with_settings(PLUGIN, true, epoch)
+        .await
+        .unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, removed_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert_eq!(
+        origin.count("service"),
+        8,
+        "each admitted call sends one fixed POST"
     );
     assert!(host.snapshots().is_empty());
     assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());

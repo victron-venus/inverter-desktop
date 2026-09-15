@@ -135,13 +135,17 @@ impl Worker {
     }
 
     fn configure(&mut self, fixture: &TcpListener, watch: &str, actions: Option<&str>) {
+        self.configure_frame(configuration(fixture, watch, actions));
+    }
+
+    fn configure_frame(&mut self, frame: Value) {
         self.send(hello());
         assert_eq!(
             self.next(),
             json!({"type":"ready","protocol_version":1,
             "host_api_version":"1.4.0","plugin_id":"inverter-desktop.home-assistant"})
         );
-        self.send(configuration(fixture, watch, actions));
+        self.send(frame);
         assert_eq!(
             self.next(),
             json!({"type":"configuration_ready","revision":"actions-1"})
@@ -421,15 +425,40 @@ fn initialize(
     watch: &str,
     selected: Option<&str>,
 ) -> WebSocket<TcpStream> {
-    worker.configure(fixture, watch, selected);
+    initialize_configuration(worker, fixture, configuration(fixture, watch, selected))
+}
+
+fn media_configuration(
+    fixture: &TcpListener,
+    watch: &str,
+    selected: Option<&str>,
+    media: Option<&str>,
+) -> Value {
+    let mut frame = configuration(fixture, watch, selected);
+    if let Some(media) = media {
+        frame["configuration"]["values"]["media_player_entities"] = json!(media);
+    }
+    frame
+}
+
+fn initialize_configuration(
+    worker: &mut Worker,
+    fixture: &TcpListener,
+    frame: Value,
+) -> WebSocket<TcpStream> {
+    worker.configure_frame(frame.clone());
     let mut names = Vec::new();
-    for name in watch
-        .split(',')
-        .chain(selected.unwrap_or("").split(','))
-        .filter(|name| !name.is_empty())
-    {
-        if !names.contains(&name) {
-            names.push(name);
+    for field in ["watch_entities", "action_entities", "media_player_entities"] {
+        for name in frame["configuration"]["values"][field]
+            .as_str()
+            .unwrap_or("")
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if !names.contains(&name) {
+                names.push(name);
+            }
         }
     }
     let socket = authorize(fixture, !names.is_empty());
@@ -447,18 +476,27 @@ fn initialize(
             "ordered union must not read duplicates"
         );
         assert!(request.body.is_empty());
-        respond(&mut request.stream, 200, entity(name, "unknown"));
+        let state = if name.starts_with("media_player.") {
+            "paused"
+        } else {
+            "unknown"
+        };
+        respond(&mut request.stream, 200, entity(name, state));
     }
     socket
 }
 
 fn service(fixture: &TcpListener, domain: &str, entity: &str) -> TcpStream {
-    let request = request(fixture);
     let method = if domain == "button" {
         "press"
     } else {
         "turn_on"
     };
+    exact_service(fixture, domain, method, entity)
+}
+
+fn exact_service(fixture: &TcpListener, domain: &str, method: &str, entity: &str) -> TcpStream {
+    let request = request(fixture);
     assert_eq!(
         request.line,
         format!("POST /reverse/proxy/ha/api/services/{domain}/{method} HTTP/1.1")
@@ -990,4 +1028,451 @@ fn output_pressure_does_not_block_eof_or_shutdown_with_submitted_services() {
         worker.stop(eof);
         no_request(&fixture, Duration::ZERO);
     }
+}
+
+#[test]
+fn media_omitted_or_empty_selection_keeps_watched_players_read_only() {
+    for selected in [None, Some("")] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let _socket = initialize_configuration(
+            &mut worker,
+            &fixture,
+            media_configuration(
+                &fixture,
+                "media_player.do_not_supply_charger",
+                None,
+                selected,
+            ),
+        );
+        let frame = worker
+            .until(|frame| item(frame, "entity-0").is_some_and(|item| item["text"] == "paused"));
+        assert!(actions(&frame).is_empty());
+        for operation in ["play", "pause", "stop"] {
+            worker.action(operation, &format!("ha-media-0-{operation}"), 5000);
+            worker.error(operation, "invalid_action");
+        }
+        no_request(&fixture, Duration::from_millis(100));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn media_exact_transport_presets_preserve_button_scene_ids_and_literal_targets() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        media_configuration(
+            &fixture,
+            "sensor.power,media_player.inverter_on",
+            Some("scene.wakeup,button.do_not_supply_charger"),
+            Some("media_player.television,media_player.inverter_on"),
+        ),
+    );
+    let frame = connected(&mut worker, 8);
+    for (index, name) in [
+        "sensor.power",
+        "media_player.inverter_on",
+        "scene.wakeup",
+        "button.do_not_supply_charger",
+        "media_player.television",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(
+            item(&frame, &format!("entity-{index}")).unwrap()["title"],
+            *name
+        );
+    }
+    for (index, name) in ["media_player.television", "media_player.inverter_on"]
+        .iter()
+        .enumerate()
+    {
+        for (operation, label) in [("play", "Play"), ("pause", "Pause"), ("stop", "Stop")] {
+            let id = format!("ha-media-{index}-{operation}");
+            let preset = item(&frame, &id).unwrap();
+            assert_eq!(preset["action_id"], id);
+            assert_eq!(preset["params"], json!({}));
+            assert_eq!(preset["title"], *name);
+            assert_eq!(preset["label"], format!("{label} {name}"));
+            worker.action(&id, &id, 5000);
+            let mut pending = exact_service(
+                &fixture,
+                "media_player",
+                &format!("media_{operation}"),
+                name,
+            );
+            respond(&mut pending, 200, json!([{ "private": PRIVATE_BODY }]));
+            worker.success(&id);
+        }
+    }
+    for (index, domain, name) in [
+        (0, "scene", "scene.wakeup"),
+        (1, "button", "button.do_not_supply_charger"),
+    ] {
+        let id = format!("ha-action-{index}");
+        assert_eq!(item(&frame, &id).unwrap()["title"], name);
+        worker.action(&id, &id, 5000);
+        let mut pending = service(&fixture, domain, name);
+        respond(&mut pending, 200, json!([]));
+        worker.success(&id);
+    }
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+#[test]
+fn media_invalid_domains_overlong_lists_and_combined_watch_overflow_never_connect() {
+    let fixture = listener();
+    let five = (0..5)
+        .map(|index| format!("media_player.p{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let watched = (0..31)
+        .map(|index| format!("sensor.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let overlong = " ".repeat(4097);
+    for (watch, media) in [
+        ("", "button.selected"),
+        ("", "scene.selected"),
+        ("", "input_boolean.do_not_supply_charger"),
+        ("", "media_player.invalid/path"),
+        ("", "Media_player.upper"),
+        ("", five.as_str()),
+        ("", overlong.as_str()),
+        (watched.as_str(), "media_player.one,media_player.two"),
+    ] {
+        let mut worker = Worker::start();
+        worker.send(hello());
+        assert_eq!(worker.next()["type"], "ready");
+        worker.send(media_configuration(&fixture, watch, None, Some(media)));
+        worker.finish(false);
+        assert!(worker.frames.try_iter().next().is_none());
+        no_request(&fixture, Duration::ZERO);
+    }
+    let watch = (0..16)
+        .map(|index| format!("sensor.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let actions = (0..16)
+        .map(|index| format!("button.b{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut worker = Worker::start();
+    worker.send(hello());
+    assert_eq!(worker.next()["type"], "ready");
+    worker.send(media_configuration(
+        &fixture,
+        &watch,
+        Some(&actions),
+        Some("media_player.extra"),
+    ));
+    worker.finish(false);
+    assert!(worker.frames.try_iter().next().is_none());
+    no_request(&fixture, Duration::ZERO);
+}
+
+#[test]
+fn media_four_unique_players_with_duplicates_fit_maximum_combined_snapshot() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let watch = (0..12)
+        .map(|index| format!("sensor.s{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let watch = format!("media_player.p3,{watch},media_player.p3");
+    let buttons = (0..16)
+        .map(|index| format!("button.b{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        media_configuration(
+            &fixture,
+            &watch,
+            Some(&buttons),
+            Some(
+                "media_player.p0,\nmedia_player.p1,media_player.p2,media_player.p3,media_player.p0",
+            ),
+        ),
+    );
+    let frame = connected(&mut worker, 28);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 61);
+    assert_eq!(
+        item(&frame, "entity-0").unwrap()["title"],
+        "media_player.p3"
+    );
+    assert_eq!(item(&frame, "ha-action-15").unwrap()["title"], "button.b15");
+    assert_eq!(
+        item(&frame, "ha-media-0-play").unwrap()["title"],
+        "media_player.p0"
+    );
+    assert_eq!(
+        item(&frame, "ha-media-3-stop").unwrap()["title"],
+        "media_player.p3"
+    );
+    for value in frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["id"].as_str().unwrap().starts_with("entity-"))
+    {
+        let name = value["title"].as_str().unwrap();
+        let state = if name.starts_with("sensor.") {
+            "x".repeat(512)
+        } else {
+            "playing".into()
+        };
+        let mut value = entity(name, &state);
+        value["attributes"]["friendly_name"] = json!("🌞".repeat(128));
+        live(&mut socket, name, Some(value));
+    }
+    let bounded = worker.until(|frame| {
+        item(frame, "entity-31").is_some_and(|item| item["title"] == "🌞".repeat(32))
+    });
+    assert_eq!(bounded["items"].as_array().unwrap().len(), 61);
+    assert!(serde_json::to_vec(&bounded).unwrap().len() + 1 < MAX_FRAME);
+    let mut ids = HashSet::new();
+    for value in bounded["items"].as_array().unwrap() {
+        assert!(ids.insert(value["id"].as_str().unwrap()));
+        assert!(value["title"].as_str().unwrap().len() <= 128);
+        if value["kind"] == "action" {
+            assert!(value["label"].as_str().unwrap().len() <= 128);
+            assert_eq!(value["params"], json!({}));
+        }
+    }
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+#[test]
+fn media_actions_withdraw_until_observed_and_for_unknown_unavailable_delete_disconnect() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    worker.configure_frame(media_configuration(
+        &fixture,
+        "",
+        None,
+        Some("media_player.selected"),
+    ));
+    let mut socket = authorize(&fixture, true);
+    let mut initial = request(&fixture);
+    assert_eq!(
+        initial.line,
+        "GET /reverse/proxy/ha/api/states/media_player.selected HTTP/1.1"
+    );
+    connected(&mut worker, 0);
+    worker.action("waiting", "ha-media-0-play", 5000);
+    worker.error("waiting", "unavailable");
+    respond(
+        &mut initial.stream,
+        404,
+        json!({"message":"Entity not found"}),
+    );
+    worker
+        .until(|frame| item(frame, "entity-0").is_some_and(|item| item["value"] == "Unavailable"));
+    worker.action("missing", "ha-media-0-play", 5000);
+    worker.error("missing", "unavailable");
+    for (index, invalid) in [Some("unknown"), Some("unavailable"), None]
+        .into_iter()
+        .enumerate()
+    {
+        // Legacy transport controls do not depend on supported_features flags.
+        let mut available = entity("media_player.selected", "off");
+        available["attributes"]["supported_features"] = json!(0);
+        live(&mut socket, "media_player.selected", Some(available));
+        connected(&mut worker, 3);
+        live(
+            &mut socket,
+            "media_player.selected",
+            invalid.map(|state| entity("media_player.selected", state)),
+        );
+        connected(&mut worker, 0);
+        for operation in ["play", "pause", "stop"] {
+            let request = format!("withdrawn-{index}-{operation}");
+            worker.action(&request, &format!("ha-media-0-{operation}"), 5000);
+            worker.error(&request, "unavailable");
+        }
+        no_request(&fixture, Duration::ZERO);
+    }
+    live(
+        &mut socket,
+        "media_player.selected",
+        Some(entity("media_player.selected", "playing")),
+    );
+    connected(&mut worker, 3);
+    socket.close(None).unwrap();
+    drop(socket);
+    let frame = worker.until(|frame| {
+        item(frame, "connection").is_some_and(|item| item["value"] == "Disconnected")
+    });
+    assert!(actions(&frame).is_empty());
+    worker.action("disconnected-media", "ha-media-0-stop", 5000);
+    worker.error("disconnected-media", "unavailable");
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+#[test]
+fn media_changed_params_and_unadvertised_service_ids_never_issue_requests() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        media_configuration(&fixture, "", None, Some("media_player.selected")),
+    );
+    connected(&mut worker, 3);
+    for (index, action, params) in [
+        (
+            0,
+            "ha-media-0-play",
+            json!({"entity_id":"media_player.other"}),
+        ),
+        (
+            1,
+            "ha-media-0-play",
+            json!({"service":"media_player.volume_set"}),
+        ),
+        (2, "ha-media-0-play", json!({"volume_level":1})),
+        (3, "ha-media-0-volume", json!({})),
+        (4, "ha-media-1-play", json!({})),
+        (5, "ha-media-00-play", json!({})),
+        (6, "ha-media-0-Play", json!({})),
+        (7, "media_player.media_play", json!({})),
+        (8, "ha-action-0", json!({})),
+    ] {
+        let request = format!("media-invalid-{index}");
+        worker.send(action_frame(&request, action, params, 5000));
+        worker.error(&request, "invalid_action");
+        no_request(&fixture, Duration::ZERO);
+    }
+    worker.stop(false);
+}
+
+#[test]
+fn media_lost_response_has_unknown_outcome_and_no_automatic_retry() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        media_configuration(&fixture, "", None, Some("media_player.selected")),
+    );
+    connected(&mut worker, 3);
+    worker.action("media-lost", "ha-media-0-play", 5000);
+    drop(exact_service(
+        &fixture,
+        "media_player",
+        "media_play",
+        "media_player.selected",
+    ));
+    worker.error("media-lost", "outcome_unknown");
+    no_request(&fixture, Duration::from_millis(1200));
+    worker.action("media-lost", "ha-media-0-play", 5000);
+    worker.error("media-lost", "invalid_action");
+    no_request(&fixture, Duration::ZERO);
+    worker.action("media-explicit-next", "ha-media-0-pause", 5000);
+    let mut pending = exact_service(
+        &fixture,
+        "media_player",
+        "media_pause",
+        "media_player.selected",
+    );
+    respond(&mut pending, 200, json!([]));
+    worker.success("media-explicit-next");
+    worker.stop(false);
+}
+
+#[test]
+fn media_and_button_requests_share_two_active_slots_and_cancellation_deadlines() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        media_configuration(
+            &fixture,
+            "",
+            Some("button.selected"),
+            Some("media_player.selected"),
+        ),
+    );
+    connected(&mut worker, 4);
+    worker.action("media-pending", "ha-media-0-play", 5000);
+    let _media = exact_service(
+        &fixture,
+        "media_player",
+        "media_play",
+        "media_player.selected",
+    );
+    worker.action("button-pending", "ha-action-0", 5000);
+    let _button = service(&fixture, "button", "button.selected");
+    worker.action("media-overloaded", "ha-media-0-stop", 5000);
+    worker.error("media-overloaded", "overloaded");
+    no_request(&fixture, Duration::ZERO);
+    for request in ["button-pending", "media-pending"] {
+        worker.send(json!({"type":"cancel","request_id":request}));
+        worker.error(request, "outcome_unknown");
+    }
+    no_request(&fixture, Duration::from_millis(100));
+    let started = Instant::now();
+    worker.action("media-deadline", "ha-media-0-stop", 250);
+    let _deadline = exact_service(
+        &fixture,
+        "media_player",
+        "media_stop",
+        "media_player.selected",
+    );
+    worker.error("media-deadline", "outcome_unknown");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+#[test]
+fn media_auth_rejection_cancels_sibling_and_revokes_all_action_families() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let _socket = initialize_configuration(
+        &mut worker,
+        &fixture,
+        media_configuration(
+            &fixture,
+            "",
+            Some("scene.selected"),
+            Some("media_player.selected"),
+        ),
+    );
+    connected(&mut worker, 4);
+    worker.action("media-auth", "ha-media-0-play", 5000);
+    let mut media = exact_service(
+        &fixture,
+        "media_player",
+        "media_play",
+        "media_player.selected",
+    );
+    worker.action("scene-sibling", "ha-action-0", 5000);
+    let _scene = service(&fixture, "scene", "scene.selected");
+    respond(&mut media, 401, json!({"message":PRIVATE_BODY}));
+    worker.error("media-auth", "outcome_unknown");
+    worker.error("scene-sibling", "outcome_unknown");
+    let frame = worker.until(|frame| {
+        item(frame, "connection").is_some_and(|item| item["value"] == "Authentication rejected")
+    });
+    assert!(actions(&frame).is_empty());
+    for (request, action) in [
+        ("media-after-auth", "ha-media-0-pause"),
+        ("scene-after-auth", "ha-action-0"),
+    ] {
+        worker.action(request, action, 5000);
+        worker.error(request, "unavailable");
+    }
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
 }

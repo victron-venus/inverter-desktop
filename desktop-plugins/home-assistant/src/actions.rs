@@ -1,6 +1,11 @@
 //! Explicit, non-retrying service operations owned by one worker session.
 
-use crate::{config::Validated, network, state::Shared, Frame};
+use crate::{
+    config::{ConfiguredAction, Validated},
+    network,
+    state::Shared,
+    Frame,
+};
 use futures_util::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use inverter_worker_protocol::{HostFrame, Output};
 use serde_json::{json, Value};
@@ -63,7 +68,7 @@ async fn completed_before_deadline(
 async fn service(
     client: reqwest::Client,
     configuration: Arc<Validated>,
-    entity: String,
+    action: ConfiguredAction,
     request_id: String,
     deadline: Instant,
 ) -> Completed {
@@ -81,9 +86,9 @@ async fn service(
     let operation = async {
         // Only the selected literal entity enters this immutable service body.
         let mut response = client
-            .post(configuration.service_url(&entity).ok_or(())?)
+            .post(configuration.service_url(action.operation))
             .bearer_auth(&configuration.token)
-            .json(&json!({"entity_id":entity}))
+            .json(&json!({"entity_id":action.entity}))
             .timeout(deadline.saturating_duration_since(Instant::now()))
             .send()
             .await
@@ -139,6 +144,7 @@ pub async fn run(
     book: Shared,
 ) -> Result<(), &'static str> {
     let client = network::http_client()?;
+    let configured_actions = configuration.actions();
     let mut connection = book
         .lock()
         .map_err(|_| "state unavailable")?
@@ -198,7 +204,7 @@ pub async fn run(
                             continue;
                         }
                         history.remember(request_id.clone(), false);
-                        let known = configuration.action_entities.iter().enumerate().any(|(index, _)| action_id == format!("ha-action-{index}"));
+                        let known = configured_actions.iter().any(|action| action.id == action_id);
                         if !known || params != json!({}) || !(1..=30_000).contains(&deadline_ms) {
                             responses.push_back(error(&request_id, "invalid_action", "The action does not match its configured preset."));
                             continue;
@@ -210,7 +216,7 @@ pub async fn run(
                             continue;
                         }
                         let target = book.lock().map_err(|_| "state unavailable")?.action_target(&action_id);
-                        let Some(entity) = target.filter(|_| received_at >= admitted_after) else {
+                        let Some(action) = target.filter(|_| received_at >= admitted_after) else {
                             responses.push_back(error(&request_id, "unavailable", "The selected Home Assistant action is unavailable."));
                             continue;
                         };
@@ -219,7 +225,7 @@ pub async fn run(
                             continue;
                         }
                         let (cancel, registration) = futures_util::future::AbortHandle::new_pair();
-                        let operation = service(client.clone(), configuration.clone(), entity, request_id.clone(), deadline);
+                        let operation = service(client.clone(), configuration.clone(), action, request_id.clone(), deadline);
                         let id = request_id.clone();
                         pending.push(async move {
                             (id, futures_util::future::Abortable::new(operation, registration).await.ok())
