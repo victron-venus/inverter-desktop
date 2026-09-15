@@ -72,7 +72,7 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
-### Current checkpoint: bounded HA weather summaries
+### Completed checkpoint: bounded HA weather summaries
 
 Start from verified main `a3eb56d`, then incorporate main `507f3d9` before final
 validation. Preserve the current condition and temperature
@@ -108,7 +108,7 @@ that supplied data without claiming modern forecast API or layout parity.
 - [x] Run worker/native formatting, strict Clippy and appropriate unit/process/
       installed-package checks; frontend checks/builds, packaging and mobile
       boundaries. Independently review projection, lifecycle and documentation.
-- [ ] Push a separate PR, address comments in English, pass final-head checks,
+- [x] Push a separate PR, address comments in English, pass final-head checks,
       merge as authorized and verify clean canonical main and its source CI.
 
 Home Assistant documents forecasts as a separate API in its
@@ -143,6 +143,25 @@ a maximum-length unbroken UTF-8 condition and disconnect clearing. Forecasts use
 separate generated lines for readability; source control characters remain
 filtered. The page and cards had no horizontal overflow. This does not establish
 production HA/device acceptance or graphical acceptance on Linux/Windows.
+
+Functional delivery merged in
+[PR #444](https://github.com/victron-venus/inverter-desktop/pull/444): reviewed
+head `8798724` passed all 41 executed checks, with three auxiliary checks skipped,
+exact-head approval and no unresolved review threads. Merge `b2915d6` has the
+same tree as the reviewed head. The canonical checkout was fast-forwarded to
+clean `main`; all six pre-existing stashes and the private ignored `AGENTS.md`
+were preserved.
+
+Post-merge source validation passed all six workflows and all 17 jobs on
+`b2915d6`: [CI](https://github.com/victron-venus/inverter-desktop/actions/runs/34995538974),
+[Unit Tests](https://github.com/victron-venus/inverter-desktop/actions/runs/34995538926),
+[CodeQL](https://github.com/victron-venus/inverter-desktop/actions/runs/34995538968),
+[Code Quality](https://github.com/victron-venus/inverter-desktop/actions/runs/34995538668),
+[Cargo Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/34995539018)
+and [Cargo Security Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/34995538936).
+These source checks do not assert completion of release installers or production
+device acceptance. Modern forecast retrieval, appliance profiles, legacy
+migration and bundled feature removal remain open.
 
 ### Completed checkpoint: grouped HA entity cards
 
