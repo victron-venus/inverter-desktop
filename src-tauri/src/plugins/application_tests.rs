@@ -492,7 +492,14 @@ async fn settings_save_keeps_disabled_workers_stopped_and_restarts_enabled_worke
     assert!(!public.to_string().contains("fixture-secret"));
     service.set_enabled(PLUGIN, true, epoch).await.unwrap();
     let before = host
-        .action_in_epoch(PLUGIN, "echo", json!({}), Duration::from_secs(2), epoch)
+        .action_in_epoch(
+            PLUGIN,
+            host.snapshots()[0].instance_id.as_deref().unwrap(),
+            "echo",
+            json!({}),
+            Duration::from_secs(2),
+            epoch,
+        )
         .await
         .unwrap();
     assert_eq!(before["configuration_secret_matches"], true);
@@ -509,7 +516,14 @@ async fn settings_save_keeps_disabled_workers_stopped_and_restarts_enabled_worke
         .unwrap();
     assert!(saved.restart_error.is_none());
     let after = host
-        .action_in_epoch(PLUGIN, "echo", json!({}), Duration::from_secs(2), epoch)
+        .action_in_epoch(
+            PLUGIN,
+            host.snapshots()[0].instance_id.as_deref().unwrap(),
+            "echo",
+            json!({}),
+            Duration::from_secs(2),
+            epoch,
+        )
         .await
         .unwrap();
     assert_ne!(before["pid"], after["pid"]);
@@ -525,6 +539,7 @@ async fn settings_save_keeps_disabled_workers_stopped_and_restarts_enabled_worke
     let restored = host
         .action_in_epoch(
             PLUGIN,
+            host.snapshots()[0].instance_id.as_deref().unwrap(),
             "echo",
             json!({}),
             Duration::from_secs(2),

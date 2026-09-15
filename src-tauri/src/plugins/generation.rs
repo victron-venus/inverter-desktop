@@ -1,4 +1,5 @@
-//! Revocable native ownership for one actual worker process, never a wire value.
+//! Revocable native ownership for one actual worker process. Only its opaque
+//! identity enters dashboard snapshots to bind clicks to the displayed instance.
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 

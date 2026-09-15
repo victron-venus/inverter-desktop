@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use url::Url;
 
 pub const MAX_ENTITIES: usize = 32;
+pub const MAX_ACTION_ENTITIES: usize = 16;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
 // Configuration and credentials deliberately have no Debug implementation.
@@ -21,6 +22,8 @@ pub struct Values {
     pub ha_base_url: String,
     #[serde(default)]
     pub watch_entities: String,
+    #[serde(default)]
+    pub action_entities: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -32,6 +35,7 @@ pub struct Secrets {
 pub struct Validated {
     pub base: Url,
     pub entities: Vec<String>,
+    pub action_entities: Vec<String>,
     pub token: String,
 }
 
@@ -55,9 +59,27 @@ impl Configuration {
         if token.is_empty() || token.len() > 4096 || !token.bytes().all(|b| b.is_ascii_graphic()) {
             return Err("invalid HA token");
         }
+        let mut entities = entity_list(&self.values.watch_entities)?;
+        let action_entities = entity_list(&self.values.action_entities)?;
+        if action_entities.len() > MAX_ACTION_ENTITIES
+            || action_entities
+                .iter()
+                .any(|entity| !matches!(entity.split_once('.'), Some(("button" | "scene", _))))
+        {
+            return Err("invalid HA action entities");
+        }
+        for entity in &action_entities {
+            if !entities.contains(entity) {
+                entities.push(entity.clone());
+            }
+        }
+        if entities.len() > MAX_ENTITIES {
+            return Err("too many watched entities");
+        }
         Ok(Validated {
             base: base_url(&self.values.ha_base_url)?,
-            entities: entity_list(&self.values.watch_entities)?,
+            entities,
+            action_entities,
             token: self.secrets.ha_token,
         })
     }
@@ -162,6 +184,15 @@ impl Validated {
             .push(entity);
         url
     }
+
+    pub fn service_url(&self, entity: &str) -> Option<Url> {
+        let path = match entity.split_once('.')? {
+            ("button", _) => "api/services/button/press",
+            ("scene", _) => "api/services/scene/turn_on",
+            _ => return None,
+        };
+        self.base.join(path).ok()
+    }
 }
 
 #[cfg(test)]
@@ -255,5 +286,66 @@ mod tests {
             value.secrets.ha_token = token.into();
             assert!(value.validate().is_err());
         }
+    }
+
+    #[test]
+    fn action_opt_in_preserves_order_deduplicates_and_only_maps_fixed_services() {
+        let mut config = configuration(
+            "https://ha.example:8443/proxy/ha",
+            "sensor.a,scene.night,button.first",
+        );
+        assert!(config.values.action_entities.is_empty());
+        config.values.action_entities =
+            "button.second,scene.night,button.second,button.first".into();
+        let config = config.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            ["sensor.a", "scene.night", "button.first", "button.second"]
+        );
+        assert_eq!(
+            config.action_entities,
+            ["button.second", "scene.night", "button.first"]
+        );
+        assert_eq!(
+            config.service_url("button.second").unwrap().as_str(),
+            "https://ha.example:8443/proxy/ha/api/services/button/press"
+        );
+        assert_eq!(
+            config.service_url("scene.night").unwrap().as_str(),
+            "https://ha.example:8443/proxy/ha/api/services/scene/turn_on"
+        );
+        assert!(config.service_url("sensor.a").is_none());
+        for actions in [
+            "switch.a",
+            "input_boolean.do_not_supply_charger",
+            "button.*",
+            "scene.a/b",
+            "scene.a.b",
+            "button.Upper",
+            "button.",
+        ] {
+            let mut config = configuration("http://localhost", "");
+            config.values.action_entities = actions.into();
+            assert!(config.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn action_and_union_limits_are_independent() {
+        let list = |domain: &str, count| {
+            (0..count)
+                .map(|index| format!("{domain}.e{index}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let mut config = configuration("http://localhost", &list("sensor", 16));
+        config.values.action_entities = list("button", 16);
+        assert_eq!(config.validate().unwrap().entities.len(), 32);
+        let mut config = configuration("http://localhost", &list("sensor", 17));
+        config.values.action_entities = list("button", 16);
+        assert!(config.validate().is_err());
+        let mut config = configuration("http://localhost", "");
+        config.values.action_entities = list("scene", 17);
+        assert!(config.validate().is_err());
     }
 }

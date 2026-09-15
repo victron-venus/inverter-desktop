@@ -31,7 +31,7 @@ class HomeAssistantPackageTests(unittest.TestCase):
             check=False, capture_output=True, text=True, timeout=10,
         )
 
-    def test_ha_payload_and_read_only_metadata_match_every_desktop_target(self):
+    def test_ha_payload_and_opt_in_action_metadata_match_every_desktop_target(self):
         """The same fixed HA identity supports all matching native headers."""
         for target in packaging.TARGETS:
             with self.subTest(target=target):
@@ -43,8 +43,8 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 if "windows" in target:
                     binary += ".exe"
                 self.assertEqual(manifest["plugin_id"], "inverter-desktop.home-assistant")
-                self.assertEqual(manifest["version"], "0.1.0")
-                self.assertEqual(manifest["host_api"], "^1.3")
+                self.assertEqual(manifest["version"], "0.2.0")
+                self.assertEqual(manifest["host_api"], "^1.4")
                 self.assertEqual(manifest["target"], target)
                 self.assertEqual(manifest["entrypoint"], f"bin/{binary}")
                 self.assertEqual(set(manifest["permissions"]), {
@@ -66,10 +66,15 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), {"ha_base_url", "ha_token"})
         self.assertFalse(schema["additionalProperties"])
         fields = schema["properties"]
-        self.assertEqual(set(fields), {"ha_base_url", "watch_entities", "ha_token"})
+        self.assertEqual(set(fields), {
+            "ha_base_url", "watch_entities", "action_entities", "ha_token",
+        })
         self.assertTrue(all(field["type"] == "string" for field in fields.values()))
         self.assertEqual(fields["ha_base_url"]["maxLength"], 2048)
         self.assertEqual(fields["watch_entities"]["default"], "")
+        self.assertEqual(fields["action_entities"]["default"], "")
+        self.assertEqual(fields["action_entities"]["maxLength"], 4096)
+        self.assertNotIn("action_entities", schema["required"])
         self.assertNotIn("minLength", fields["watch_entities"])
         self.assertTrue(fields["ha_token"]["writeOnly"])
         self.assertEqual(fields["ha_token"]["minLength"], 1)

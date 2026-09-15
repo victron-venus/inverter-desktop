@@ -1,9 +1,9 @@
-//! Read-only, directly scoped HA networking. No worker-output or host handles.
+//! Directly scoped HA state networking. No worker-output or host handles.
 
 use crate::{config::Validated, state::Shared};
 use futures_util::{stream, SinkExt, StreamExt};
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     time::{self, Instant},
@@ -368,9 +368,10 @@ async fn session(
     }
 }
 
-fn http_client() -> Result<reqwest::Client, &'static str> {
+pub fn http_client() -> Result<reqwest::Client, &'static str> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .no_proxy()
         .connect_timeout(OPERATION_TIMEOUT)
         .timeout(OPERATION_TIMEOUT)
@@ -378,16 +379,27 @@ fn http_client() -> Result<reqwest::Client, &'static str> {
         .map_err(|_| "cannot initialize HA network")
 }
 
-pub async fn run(configuration: Validated, state: Shared) -> Result<(), &'static str> {
+pub async fn run(configuration: Arc<Validated>, state: Shared) -> Result<(), &'static str> {
     let client = http_client()?;
+    let mut connection = state
+        .lock()
+        .map_err(|_| "state unavailable")?
+        .subscribe_connection();
     let mut retry = 0_usize;
     loop {
+        if connection.borrow().authentication_rejected {
+            return std::future::pending().await;
+        }
         state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .begin_session();
         let started = Instant::now();
-        let result = session(&client, &configuration, &state).await;
+        let result = tokio::select! {
+            biased;
+            _ = connection.wait_for(|link| link.authentication_rejected) => Err(Failure::Authentication),
+            result = session(&client, &configuration, &state) => result,
+        };
         if result == Err(Failure::Authentication) {
             state
                 .lock()
@@ -404,7 +416,14 @@ pub async fn run(configuration: Validated, state: Shared) -> Result<(), &'static
         if started.elapsed() >= Duration::from_secs(60) {
             retry = 0;
         }
-        time::sleep(Duration::from_secs(BACKOFF_SECONDS[retry])).await;
+        let authentication_rejected = tokio::select! {
+            biased;
+            _ = connection.wait_for(|link| link.authentication_rejected) => true,
+            _ = time::sleep(Duration::from_secs(BACKOFF_SECONDS[retry])) => false,
+        };
+        if authentication_rejected {
+            return std::future::pending().await;
+        }
         retry = (retry + 1).min(BACKOFF_SECONDS.len() - 1);
     }
 }

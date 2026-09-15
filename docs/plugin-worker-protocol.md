@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.3.0**, independently of the application version. The
+The current host API is **1.4.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -45,7 +45,10 @@ The additional limits are:
   bytes. JSON data has at most eight levels below its root and 512 values; object
   keys occupy at most 128 bytes and cannot contain control characters.
 - Action deadlines are relative milliseconds in the range 1–60,000. The host
-  enforces its own deadline even when a worker does not cooperate.
+  forwards the remaining budget immediately before writing, subtracting time
+  spent in its queues and dropping requests with less than one millisecond left.
+  Its original absolute deadline and cancellation remain authoritative, including
+  during pipe transmission and when a worker does not cooperate.
 - Error codes follow the identifier rules. Error messages occupy at most 1,024
   bytes.
 
@@ -61,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.3.0",
+  "host_api_version": "1.4.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -73,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.3.0",
+  "host_api_version": "1.4.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -115,7 +118,7 @@ startup deadline covers both steps. Early contributions, missing/mismatched or
 duplicate acknowledgments fail that generation. Packages without configuration
 permission receive no configuration frame and complete startup after `ready`.
 Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
-are incompatible with a 1.3 host. The wire protocol and manifest remain version 1.
+are incompatible with a 1.4 host. The wire protocol and manifest remain version 1.
 A configured worker should declare an API requirement such as `^1.1`.
 
 The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
@@ -136,6 +139,29 @@ Saving settings restarts an enabled worker with the new configuration; disabled
 workers remain stopped. There is no hot-reload or request-time secret API in this
 checkpoint. See [plugin settings](plugin-settings.md) for the schema, encryption,
 retention, revision, and failure contracts.
+
+## Displayed action authority (host API 1.4)
+
+Native dashboard snapshots include `instance_id`, an opaque identifier for the
+actual worker process, or null when no live instance is available. A new process
+always gets a fresh identity, including reinstall when generation counters repeat.
+The authenticated `plugin_action` application command requires that displayed
+identity as `instanceId`, plus the action ID and exact advertised preset params.
+The host rejects stale instances before enqueueing, and continues checking the
+session, generation, advertisement and deadline before writing the worker pipe.
+
+The frontend also rejects changed clicked descriptors instead of substituting new
+parameters. Pending and uncertain-result feedback belongs to the actual instance
+and operation; changing a label or temporarily withdrawing an action does not
+unlock duplicate dispatch. Snapshot requests are coalesced so live updates do not
+starve visible state. Authentication changes and instance removal revoke old UI
+work. None of this identity data is a publisher key or permission to bypass auth.
+
+This extends the native dashboard boundary, not the worker wire schema. Existing
+worker Action/Cancel/ActionResult/ActionError messages stay at protocol version 1.
+HA packages with service actions require `^1.4` so they cannot be installed on an
+older host without the displayed-instance check. Frigate remains compatible with
+its existing API range.
 
 ## Dashboard contributions
 

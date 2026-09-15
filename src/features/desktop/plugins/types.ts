@@ -20,6 +20,7 @@ export type DashboardContribution =
 
 export interface PluginSnapshot {
   plugin_id: string
+  instance_id: string | null
   state: 'starting' | 'running' | 'restarting' | 'stopped' | 'failed'
   generation: number
   restart_count: number

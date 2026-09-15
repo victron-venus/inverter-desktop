@@ -6,9 +6,9 @@
 
 use super::generation::{GenerationLease, RevokeOnDrop};
 use super::protocol::{
-    encode_host_frame, parse_worker_frame, validate_handshake, validate_plugin_id,
-    DashboardContribution, HostMessage, HttpVideoGrant, WorkerConfiguration, WorkerMessage,
-    HOST_API_VERSION, MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    encode_host_frame, parse_worker_frame, validate_handshake, validate_host_message,
+    validate_plugin_id, DashboardContribution, HostMessage, HttpVideoGrant, WorkerConfiguration,
+    WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -126,6 +126,8 @@ pub struct PluginSnapshot {
     pub plugin_id: String,
     pub state: WorkerState,
     pub generation: u64,
+    /// Opaque identity of the actual process, including after reinstall.
+    pub instance_id: Option<String>,
     pub restart_count: u32,
     pub contributions: Vec<DashboardContribution>,
     /// Host-owned diagnostic codes only. Worker stderr and response text never enter this field.
@@ -193,6 +195,10 @@ impl WorkerEntry {
         {
             lease.revoke();
         }
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .instance_id = None;
         self.http_videos
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -596,6 +602,7 @@ impl PluginHost {
                 plugin_id: spec.plugin_id.clone(),
                 state: WorkerState::Starting,
                 generation: 0,
+                instance_id: None,
                 restart_count: 0,
                 contributions: Vec::new(),
                 last_error: None,
@@ -657,15 +664,21 @@ impl PluginHost {
         timeout: Duration,
     ) -> Result<Value, PluginError> {
         let epoch = self.authority_epoch();
-        self.action_in_epoch(plugin_id, action_id, params, timeout, epoch)
+        let instance = self
+            .entry(plugin_id)?
+            .snapshot()
+            .instance_id
+            .ok_or(PluginError::Unavailable)?;
+        self.action_in_epoch(plugin_id, &instance, action_id, params, timeout, epoch)
             .await
     }
 
-    /// Enqueue only in the session that authorized the caller, even if a newer
-    /// session has already registered a replacement for the same plugin ID.
+    /// Enqueue only for the actual worker instance and session shown to the
+    /// caller. Reinstall can reuse generation counters but never this identity.
     pub async fn action_in_epoch(
         &self,
         plugin_id: &str,
+        instance_id: &str,
         action_id: &str,
         params: Value,
         timeout: Duration,
@@ -679,7 +692,9 @@ impl PluginHost {
         }
         let entry = self.entry(plugin_id)?;
         let snapshot = entry.snapshot();
-        if snapshot.state != WorkerState::Running {
+        if snapshot.state != WorkerState::Running
+            || snapshot.instance_id.as_deref() != Some(instance_id)
+        {
             return Err(PluginError::Unavailable);
         }
         if !advertises(&snapshot.contributions, action_id, &params) {
@@ -696,7 +711,7 @@ impl PluginHost {
             params: params.clone(),
             deadline_ms: timeout.as_millis().max(1) as u64,
         };
-        let encoded = encode_host_frame(&message).map_err(|_| PluginError::InvalidRequest)?;
+        validate_host_message(&message).map_err(|_| PluginError::InvalidRequest)?;
         let (reply, response) = oneshot::channel();
         let (cancel, cancellation) = watch::channel(false);
         let deadline = Instant::now() + timeout;
@@ -715,7 +730,6 @@ impl PluginHost {
                     generation: snapshot.generation,
                     action_id: action_id.to_owned(),
                     params,
-                    encoded,
                     cancellation,
                     deadline,
                     reply,
@@ -925,7 +939,6 @@ enum Control {
         generation: u64,
         action_id: String,
         params: Value,
-        encoded: Vec<u8>,
         cancellation: watch::Receiver<bool>,
         deadline: Instant,
         reply: ActionReply,
@@ -945,7 +958,9 @@ enum Outgoing {
         deadline: Instant,
     },
     Action {
-        encoded: Vec<u8>,
+        request_id: String,
+        action_id: String,
+        params: Value,
         deadline: Instant,
         cancellation: watch::Receiver<bool>,
     },
@@ -998,7 +1013,9 @@ async fn write_frames<W: AsyncWrite + Unpin>(
                 }
             }
             Outgoing::Action {
-                encoded,
+                request_id,
+                action_id,
+                params,
                 deadline,
                 mut cancellation,
             } => {
@@ -1013,6 +1030,23 @@ async fn write_frames<W: AsyncWrite + Unpin>(
                 {
                     continue;
                 }
+                // Forward only the original request's remaining budget. Queue
+                // pressure must not give the worker a fresh full timeout.
+                let deadline_ms = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .try_into()
+                    .map_err(|_| "host_frame_invalid")?;
+                if deadline_ms == 0 {
+                    continue;
+                }
+                let encoded = encode_host_frame(&HostMessage::Action {
+                    request_id,
+                    action_id,
+                    params,
+                    deadline_ms,
+                })
+                .map_err(|_| "host_frame_invalid")?;
                 tokio::select! {
                     biased;
                     _ = stop.changed() => return Ok(()),
@@ -1146,6 +1180,7 @@ fn spawn_generation(
             WorkerState::Restarting
         };
         snapshot.generation += 1;
+        snapshot.instance_id = None;
         snapshot.restart_count = restart_count;
         snapshot.contributions.clear();
     }
@@ -1164,10 +1199,16 @@ fn spawn_generation(
         entry.snapshot().generation,
     );
     let generation_guard = RevokeOnDrop(lease.clone());
+    let instance_id = lease.instance_id().to_string();
     *entry
         .generation_lease
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(lease);
+    entry
+        .snapshot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .instance_id = Some(instance_id);
     entry.reaped.store(false, Ordering::Release);
     drop(authority);
     (entry.changed)();
@@ -1503,7 +1544,6 @@ fn handle_control(
             generation: expected,
             action_id,
             params,
-            encoded,
             cancellation,
             deadline,
             reply,
@@ -1531,7 +1571,9 @@ fn handle_control(
             if pipes
                 .writer
                 .try_send(Outgoing::Action {
-                    encoded,
+                    request_id: request_id.clone(),
+                    action_id,
+                    params,
                     deadline,
                     cancellation,
                 })

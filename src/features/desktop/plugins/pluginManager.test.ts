@@ -33,6 +33,7 @@ const installed: ManagedPlugin = {
   runtime: {
     plugin_id: 'example.monitor',
     state: 'running',
+    instance_id: 'worker-instance-1',
     generation: 1,
     restart_count: 0,
     contributions: [],

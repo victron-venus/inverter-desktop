@@ -122,8 +122,11 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and read-only state cards; it has no service
-actions, core MQTT access, camera authority, or inverter flag aliases. Initial
+worker supplies connection status and state cards. Version 0.2 requires host API
+`^1.4` and keeps service actions disabled unless `action_entities` explicitly
+selects literal `button.*` or `scene.*` targets. Only fixed button presses and
+scene activation are supported; there is no generic service proxy, core MQTT
+access, camera authority, or inverter flag alias lookup. Initial
 REST reads select individual configured entities; the broader `state_changed`
 event stream is filtered locally. Network permissions describe trusted worker
 behavior and do not sandbox its operating-system access.
@@ -137,8 +140,9 @@ is linked into the main executable or mobile build.
 
 The explicit installed-package acceptance uses the actual release worker,
 disposable package trust, a temporary HA HTTP/WebSocket fixture and an independent
-core MQTT connection. It covers settings restart, disable, logout and uninstall;
-current results are recorded in TODO.md. A production HA installation, service/UI
+core MQTT connection. Separate read-only and action fixtures cover settings
+restart, disable, logout/uninstall, exact service POSTs and stale action rejection.
+Current demonstrated results and pending checks are recorded in TODO.md. A production HA installation, service/UI
 parity and legacy migration remain separate work. The release trust policy stays
 empty and this slice does not create signing keys.
 

@@ -40,10 +40,12 @@ notifications, and direct completed-clip requests handled by owned native media
 services. Clip/window acceptance is tracked separately from source implementation.
 Snapshots, optional HA proxy support, other camera adapters, and migration remain.
 A separately built [Home Assistant worker](desktop-plugins/home-assistant/README.md)
-adds authenticated connection status and read-only state cards for a configured
-entity list. It owns its REST/WebSocket connection and receives an isolated
-plugin token. HA service controls, legacy UI parity, and migration remain tracked
-work; core inverter-control buttons continue to use MQTT independently.
+adds authenticated connection status and state cards for a configured entity
+list. Read-only operation is the default; an explicit action list enables fixed
+HA button presses and scene activation through instance-bound plugin controls.
+The worker owns its REST/WebSocket connection and isolated token. Other HA
+services, legacy UI parity, and migration remain tracked work; core inverter
+buttons continue to use MQTT independently.
 See the [worker protocol](docs/plugin-worker-protocol.md) and
 TODO for the remaining work and validation boundaries.
 

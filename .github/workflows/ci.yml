@@ -89,16 +89,18 @@ jobs:
           done
       - name: Build the real Home Assistant worker package payload
         run: cargo build --release --locked --manifest-path desktop-plugins/home-assistant/Cargo.toml
-      - name: Exercise the signed Home Assistant worker with private HTTP and WebSocket fixtures
+      - name: Exercise signed Home Assistant reads and actions with private HTTP, WebSocket and MQTT fixtures
         env:
           INVERTER_HOME_ASSISTANT_WORKER: ${{ github.workspace }}/desktop-plugins/home-assistant/target/release/inverter-home-assistant-worker
           MOSQUITTO_BIN: /usr/sbin/mosquitto
         run: |
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib \
-            plugins::home_assistant_integration_tests::signed_home_assistant_package_lifecycle \
-            -- --exact --ignored --test-threads=1 2>&1 | tee "$RUNNER_TEMP/home-assistant-package.log"
-          # Missing fixture paths or a zero-test selection are acceptance failures.
-          grep -F 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/home-assistant-package.log"
+          for ha_test in signed_home_assistant_package_lifecycle signed_home_assistant_package_actions; do
+            cargo test --locked --manifest-path src-tauri/Cargo.toml --lib \
+              "plugins::home_assistant_integration_tests::$ha_test" \
+              -- --exact --ignored --test-threads=1 2>&1 | tee "$RUNNER_TEMP/$ha_test.log"
+            # Missing fixture paths or a zero-test selection are acceptance failures.
+            grep -F 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/$ha_test.log"
+          done
 
   desktop-workers:
     name: ${{ matrix.name }} (${{ matrix.os }})
