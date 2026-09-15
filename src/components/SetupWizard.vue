@@ -121,7 +121,8 @@
             <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
               <h3 class="classic-section-title">Remote IGW</h3>
               <p class="text-[10px] text-muted mt-1">
-                Cloudflare Access + inverter-gateway (HTTPS).
+                Connect directly over HTTPS, or through Cloudflare Access when it protects your
+                gateway URL.
               </p>
             </header>
             <div class="flex flex-col gap-3 p-3 classic-inset !rounded-lg !p-3">
@@ -135,10 +136,13 @@
                   placeholder="https://victron.example.com"
                   autocomplete="off"
                 />
+                <p class="text-[10px] text-muted px-1">
+                  Use a local or public HTTPS URL with a certificate trusted by your system.
+                </p>
               </div>
               <div class="flex flex-col gap-1">
                 <label for="setup_gateway_access_client_id" class="classic-label px-1"
-                  >CF Access Client ID</label
+                  >Cloudflare Access Client ID (optional)</label
                 >
                 <input
                   id="setup_gateway_access_client_id"
@@ -151,7 +155,7 @@
               </div>
               <div class="flex flex-col gap-1">
                 <label for="setup_gateway_access_client_secret" class="classic-label px-1"
-                  >CF Access Client Secret</label
+                  >Cloudflare Access Client Secret (optional)</label
                 >
                 <input
                   id="setup_gateway_access_client_secret"
@@ -161,6 +165,9 @@
                   placeholder="Service token secret"
                   autocomplete="new-password"
                 />
+                <p class="text-[10px] text-muted px-1">
+                  Leave both Access fields blank for a direct HTTPS gateway, or supply both.
+                </p>
               </div>
               <div class="flex flex-col gap-1">
                 <label for="setup_gateway_api_token" class="classic-label px-1"
@@ -174,6 +181,9 @@
                   placeholder="GATEWAY_API_TOKEN"
                   autocomplete="new-password"
                 />
+                <p class="text-[10px] text-muted px-1">
+                  Enter the API token configured on your gateway.
+                </p>
               </div>
               <div class="flex items-center gap-2 pt-1">
                 <UiButton class="flex-1" :loading="testingGateway" @click="testGatewayConnection">
@@ -214,6 +224,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { computed, onMounted, reactive, ref } from 'vue'
 import type { AppConfig } from '../config'
 import { defaultConfig } from '../config'
+import { gatewayConfigError } from '../connectionPolicy'
 import { logger } from '../logger'
 import UiButton from './UiButton.vue'
 import PrivacyLink from './PrivacyLink.vue'
@@ -255,20 +266,16 @@ function validateMain(): string | null {
       return 'Enable TLS before using an MQTT username or password'
     return null
   }
-  if (!(config.gateway_url || '').trim()) return 'Gateway URL is required'
-  if (!(config.gateway_access_client_id || '').trim()) return 'CF Access Client ID is required'
-  if (!(config.gateway_access_client_secret || '').trim())
-    return 'CF Access Client Secret is required'
-  if (!(config.gateway_api_token || '').trim()) return 'API bearer token is required'
-  return null
+  return gatewayConfigError(config)
 }
 
 async function testGatewayConnection() {
   const url = (config.gateway_url || '').trim()
   const clientId = (config.gateway_access_client_id || '').trim()
   const clientSecret = (config.gateway_access_client_secret || '').trim()
-  if (!url || !clientId || !clientSecret) {
-    gatewayTestResult.value = 'URL, Access Client ID and Secret required'
+  const validationError = gatewayConfigError(config)
+  if (validationError) {
+    gatewayTestResult.value = validationError
     gatewayTestSuccess.value = false
     return
   }

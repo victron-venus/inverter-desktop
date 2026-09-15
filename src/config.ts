@@ -92,13 +92,13 @@ export interface AppConfig {
   auth_username?: string | null
   auth_password?: string | null
   auth_biometric?: boolean
-  /** Prefer remote inverter-gateway (Cloudflare Access) when enabled */
+  /** Enable an HTTPS inverter-gateway connection */
   gateway_enabled?: boolean
-  /** Public HTTPS base URL (e.g. https://victron.example.com) */
+  /** Local or public HTTPS base URL (e.g. https://gateway.example.com:9151) */
   gateway_url?: string | null
-  /** CF-Access-Client-Id */
+  /** Optional CF-Access-Client-Id; supply both Access fields or neither */
   gateway_access_client_id?: string | null
-  /** CF-Access-Client-Secret */
+  /** Optional CF-Access-Client-Secret; supply both Access fields or neither */
   gateway_access_client_secret?: string | null
   /** Authorization: Bearer (GATEWAY_API_TOKEN) */
   gateway_api_token?: string | null

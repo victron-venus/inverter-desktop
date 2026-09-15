@@ -163,13 +163,13 @@
               </div>
             </div>
 
-            <!-- Remote Gateway (Cloudflare Access + inverter-gateway) -->
+            <!-- HTTPS inverter-gateway, with optional Cloudflare Access -->
             <div v-if="activeTab === 'gateway'" class="flex flex-col gap-4">
               <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
                 <h2 class="classic-section-title">Remote Gateway</h2>
                 <p class="text-[10px] text-muted mt-1">
-                  Reach Cerbo via public HTTPS through Cloudflare Access and inverter-gateway. LAN
-                  MQTT settings stay for local use; enable this when you are away from home.
+                  Reach inverter-gateway over HTTPS on your network or through a public endpoint.
+                  Cloudflare Access credentials are needed only when Access protects that URL.
                 </p>
               </header>
 
@@ -195,13 +195,14 @@
                     autocomplete="off"
                   />
                   <p class="text-[10px] text-muted px-1 italic">
-                    Public hostname only (https). Trailing slash optional.
+                    Local or public HTTPS URL with a certificate trusted by your system. Trailing
+                    slash optional.
                   </p>
                 </div>
 
                 <div class="flex flex-col gap-1">
                   <label for="gateway_access_client_id" class="classic-label px-1"
-                    >Access Client ID</label
+                    >Cloudflare Access Client ID (optional)</label
                   >
                   <input
                     id="gateway_access_client_id"
@@ -215,7 +216,7 @@
 
                 <div class="flex flex-col gap-1">
                   <label for="gateway_access_client_secret" class="classic-label px-1"
-                    >Access Client Secret</label
+                    >Cloudflare Access Client Secret (optional)</label
                   >
                   <input
                     id="gateway_access_client_secret"
@@ -225,6 +226,9 @@
                     placeholder="Service token secret"
                     autocomplete="new-password"
                   />
+                  <p class="text-[10px] text-muted px-1 italic">
+                    Leave both Access fields blank for a direct HTTPS gateway, or supply both.
+                  </p>
                 </div>
 
                 <div class="flex flex-col gap-1">
@@ -240,8 +244,7 @@
                     autocomplete="new-password"
                   />
                   <p class="text-[10px] text-muted px-1 italic">
-                    Sent as Authorization: Bearer. Required for /v1/*; /health may work with Access
-                    alone.
+                    Enter the API token configured on your gateway.
                   </p>
                 </div>
 
@@ -745,6 +748,7 @@ import {
 } from '@features'
 import { useConfigForm } from './composables/useConfigForm'
 import type { AppConfig } from './config'
+import { gatewayConfigError } from './connectionPolicy'
 
 const {
   config,
@@ -841,8 +845,9 @@ async function testGatewayConnection() {
   const url = (config.gateway_url || '').trim()
   const clientId = (config.gateway_access_client_id || '').trim()
   const clientSecret = (config.gateway_access_client_secret || '').trim()
-  if (!url || !clientId || !clientSecret) {
-    gatewayTestResult.value = 'URL, Access Client ID and Secret required'
+  const validationError = gatewayConfigError(config)
+  if (validationError) {
+    gatewayTestResult.value = validationError
     gatewayTestSuccess.value = false
     return
   }
@@ -875,6 +880,12 @@ async function testGatewayConnection() {
 }
 
 async function handleSave() {
+  const gatewayError = config.gateway_enabled ? gatewayConfigError(config) : null
+  if (gatewayError) {
+    message.value = gatewayError
+    messageType.value = 'error'
+    return
+  }
   if (!config.gateway_enabled && !config.mqtt_tls && (config.mqtt_login || config.mqtt_password)) {
     message.value = 'Enable TLS before using an MQTT username or password'
     messageType.value = 'error'

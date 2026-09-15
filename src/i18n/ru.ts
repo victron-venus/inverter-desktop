@@ -10,7 +10,7 @@ export default {
     uptime: 'Аптайм',
     desktop: 'Desktop',
     control: 'Control',
-    tipIgw: 'Удалённый inverter-gateway через Cloudflare Access',
+    tipIgw: 'Inverter-gateway по HTTPS',
     tipMqtt: 'Живые данные Cerbo GX по MQTT в локальной сети',
   },
   config: {

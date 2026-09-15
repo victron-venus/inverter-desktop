@@ -76,10 +76,10 @@ function mqttConnectArgs(config: AppConfig) {
 
 function gatewayConnectArgs(config: AppConfig) {
   return {
-    url: config.gateway_url,
-    accessClientId: config.gateway_access_client_id,
-    accessClientSecret: config.gateway_access_client_secret,
-    apiToken: config.gateway_api_token || null,
+    url: (config.gateway_url || '').trim(),
+    accessClientId: (config.gateway_access_client_id || '').trim(),
+    accessClientSecret: (config.gateway_access_client_secret || '').trim(),
+    apiToken: (config.gateway_api_token || '').trim() || null,
   }
 }
 
