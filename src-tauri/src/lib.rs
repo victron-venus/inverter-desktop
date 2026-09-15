@@ -324,11 +324,16 @@ fn stop_inverter_clients(
 
 #[tauri::command]
 fn disconnect_inverter(
+    app: tauri::AppHandle,
     mqtt_client: State<MqttState>,
     gateway_client: State<GatewayState>,
     lifecycle: State<InverterLifecycle>,
 ) -> Result<(), String> {
-    stop_inverter_clients(&mqtt_client, &gateway_client, &lifecycle)
+    stop_inverter_clients(&mqtt_client, &gateway_client, &lifecycle)?;
+    // stop() aborts/silences each poller, so its final status event is not
+    // guaranteed. Explicit disconnect must immediately invalidate the editor.
+    let _ = app.emit("setpoint-override-update", serde_json::Value::Null);
+    Ok(())
 }
 
 #[tauri::command]
@@ -353,22 +358,36 @@ fn get_state(
 }
 
 #[tauri::command]
-fn get_setpoint_override(
+async fn get_setpoint_override(
     mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
 ) -> Result<SetpointOverrideStatus, String> {
+    if let Some(auth) = active_gateway_auth(&gateway_client)? {
+        return gateway_actions::get_setpoint_override(&auth).await;
+    }
+    mqtt_setpoint_override(&mqtt_client)
+}
+
+fn mqtt_setpoint_override(mqtt_client: &MqttState) -> Result<SetpointOverrideStatus, String> {
     let guard = mqtt_client.0.lock().map_err(|e| e.to_string())?;
-    Ok(guard
+    guard
         .as_ref()
         .and_then(MqttClient::setpoint_override_status)
-        .unwrap_or_default())
+        .ok_or_else(|| {
+            "Current Setpoint Override status is unavailable; wait for fresh MQTT telemetry".into()
+        })
 }
 
 #[tauri::command]
 async fn set_setpoint_override(
     value: Option<i32>,
     mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
 ) -> Result<SetpointOverrideStatus, String> {
     let request_id = uuid::Uuid::new_v4().to_string();
+    if let Some(auth) = active_gateway_auth(&gateway_client)? {
+        return gateway_actions::set_setpoint_override(&auth, value, &request_id).await;
+    }
     let shared_state = {
         let guard = mqtt_client.0.lock().map_err(|e| e.to_string())?;
         let client = guard
@@ -1043,6 +1062,7 @@ async fn connect_mqtt_impl(
     }
     // A newly saved config may be invalid. Stop the old source before rejecting
     // it so controls cannot target an old broker under the new endpoint's UI.
+    let _ = app.emit("setpoint-override-update", serde_json::Value::Null);
     client.configure_transport(tls)?;
     #[cfg(desktop)]
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
@@ -1115,6 +1135,7 @@ async fn connect_gateway(
             info!("connect_gateway: stopping prior gateway client");
             old.stop();
         }
+        let _ = app.emit("setpoint-override-update", serde_json::Value::Null);
         let client = gateway::start_gateway_client(
             app.clone(),
             url,
@@ -2594,6 +2615,30 @@ mod inverter_action_routing_tests {
                 .unwrap_err(),
             "Neither MQTT nor IGW is connected"
         );
+    }
+
+    #[test]
+    fn missing_mqtt_override_status_is_unknown_not_inactive() {
+        let absent = MqttState(Arc::new(Mutex::new(None)));
+        assert!(mqtt_setpoint_override(&absent).is_err());
+        let mqtt = mqtt_slot();
+        assert!(mqtt_setpoint_override(&mqtt).is_err());
+        mqtt.0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .state
+            .lock()
+            .unwrap()
+            .setpoint_override = Some(SetpointOverrideStatus {
+            value: None,
+            request_id: Some("accepted-stop".into()),
+            last_error: None,
+        });
+        let inactive = mqtt_setpoint_override(&mqtt).unwrap();
+        assert_eq!(inactive.value, None);
+        assert_eq!(inactive.request_id.as_deref(), Some("accepted-stop"));
     }
 
     #[test]

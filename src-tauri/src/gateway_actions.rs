@@ -5,8 +5,11 @@
 
 use crate::gateway::{GatewayHttpAuth, GatewayInstances, GatewaySnapshot};
 use crate::inverter_control;
+use crate::mqtt::SetpointOverrideStatus;
 use serde_json::{json, Value};
 use std::future::Future;
+use std::time::Duration;
+use tokio::time::Instant;
 
 #[derive(Debug, PartialEq)]
 enum Action {
@@ -184,6 +187,103 @@ pub(crate) async fn perform(
         request,
         || crate::gateway::command_snapshot(auth),
         |name, body| crate::gateway::send_command(auth, name, body),
+    )
+    .await
+}
+
+const OVERRIDE_DEADLINE: Duration = Duration::from_secs(5);
+const OVERRIDE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const OVERRIDE_UNCONFIRMED: &str =
+    "Cerbo has not confirmed the override. Check its connection and current status before trying again.";
+
+async fn before_deadline<T>(
+    deadline: Instant,
+    future: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    if Instant::now() >= deadline {
+        return Err(OVERRIDE_UNCONFIRMED.into());
+    }
+    tokio::time::timeout_at(deadline, future)
+        .await
+        .map_err(|_| OVERRIDE_UNCONFIRMED.to_string())?
+}
+
+pub(crate) async fn get_setpoint_override(
+    auth: &GatewayHttpAuth,
+) -> Result<SetpointOverrideStatus, String> {
+    auth.ensure_active()?;
+    let snap = before_deadline(
+        Instant::now() + OVERRIDE_DEADLINE,
+        crate::gateway::command_snapshot(auth),
+    )
+    .await?;
+    auth.ensure_active()?;
+    crate::gateway::snapshot_override_status(&snap)
+}
+
+async fn set_override_with<S, P, A, SF, PF>(
+    value: Option<i32>,
+    request_id: &str,
+    mut snapshot: S,
+    post: P,
+    active: A,
+) -> Result<SetpointOverrideStatus, String>
+where
+    S: FnMut() -> SF,
+    SF: Future<Output = Result<GatewaySnapshot, String>>,
+    P: FnOnce(Value) -> PF,
+    PF: Future<Output = Result<(), String>>,
+    A: Fn() -> Result<(), String>,
+{
+    let deadline = Instant::now() + OVERRIDE_DEADLINE;
+    active()?;
+    let initial = before_deadline(deadline, snapshot()).await?;
+    active()?;
+    crate::gateway::snapshot_override_status(&initial)?;
+    // One queue request, never repeated even if the response or acknowledgement
+    // is lost. Reads and the POST all share one deadline, including DNS/TLS.
+    before_deadline(
+        deadline,
+        post(json!({"value":value,"request_id":request_id})),
+    )
+    .await?;
+    active()?;
+    loop {
+        let snap = before_deadline(deadline, snapshot()).await?;
+        active()?;
+        let status = crate::gateway::snapshot_override_status(&snap)?;
+        if status.request_id.as_deref() == Some(request_id) {
+            if let Some(error) = status.last_error.as_ref() {
+                return Err(error.clone());
+            }
+            if status.value != value {
+                return Err(
+                    "Cerbo acknowledged a different override value; check its current status"
+                        .into(),
+                );
+            }
+            return Ok(status);
+        }
+        before_deadline(deadline, async {
+            tokio::time::sleep(OVERRIDE_POLL_INTERVAL).await;
+            Ok(())
+        })
+        .await?;
+        active()?;
+    }
+}
+
+pub(crate) async fn set_setpoint_override(
+    auth: &GatewayHttpAuth,
+    value: Option<i32>,
+    request_id: &str,
+) -> Result<SetpointOverrideStatus, String> {
+    set_override_with(
+        value,
+        request_id,
+        || crate::gateway::command_snapshot(auth),
+        |body| crate::gateway::send_command(auth, "setpoint_override", body),
+        || auth.ensure_active(),
     )
     .await
 }
@@ -460,5 +560,289 @@ mod tests {
             assert!(result.is_err());
             assert!(posts.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+
+    fn status(
+        value: Option<i32>,
+        request_id: Option<&str>,
+        error: Option<&str>,
+    ) -> GatewaySnapshot {
+        serde_json::from_value(json!({
+            "capabilities":{"setpoint_override":true},
+            "inverter":{"setpoint_override":{"value":value,"request_id":request_id,"last_error":error}}
+        })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn override_success_requires_matching_acknowledgement_including_stop() {
+        for value in [Some(-500), Some(i32::MIN), Some(i32::MAX), None] {
+            let reads = RefCell::new(VecDeque::from([
+                status(None, None, None),
+                status(value, Some("old-request"), None),
+                status(value, Some("current-request"), None),
+            ]));
+            let posts = Cell::new(0);
+            let result = set_override_with(
+                value,
+                "current-request",
+                || {
+                    let next = reads.borrow_mut().pop_front().expect("bounded reads");
+                    async { Ok(next) }
+                },
+                |body| {
+                    posts.set(posts.get() + 1);
+                    assert_eq!(body, json!({"value":value,"request_id":"current-request"}));
+                    async { Ok(()) }
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.value, value);
+            assert_eq!(result.request_id.as_deref(), Some("current-request"));
+            assert_eq!(posts.get(), 1);
+            assert!(reads.borrow().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn daemon_error_or_mismatched_value_is_not_success() {
+        for (ack, expected) in [
+            (
+                status(
+                    Some(5),
+                    Some("request"),
+                    Some("Device rejected requested override"),
+                ),
+                "Device rejected requested override",
+            ),
+            (
+                status(Some(6), Some("request"), None),
+                "Cerbo acknowledged a different override value; check its current status",
+            ),
+        ] {
+            let reads = RefCell::new(VecDeque::from([status(None, None, None), ack]));
+            let posts = Cell::new(0);
+            let error = set_override_with(
+                Some(5),
+                "request",
+                || {
+                    let snap = reads.borrow_mut().pop_front().unwrap();
+                    async { Ok(snap) }
+                },
+                |_| {
+                    posts.set(posts.get() + 1);
+                    async { Ok(()) }
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, expected);
+            assert_eq!(posts.get(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_capability_or_stale_controller_prevents_post() {
+        for snap in [
+            GatewaySnapshot::default(),
+            serde_json::from_value(json!({"capabilities":{"setpoint_override":true},"inverter":{"setpoint_override":null}})).unwrap(),
+            serde_json::from_value(
+                json!({"capabilities":{"setpoint_override":true},"inverter":null}),
+            )
+            .unwrap(),
+        ] {
+            let error = set_override_with(
+                Some(1),
+                "request",
+                || async { Ok(snap.clone()) },
+                |_| async { panic!("unsupported control must not post") },
+                || Ok(()),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.contains("gateway") || error.contains("unavailable"));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queue_acceptance_and_an_old_ack_never_count_as_confirmation() {
+        let posts = Cell::new(0);
+        let started = Instant::now();
+        let result = set_override_with(
+            Some(1),
+            "new",
+            || async { Ok(status(None, Some("old"), None)) },
+            |_| {
+                posts.set(posts.get() + 1);
+                async { Ok(()) }
+            },
+            || Ok(()),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCONFIRMED);
+        assert_eq!(posts.get(), 1);
+        assert_eq!(Instant::now() - started, OVERRIDE_DEADLINE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn total_deadline_bounds_preflight_post_and_each_acknowledgement_read() {
+        let reads = Cell::new(0);
+        let posts = Cell::new(0);
+        let started = Instant::now();
+        let result = set_override_with(
+            Some(1),
+            "request",
+            || {
+                reads.set(reads.get() + 1);
+                let first = reads.get() == 1;
+                async move {
+                    tokio::time::sleep(Duration::from_secs(if first { 1 } else { 4 })).await;
+                    Ok(status(None, None, None))
+                }
+            },
+            |_| {
+                posts.set(posts.get() + 1);
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    Ok(())
+                }
+            },
+            || Ok(()),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCONFIRMED);
+        assert_eq!(posts.get(), 1);
+        assert_eq!(reads.get(), 2);
+        assert_eq!(Instant::now() - started, OVERRIDE_DEADLINE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_preflight_sends_nothing_and_a_hung_post_is_not_repeated() {
+        let started = Instant::now();
+        let result = set_override_with(
+            Some(1),
+            "request",
+            || async { std::future::pending::<Result<GatewaySnapshot, String>>().await },
+            |_| async { panic!("preflight did not complete") },
+            || Ok(()),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCONFIRMED);
+        assert_eq!(Instant::now() - started, OVERRIDE_DEADLINE);
+        let posts = Cell::new(0);
+        let result = set_override_with(
+            Some(1),
+            "request",
+            || async { Ok(status(None, None, None)) },
+            |_| {
+                posts.set(posts.get() + 1);
+                async { std::future::pending::<Result<(), String>>().await }
+            },
+            || Ok(()),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCONFIRMED);
+        assert_eq!(posts.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn stopped_gateway_during_preflight_or_ack_cannot_post_or_claim_success() {
+        for stop_at in [1, 2] {
+            let client = crate::gateway::idle_test_client();
+            let auth = client.http_auth();
+            let reads = Cell::new(0);
+            let posts = Cell::new(0);
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+            let mut signal = Some((started_tx, resume_rx));
+            let operation = set_override_with(
+                Some(1),
+                "request",
+                || {
+                    reads.set(reads.get() + 1);
+                    let pause = if reads.get() == stop_at {
+                        signal.take()
+                    } else {
+                        None
+                    };
+                    let ack = reads.get() == 2;
+                    async move {
+                        if let Some((started, resume)) = pause {
+                            started.send(()).unwrap();
+                            resume.await.unwrap();
+                        }
+                        Ok(status(
+                            if ack { Some(1) } else { None },
+                            if ack { Some("request") } else { None },
+                            None,
+                        ))
+                    }
+                },
+                |_| {
+                    posts.set(posts.get() + 1);
+                    async { Ok(()) }
+                },
+                || auth.ensure_active(),
+            );
+            let stop = async {
+                started_rx.await.unwrap();
+                client.stop();
+                resume_tx.send(()).unwrap();
+            };
+            let (result, ()) = tokio::join!(operation, stop);
+            assert!(result.unwrap_err().contains("connection changed"));
+            assert_eq!(posts.get(), stop_at - 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn network_failure_or_controller_invalidation_after_post_never_reposts() {
+        for failure in [
+            Err("snapshot HTTP 503".to_string()),
+            Ok(GatewaySnapshot::default()),
+            Ok(serde_json::from_value(json!({"capabilities":{"setpoint_override":true},"inverter":{"setpoint_override":null}})).unwrap()),
+        ] {
+            let reads = RefCell::new(VecDeque::from([Ok(status(None, None, None)), failure]));
+            let posts = Cell::new(0);
+            let result = set_override_with(
+                Some(1),
+                "request",
+                || {
+                    let snap = reads.borrow_mut().pop_front().unwrap();
+                    async { snap }
+                },
+                |_| {
+                    posts.set(posts.get() + 1);
+                    async { Ok(()) }
+                },
+                || Ok(()),
+            )
+            .await;
+            assert!(result.is_err());
+            assert_eq!(posts.get(), 1);
+        }
+        let posts = Cell::new(0);
+        let result = set_override_with(
+            Some(1),
+            "request",
+            || async { Ok(status(None, None, None)) },
+            |_| {
+                posts.set(posts.get() + 1);
+                async { Err("POST response lost".into()) }
+            },
+            || Ok(()),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "POST response lost");
+        assert_eq!(posts.get(), 1);
     }
 }

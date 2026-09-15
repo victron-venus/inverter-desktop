@@ -4,7 +4,7 @@
 
 use crate::mqtt::{
     inverter_state_name, voltage_soc, Battery, DiscoveredInstance, InverterState, MpptCharger,
-    PvInverter,
+    PvInverter, SetpointOverrideStatus,
 };
 use log::{info, warn};
 use serde::Deserialize;
@@ -373,6 +373,52 @@ fn bool_value(value: &Value) -> Option<bool> {
     }
 }
 
+/// A missing capability/controller/value is unknown, never an inactive override.
+/// The same parser serves display, fresh reads, and request-id acknowledgement.
+pub(crate) fn snapshot_override_status(
+    snap: &GatewaySnapshot,
+) -> Result<SetpointOverrideStatus, String> {
+    if snap
+        .capabilities
+        .get("setpoint_override")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("This IGW does not support Setpoint Override; update the gateway first".into());
+    }
+    let unavailable = || {
+        "Current Setpoint Override status is unavailable; wait for fresh IGW telemetry".to_string()
+    };
+    let status = snap
+        .inverter
+        .as_ref()
+        .and_then(|v| v.get("setpoint_override"))
+        .and_then(Value::as_object)
+        .ok_or_else(unavailable)?;
+    let value = match status.get("value") {
+        Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_i64()
+                .and_then(|v| i32::try_from(v).ok())
+                .ok_or_else(unavailable)?,
+        ),
+        None => return Err(unavailable()),
+    };
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match status.get(key) {
+            Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            _ => Err(unavailable()),
+        }
+    };
+    Ok(SetpointOverrideStatus {
+        value,
+        last_error: text("last_error")?,
+        request_id: text("request_id")?,
+    })
+}
+
 fn map_controller(snap: &GatewaySnapshot, st: &mut InverterState) {
     // IGW expires the controller separately from native Cerbo devices. None
     // must clear controls even if the rest of the gateway remains connected.
@@ -403,7 +449,7 @@ fn map_controller(snap: &GatewaySnapshot, st: &mut InverterState) {
     st.ha_connected = controller.get("ha_connected").and_then(bool_value);
     st.daily_stats = serde_json::from_value(field("daily_stats")).ok();
     st.solar_forecast = serde_json::from_value(field("solar_forecast")).ok();
-    st.setpoint_override = serde_json::from_value(field("setpoint_override")).ok();
+    st.setpoint_override = snapshot_override_status(snap).ok();
     st.grid_backup = serde_json::from_value(field("grid_backup")).ok();
     st.grid_using_backup = Some(
         controller
@@ -897,6 +943,12 @@ pub(crate) fn start_gateway_client(
     let base_poll = base.clone();
 
     let handle = tauri::async_runtime::spawn(async move {
+        // A new connection has no confirmed override status until its first
+        // successful snapshot, even if the previous transport had one.
+        let _ = app.emit(
+            "setpoint-override-update",
+            Option::<SetpointOverrideStatus>::None,
+        );
         let client = match http_client() {
             Ok(c) => c,
             Err(e) => {
@@ -935,10 +987,15 @@ pub(crate) fn start_gateway_client(
                         info!("gateway remote connected to {base_poll}");
                         let _ = app.emit("mqtt-connection-status", true);
                     }
+                    let _ = app.emit("setpoint-override-update", &mapped.setpoint_override);
                     let _ = app.emit("mqtt-state-update", mapped);
                 }
                 Err(e) => {
                     warn!("gateway poll failed: {e}");
+                    let _ = app.emit(
+                        "setpoint-override-update",
+                        Option::<SetpointOverrideStatus>::None,
+                    );
                     if let Ok(mut cached) = state_c.lock() {
                         invalidate_gateway_controls(&mut cached);
                         let _ = app.emit("mqtt-state-update", cached.clone());
@@ -950,6 +1007,10 @@ pub(crate) fn start_gateway_client(
                 }
             }
         }
+        let _ = app.emit(
+            "setpoint-override-update",
+            Option::<SetpointOverrideStatus>::None,
+        );
         let _ = app.emit("mqtt-connection-status", false);
         info!("gateway remote poller stopped");
     });
@@ -1387,10 +1448,10 @@ mod tests {
                 "grid_backup": {"enabled": true, "available": true, "service": "test.grid",
                     "name": "Test submeter", "power": 123.0, "measurement_time": 1700000000.0, "age_seconds": 7.0},
                 "grid_using_backup": false,
-                "setpoint_override": {"value": 100},
+                "setpoint_override": {"value": 100, "last_error": null, "request_id": null},
                 "daily_stats": {"grid_kwh": 2.0}, "solar_forecast": {"today_kwh": 3.0}
             },
-            "capabilities": {"water_mode": true},
+            "capabilities": {"water_mode": true, "setpoint_override": true},
             "tank": {"21/Level": 0.5, "21/Connected": 1, "21/CustomName": "Test tank"},
             "pump": {"7/State": 1, "7/Mode": 0, "7/Connected": 1,
                 "8/State": 0, "8/Mode": 2, "8/Connected": 1,
@@ -1646,5 +1707,38 @@ mod tests {
         assert_eq!(state.pump_switch, None);
         assert_eq!(state.water_pump_mode, None);
         assert_eq!(state.water_level, Some(0.5));
+    }
+    #[test]
+    fn override_status_distinguishes_unknown_from_confirmed_inactive_and_keeps_ack() {
+        let mut snap = complete_snapshot();
+        assert_eq!(snapshot_override_status(&snap).unwrap().value, Some(100));
+        snap.inverter.as_mut().unwrap()["setpoint_override"] = json!({
+            "value": null, "last_error": null, "request_id": "synthetic-stop-ack"
+        });
+        let status = snapshot_override_status(&snap).unwrap();
+        assert_eq!(status.value, None);
+        assert_eq!(status.request_id.as_deref(), Some("synthetic-stop-ack"));
+        assert!(snapshot_to_state(&snap).setpoint_override.is_some());
+        for invalid in [
+            Value::Null,
+            json!({}),
+            json!({"value":true}),
+            json!({"value":1.0}),
+            json!({"value":"100"}),
+            json!({"value":2147483648_u64}),
+            json!({"value":null,"request_id":3}),
+            json!({"value":null,"last_error":null}),
+            json!({"value":null,"request_id":null}),
+        ] {
+            snap.inverter.as_mut().unwrap()["setpoint_override"] = invalid;
+            assert!(snapshot_override_status(&snap).is_err());
+            assert!(snapshot_to_state(&snap).setpoint_override.is_none());
+        }
+        snap = complete_snapshot();
+        snap.capabilities.remove("setpoint_override");
+        assert!(snapshot_override_status(&snap).is_err());
+        snap = complete_snapshot();
+        snap.inverter = None;
+        assert!(snapshot_override_status(&snap).is_err());
     }
 }

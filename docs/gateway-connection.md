@@ -38,3 +38,10 @@ instances in the app take precedence over the controller's UI configuration.
 Missing or disconnected devices do not silently select another instance, and
 expired controller data is cleared. Water controls require a gateway that
 advertises Water mode support.
+
+Setpoint Override also uses the active connection. Its HTTPS path requires IGW's
+`setpoint_override` capability and a known controller status. The app waits up to
+five seconds for the controller to acknowledge the same request ID and value,
+including an explicit stop. A queued request alone is not confirmation. If a
+response is lost, check the current status before trying again; writes are not
+retried automatically. Missing status is shown as unknown, not as stopped.
