@@ -4,6 +4,7 @@ mod discovery;
 mod network;
 mod numeric;
 mod state;
+mod weather;
 
 use config::Configuration;
 use inverter_worker_protocol::{HostFrame, Output, StopReason};

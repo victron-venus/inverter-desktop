@@ -72,6 +72,78 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
+### Current checkpoint: bounded HA weather summaries
+
+Start from verified main `a3eb56d`, then incorporate main `507f3d9` before final
+validation. Preserve the current condition and temperature
+of each explicitly watched `weather.*` entity in its existing read-only card.
+The bundled client reads an optional legacy `forecast` state attribute; support
+that supplied data without claiming modern forecast API or layout parity.
+
+- [x] Add a weather-specific projection of the observed condition, finite numeric
+      `temperature` and explicit `temperature_unit`. Preserve literal entity
+      selection, stable state IDs, bounded friendly names and one state slot.
+      Do not infer a unit, convert temperatures or change other entity domains.
+- [x] Show at most the first five supplied legacy forecast entries using bounded
+      dates/conditions and finite high/low temperatures. Ignore malformed fields,
+      retain whole numeric values and bound the complete text to 512 UTF-8 bytes.
+      Keep snapshots within 32 state slots, 64 contributions and 64 KiB.
+- [x] Keep unknown, unavailable, missing and disconnected weather as the existing
+      status cards. Attribute-only updates replace the summary; removed attributes
+      cannot retain stale temperature or forecast data. Preserve live-over-REST
+      ordering, reconnect and settings restart behavior.
+- [x] Preserve read-only authority: no weather discovery, automatic actions,
+      service calls, additional endpoints or subscriptions. Modern Home Assistant
+      forecast retrieval remains a separate explicitly open feature.
+- [x] Add worker tests for initial/live state, invalid or missing fields,
+      nonfinite/oversized numbers, UTF-8 bounds, unselected entities, state removal
+      and full snapshots. Extend process and actual installed-package lifecycle
+      acceptance, including independent core MQTT telemetry and no command writes.
+- [x] Bump only the HA worker/package version to 0.9.0. Retain host API `^1.6`,
+      wire/manifest schemas, permissions, configuration and empty publisher policy.
+      Keep HA, cameras and the complete plugin ecosystem excluded from mobile.
+- [x] Update English worker, package and application documentation. Distinguish
+      current observations, optional legacy forecast attributes and modern forecast
+      subscriptions; leave appliance profiles, migration and bundled removal open.
+- [x] Run worker/native formatting, strict Clippy and appropriate unit/process/
+      installed-package checks; frontend checks/builds, packaging and mobile
+      boundaries. Independently review projection, lifecycle and documentation.
+- [ ] Push a separate PR, address comments in English, pass final-head checks,
+      merge as authorized and verify clean canonical main and its source CI.
+
+Home Assistant documents forecasts as a separate API in its
+[weather entity contract](https://developers.home-assistant.io/docs/core/entity/weather/).
+This checkpoint reads only the entity state already authorized by `watch_entities`.
+It does not fetch, synthesize or promise a forecast when the state has none.
+
+Local validation passed after incorporating main `507f3d9`: 178 HA worker tests
+(82 unit, 76 action/process, three TLS and 17 protocol), strict worker/native
+Clippy and formatting, and the actual HA 0.9 release build. All seven installed
+HA package scenarios were explicitly selected, each reporting one passed test
+with zero failed or ignored tests. The weather lifecycle verifies attribute
+withdrawal, exact read scope, denied actions, settings/authentication/enablement
+teardown and independent core MQTT telemetry with no command writes.
+
+The late-REST process test uses a positive completion boundary: with both initial
+read slots occupied, the third request can start only after the stale weather
+response has been handled. A subsequent watched sensor publication proves the
+weather card still contains the newer live state. This avoids assuming a short
+observation window covers the worker's coalesced publication interval.
+
+The updated application passed 418 ordinary native tests, 401 desktop frontend
+tests, 17 mobile tests and five build-profile tests, plus frontend formatting,
+lint, typechecking and both mobile/desktop builds. Packaging passed 27 tests and
+the native mobile-boundary suite passed 29. Independent reviews covered numeric
+and calendar parsing, source/output bounds, ordering, installed lifecycle and
+English documentation.
+
+A disposable browser fixture passed light/dark review at a 320px viewport with
+current Celsius/Fahrenheit values, five forecast entries, missing temperature,
+a maximum-length unbroken UTF-8 condition and disconnect clearing. Forecasts use
+separate generated lines for readability; source control characters remain
+filtered. The page and cards had no horizontal overflow. This does not establish
+production HA/device acceptance or graphical acceptance on Linux/Windows.
+
 ### Completed checkpoint: grouped HA entity cards
 
 Start from verified main `e6de910`. Present each explicitly selected HA entity's

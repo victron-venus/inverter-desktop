@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "host_api": "^1.6",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",

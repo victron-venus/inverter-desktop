@@ -122,10 +122,15 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.8 requires host API
+worker supplies connection status and state cards. Version 0.9 retains host API
 `^1.6` to group each selected entity's state and explicitly authorized controls
 through validated `state_id` references. Existing IDs, parameters and numeric
 revisions retain their authority; equal friendly names do not merge entities.
+Explicitly watched weather entities project condition and a finite temperature
+with its supplied unit into one bounded text card. At most five existing legacy
+forecast entries are included when supplied by the state. This adds no requests,
+service authority, configuration fields, contribution kinds or state slots;
+modern forecast subscriptions remain separate work.
 The worker keeps service actions disabled unless `action_entities` explicitly
 selects literal `button.*` or `scene.*` targets, `media_player_entities` selects
 literal media players, `binary_entities` selects literal switches, input booleans
@@ -175,7 +180,7 @@ disposable package trust, a temporary HA HTTP/WebSocket fixture and an independe
 core MQTT connection. Separate read-only and action fixtures cover settings
 restart, disable, logout/uninstall, exact service POSTs and stale action rejection.
 Current demonstrated results and pending checks are recorded in TODO.md. A production HA installation, service/UI
-parity, entity-picker UI, appliance/weather presentation and legacy migration
+parity, entity-picker UI, appliance layouts, modern forecast retrieval and legacy migration
 remain separate work. The release trust policy stays
 empty and this slice does not create signing keys.
 

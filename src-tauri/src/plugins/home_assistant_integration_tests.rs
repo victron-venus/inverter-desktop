@@ -335,6 +335,8 @@ impl HomeAssistant {
                     "input_boolean.do_not_supply_charger",
                     "sensor.missing",
                     "sensor.next",
+                    "weather.home",
+                    "weather.next",
                 ]
                 .iter()
                 .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
@@ -577,6 +579,16 @@ async fn serve_connection(
         }
         "sensor.missing" => ("404 Not Found", json!({"message":"Entity not found"})),
         "sensor.next" => ("200 OK", entity_state(entity, "7", "Next sensor")),
+        "weather.home" => ("200 OK", weather_state(entity, "sunny")),
+        "weather.next" => {
+            let mut value = weather_state(entity, "rainy");
+            value["attributes"]["temperature"] = json!(7);
+            value["attributes"]
+                .as_object_mut()
+                .unwrap()
+                .remove("forecast");
+            ("200 OK", value)
+        }
         "button.do_not_supply_charger" | "scene.evening" | "scene.next" if services.is_some() => {
             ("200 OK", entity_state(entity, "unknown", entity))
         }
@@ -783,6 +795,17 @@ fn entity_state(entity: &str, state: &str, name: &str) -> Value {
     json!({"entity_id":entity,"state":state,"attributes":{
         "friendly_name":name,"unit_of_measurement":"°C","private":PRIVATE_ATTRIBUTE
     }})
+}
+
+fn weather_state(entity: &str, condition: &str) -> Value {
+    let mut value = entity_state(entity, condition, "Home weather");
+    value["attributes"]["temperature"] = json!(21.5);
+    value["attributes"]["temperature_unit"] = json!("°C");
+    value["attributes"]["forecast"] = json!([{
+        "datetime":"2026-09-16T12:00:00+00:00", "condition":"cloudy",
+        "temperature":23, "templow":14, "private":PRIVATE_ATTRIBUTE
+    }]);
+    value
 }
 
 fn cover_state(entity: &str, state: &str, features: Option<Value>) -> Value {
@@ -1404,6 +1427,7 @@ async fn signed_home_assistant_package_lifecycle() {
     let root = directory.path().canonicalize().unwrap();
     let broker = Broker::new(&root).await;
     let core = CoreTelemetry::new(broker.port);
+    let commands = CommandProbe::new(broker.port).await;
     let origin = HomeAssistant::new().await;
     let (service, host, epoch) = install(&root).await;
     core.assert_receives(&broker, 1).await;
@@ -1441,7 +1465,7 @@ async fn signed_home_assistant_package_lifecycle() {
         epoch,
         &origin,
         FIRST_PREFIX,
-        Some("sensor.temperature,\ninput_boolean.do_not_supply_charger,sensor.missing,sensor.temperature"),
+        Some("sensor.temperature,\ninput_boolean.do_not_supply_charger,sensor.missing,weather.home,sensor.temperature"),
         None,
     )
     .await;
@@ -1449,10 +1473,17 @@ async fn signed_home_assistant_package_lifecycle() {
     item_value(&host, "entity-0", "value", json!(21.5)).await;
     item_value(&host, "entity-1", "text", json!("on")).await;
     item_value(&host, "entity-2", "value", json!("Unavailable")).await;
-    assert_eq!(items(&host).len(), 4);
+    item_value(
+        &host,
+        "entity-3",
+        "text",
+        json!("Condition: sunny; Temperature: 21.5 °C\nForecast: 2026-09-16T12:00:00+00:00, Condition: cloudy, High: 23 °C, Low: 14 °C"),
+    )
+    .await;
+    assert_eq!(items(&host).len(), 5);
     assert_eq!(
         origin.count("state"),
-        3,
+        4,
         "deduplicated selected entities only"
     );
     // A literal HA alias remains on while the daemon's canonical flag is false.
@@ -1477,8 +1508,96 @@ async fn signed_home_assistant_package_lifecycle() {
     assert!(!serde_json::to_string(&items(&host))
         .unwrap()
         .contains("Never displayed"));
+    // Weather is an explicitly selected read-only state. Attribute-only changes
+    // replace the summary, and unrelated entities cannot influence its identity.
+    origin.event(
+        "weather.unselected",
+        Some(weather_state("weather.unselected", "never-displayed")),
+    );
+    let mut forecast_withdrawn = weather_state("weather.home", "sunny");
+    forecast_withdrawn["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("forecast");
+    origin.event("weather.home", Some(forecast_withdrawn));
+    item_value(
+        &host,
+        "entity-3",
+        "text",
+        json!("Condition: sunny; Temperature: 21.5 °C"),
+    )
+    .await;
+    let mut weather = weather_state("weather.home", "rainy");
+    weather["attributes"]["temperature"] = json!(-0.5);
+    weather["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("forecast");
+    origin.event("weather.home", Some(weather.clone()));
+    item_value(
+        &host,
+        "entity-3",
+        "text",
+        json!("Condition: rainy; Temperature: -0.5 °C"),
+    )
+    .await;
+    weather["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("temperature_unit");
+    origin.event("weather.home", Some(weather));
+    item_value(&host, "entity-3", "text", json!("Condition: rainy")).await;
+    for (condition, display) in [("unknown", "Unknown"), ("unavailable", "Unavailable")] {
+        origin.event(
+            "weather.home",
+            Some(weather_state("weather.home", condition)),
+        );
+        item_value(&host, "entity-3", "value", json!(display)).await;
+        assert!(items(&host)
+            .iter()
+            .find(|item| item["id"] == "entity-3")
+            .unwrap()
+            .get("text")
+            .is_none());
+    }
+    origin.event("weather.home", None);
+    origin.event(
+        "sensor.temperature",
+        Some(entity_state("sensor.temperature", "23", "Temperature")),
+    );
+    item_value(&host, "entity-0", "value", json!(23.0)).await;
+    item_value(&host, "entity-3", "value", json!("Unavailable")).await;
+    let mut restored = weather_state("weather.home", "cloudy");
+    restored["attributes"] = json!({"friendly_name":"Renamed weather"});
+    origin.event("weather.home", Some(restored));
+    item_value(&host, "entity-3", "text", json!("Condition: cloudy")).await;
+    item_value(&host, "entity-3", "title", json!("Renamed weather")).await;
+    let current_instance = instance(&host);
+    for action_id in [
+        "entity-3",
+        "weather.home",
+        "weather.get_forecasts",
+        "ha-action-0",
+    ] {
+        assert_eq!(
+            host.action_in_epoch(PLUGIN, &current_instance, action_id, json!({}), WAIT, epoch)
+                .await
+                .unwrap_err(),
+            PluginError::UnknownAction
+        );
+    }
+    assert_eq!(
+        origin.count("state"),
+        4,
+        "weather updates must not fetch forecasts or repeat reads"
+    );
+    assert_eq!(origin.count("service"), 0);
+    assert!(!serde_json::to_string(&items(&host))
+        .unwrap()
+        .contains("never-displayed"));
     no_secrets(&host, &origin);
     core.assert_receives(&broker, 4).await;
+    commands.assert_live_without_commands(4).await;
 
     // Replacing settings rotates the token, preserves the explicit port/prefix,
     // closes the old worker's socket, and replaces the contribution inventory.
@@ -1487,14 +1606,25 @@ async fn signed_home_assistant_package_lifecycle() {
         epoch,
         &origin,
         SECOND_PREFIX,
-        Some("sensor.next"),
+        Some("sensor.next,weather.next"),
         Some(&origin.second_token),
     )
     .await;
     connection(&host).await;
     item_value(&host, "entity-0", "value", json!(7.0)).await;
     until(|| origin.active.load(Ordering::Acquire) == 1).await;
-    assert_eq!(items(&host).len(), 2);
+    item_value(
+        &host,
+        "entity-1",
+        "text",
+        json!("Condition: rainy; Temperature: 7 °C"),
+    )
+    .await;
+    assert_eq!(items(&host).len(), 3);
+    origin.event(
+        "weather.home",
+        Some(weather_state("weather.home", "old-weather-configuration")),
+    );
     origin.event(
         "sensor.temperature",
         Some(entity_state(
@@ -1511,6 +1641,9 @@ async fn signed_home_assistant_package_lifecycle() {
     assert!(!serde_json::to_string(&items(&host))
         .unwrap()
         .contains("Old configuration"));
+    assert!(!serde_json::to_string(&items(&host))
+        .unwrap()
+        .contains("old-weather-configuration"));
     no_secrets(&host, &origin);
 
     service.set_enabled(PLUGIN, false, epoch).await.unwrap();
@@ -1520,6 +1653,13 @@ async fn signed_home_assistant_package_lifecycle() {
     service.set_enabled(PLUGIN, true, epoch).await.unwrap();
     connection(&host).await;
     item_value(&host, "entity-0", "value", json!(7.0)).await;
+    item_value(
+        &host,
+        "entity-1",
+        "text",
+        json!("Condition: rainy; Temperature: 7 °C"),
+    )
+    .await;
     assert!(service.session_changed(false).is_none());
     assert!(items(&host).is_empty());
     origin.no_sockets().await;
@@ -1527,6 +1667,13 @@ async fn signed_home_assistant_package_lifecycle() {
     let next_epoch = service.session_changed(true).unwrap();
     service.restore(next_epoch).await.unwrap();
     connection(&host).await;
+    item_value(
+        &host,
+        "entity-1",
+        "text",
+        json!("Condition: rainy; Temperature: 7 °C"),
+    )
+    .await;
     no_secrets(&host, &origin);
     service
         .uninstall_with_settings(PLUGIN, true, next_epoch)
@@ -1545,6 +1692,8 @@ async fn signed_home_assistant_package_lifecycle() {
         .next()
         .is_none());
     core.assert_receives(&broker, 7).await;
+    commands.assert_live_without_commands(7).await;
+    assert_eq!(origin.count("service"), 0);
     origin.assert_safe();
     service.close().await.unwrap();
 }

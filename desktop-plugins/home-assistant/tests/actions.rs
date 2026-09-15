@@ -4095,3 +4095,492 @@ fn grouped_controls_follow_explicit_identity_across_duplicate_titles_and_live_wi
     no_request(&fixture, Duration::from_millis(50));
     worker.stop(false);
 }
+
+fn weather_entity(name: &str, condition: &str) -> Value {
+    let mut value = entity(name, condition);
+    value["attributes"]["temperature"] = json!(21.5);
+    value["attributes"]["temperature_unit"] = json!("°C");
+    value["attributes"]["unit_of_measurement"] = json!("must-not-be-used");
+    value["attributes"]["forecast"] = json!([{
+        "datetime":"2026-09-16T12:00:00+00:00", "condition":"cloudy",
+        "temperature":23, "templow":14, "private":PRIVATE_BODY
+    }]);
+    value["attributes"]["private"] = json!(PRIVATE_BODY);
+    value
+}
+
+fn initial_weather_states(
+    worker: &mut Worker,
+    fixture: &TcpListener,
+    states: &[Value],
+) -> WebSocket<TcpStream> {
+    let names = states
+        .iter()
+        .map(|state| state["entity_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    worker.configure(fixture, &names.join(","), None);
+    let socket = authorize(fixture, true);
+    let mut seen = HashSet::new();
+    for _ in states {
+        let mut request = request(fixture);
+        let name = request
+            .line
+            .strip_prefix("GET /reverse/proxy/ha/api/states/")
+            .and_then(|name| name.strip_suffix(" HTTP/1.1"))
+            .expect("weather only reads explicitly selected states");
+        assert!(seen.insert(name.to_owned()));
+        assert!(request.body.is_empty());
+        let state = states
+            .iter()
+            .find(|state| state["entity_id"] == name)
+            .unwrap();
+        respond(&mut request.stream, 200, state.clone());
+    }
+    socket
+}
+
+fn weather_text(worker: &mut Worker, id: &str, expected: &str) -> Value {
+    worker.until(|frame| item(frame, id).is_some_and(|item| item["text"] == expected))
+}
+
+fn assert_weather_read_only(frame: &Value) {
+    assert!(actions(frame).is_empty());
+    assert!(inputs(frame).is_empty());
+    assert!(frame["items"].as_array().unwrap().iter().all(|item| {
+        matches!(item["kind"].as_str(), Some("text" | "metric" | "status"))
+            && item.get("state_id").is_none()
+    }));
+}
+
+#[test]
+fn weather_explicit_rest_and_live_summaries_stay_read_only_and_keep_entity_identity() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initial_weather_states(
+        &mut worker,
+        &fixture,
+        &[
+            entity("sensor.barrier", "1"),
+            weather_entity("weather.home", "sunny"),
+        ],
+    );
+    let initial = weather_text(&mut worker, "entity-1", "Condition: sunny; Temperature: 21.5 °C\nForecast: 2026-09-16T12:00:00+00:00, Condition: cloudy, High: 23 °C, Low: 14 °C");
+    assert_eq!(initial["items"].as_array().unwrap().len(), 3);
+    assert_weather_read_only(&initial);
+    live(
+        &mut socket,
+        "weather.unselected",
+        Some(weather_entity("weather.unselected", "never-visible")),
+    );
+    live(
+        &mut socket,
+        "sensor.weather",
+        Some(weather_entity("sensor.weather", "also-never-visible")),
+    );
+    let isolated = numeric_barrier(&mut worker, &mut socket, 2);
+    assert_eq!(item(&isolated, "entity-1"), item(&initial, "entity-1"));
+    assert!(!isolated.to_string().contains("never-visible"));
+    let mut forecast_update = weather_entity("weather.home", "sunny");
+    forecast_update["attributes"]["forecast"] = json!([{
+        "datetime":"2026-09-17", "condition":"rainy", "temperature":19
+    }]);
+    live(&mut socket, "weather.home", Some(forecast_update.clone()));
+    weather_text(&mut worker, "entity-1", "Condition: sunny; Temperature: 21.5 °C\nForecast: 2026-09-17, Condition: rainy, High: 19 °C");
+    forecast_update["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("forecast");
+    live(&mut socket, "weather.home", Some(forecast_update));
+    weather_text(
+        &mut worker,
+        "entity-1",
+        "Condition: sunny; Temperature: 21.5 °C",
+    );
+    let mut update = weather_entity("weather.home", "rainy");
+    update["attributes"]["friendly_name"] = json!("Same entity, new title");
+    update["attributes"]["temperature"] = json!(-0.5);
+    update["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("forecast");
+    live(&mut socket, "weather.home", Some(update));
+    let changed = weather_text(
+        &mut worker,
+        "entity-1",
+        "Condition: rainy; Temperature: -0.5 °C",
+    );
+    assert_eq!(
+        item(&changed, "entity-1").unwrap()["title"],
+        "Same entity, new title"
+    );
+    assert_weather_read_only(&changed);
+    for (index, condition, expected) in
+        [(0, "unknown", "Unknown"), (1, "unavailable", "Unavailable")]
+    {
+        live(
+            &mut socket,
+            "weather.home",
+            Some(weather_entity("weather.home", condition)),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 3);
+        let weather = item(&frame, "entity-1").unwrap();
+        assert_eq!(weather["kind"], "status");
+        assert_eq!(weather["value"], expected);
+        assert!(weather.get("text").is_none());
+        assert_weather_read_only(&frame);
+    }
+    live(&mut socket, "weather.home", None);
+    let removed = numeric_barrier(&mut worker, &mut socket, 5);
+    assert_eq!(item(&removed, "entity-1").unwrap()["value"], "Unavailable");
+    live(
+        &mut socket,
+        "weather.home",
+        Some(entity("weather.home", "cloudy")),
+    );
+    weather_text(&mut worker, "entity-1", "Condition: cloudy");
+    for (index, action) in [
+        "entity-1",
+        "weather.home",
+        "weather.get_forecasts",
+        "ha-action-0",
+        "ha-number-0-set",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let request = format!("weather-denied-{index}");
+        worker.action(&request, action, 5000);
+        worker.error(&request, "invalid_action");
+    }
+    // A weather-shaped attribute object on another domain retains its old state projection.
+    live(
+        &mut socket,
+        "sensor.barrier",
+        Some(weather_entity("sensor.barrier", "sunny")),
+    );
+    let generic = weather_text(&mut worker, "entity-0", "sunny");
+    assert_weather_read_only(&generic);
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn weather_temperature_metadata_requires_finite_json_numbers_and_an_explicit_source_unit() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize(&mut worker, &fixture, "sensor.barrier,weather.home", None);
+    for (index, temperature) in [
+        json!("21.5"),
+        json!(true),
+        Value::Null,
+        json!([]),
+        json!({}),
+        serde_json::from_str::<Value>("1e999").unwrap(),
+        serde_json::from_str::<Value>("0.123456789012345678901234567890125").unwrap(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut value = entity("weather.home", "sunny");
+        value["attributes"]["temperature"] = temperature;
+        value["attributes"]["temperature_unit"] = json!("°C");
+        live(&mut socket, "weather.home", Some(value));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 1);
+        assert_eq!(
+            item(&frame, "entity-1").unwrap()["text"],
+            "Condition: sunny"
+        );
+    }
+    for (index, unit) in [
+        None,
+        Some(Value::Null),
+        Some(json!("")),
+        Some(json!("  \n\t")),
+        Some(json!(false)),
+        Some(json!("x".repeat(33))),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut value = entity("weather.home", "sunny");
+        value["attributes"]["temperature"] = json!(21.5);
+        value["attributes"]["unit_of_measurement"] = json!("°C");
+        value["attributes"]["forecast"] =
+            json!([{"datetime":"2026-09-16", "temperature":23, "templow":14}]);
+        if let Some(unit) = unit {
+            value["attributes"]["temperature_unit"] = unit;
+        }
+        live(&mut socket, "weather.home", Some(value));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 20);
+        assert_eq!(
+            item(&frame, "entity-1").unwrap()["text"],
+            "Condition: sunny"
+        );
+    }
+    let mut value = entity("weather.home", "sunny");
+    value["attributes"]["temperature"] = serde_json::from_str("2.15e1").unwrap();
+    value["attributes"]["temperature_unit"] = json!("  °F\n ");
+    live(&mut socket, "weather.home", Some(value));
+    weather_text(
+        &mut worker,
+        "entity-1",
+        "Condition: sunny; Temperature: 2.15e+1 °F",
+    );
+    for (index, condition) in [
+        json!("\n\t"),
+        json!("x".repeat(129)),
+        json!(false),
+        json!(12),
+        Value::Null,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut value = weather_entity("weather.home", "sunny");
+        value["state"] = condition;
+        live(&mut socket, "weather.home", Some(value));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 40);
+        assert_eq!(item(&frame, "entity-1").unwrap()["value"], "Unavailable");
+        assert_weather_read_only(&frame);
+    }
+    let mut missing = weather_entity("weather.home", "sunny");
+    missing.as_object_mut().unwrap().remove("state");
+    live(&mut socket, "weather.home", Some(missing));
+    let frame = numeric_barrier(&mut worker, &mut socket, 50);
+    assert_eq!(item(&frame, "entity-1").unwrap()["value"], "Unavailable");
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn weather_legacy_forecasts_validate_dates_and_only_consider_the_first_five_source_entries() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize(&mut worker, &fixture, "sensor.barrier,weather.home", None);
+    let mut value = entity("weather.home", "sunny");
+    value["attributes"]["temperature_unit"] = json!("°C");
+    value["attributes"]["forecast"] = json!([
+        {"datetime":"2028-02-29", "condition":"cloudy"},
+        {"datetime":"2026-09-16T12:00:00Z", "temperature":23},
+        {"datetime":"2026-09-16T12:00:00.123456789+05:30", "templow":14},
+        {"datetime":"2026-09-17", "condition":"rainy", "temperature":19, "templow":11},
+        {"datetime":"2026-09-18", "condition":"windy"},
+        {"datetime":"2026-09-19", "condition":"sixth-entry-must-not-appear"}
+    ]);
+    live(&mut socket, "weather.home", Some(value));
+    let frame = weather_text(&mut worker, "entity-1", "Condition: sunny\nForecast: 2028-02-29, Condition: cloudy\nForecast: 2026-09-16T12:00:00Z, High: 23 °C\nForecast: 2026-09-16T12:00:00.123456789+05:30, Low: 14 °C\nForecast: 2026-09-17, Condition: rainy, High: 19 °C, Low: 11 °C\nForecast: 2026-09-18, Condition: windy");
+    assert_weather_read_only(&frame);
+    assert_eq!(
+        item(&frame, "entity-1").unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .matches("Forecast:")
+            .count(),
+        5
+    );
+    for (index, date) in [
+        "2026-02-29",
+        "2026-09-31",
+        "2026-00-01",
+        "2026-01-00",
+        "2026-09-16T25:00:00Z",
+        "2026-09-16T12:60:00Z",
+        "2026-09-16T12:00:00",
+        "2026-09-16T12:00:00+24:00",
+        "2026-09-16T12:00:00.1234567890Z",
+        "2026-09-16\n",
+        "not-a-date",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut value = entity("weather.home", "sunny");
+        value["attributes"]["forecast"] =
+            json!([{ "datetime":date, "condition":"must-not-appear" }]);
+        live(&mut socket, "weather.home", Some(value));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 1);
+        assert_eq!(
+            item(&frame, "entity-1").unwrap()["text"],
+            "Condition: sunny"
+        );
+    }
+    let mut value = entity("weather.home", "sunny");
+    value["attributes"]["forecast"] = json!([
+        null, {"datetime":"invalid","condition":"ignored"}, {"datetime":"2026-09-16"},
+        {"datetime":false,"condition":"ignored"}, ["malformed"],
+        {"datetime":"2026-09-17","condition":"do-not-backfill-the-first-five"}
+    ]);
+    live(&mut socket, "weather.home", Some(value));
+    let frame = numeric_barrier(&mut worker, &mut socket, 30);
+    assert_eq!(
+        item(&frame, "entity-1").unwrap()["text"],
+        "Condition: sunny"
+    );
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn weather_newer_live_attributes_override_initial_rest_and_reconnect_drops_old_summaries() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    worker.configure(
+        &fixture,
+        "sensor.barrier,weather.home,sensor.after_weather",
+        None,
+    );
+    let mut socket = authorize(&fixture, true);
+    // The initial reader admits two requests. Hold the sensor response so the
+    // third GET can only start after the weather completion reaches Book.initial.
+    let mut initial = [request(&fixture), request(&fixture)];
+    let weather_index = initial
+        .iter()
+        .position(|request| {
+            request.line == "GET /reverse/proxy/ha/api/states/weather.home HTTP/1.1"
+        })
+        .unwrap();
+    let sensor_index = 1 - weather_index;
+    assert_eq!(
+        initial[sensor_index].line,
+        "GET /reverse/proxy/ha/api/states/sensor.barrier HTTP/1.1"
+    );
+    let mut newer = entity("weather.home", "rainy");
+    newer["attributes"]["temperature"] = json!(7);
+    newer["attributes"]["temperature_unit"] = json!("°C");
+    live(&mut socket, "weather.home", Some(newer));
+    weather_text(
+        &mut worker,
+        "entity-1",
+        "Condition: rainy; Temperature: 7 °C",
+    );
+    respond(
+        &mut initial[weather_index].stream,
+        200,
+        weather_entity("weather.home", "sunny"),
+    );
+    let mut third = request(&fixture);
+    assert_eq!(
+        third.line,
+        "GET /reverse/proxy/ha/api/states/sensor.after_weather HTTP/1.1"
+    );
+    let after_rest = numeric_barrier(&mut worker, &mut socket, 5);
+    assert_eq!(
+        item(&after_rest, "entity-1").unwrap()["text"],
+        "Condition: rainy; Temperature: 7 °C"
+    );
+    respond(
+        &mut initial[sensor_index].stream,
+        200,
+        entity("sensor.barrier", "1"),
+    );
+    respond(&mut third.stream, 200, entity("sensor.after_weather", "3"));
+    worker.until(|frame| item(frame, "entity-2").is_some_and(|item| item["value"] == 3.0));
+    drop(socket);
+    let disconnected = worker.until(|frame| {
+        item(frame, "connection").is_some_and(|item| item["value"] == "Disconnected")
+    });
+    assert_eq!(
+        item(&disconnected, "entity-1").unwrap()["value"],
+        "Unavailable"
+    );
+    assert!(!disconnected.to_string().contains("Forecast:"));
+    let mut socket = authorize(&fixture, true);
+    let waiting = connected(&mut worker, 0);
+    assert!(item(&waiting, "entity-1").unwrap().get("text").is_none());
+    let mut seen = HashSet::new();
+    for _ in 0..3 {
+        let mut reinitial = request(&fixture);
+        let name = reinitial
+            .line
+            .strip_prefix("GET /reverse/proxy/ha/api/states/")
+            .and_then(|name| name.strip_suffix(" HTTP/1.1"))
+            .unwrap();
+        assert!(seen.insert(name.to_owned()));
+        let state = match name {
+            "weather.home" => "cloudy",
+            "sensor.barrier" => "10",
+            "sensor.after_weather" => "20",
+            _ => panic!("reconnect must read only configured targets"),
+        };
+        respond(&mut reinitial.stream, 200, entity(name, state));
+    }
+    let frame = weather_text(&mut worker, "entity-1", "Condition: cloudy");
+    assert_weather_read_only(&frame);
+    live(
+        &mut socket,
+        "weather.home",
+        Some(entity("weather.home", "sunny")),
+    );
+    weather_text(&mut worker, "entity-1", "Condition: sunny");
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(true);
+}
+
+#[test]
+fn weather_utf8_projection_fits_the_actual_64_item_frame_with_unchanged_control_budget() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let weather = (0..11)
+        .map(|index| format!("weather.e{index}"))
+        .collect::<Vec<_>>();
+    let buttons = (0..16)
+        .map(|index| format!("button.e{index}"))
+        .collect::<Vec<_>>();
+    let media = (0..4)
+        .map(|index| format!("media_player.e{index}"))
+        .collect::<Vec<_>>();
+    let mut config = media_configuration(
+        &fixture,
+        &weather.join(","),
+        Some(&buttons.join(",")),
+        Some(&media.join(",")),
+    );
+    config["configuration"]["values"]["cover_entities"] = json!("cover.shade");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let condition = "🌦".repeat(32);
+    let unit = "°".repeat(16);
+    for name in &weather {
+        let mut value = entity(name, &condition);
+        value["attributes"]["friendly_name"] = json!("\"".repeat(128));
+        value["attributes"]["temperature_unit"] = json!(unit);
+        value["attributes"]["temperature"] =
+            serde_json::from_str("12345678901234567890123456789012").unwrap();
+        value["attributes"]["forecast"] = json!((0..5)
+            .map(|index| json!({
+                "datetime":format!("2026-09-{:02}", 16 + index),
+                "condition":"\"".repeat(128),
+                "temperature":23, "templow":14
+            }))
+            .collect::<Vec<_>>());
+        live(&mut socket, name, Some(value));
+    }
+    let frame =
+        worker.until(|frame| item(frame, "entity-10").is_some_and(|item| item["kind"] == "text"));
+    assert_eq!(frame["items"].as_array().unwrap().len(), 64);
+    assert_eq!(actions(&frame).len(), 31);
+    let ids = frame["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 64);
+    assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
+    for index in 0..11 {
+        let projected = item(&frame, &format!("entity-{index}")).unwrap();
+        assert_eq!(projected["title"].as_str().unwrap().len(), 128);
+        let text = projected["text"].as_str().unwrap();
+        assert!(text.len() <= 512);
+        assert!(text.starts_with(&format!(
+            "Condition: {condition}; Temperature: 12345678901234567890123456789012 {unit}"
+        )));
+        assert!(text.contains("Forecast: 2026-09-16"));
+        assert!(
+            text.ends_with(&format!("Low: 14 {unit}")),
+            "bounded projection must retain complete forecast entries"
+        );
+        assert!(projected.get("state_id").is_none());
+    }
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
