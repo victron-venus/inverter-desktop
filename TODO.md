@@ -207,6 +207,15 @@ compatibility reviews found no open issues. Old configurations retain the exact
 63/64-contribution cases preserve the 64 KiB frame limit with escaped bounded
 fields and valid binary states. No application signing or publisher keys are added.
 
+One Windows CI run failed the retained empty-body video retry scenario while the
+parallel check at the same head passed. Its assertion hid the transfer-error
+category, so the original cause is not established. The test server now reads
+bounded header chunks instead of one socket operation per byte, success assertions
+report only safe error enums, and the retry scenario checks exact served bytes
+and complete file cleanup. Transfer deadlines, retry counts and production code
+are unchanged. The exact scenario, all 16 media tests and strict native Clippy
+pass locally; final Windows acceptance remains part of the current-head CI gate.
+
 Physical HA devices, actual scheduled automations, number/cover inputs, discovery,
 appliance/weather presentation, remaining camera adapters and legacy migration
 remain separate acceptance work.
