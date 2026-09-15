@@ -11,6 +11,7 @@ fn configuration(base: &str) -> Validated {
         action_entities: vec![],
         media_player_entities: vec![],
         binary_entities: vec![],
+        cover_entities: vec![],
         token: "fixture-token-only".into(),
     }
 }

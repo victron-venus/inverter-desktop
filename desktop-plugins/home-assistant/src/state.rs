@@ -33,6 +33,7 @@ struct Entity {
     actionable: bool,
     unknown: bool,
     binary_known: bool,
+    cover_features: u64,
     title: String,
 }
 
@@ -101,6 +102,7 @@ impl Book {
                     actionable: false,
                     unknown: false,
                     binary_known: false,
+                    cover_features: 0,
                     title: name.clone(),
                 })
                 .collect(),
@@ -137,6 +139,7 @@ impl Book {
             entity.item = unavailable(index, &entity.name, "Waiting");
             entity.actionable = false;
             entity.binary_known = false;
+            entity.cover_features = 0;
         }
         self.connection("Connecting", "neutral");
     }
@@ -150,6 +153,7 @@ impl Book {
             entity.item = unavailable(index, &entity.name, "Unavailable");
             entity.actionable = false;
             entity.binary_known = false;
+            entity.cover_features = 0;
         }
     }
 
@@ -196,16 +200,28 @@ impl Book {
             state["entity_id"].as_str() == Some(name)
                 && matches!(state["state"].as_str(), Some("on" | "off"))
         });
+        let cover_features = state
+            .filter(|state| {
+                state["entity_id"].as_str() == Some(name)
+                    && matches!(
+                        state["state"].as_str(),
+                        Some("open" | "closed" | "opening" | "closing")
+                    )
+            })
+            .and_then(|state| state["attributes"]["supported_features"].as_u64())
+            .unwrap_or(0);
         entity.title = item["title"].as_str().unwrap_or(name).to_owned();
         if entity.item != item
             || entity.actionable != actionable
             || entity.unknown != unknown
             || entity.binary_known != binary_known
+            || entity.cover_features != cover_features
         {
             entity.item = item;
             entity.actionable = actionable;
             entity.unknown = unknown;
             entity.binary_known = binary_known;
+            entity.cover_features = cover_features;
             self.revision = self.revision.wrapping_add(1);
         }
     }
@@ -220,6 +236,10 @@ impl Book {
                 && entity.actionable
                 && (!entity.unknown || action.operation.allows_unknown())
                 && (!action.operation.requires_binary_state() || entity.binary_known)
+                && action
+                    .operation
+                    .required_cover_feature()
+                    .is_none_or(|feature| entity.cover_features & feature != 0)
         })
     }
 
@@ -368,7 +388,7 @@ mod tests {
             "scene.night".into(),
             "button.read_only".into(),
         ];
-        let state = Book::new(&names, &configured_actions(&names[..2], &[], &[]));
+        let state = Book::new(&names, &configured_actions(&names[..2], &[], &[], &[]));
         let mut book = state.lock().unwrap();
         for name in &names {
             book.initial(name, Some(&json!({"entity_id":name,"state":"unknown","attributes":{"friendly_name":"A name"}})));
@@ -418,7 +438,7 @@ mod tests {
         let names = (0..16)
             .map(|index| format!("scene.e{index}"))
             .collect::<Vec<_>>();
-        let state = Book::new(&names, &configured_actions(&names, &[], &[]));
+        let state = Book::new(&names, &configured_actions(&names, &[], &[], &[]));
         let mut book = state.lock().unwrap();
         book.connected();
         for name in &names {
@@ -450,7 +470,7 @@ mod tests {
             "media_player.den".into(),
             "media_player.read_only".into(),
         ];
-        let actions = configured_actions(&names[..2], &names[2..3], &[]);
+        let actions = configured_actions(&names[..2], &names[2..3], &[], &[]);
         let state = Book::new(&names, &actions);
         let mut book = state.lock().unwrap();
         book.connected();
@@ -547,7 +567,7 @@ mod tests {
             "light.room".into(),
             "switch.read_only".into(),
         ];
-        let state = Book::new(&names, &configured_actions(&[], &[], &names[..3]));
+        let state = Book::new(&names, &configured_actions(&[], &[], &names[..3], &[]));
         let mut book = state.lock().unwrap();
         for name in &names {
             book.initial(name, Some(&json!({"entity_id":name,"state":"off","attributes":{"friendly_name":"Room control"}})));
@@ -611,7 +631,7 @@ mod tests {
     #[test]
     fn binary_withdrawal_checks_raw_state_and_reconnection_requires_fresh_observation() {
         let names = ["switch.desk".into()];
-        let state = Book::new(&names, &configured_actions(&[], &[], &names));
+        let state = Book::new(&names, &configured_actions(&[], &[], &names, &[]));
         let mut book = state.lock().unwrap();
         book.connected();
         book.mark_published();
@@ -682,6 +702,320 @@ mod tests {
         book.authentication_rejected();
         assert!(book.action_target("ha-binary-0-on").is_none());
         assert_eq!(book.frame()["items"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn cover_actions_preserve_earlier_families_and_observed_stationary_or_moving_state() {
+        let names = [
+            "button.first".into(),
+            "scene.night".into(),
+            "media_player.den".into(),
+            "switch.desk".into(),
+            "cover.shade".into(),
+            "cover.read_only".into(),
+        ];
+        let actions = configured_actions(&names[..2], &names[2..3], &names[3..4], &names[4..5]);
+        let shared = Book::new(&names, &actions);
+        let mut book = shared.lock().unwrap();
+        for (name, value) in names
+            .iter()
+            .zip(["unknown", "unknown", "paused", "off", "closed", "open"])
+        {
+            book.initial(name, Some(&json!({"entity_id":name,"state":value,"attributes":{"friendly_name":"Shade","supported_features":11}})));
+        }
+        assert_eq!(book.frame()["items"].as_array().unwrap().len(), 7);
+        book.connected();
+        assert!(book.action_target("ha-cover-0-open").is_none());
+        book.mark_published();
+        for observed in ["open", "closed", "opening", "closing"] {
+            book.live("cover.shade", Some(&json!({"entity_id":"cover.shade","state":observed,"attributes":{"friendly_name":"Shade","supported_features":11}})));
+            let frame = book.frame();
+            let items = frame["items"].as_array().unwrap();
+            assert_eq!(items.len(), 17);
+            assert_eq!(items[5]["text"], observed);
+            for id in [
+                "ha-action-0",
+                "ha-action-1",
+                "ha-media-0-play",
+                "ha-media-0-pause",
+                "ha-media-0-stop",
+                "ha-binary-0-on",
+                "ha-binary-0-off",
+            ] {
+                assert!(book.action_target(id).is_some());
+            }
+            for (offset, (verb, label)) in [
+                ("open", "Open Shade"),
+                ("close", "Close Shade"),
+                ("stop", "Stop Shade"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let id = format!("ha-cover-0-{verb}");
+                assert_eq!(
+                    items[14 + offset],
+                    json!({"kind":"action","id":id,"action_id":id,"title":"Shade","label":label,"params":{}})
+                );
+                assert_eq!(book.action_target(&id).unwrap().entity, "cover.shade");
+            }
+            assert_eq!(
+                book.frame(),
+                frame,
+                "admitting cover commands must not synthesize state or position"
+            );
+        }
+        for id in [
+            "ha-cover-00-open",
+            "ha-cover-1-open",
+            "ha-cover-0-toggle",
+            "ha-cover-0-position",
+            "ha-cover-0-open_tilt",
+        ] {
+            assert!(book.action_target(id).is_none());
+        }
+        book.live("cover.shade", Some(&json!({"entity_id":"cover.shade","state":"open","attributes":{"friendly_name":"🌞\n".repeat(128),"supported_features":11}})));
+        let frame = book.frame();
+        for (offset, prefix) in ["Open 🌞", "Close 🌞", "Stop 🌞"].into_iter().enumerate() {
+            let label = frame["items"][14 + offset]["label"].as_str().unwrap();
+            assert!(label.starts_with(prefix));
+            assert!(label.len() <= 128);
+            assert!(!label.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn cover_capability_only_updates_publish_and_recheck_each_required_bit() {
+        let names = ["cover.shade".into()];
+        let shared = Book::new(&names, &configured_actions(&[], &[], &[], &names));
+        let mut book = shared.lock().unwrap();
+        book.connected();
+        book.mark_published();
+        let mut previous = 0;
+        for features in [0, 1, 2, 8, 3, 9, 10, 11, 4, 16, u64::MAX] {
+            let revision = book.revision;
+            book.live("cover.shade", Some(&json!({"entity_id":"cover.shade","state":"closed","attributes":{"supported_features":features}})));
+            assert_ne!(
+                book.revision, revision,
+                "capability-only updates need a publication revision"
+            );
+            let frame = book.frame();
+            assert_eq!(
+                frame["items"][1],
+                json!({"kind":"text","id":"entity-0","title":"cover.shade","text":"closed"})
+            );
+            let mut advertised = 0;
+            for (verb, bit) in [("open", 1), ("close", 2), ("stop", 8)] {
+                let id = format!("ha-cover-0-{verb}");
+                let allowed = features & bit != 0;
+                assert_eq!(
+                    book.action_target(&id).is_some(),
+                    allowed && previous & bit != 0,
+                    "revocation is immediate; newly eligible actions must be published"
+                );
+                assert_eq!(
+                    frame["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["id"] == id),
+                    allowed
+                );
+                advertised += usize::from(allowed);
+            }
+            assert_eq!(frame["items"].as_array().unwrap().len(), 2 + advertised);
+            book.mark_published();
+            for (verb, bit) in [("open", 1), ("close", 2), ("stop", 8)] {
+                assert_eq!(
+                    book.action_target(&format!("ha-cover-0-{verb}")).is_some(),
+                    features & bit != 0
+                );
+            }
+            previous = features;
+        }
+    }
+
+    #[test]
+    fn cover_malformed_observations_withdraw_commands_and_sessions_clear_capabilities() {
+        let names = ["cover.shade".into()];
+        let shared = Book::new(&names, &configured_actions(&[], &[], &[], &names));
+        let mut book = shared.lock().unwrap();
+        book.connected();
+        book.mark_published();
+        assert!(book.action_target("ha-cover-0-open").is_none());
+        let known = json!({"entity_id":"cover.shade","state":"closed","attributes":{"supported_features":11}});
+        let mut invalid = ["unknown", "unavailable", "OPEN", "closed ", "opening\n", "on", "", "100"]
+            .into_iter().map(|value| Some(json!({"entity_id":"cover.shade","state":value,"attributes":{"supported_features":11}}))).collect::<Vec<_>>();
+        for features in [
+            json!(null),
+            json!(true),
+            json!(-1),
+            json!(11.0),
+            json!("11"),
+            json!([11]),
+            json!({"mask":11}),
+        ] {
+            invalid.push(Some(json!({"entity_id":"cover.shade","state":"closed","attributes":{"supported_features":features}})));
+        }
+        for attributes in [
+            json!(null),
+            json!([]),
+            json!(11),
+            json!("attributes"),
+            json!({}),
+        ] {
+            invalid.push(Some(
+                json!({"entity_id":"cover.shade","state":"closed","attributes":attributes}),
+            ));
+        }
+        invalid.extend([
+            None,
+            Some(json!({"entity_id":"cover.shade","state":"closed"})),
+            Some(json!({"entity_id":"cover.shade","attributes":{"supported_features":11}})),
+            Some(json!({"entity_id":"cover.shade","state":null,"attributes":{"supported_features":11}})),
+            Some(json!({"entity_id":"cover.shade","state":false,"attributes":{"supported_features":11}})),
+            Some(json!({"entity_id":"cover.shade","state":0,"attributes":{"supported_features":11}})),
+            Some(json!({"entity_id":"cover.other","state":"closed","attributes":{"supported_features":11}})),
+            Some(serde_json::from_str(r#"{"entity_id":"cover.shade","state":"closed","attributes":{"supported_features":18446744073709551616}}"#).unwrap()),
+        ]);
+        for value in invalid {
+            book.live("cover.shade", Some(&known));
+            book.mark_published();
+            assert!(book.action_target("ha-cover-0-stop").is_some());
+            let revision = book.revision;
+            book.live("cover.shade", value.as_ref());
+            assert_ne!(book.revision, revision);
+            for verb in ["open", "close", "stop"] {
+                assert!(book.action_target(&format!("ha-cover-0-{verb}")).is_none());
+            }
+            assert_eq!(book.frame()["items"].as_array().unwrap().len(), 2);
+            book.mark_published();
+        }
+        book.live("cover.shade", None);
+        book.initial("cover.shade", Some(&known));
+        book.mark_published();
+        assert!(
+            book.action_target("ha-cover-0-open").is_none(),
+            "late initial state must not revive a deleted cover"
+        );
+        book.live("cover.shade", Some(&known));
+        book.mark_published();
+        assert!(book.action_target("ha-cover-0-open").is_some());
+        book.disconnected();
+        book.connected();
+        book.mark_published();
+        assert!(book.action_target("ha-cover-0-open").is_none());
+        book.begin_session();
+        book.connected();
+        book.mark_published();
+        assert!(book.action_target("ha-cover-0-open").is_none());
+        book.initial(
+            "cover.shade",
+            Some(&json!({"entity_id":"cover.shade","state":"open"})),
+        );
+        book.mark_published();
+        assert!(
+            book.action_target("ha-cover-0-open").is_none(),
+            "a new session must not reuse old feature bits"
+        );
+        book.initial("cover.shade", Some(&known));
+        book.mark_published();
+        assert!(book.action_target("ha-cover-0-open").is_some());
+        book.authentication_rejected();
+        assert!(book.action_target("ha-cover-0-open").is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn maximum_cover_combinations_fit_the_actual_encoder_with_worst_escaped_values() {
+        let literal = |domain: &str, index: usize| {
+            let suffix = format!("_{index}");
+            format!(
+                "{domain}.{}{suffix}",
+                "x".repeat(128 - domain.len() - 1 - suffix.len())
+            )
+        };
+        // The single-cover case has 31 maximally escaped long state values and
+        // 31 action contributions; additional covers require shorter state text.
+        for (action_count, media_count, binary_count, cover_count) in
+            [(16, 4, 0, 1), (7, 2, 3, 4), (0, 1, 8, 4)]
+        {
+            let watched = (0..32 - action_count - media_count - binary_count - cover_count)
+                .map(|index| literal("sensor", index))
+                .collect::<Vec<_>>();
+            let actions = (0..action_count)
+                .map(|index| literal(if index % 2 == 0 { "button" } else { "scene" }, index))
+                .collect::<Vec<_>>();
+            let media = (0..media_count)
+                .map(|index| literal("media_player", index))
+                .collect::<Vec<_>>();
+            let binary = (0..binary_count)
+                .map(|index| literal(["switch", "input_boolean", "light"][index % 3], index))
+                .collect::<Vec<_>>();
+            let covers = (0..cover_count)
+                .map(|index| literal("cover", index))
+                .collect::<Vec<_>>();
+            let config: crate::config::Configuration = serde_json::from_value(json!({
+                "revision":"maximum-covers",
+                "values":{"ha_base_url":"http://localhost/ha/","watch_entities":watched.join(","),"action_entities":actions.join(","),"media_player_entities":media.join(","),"binary_entities":binary.join(","),"cover_entities":covers.join(",")},
+                "secrets":{"ha_token":"fixture-token"}
+            })).unwrap();
+            let config = config.validate().unwrap();
+            assert_eq!(config.entities.len(), 32);
+            assert!(config.entities.iter().all(|entity| entity.len() == 128));
+            let shared = Book::new(&config.entities, &config.actions());
+            let frame = {
+                let mut book = shared.lock().unwrap();
+                book.connected();
+                for entity in &config.entities {
+                    let observed = if covers.contains(entity) {
+                        "opening".to_owned()
+                    } else if binary.contains(entity) {
+                        "off".to_owned()
+                    } else {
+                        "\\\"".repeat(1024)
+                    };
+                    book.live(entity, Some(&json!({"entity_id":entity,"state":observed,"attributes":{"friendly_name":"\\\"".repeat(256),"supported_features":11}})));
+                }
+                book.frame()
+            };
+            let items = frame["items"].as_array().unwrap();
+            assert_eq!(items.len(), 64);
+            assert_eq!(
+                items.iter().filter(|item| item["kind"] == "action").count(),
+                31
+            );
+            let ids = items
+                .iter()
+                .map(|item| item["id"].as_str().unwrap())
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(ids.len(), items.len());
+            for (entity, item) in config.entities.iter().zip(&items[1..33]) {
+                assert_eq!(item["title"].as_str().unwrap().len(), 128);
+                assert_eq!(
+                    item["text"].as_str().unwrap().len(),
+                    if covers.contains(entity) {
+                        7
+                    } else if binary.contains(entity) {
+                        3
+                    } else {
+                        512
+                    }
+                );
+            }
+            for item in &items[33..] {
+                assert_eq!(item["title"].as_str().unwrap().len(), 128);
+                assert_eq!(item["label"].as_str().unwrap().len(), 128);
+                assert_eq!(item["params"], json!({}));
+            }
+            assert!(
+                serde_json::to_vec(&frame).unwrap().len()
+                    < inverter_worker_protocol::MAX_FRAME_BYTES
+            );
+            Output::with_writer(std::io::sink())
+                .send(frame)
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

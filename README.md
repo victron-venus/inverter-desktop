@@ -42,10 +42,11 @@ Snapshots, optional HA proxy support, other camera adapters, and migration remai
 A separately built [Home Assistant worker](desktop-plugins/home-assistant/README.md)
 adds authenticated connection status and state cards for a configured entity
 list. Read-only operation is the default; explicit action lists enable fixed
-HA button presses, scene activation, media-player Play/Pause/Stop and explicit
-switch/helper/light on/off commands through instance-bound plugin controls.
-On/off state follows Home Assistant updates rather than assuming a service call
-changed the device.
+HA button presses, scene activation, media-player Play/Pause/Stop, explicit
+switch/helper/light on/off commands and supported cover Open/Close/Stop through
+instance-bound plugin controls. Cover capabilities update the available actions.
+Displayed state follows Home Assistant updates rather than assuming a service
+call changed the device.
 The worker owns its REST/WebSocket connection and isolated token. Other HA
 services, legacy UI parity, and migration remain tracked work; core inverter
 buttons continue to use MQTT independently.

@@ -47,6 +47,13 @@ const BINARY_TARGETS: [&str; 9] = [
     "light.missing",
     "switch.next",
 ];
+const COVER_TARGETS: [&str; 5] = [
+    "cover.do_not_supply_charger",
+    "cover.open_only",
+    "cover.malformed",
+    "cover.unavailable",
+    "cover.next",
+];
 
 #[derive(Clone)]
 struct Request {
@@ -76,6 +83,7 @@ impl Observations {
 struct ServiceControl {
     media_enabled: bool,
     binary_enabled: bool,
+    cover_enabled: bool,
     stall_next: Arc<AtomicBool>,
     pending: Arc<AtomicUsize>,
     release: broadcast::Sender<()>,
@@ -86,6 +94,7 @@ impl ServiceControl {
         Self {
             media_enabled: false,
             binary_enabled: false,
+            cover_enabled: false,
             stall_next: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             release: broadcast::channel(4).0,
@@ -102,6 +111,13 @@ impl ServiceControl {
     fn binary() -> Self {
         Self {
             binary_enabled: true,
+            ..Self::new()
+        }
+    }
+
+    fn cover() -> Self {
+        Self {
+            cover_enabled: true,
             ..Self::new()
         }
     }
@@ -123,6 +139,9 @@ fn fixture_services(target: &str, control: &ServiceControl) -> &'static [&'stati
                 Some("light") => &["light/turn_on", "light/turn_off"],
                 _ => &[],
             }
+        }
+        target if control.cover_enabled && COVER_TARGETS.contains(&target) => {
+            &["cover/open_cover", "cover/close_cover", "cover/stop_cover"]
         }
         _ => &[],
     }
@@ -268,7 +287,14 @@ impl HomeAssistant {
                     && BINARY_TARGETS
                         .iter()
                         .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
-                assert!(readonly || action_target || media_target || binary_target);
+                let cover_target = self
+                    .services
+                    .as_ref()
+                    .is_some_and(|control| control.cover_enabled)
+                    && COVER_TARGETS
+                        .iter()
+                        .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
+                assert!(readonly || action_target || media_target || binary_target || cover_target);
             }
             if request.operation == "service" {
                 assert!(
@@ -460,6 +486,20 @@ async fn serve_connection(
         entity
             if services
                 .as_ref()
+                .is_some_and(|control| control.cover_enabled)
+                && COVER_TARGETS.contains(&entity) =>
+        {
+            let (state, features) = match entity {
+                "cover.open_only" => ("opening", json!(1)),
+                "cover.malformed" => ("closed", json!("11")),
+                "cover.unavailable" => ("unavailable", json!(11)),
+                _ => ("closed", json!(11)),
+            };
+            ("200 OK", cover_state(entity, state, Some(features)))
+        }
+        entity
+            if services
+                .as_ref()
                 .is_some_and(|control| control.binary_enabled)
                 && BINARY_TARGETS.contains(&entity) =>
         {
@@ -581,6 +621,14 @@ fn entity_state(entity: &str, state: &str, name: &str) -> Value {
     json!({"entity_id":entity,"state":state,"attributes":{
         "friendly_name":name,"unit_of_measurement":"°C","private":PRIVATE_ATTRIBUTE
     }})
+}
+
+fn cover_state(entity: &str, state: &str, features: Option<Value>) -> Value {
+    let mut value = entity_state(entity, state, entity);
+    if let Some(features) = features {
+        value["attributes"]["supported_features"] = features;
+    }
+    value
 }
 
 async fn until(mut predicate: impl FnMut() -> bool) {
@@ -913,6 +961,28 @@ async fn configure_binary(
             ("ha_base_url".into(), json!(origin.base(prefix))),
             ("watch_entities".into(), json!("sensor.temperature")),
             ("binary_entities".into(), json!(entities)),
+        ]),
+        token,
+    )
+    .await;
+}
+
+async fn configure_cover(
+    service: &PackageApplication,
+    epoch: u64,
+    origin: &HomeAssistant,
+    prefix: &str,
+    entities: &str,
+    token: Option<&str>,
+) {
+    save_configuration(
+        service,
+        epoch,
+        origin,
+        BTreeMap::from([
+            ("ha_base_url".into(), json!(origin.base(prefix))),
+            ("watch_entities".into(), json!("sensor.temperature")),
+            ("cover_entities".into(), json!(entities)),
         ]),
         token,
     )
@@ -2102,6 +2172,397 @@ async fn signed_home_assistant_package_binary() {
         origin.count("service"),
         10,
         "each admitted call sends one fixed POST"
+    );
+    assert!(host.snapshots().is_empty());
+    assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
+    assert!(fs::read_dir(root.join("store/settings"))
+        .unwrap()
+        .next()
+        .is_none());
+    core.assert_receives(&broker, 6).await;
+    commands.assert_live_without_commands(6).await;
+    origin.assert_safe();
+    service.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires explicitly built INVERTER_HOME_ASSISTANT_WORKER and local MOSQUITTO_BIN; CI runs this acceptance test"]
+async fn signed_home_assistant_package_cover() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let broker = Broker::new(&root).await;
+    let core = CoreTelemetry::new(broker.port);
+    let commands = CommandProbe::new(broker.port).await;
+    let controls = ServiceControl::cover();
+    let origin = HomeAssistant::with_services(Some(controls.clone())).await;
+    let (service, host, epoch) = install(&root).await;
+    let view = serde_json::to_value(service.get_settings(PLUGIN, epoch).await.unwrap()).unwrap();
+    for field in [
+        "action_entities",
+        "media_player_entities",
+        "binary_entities",
+        "cover_entities",
+    ] {
+        assert_eq!(view["values"][field], "");
+    }
+
+    configure(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        Some(COVER_TARGETS[0]),
+        Some(&origin.first_token),
+    )
+    .await;
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    item_value(&host, "entity-0", "text", json!("closed")).await;
+    no_secrets(&host, &origin);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &instance(&host),
+            "ha-cover-0-open",
+            json!({}),
+            WAIT,
+            epoch,
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(
+        origin.count("service"),
+        0,
+        "reading never grants cover control"
+    );
+    core.assert_receives(&broker, 1).await;
+    commands.assert_live_without_commands(1).await;
+
+    configure_cover(
+        &service,
+        epoch,
+        &origin,
+        FIRST_PREFIX,
+        &COVER_TARGETS[..4].join(","),
+        None,
+    )
+    .await;
+    connection(&host).await;
+    until(|| actions(&host).len() == 4).await;
+    for (index, field, value) in [
+        (1, "text", "closed"),
+        (2, "text", "opening"),
+        (3, "text", "closed"),
+        (4, "value", "Unavailable"),
+    ] {
+        item_value(&host, &format!("entity-{index}"), field, json!(value)).await;
+    }
+    let first_instance = instance(&host);
+    let advertised = actions(&host);
+    for index in 0..4 {
+        for operation in ["open", "close", "stop"] {
+            let id = format!("ha-cover-{index}-{operation}");
+            if index == 0 || (index == 1 && operation == "open") {
+                let action = advertised
+                    .iter()
+                    .find(|item| item["action_id"] == id)
+                    .unwrap();
+                assert_eq!(action["id"], id);
+                assert_eq!(action["params"], json!({}));
+            } else {
+                assert!(!advertised.iter().any(|item| item["action_id"] == id));
+                assert_eq!(
+                    host.action_in_epoch(PLUGIN, &first_instance, &id, json!({}), WAIT, epoch)
+                        .await
+                        .unwrap_err(),
+                    PluginError::UnknownAction
+                );
+            }
+        }
+    }
+    for (action_id, params) in [
+        ("ha-cover-0-toggle", json!({})),
+        ("ha-cover-4-open", json!({})),
+        (
+            "ha-cover-0-open",
+            json!({"entity_id":COVER_TARGETS[1],"position":50,"service":"set_cover_position"}),
+        ),
+    ] {
+        assert_eq!(
+            host.action_in_epoch(PLUGIN, &first_instance, action_id, params, WAIT, epoch)
+                .await
+                .unwrap_err(),
+            PluginError::UnknownAction
+        );
+    }
+    assert_eq!(origin.count("service"), 0);
+
+    for (index, (operation, previous, confirmed)) in [
+        ("open", "closed", "opening"),
+        ("close", "opening", "closing"),
+        ("stop", "closing", "open"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            submit_action(
+                &host,
+                &first_instance,
+                &format!("ha-cover-0-{operation}"),
+                epoch,
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            json!({})
+        );
+        assert_service(
+            &origin,
+            index,
+            FIRST_PREFIX,
+            &format!("cover/{operation}_cover"),
+            COVER_TARGETS[0],
+        );
+        // Force a fresh frame after the successful POST. The displayed cover
+        // state must stay unchanged until its own server event arrives.
+        let marker = 40 + index;
+        origin.event(
+            "sensor.temperature",
+            Some(entity_state(
+                "sensor.temperature",
+                &marker.to_string(),
+                "Temperature",
+            )),
+        );
+        item_value(&host, "entity-0", "value", json!(marker as f64)).await;
+        assert!(items(&host)
+            .iter()
+            .any(|item| { item["id"] == "entity-1" && item["text"] == previous }));
+        origin.event(
+            COVER_TARGETS[0],
+            Some(cover_state(COVER_TARGETS[0], confirmed, Some(json!(11)))),
+        );
+        item_value(&host, "entity-1", "text", json!(confirmed)).await;
+    }
+    assert_eq!(origin.count("service"), 3);
+    core.assert_receives(&broker, 2).await;
+    commands.assert_live_without_commands(2).await;
+
+    // State and title are identical across these observations. Capabilities
+    // alone must update publication and reject a previously advertised preset.
+    for (features, permitted) in [
+        (Some(json!(1)), Some("open")),
+        (Some(json!(2)), Some("close")),
+        (Some(json!(8)), Some("stop")),
+        (Some(json!(4)), None),
+        (Some(json!("11")), None),
+        (Some(json!(11.0)), None),
+        (Some(json!(-1)), None),
+        (None, None),
+    ] {
+        origin.event(
+            COVER_TARGETS[0],
+            Some(cover_state(COVER_TARGETS[0], "open", features)),
+        );
+        until(|| {
+            let advertised = actions(&host);
+            ["open", "close", "stop"].into_iter().all(|operation| {
+                advertised
+                    .iter()
+                    .any(|item| item["action_id"] == format!("ha-cover-0-{operation}"))
+                    == (permitted == Some(operation))
+            })
+        })
+        .await;
+        assert!(items(&host)
+            .iter()
+            .any(|item| { item["id"] == "entity-1" && item["text"] == "open" }));
+        for operation in ["open", "close", "stop"] {
+            if permitted != Some(operation) {
+                assert_eq!(
+                    host.action_in_epoch(
+                        PLUGIN,
+                        &first_instance,
+                        &format!("ha-cover-0-{operation}"),
+                        json!({}),
+                        WAIT,
+                        epoch,
+                    )
+                    .await
+                    .unwrap_err(),
+                    PluginError::UnknownAction
+                );
+            }
+        }
+        assert_eq!(origin.count("service"), 3);
+        origin.event(
+            COVER_TARGETS[0],
+            Some(cover_state(COVER_TARGETS[0], "open", Some(json!(11)))),
+        );
+        until(|| actions(&host).len() == 4).await;
+    }
+    for state in [Some("unknown"), Some("unavailable"), Some("on"), None] {
+        origin.event(
+            COVER_TARGETS[0],
+            state.map(|state| cover_state(COVER_TARGETS[0], state, Some(json!(11)))),
+        );
+        until(|| actions(&host).len() == 1).await;
+        assert_eq!(
+            host.action_in_epoch(
+                PLUGIN,
+                &first_instance,
+                "ha-cover-0-stop",
+                json!({}),
+                WAIT,
+                epoch,
+            )
+            .await
+            .unwrap_err(),
+            PluginError::UnknownAction
+        );
+        origin.event(
+            COVER_TARGETS[0],
+            Some(cover_state(COVER_TARGETS[0], "open", Some(json!(11)))),
+        );
+        until(|| actions(&host).len() == 4).await;
+    }
+    assert_eq!(origin.count("service"), 3);
+    controls.stall_next.store(true, Ordering::Release);
+    let replaced_action = submit_action(&host, &first_instance, "ha-cover-0-open", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert!(!replaced_action.is_finished());
+    assert_service(
+        &origin,
+        3,
+        FIRST_PREFIX,
+        "cover/open_cover",
+        COVER_TARGETS[0],
+    );
+    core.assert_receives(&broker, 3).await;
+    commands.assert_live_without_commands(3).await;
+
+    // The fixture has received this POST. Teardown cancels local waiting and
+    // closes sockets; it cannot undo an accepted operation or implicitly Stop.
+    assert_eq!(controls.pending.load(Ordering::Acquire), 1);
+    configure_cover(
+        &service,
+        epoch,
+        &origin,
+        SECOND_PREFIX,
+        COVER_TARGETS[4],
+        Some(&origin.second_token),
+    )
+    .await;
+    connection(&host).await;
+    until(|| actions(&host).len() == 3 && instance(&host) != first_instance).await;
+    until(|| {
+        controls.pending.load(Ordering::Acquire) == 0 && origin.active.load(Ordering::Acquire) == 1
+    })
+    .await;
+    assert!(timeout(WAIT, replaced_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    let second_instance = instance(&host);
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &first_instance,
+            "ha-cover-0-open",
+            json!({}),
+            WAIT,
+            epoch,
+        )
+        .await
+        .unwrap_err(),
+        PluginError::Unavailable
+    );
+    assert_eq!(
+        host.action_in_epoch(
+            PLUGIN,
+            &second_instance,
+            "ha-cover-1-open",
+            json!({}),
+            WAIT,
+            epoch,
+        )
+        .await
+        .unwrap_err(),
+        PluginError::UnknownAction
+    );
+    assert_eq!(origin.count("service"), 4);
+    assert_eq!(
+        submit_action(&host, &second_instance, "ha-cover-0-close", epoch)
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({})
+    );
+    assert_service(
+        &origin,
+        4,
+        SECOND_PREFIX,
+        "cover/close_cover",
+        COVER_TARGETS[4],
+    );
+    no_private_data(&host, &origin);
+    core.assert_receives(&broker, 4).await;
+    commands.assert_live_without_commands(4).await;
+
+    controls.stall_next.store(true, Ordering::Release);
+    let disabled_action = submit_action(&host, &second_instance, "ha-cover-0-open", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_service(
+        &origin,
+        5,
+        SECOND_PREFIX,
+        "cover/open_cover",
+        COVER_TARGETS[4],
+    );
+    service.set_enabled(PLUGIN, false, epoch).await.unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, disabled_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert!(items(&host).is_empty());
+    core.assert_receives(&broker, 5).await;
+    commands.assert_live_without_commands(5).await;
+
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    connection(&host).await;
+    until(|| actions(&host).len() == 3).await;
+    let final_instance = instance(&host);
+    assert_ne!(final_instance, second_instance);
+    controls.stall_next.store(true, Ordering::Release);
+    let removed_action = submit_action(&host, &final_instance, "ha-cover-0-close", epoch);
+    until(|| controls.pending.load(Ordering::Acquire) == 1).await;
+    assert_service(
+        &origin,
+        6,
+        SECOND_PREFIX,
+        "cover/close_cover",
+        COVER_TARGETS[4],
+    );
+    service
+        .uninstall_with_settings(PLUGIN, true, epoch)
+        .await
+        .unwrap();
+    origin.no_sockets().await;
+    assert!(timeout(WAIT, removed_action)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert_eq!(
+        origin.count("service"),
+        7,
+        "only admitted commands send POSTs; cancellation must not issue Stop"
     );
     assert!(host.snapshots().is_empty());
     assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
