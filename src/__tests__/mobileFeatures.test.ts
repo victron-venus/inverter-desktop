@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import {
   featureConnection,
+  FeaturePluginManager,
+  featurePluginManagerTabId,
   featureSetupAvailable,
   getFeatureView,
   useDashboardFeatures,
@@ -82,6 +84,10 @@ beforeEach(() => {
 describe('mobile build feature boundary', () => {
   it('uses the mobile port with no feature routes or transport calls', async () => {
     expect(featureSetupAvailable).toBe(false)
+    expect(featurePluginManagerTabId).toBeUndefined()
+    const manager = mount(FeaturePluginManager)
+    expect(manager.text()).toBe('')
+    manager.unmount()
     expect(getFeatureView('/camera-video')).toBeUndefined()
     await featureConnection.connect(config)
     featureConnection.cleanup()
@@ -276,6 +282,12 @@ describe('mobile build feature boundary', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Cerbo Devices')
     expect(wrapper.text()).not.toContain('Home Assistant')
+    expect(wrapper.text()).not.toContain('Plugins')
+    expect(wrapper.text()).not.toContain('plugins.manager')
+    expect(wrapper.text()).not.toContain('Stored plugin data')
+    expect(wrapper.text()).not.toContain('Unidentified stored data')
+    expect(wrapper.find('input[name="delete-plugin-settings"]').exists()).toBe(false)
+    expect(wrapper.find('input[type="password"][autocomplete="new-password"]').exists()).toBe(false)
     expect(wrapper.find('#ha_url').exists()).toBe(false)
     const devicesTab = wrapper.findAll('button').find((entry) => entry.text() === 'Cerbo Devices')!
     await devicesTab.trigger('click')
@@ -293,6 +305,8 @@ describe('mobile build feature boundary', () => {
     expect(saved.header_toggles_config[1]).toEqual(config.header_toggles_config[1])
     expect(saved.ha_entities).toEqual(config.ha_entities)
     expect(saved.ha_url).toBe(config.ha_url)
+    expect(invoke.mock.calls.some(([command]) => /plugin_settings/.test(command))).toBe(false)
+    expect(invoke.mock.calls.some(([command]) => /retained_plugin_data/.test(command))).toBe(false)
     wrapper.unmount()
   })
 })

@@ -12,13 +12,42 @@
 Desktop and mobile application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
 Android and iOS contain the inverter core: telemetry, MQTT controls, Cerbo EV/water,
-charts, and core notifications. Home Assistant, cameras, and the planned installable
-plugin ecosystem are desktop-only. Implementation progress is tracked in
-[TODO.md](TODO.md), with the current build boundary documented in
+charts, and core notifications. Home Assistant, cameras, and the plugin ecosystem
+are desktop-only. Implementation progress is tracked in [TODO.md](TODO.md), with
+the build boundary documented in
 [desktop features and mobile core](docs/desktop-features-and-mobile-core.md).
-The desktop [worker host](docs/plugin-worker-protocol.md) supports versioned
-process communication and declarative dashboard contributions. Its initial
-registry is empty; package installation and HA/camera migration remain in progress.
+
+Desktop settings now include a **Plugins** tab for reviewing signed packages,
+installing/updating, enabling/disabling, rolling back, and uninstalling them. The
+[native package pipeline](docs/plugin-packages.md) verifies the selected archive
+before showing its identity, version, publisher, and declared capabilities. Only
+an explicit Install/Update action commits those reviewed bytes. Enabled installed
+workers can resume after authentication and stop on logout. Configuration-capable
+packages have a [typed settings editor](docs/plugin-settings.md) with isolated
+encrypted records and write-only secrets. Saving restarts enabled workers with
+acknowledged configuration; uninstall retains settings unless deletion is selected.
+An on-demand stored-data view shows usage and allows confirmed cleanup of records
+with no installed owner, including corrupt records or unavailable credentials.
+Data belonging to installed packages stays protected from this cleanup.
+
+**The current release publisher policy is empty, so package installation is
+disabled.** The manager reports this directly; it does not offer unsigned packages
+or user-supplied trust. Production publisher provisioning remains a separate step.
+Home Assistant and cameras still come bundled with desktop and are not managed as
+packages yet. A separately built [Frigate worker](desktop-plugins/frigate/README.md)
+starts their extraction with an independent MQTT connection, native motion
+notifications, and direct completed-clip requests handled by owned native media
+services. Clip/window acceptance is tracked separately from source implementation.
+Snapshots, optional HA proxy support, other camera adapters, and migration remain.
+A separately built [Home Assistant worker](desktop-plugins/home-assistant/README.md)
+adds authenticated connection status and state cards for a configured entity
+list. Read-only operation is the default; an explicit action list enables fixed
+HA button presses and scene activation through instance-bound plugin controls.
+The worker owns its REST/WebSocket connection and isolated token. Other HA
+services, legacy UI parity, and migration remain tracked work; core inverter
+buttons continue to use MQTT independently.
+See the [worker protocol](docs/plugin-worker-protocol.md) and
+TODO for the remaining work and validation boundaries.
 
 | Surface                     | Recommended project                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ |

@@ -39,6 +39,408 @@ fn spec(mode: &str) -> WorkerSpec {
         plugin_id: TEST_PLUGIN.into(),
         executable: fixture(),
         args: vec![mode.into()],
+        configuration: None,
+        desktop_notifications: false,
+        http_video: None,
+    }
+}
+
+fn configured_spec(mode: &str) -> WorkerSpec {
+    let mut worker = spec(mode);
+    worker.configuration = Some(WorkerConfiguration {
+        revision: "revision-1".into(),
+        values: json!({"server":"https://plugin.example"}),
+        secrets: [("token".into(), "fixture-secret".into())].into(),
+    });
+    worker
+}
+
+fn notification_spec(mode: &str) -> WorkerSpec {
+    let mut worker = if mode.starts_with("configuration") {
+        configured_spec(mode)
+    } else {
+        spec(mode)
+    };
+    worker.desktop_notifications = true;
+    worker
+}
+
+#[tokio::test]
+async fn notifications_deliver_once_after_readiness_without_exposing_snapshot_content() {
+    let host = PluginHost::default();
+    assert!(!host.has_pending_notifications());
+    host.start(notification_spec("notifications"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    assert!(host.has_pending_notifications());
+    let public = serde_json::to_string(&host.snapshots()).unwrap();
+    assert!(!public.contains("Private camera"));
+    assert!(!public.contains("motion-1"));
+    let mut delivered = Vec::new();
+    assert_eq!(
+        host.dispatch_notifications(|item| {
+            delivered.push((
+                item.plugin_id.clone(),
+                item.id.clone(),
+                item.title.clone(),
+                item.body.clone(),
+            ));
+        }),
+        2
+    );
+    assert_eq!(
+        delivered[0],
+        (
+            TEST_PLUGIN.into(),
+            "motion-1".into(),
+            "Private camera title".into(),
+            "Private camera body".into()
+        )
+    );
+    assert_eq!(delivered[1].1, "motion-2");
+    assert!(!host.has_pending_notifications());
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("duplicate delivery")),
+        0
+    );
+    host.shutdown().await;
+
+    let host = PluginHost::default();
+    host.start(notification_spec("configuration_notifications"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|item| assert_eq!(item.id, "configured-motion")),
+        1
+    );
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn unauthorized_premature_oversized_and_frame_flood_notifications_fail_closed() {
+    for (mode, permitted, expected) in [
+        ("notifications", false, "worker_notification_unauthorized"),
+        (
+            "notifications_before_ready",
+            true,
+            "worker_handshake_invalid",
+        ),
+        (
+            "configuration_early_notification",
+            true,
+            "worker_configuration_ack_invalid",
+        ),
+        ("notifications_oversize", true, "worker_frame_invalid"),
+        ("notifications_flood", true, "worker_rate_limit"),
+    ] {
+        let host = PluginHost::default();
+        let mut worker = notification_spec(mode);
+        worker.desktop_notifications = permitted;
+        host.start(worker).await.unwrap();
+        let failed = wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert_eq!(failed.last_error.as_deref(), Some(expected), "{mode}");
+        assert!(failed.contributions.is_empty());
+        assert_eq!(
+            host.dispatch_notifications(|_| panic!("failed worker notification")),
+            0
+        );
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn valid_notification_bursts_drop_queue_and_rate_excess_without_failing_worker() {
+    let host = PluginHost::default();
+    host.start(notification_spec("notifications_actions"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    for expected in [
+        NOTIFICATION_QUEUE_CAPACITY,
+        NOTIFICATIONS_PER_WORKER_PER_MINUTE - NOTIFICATION_QUEUE_CAPACITY,
+        0,
+    ] {
+        action(&host, "echo").await.unwrap();
+        assert_eq!(host.dispatch_notifications(|_| {}), expected);
+        assert_eq!(host.snapshots()[0].state, WorkerState::Running);
+    }
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    assert_eq!(
+        entry.notifications.lock().unwrap().seen.len(),
+        NOTIFICATIONS_PER_WORKER_PER_MINUTE
+    );
+    // Advancing only the rate windows avoids a minute of wall-clock waiting.
+    entry.notifications.lock().unwrap().rate.window = Instant::now() - Duration::from_secs(61);
+    host.0.notification_rate.lock().unwrap().window = Instant::now() - Duration::from_secs(61);
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|_| {}),
+        NOTIFICATION_QUEUE_CAPACITY
+    );
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn global_notification_rate_bounds_multiple_real_workers() {
+    let host = PluginHost::default();
+    let mut total = 0;
+    for index in 0..5 {
+        let mut worker = notification_spec("notifications_actions");
+        worker.plugin_id = format!("test.notifications-{index}");
+        let id = worker.plugin_id.clone();
+        host.start(worker).await.unwrap();
+        time::timeout(Duration::from_secs(5), async {
+            while !host.snapshots().iter().any(|snapshot| {
+                snapshot.plugin_id == id
+                    && snapshot.state == WorkerState::Running
+                    && !snapshot.contributions.is_empty()
+            }) {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            host.action(&id, "echo", json!({}), Duration::from_secs(2))
+                .await
+                .unwrap();
+            total += host.dispatch_notifications(|_| {});
+        }
+    }
+    assert_eq!(total, NOTIFICATIONS_GLOBAL_PER_MINUTE);
+    assert!(host
+        .snapshots()
+        .iter()
+        .all(|snapshot| snapshot.state == WorkerState::Running));
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_notifications_cannot_cross_stop_removal_revocation_or_restart() {
+    for transition in ["stop", "remove", "revoke", "restart"] {
+        let host = PluginHost::default();
+        host.start(notification_spec("notifications"))
+            .await
+            .unwrap();
+        let first = ready(&host).await;
+        action(&host, "echo").await.unwrap();
+        assert_eq!(
+            host.entry(TEST_PLUGIN)
+                .unwrap()
+                .notifications
+                .lock()
+                .unwrap()
+                .pending
+                .len(),
+            2
+        );
+        match transition {
+            "stop" => host.stop(TEST_PLUGIN).await.unwrap(),
+            "remove" => host.remove(TEST_PLUGIN).await.unwrap(),
+            "revoke" => {
+                host.revoke();
+                host.resume();
+            }
+            "restart" => {
+                assert!(action(&host, "crash").await.is_err());
+                wait_for(&host, |snapshot| {
+                    snapshot.generation > first.generation
+                        && snapshot.state == WorkerState::Running
+                        && !snapshot.contributions.is_empty()
+                })
+                .await;
+                action(&host, "echo").await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            host.dispatch_notifications(|_| panic!("stale notification after {transition}")),
+            0
+        );
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn queued_notification_expiry_and_duplicate_retention_are_bounded() {
+    let host = PluginHost::default();
+    host.start(notification_spec("notifications"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    {
+        let mut state = entry.notifications.lock().unwrap();
+        for queued in &mut state.pending {
+            queued.created = Instant::now() - NOTIFICATION_DELIVERY_TTL;
+        }
+    }
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("expired notification")),
+        0
+    );
+    action(&host, "echo").await.unwrap();
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("duplicate after queue expiry")),
+        0
+    );
+    {
+        let mut state = entry.notifications.lock().unwrap();
+        for (_, created) in &mut state.seen {
+            *created = Instant::now() - NOTIFICATION_DEDUP_TTL;
+        }
+    }
+    action(&host, "echo").await.unwrap();
+    assert_eq!(host.dispatch_notifications(|_| {}), 2);
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn configuration_is_acknowledged_before_running_or_accepting_actions() {
+    let host = PluginHost::default();
+    host.start(configured_spec("configuration_delayed"))
+        .await
+        .unwrap();
+    assert_eq!(
+        action(&host, "echo").await.unwrap_err(),
+        PluginError::Unavailable
+    );
+    let snapshot = ready(&host).await;
+    let reply = action(&host, "echo").await.unwrap();
+    assert!(!host.has_pending_notifications());
+    assert_eq!(reply["configuration_revision"], "revision-1");
+    assert_eq!(reply["configuration_secret_matches"], true);
+    let public = serde_json::to_string(&snapshot).unwrap();
+    assert!(!public.contains("fixture-secret"));
+    assert!(!public.contains("plugin.example"));
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn missing_wrong_early_and_duplicate_configuration_acknowledgements_fail() {
+    for mode in [
+        "configuration_wrong_ack",
+        "configuration_early_data",
+        "configuration_duplicate_ack",
+        "configuration_no_ack",
+    ] {
+        let host = PluginHost::default();
+        host.start(configured_spec(mode)).await.unwrap();
+        let failed = wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert!(failed.contributions.is_empty(), "{mode}");
+        assert!(
+            failed.last_error.as_deref().is_some_and(|error| matches!(
+                error,
+                "worker_configuration_ack_invalid"
+                    | "worker_duplicate_handshake"
+                    | "worker_startup_timeout"
+            )),
+            "{mode}: {:?}",
+            failed.last_error
+        );
+        assert_eq!(
+            action(&host, "echo").await.unwrap_err(),
+            PluginError::Unavailable
+        );
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn configuration_writer_rejects_revoked_epoch_and_expired_deadline_before_write() {
+    for expired in [false, true] {
+        let (writer, mut reader) = tokio::io::duplex(8);
+        let (outgoing, receiver) = mpsc::channel(2);
+        let (_stop, stop_receiver) = watch::channel(false);
+        let authority = Arc::new(Mutex::new(Authority {
+            enabled: true,
+            epoch: u64::from(!expired),
+        }));
+        outgoing
+            .send(Outgoing::Configuration {
+                encoded: b"secret must never be written\n".to_vec(),
+                deadline: if expired {
+                    Instant::now() - Duration::from_millis(1)
+                } else {
+                    Instant::now() + Duration::from_secs(1)
+                },
+            })
+            .await
+            .unwrap();
+        drop(outgoing);
+        let result = write_frames(writer, receiver, stop_receiver, authority, 0).await;
+        if expired {
+            assert_eq!(result.unwrap_err(), "worker_configuration_timeout");
+        } else {
+            result.unwrap();
+        }
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).await.unwrap();
+        assert!(actual.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn interrupted_configuration_frame_never_allows_a_following_frame() {
+    for revoked in [false, true] {
+        let (writer, mut reader) = tokio::io::duplex(8);
+        let (outgoing, receiver) = mpsc::channel(2);
+        let (stop, stop_receiver) = watch::channel(false);
+        let authority = Arc::new(Mutex::new(Authority {
+            enabled: true,
+            epoch: 0,
+        }));
+        outgoing
+            .send(Outgoing::Configuration {
+                encoded: b"configuration frame longer than the pipe\n".to_vec(),
+                deadline: Instant::now()
+                    + if revoked {
+                        Duration::from_secs(1)
+                    } else {
+                        Duration::from_millis(20)
+                    },
+            })
+            .await
+            .unwrap();
+        outgoing
+            .send(Outgoing::Control(
+                b"must never follow partial configuration\n".to_vec(),
+            ))
+            .await
+            .unwrap();
+        let task = tokio::spawn(write_frames(
+            writer,
+            receiver,
+            stop_receiver,
+            authority.clone(),
+            0,
+        ));
+        time::sleep(Duration::from_millis(40)).await;
+        if revoked {
+            *authority.lock().unwrap() = Authority {
+                enabled: false,
+                epoch: 1,
+            };
+            stop.send(true).unwrap();
+        }
+        let result = time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        if revoked {
+            result.unwrap();
+        } else {
+            assert_eq!(result.unwrap_err(), "worker_configuration_timeout");
+        }
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).await.unwrap();
+        assert_eq!(actual, &b"configuration"[..8]);
     }
 }
 
@@ -119,6 +521,57 @@ async fn separate_executable_handshakes_contributes_and_serves_multiple_windows(
         host.start(spec("normal")).await.unwrap_err(),
         PluginError::HostStopped
     );
+}
+
+#[tokio::test]
+async fn package_start_cannot_cross_logout_and_relogin() {
+    let host = PluginHost::default();
+    let original_epoch = host.authority_epoch();
+    host.revoke();
+    host.resume();
+    assert!(!host.is_authorized_epoch(original_epoch));
+    let committed = AtomicBool::new(false);
+    assert!(host
+        .commit_in_epoch(original_epoch, || {
+            committed.store(true, Ordering::Release);
+            Ok(())
+        })
+        .is_err());
+    assert!(!committed.load(Ordering::Acquire));
+    assert_eq!(
+        host.start_in_epoch(spec("normal"), original_epoch)
+            .await
+            .unwrap_err(),
+        PluginError::Unavailable
+    );
+    assert!(host.snapshots().is_empty());
+    let current_epoch = host.authority_epoch();
+    assert!(host.is_authorized_epoch(current_epoch));
+    host.start_in_epoch(spec("normal"), current_epoch)
+        .await
+        .unwrap();
+    ready(&host).await;
+    host.shutdown().await;
+    assert!(!host.is_authorized_epoch(current_epoch));
+}
+
+#[tokio::test]
+async fn uninstall_reaps_workers_and_releases_registry_capacity() {
+    let host = PluginHost::default();
+    for index in 0..=MAX_WORKERS {
+        let mut worker = spec("normal");
+        worker.plugin_id = format!("test.package{index}");
+        let id = worker.plugin_id.clone();
+        host.start(worker).await.unwrap();
+        ready(&host).await;
+        let entry = host.entry(&id).unwrap();
+        host.remove(&id).await.unwrap();
+        assert!(entry.reaped.load(Ordering::Acquire));
+        assert!(*entry.done.borrow());
+        assert!(entry.task.lock().unwrap().is_none());
+        assert!(host.snapshots().is_empty());
+    }
+    host.shutdown().await;
 }
 
 #[tokio::test]
@@ -313,7 +766,9 @@ async fn queued_writes_recheck_deadline_cancellation_and_revoked_epoch() {
             .unwrap();
         outgoing
             .send(Outgoing::Action {
-                encoded: b"must never be written\n".to_vec(),
+                request_id: "expired-request".into(),
+                action_id: "echo".into(),
+                params: json!({"marker":"must never be written"}),
                 deadline: Instant::now()
                     + if invalidation == "deadline" {
                         Duration::from_millis(20)
@@ -363,6 +818,95 @@ async fn queued_writes_recheck_deadline_cancellation_and_revoked_epoch() {
 }
 
 #[tokio::test]
+async fn a_queued_action_forwards_only_its_original_remaining_budget() {
+    let (writer, mut reader) = tokio::io::duplex(8);
+    let (outgoing, receiver) = mpsc::channel(4);
+    let (_stop, stop_receiver) = watch::channel(false);
+    let authority = Arc::new(Mutex::new(Authority {
+        enabled: true,
+        epoch: 7,
+    }));
+    let (_cancel, cancellation) = watch::channel(false);
+    let first_frame = b"control frame blocks the action until the reader drains\n".to_vec();
+    outgoing
+        .send(Outgoing::Control(first_frame.clone()))
+        .await
+        .unwrap();
+    let params =
+        json!({"nested":{"literal":"button.fixed","values":[1,true,null]},"text":"unchanged"});
+    let original_budget = Duration::from_secs(2);
+    let deadline = Instant::now() + original_budget;
+    outgoing
+        .send(Outgoing::Action {
+            request_id: "queued-request".into(),
+            action_id: "fixed-action".into(),
+            params: params.clone(),
+            deadline,
+            cancellation,
+        })
+        .await
+        .unwrap();
+    drop(outgoing);
+    let task = tokio::spawn(write_frames(writer, receiver, stop_receiver, authority, 7));
+    time::sleep(Duration::from_millis(100)).await;
+    let remaining_at_release = deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis() as u64;
+    let mut actual = Vec::new();
+    time::timeout(Duration::from_secs(2), reader.read_to_end(&mut actual))
+        .await
+        .unwrap()
+        .unwrap();
+    task.await.unwrap().unwrap();
+    assert!(actual.starts_with(&first_frame));
+    let action: HostMessage = serde_json::from_slice(&actual[first_frame.len()..]).unwrap();
+    match action {
+        HostMessage::Action {
+            request_id,
+            action_id,
+            params: actual_params,
+            deadline_ms,
+        } => {
+            assert_eq!(request_id, "queued-request");
+            assert_eq!(action_id, "fixed-action");
+            assert_eq!(actual_params, params);
+            assert!((1..=remaining_at_release).contains(&deadline_ms));
+            assert!(deadline_ms < original_budget.as_millis() as u64);
+        }
+        _ => panic!("expected the queued action"),
+    }
+}
+
+#[tokio::test]
+async fn an_action_with_less_than_one_millisecond_remaining_is_not_written() {
+    let (writer, mut reader) = tokio::io::duplex(1024);
+    let (outgoing, receiver) = mpsc::channel(1);
+    let (_stop, stop_receiver) = watch::channel(false);
+    let (_cancel, cancellation) = watch::channel(false);
+    let authority = Arc::new(Mutex::new(Authority {
+        enabled: true,
+        epoch: 7,
+    }));
+    outgoing
+        .send(Outgoing::Action {
+            request_id: "submillisecond-request".into(),
+            action_id: "echo".into(),
+            params: json!({}),
+            deadline: Instant::now() + Duration::from_micros(500),
+            cancellation,
+        })
+        .await
+        .unwrap();
+    drop(outgoing);
+    write_frames(writer, receiver, stop_receiver, authority, 7)
+        .await
+        .unwrap();
+    let mut actual = Vec::new();
+    reader.read_to_end(&mut actual).await.unwrap();
+    assert!(actual.is_empty());
+}
+
+#[tokio::test]
 async fn interruption_mid_action_frame_closes_writer_instead_of_writing_next_frame() {
     for invalidation in ["deadline", "cancel"] {
         let (writer, mut reader) = tokio::io::duplex(8);
@@ -375,7 +919,9 @@ async fn interruption_mid_action_frame_closes_writer_instead_of_writing_next_fra
         let (cancel, cancellation) = watch::channel(false);
         outgoing
             .send(Outgoing::Action {
-                encoded: b"first action cannot complete while reader is stalled\n".to_vec(),
+                request_id: "partial-request".into(),
+                action_id: "echo".into(),
+                params: json!({"marker":"first action cannot complete while reader is stalled"}),
                 deadline: Instant::now()
                     + if invalidation == "deadline" {
                         Duration::from_millis(20)
@@ -411,7 +957,7 @@ async fn interruption_mid_action_frame_closes_writer_instead_of_writing_next_fra
         );
         let mut actual = Vec::new();
         reader.read_to_end(&mut actual).await.unwrap();
-        assert_eq!(actual, b"first ac");
+        assert_eq!(actual, b"{\"type\":");
     }
 }
 
@@ -465,5 +1011,299 @@ async fn a_buffered_reply_cannot_cross_logout_and_a_new_login() {
     host.start(spec("normal")).await.unwrap();
     ready(&host).await;
     assert_eq!(action(&host, "echo").await.unwrap()["ok"], true);
+    host.shutdown().await;
+}
+
+#[test]
+fn an_older_concurrent_resume_cannot_undo_a_newer_revocation() {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Barrier;
+
+    let first_revoked = Arc::new(Barrier::new(2));
+    let continue_first = Arc::new(Barrier::new(2));
+    let changed = Arc::new(AtomicUsize::new(0));
+    let host = PluginHost::new(Arc::new({
+        let first_revoked = first_revoked.clone();
+        let continue_first = continue_first.clone();
+        move || {
+            if changed.fetch_add(1, Ordering::AcqRel) == 0 {
+                // Pause after the authority lock is released but before the
+                // first revoke_epoch returns to its unlock continuation.
+                first_revoked.wait();
+                continue_first.wait();
+            }
+        }
+    }));
+    let older_host = host.clone();
+    let older = std::thread::spawn(move || {
+        let epoch = older_host.revoke_epoch();
+        (epoch, older_host.resume_in_epoch(epoch))
+    });
+    first_revoked.wait();
+    let newer_epoch = host.revoke_epoch();
+    continue_first.wait();
+    let (older_epoch, resumed) = older.join().unwrap();
+    assert_ne!(older_epoch, newer_epoch);
+    assert!(!resumed);
+    assert_eq!(host.authority_epoch(), newer_epoch);
+    assert!(!host.is_authorized_epoch(newer_epoch));
+
+    assert!(host.resume_in_epoch(newer_epoch));
+    assert!(!host.resume_in_epoch(older_epoch));
+    assert!(host.is_authorized_epoch(newer_epoch));
+}
+
+#[tokio::test]
+async fn an_old_session_action_cannot_reach_a_replacement_worker() {
+    let host = PluginHost::default();
+    host.start(spec("normal")).await.unwrap();
+    ready(&host).await;
+    let old_epoch = host.authority_epoch();
+    let old_instance = host.snapshots()[0].instance_id.clone().unwrap();
+    // Keep this caller unpolled until logout and a new login have replaced the
+    // worker. If dispatched, this advertised action would terminate that child.
+    let old_request = host.action_in_epoch(
+        TEST_PLUGIN,
+        &old_instance,
+        "crash",
+        json!({}),
+        Duration::from_secs(2),
+        old_epoch,
+    );
+    let new_epoch = host.revoke_epoch();
+    assert!(host.resume_in_epoch(new_epoch));
+    host.wait_revoked().await;
+    host.start_in_epoch(spec("normal"), new_epoch)
+        .await
+        .unwrap();
+    let replacement = ready(&host).await;
+
+    assert_eq!(old_request.await.unwrap_err(), PluginError::Unavailable);
+    assert_eq!(
+        host.action_in_epoch(
+            TEST_PLUGIN,
+            replacement.instance_id.as_deref().unwrap(),
+            "echo",
+            json!({}),
+            Duration::from_secs(2),
+            new_epoch,
+        )
+        .await
+        .unwrap()["ok"],
+        true
+    );
+    let after = host.snapshots().pop().unwrap();
+    assert_eq!(after.generation, replacement.generation);
+    assert_eq!(after.restart_count, replacement.restart_count);
+    assert_eq!(after.state, WorkerState::Running);
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_displayed_action_cannot_target_a_reinstalled_worker_with_reused_counters() {
+    let host = PluginHost::default();
+    host.start(spec("normal")).await.unwrap();
+    let first = ready(&host).await;
+    let epoch = host.authority_epoch();
+    let first_instance = first.instance_id.as_deref().unwrap();
+    // Delay polling until reinstall. Both workers advertise the same empty
+    // preset, so parameter equality and the reused counter cannot reject it.
+    let stale_click = host.action_in_epoch(
+        TEST_PLUGIN,
+        first_instance,
+        "crash",
+        json!({}),
+        Duration::from_secs(2),
+        epoch,
+    );
+    host.remove(TEST_PLUGIN).await.unwrap();
+    host.start(spec("normal")).await.unwrap();
+    let replacement = ready(&host).await;
+    assert_eq!(replacement.generation, first.generation);
+    assert_eq!(host.authority_epoch(), epoch);
+    assert_ne!(replacement.instance_id, first.instance_id);
+    assert_eq!(stale_click.await.unwrap_err(), PluginError::Unavailable);
+    assert_eq!(
+        host.action_in_epoch(
+            TEST_PLUGIN,
+            replacement.instance_id.as_deref().unwrap(),
+            "echo",
+            json!({}),
+            Duration::from_secs(2),
+            epoch,
+        )
+        .await
+        .unwrap()["ok"],
+        true
+    );
+    let after = host.snapshots().pop().unwrap();
+    assert_eq!(after.instance_id, replacement.instance_id);
+    assert_eq!(after.generation, replacement.generation);
+    assert_eq!(after.restart_count, 0);
+    assert_eq!(after.state, WorkerState::Running);
+    host.shutdown().await;
+    assert!(host
+        .snapshots()
+        .iter()
+        .all(|entry| entry.instance_id.is_none()));
+}
+
+#[tokio::test]
+async fn an_epoch_bound_resume_cannot_revive_a_shutdown_host() {
+    let host = PluginHost::default();
+    let epoch = host.revoke_epoch();
+    assert!(host.resume_in_epoch(epoch));
+    host.shutdown().await;
+    let stopped_epoch = host.authority_epoch();
+    assert!(!host.resume_in_epoch(stopped_epoch));
+    assert!(!host.resume_in_epoch(epoch));
+    assert!(!host.is_authorized_epoch(stopped_epoch));
+}
+
+fn video_spec(mode: &str) -> WorkerSpec {
+    let mut worker = configured_spec(mode);
+    worker.configuration.as_mut().unwrap().values = json!({"server":"https://video.test/base/"});
+    let manifest = serde_json::from_value(json!({
+        "schema_version":1,"plugin_id":TEST_PLUGIN,"version":"1.0.0","host_api":"^1.3",
+        "target":"aarch64-apple-darwin","entrypoint":"worker","inventory":[],"signature":null,
+        "config_schema":{"type":"object","properties":{"server":{"type":"string"}}},
+        "permissions":["plugin_configuration","http_video"],"http_video":{"base_url_setting":"server"}
+    })).unwrap();
+    worker.http_video =
+        HttpVideoGrant::from_manifest_configuration(&manifest, worker.configuration.as_ref())
+            .unwrap();
+    worker
+}
+
+#[tokio::test]
+async fn http_video_admission_is_private_deduplicated_and_notification_permission_scoped() {
+    let host = PluginHost::default();
+    let mut worker = video_spec("configuration_video");
+    worker.desktop_notifications = true;
+    host.start(worker).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let snapshot = serde_json::to_string(&host.snapshots()).unwrap();
+    assert!(!snapshot.contains("video.test") && !snapshot.contains("Private camera"));
+    let requests = host.take_http_video_requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "same ID and same title are independently suppressed"
+    );
+    assert_eq!(requests[0].id, "clip-1");
+    assert_eq!(requests[0].lease.plugin_id(), TEST_PLUGIN);
+    assert_eq!(requests[0].lease.epoch(), host.authority_epoch());
+    let mut notifications = Vec::new();
+    host.dispatch_notifications(|item| notifications.push(item.body.clone()));
+    assert_eq!(notifications, ["Camera motion clip available"]);
+    host.shutdown().await;
+    assert!(!requests[0].lease.is_active());
+}
+
+#[tokio::test]
+async fn http_video_rejects_missing_permission_wrong_origin_and_preconfiguration_requests() {
+    for (mode, permission) in [
+        ("configuration_video", false),
+        ("configuration_video_bad_url", true),
+        ("configuration_early_video", true),
+    ] {
+        let host = PluginHost::default();
+        let worker = if permission {
+            video_spec(mode)
+        } else {
+            configured_spec(mode)
+        };
+        host.start(worker).await.unwrap();
+        wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert!(host.take_http_video_requests().is_empty());
+        assert!(!host.has_pending_notifications());
+        host.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn http_video_queue_is_bounded_and_old_leases_cannot_survive_same_epoch_reregistration() {
+    let host = PluginHost::default();
+    host.start(video_spec("configuration_video_burst"))
+        .await
+        .unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let requests = host.take_http_video_requests();
+    assert_eq!(requests.len(), HTTP_VIDEO_QUEUE_CAPACITY);
+    assert!(
+        !host.has_pending_notifications(),
+        "HttpVideo alone does not grant notifications"
+    );
+    let old = requests[0].lease.clone();
+    host.remove(TEST_PLUGIN).await.unwrap();
+    assert!(!old.is_active());
+    host.start(video_spec("configuration_video")).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let fresh = host.take_http_video_requests().pop().unwrap().lease;
+    assert_eq!(old.epoch(), fresh.epoch());
+    assert_eq!(old.generation(), fresh.generation());
+    assert_ne!(old.instance_id(), fresh.instance_id());
+    assert!(old
+        .commit_if_active(|| panic!("old instance revived"))
+        .is_err());
+    host.revoke();
+    host.resume();
+    assert!(!fresh.is_active());
+    assert!(host.take_http_video_requests().is_empty());
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn http_video_crash_revokes_before_restart_and_supervisor_drop_revokes_current_lease() {
+    let host = PluginHost::default();
+    host.start(video_spec("configuration_video")).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let old = host.take_http_video_requests().pop().unwrap().lease;
+    let _ = action(&host, "crash").await;
+    wait_for(&host, |snapshot| {
+        snapshot.generation > old.generation() && snapshot.state == WorkerState::Running
+    })
+    .await;
+    assert!(!old.is_active());
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let fresh = entry.generation_lease.lock().unwrap().clone().unwrap();
+    assert_ne!(old.instance_id(), fresh.instance_id());
+    entry.task.lock().unwrap().as_ref().unwrap().abort();
+    time::timeout(Duration::from_secs(2), fresh.cancelled())
+        .await
+        .unwrap();
+    assert!(!fresh.is_active());
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn generation_is_revoked_if_the_first_spawn_callback_panics() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let host = PluginHost::new(Arc::new(move || {
+        if observed.fetch_add(1, Ordering::SeqCst) == 1 {
+            panic!("fixture spawn callback panic");
+        }
+    }));
+    host.start(video_spec("configuration_video")).await.unwrap();
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let lease = time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(lease) = entry.generation_lease.lock().unwrap().clone() {
+                break lease;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    time::timeout(Duration::from_secs(2), lease.cancelled())
+        .await
+        .unwrap();
+    assert!(!lease.is_active());
     host.shutdown().await;
 }

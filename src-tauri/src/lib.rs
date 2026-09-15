@@ -25,6 +25,9 @@ mod inverter_control;
 pub(crate) mod mqtt;
 #[cfg(desktop)]
 pub mod plugins;
+
+#[cfg(all(desktop, feature = "native-media-smoke"))]
+pub use plugins::native_media_smoke::run as run_native_media_smoke;
 #[cfg(target_os = "macos")]
 mod tray_icon;
 
@@ -1316,6 +1319,11 @@ fn percent_encode_query(input: &str) -> String {
     out
 }
 
+#[cfg(desktop)]
+fn is_video_window_label(label: &str) -> bool {
+    is_camera_video_label(label) || plugins::media_windows::is_plugin_video_label(label)
+}
+
 /// Force camera-video to the default size, then stack top-right (see
 /// [`position_camera_video_stacked`]). Call after create so window-state cannot stick.
 #[cfg(desktop)]
@@ -1330,7 +1338,7 @@ fn apply_camera_video_window_defaults(app: &tauri::AppHandle, window: &tauri::We
 /// Place a camera clip window at the top-right, packing into free slots.
 ///
 /// Layout (physical pixels, same margin as edge inset = `CAMERA_VIDEO_WINDOW_MARGIN`):
-/// Column-major from the top-right of the current (else primary) monitor:
+/// Column-major from the top-right of the current (else primary) monitor's work area:
 /// right column top→bottom, then the next column to the left, and so on.
 /// Only **visible** peer `camera-video*` windows count as occupied — closed or
 /// closing windows that linger in `webview_windows()` are ignored so stacking
@@ -1352,8 +1360,10 @@ fn position_camera_video_stacked(app: &tauri::AppHandle, window: &tauri::Webview
 
     let scale = monitor.scale_factor();
     let margin = (CAMERA_VIDEO_WINDOW_MARGIN * scale).round() as i32;
-    let screen_pos = *monitor.position();
-    let screen_size = *monitor.size();
+    // Exclude the menu bar/taskbar before assigning slots. Native clamping of
+    // only the first window would otherwise make the next slot overlap it.
+    let screen_pos = monitor.work_area().position;
+    let screen_size = monitor.work_area().size;
     let window_size = window.outer_size().unwrap_or_else(|_| {
         tauri::PhysicalSize::new(
             (CAMERA_VIDEO_WINDOW_W * scale).round() as u32,
@@ -1374,7 +1384,7 @@ fn position_camera_video_stacked(app: &tauri::AppHandle, window: &tauri::Webview
 
     let mut existing: Vec<(i32, i32)> = Vec::new();
     for (label, other) in app.webview_windows() {
-        if label.as_str() == window.label() || !is_camera_video_label(label.as_str()) {
+        if label.as_str() == window.label() || !is_video_window_label(label.as_str()) {
             continue;
         }
         // Closed/closing windows can linger in webview_windows() with their last
@@ -1432,7 +1442,7 @@ fn position_camera_video_stacked(app: &tauri::AppHandle, window: &tauri::Webview
 fn reflow_camera_video_windows(app: &tauri::AppHandle) {
     let mut windows: Vec<(tauri::WebviewWindow, i32, i32)> = Vec::new();
     for (label, win) in app.webview_windows() {
-        if !is_camera_video_label(label.as_str()) {
+        if !is_video_window_label(label.as_str()) {
             continue;
         }
         if !win.is_visible().unwrap_or(false) {
@@ -1462,8 +1472,8 @@ fn reflow_camera_video_windows(app: &tauri::AppHandle) {
 
     let scale = monitor.scale_factor();
     let margin = (CAMERA_VIDEO_WINDOW_MARGIN * scale).round() as i32;
-    let screen_pos = *monitor.position();
-    let screen_size = *monitor.size();
+    let screen_pos = monitor.work_area().position;
+    let screen_size = monitor.work_area().size;
     let window_size = ref_win.outer_size().unwrap_or_else(|_| {
         tauri::PhysicalSize::new(
             (CAMERA_VIDEO_WINDOW_W * scale).round() as u32,
@@ -1834,9 +1844,12 @@ pub fn run() {
     // persist/restore them or a prior huge size from .window-state.json will stick.
     let builder = builder.plugin(
         tauri_plugin_window_state::Builder::new()
-            .with_filter(|label| !is_camera_video_label(label))
+            .with_filter(|label| !is_video_window_label(label))
             .build(),
     );
+
+    #[cfg(desktop)]
+    let builder = plugins::media_windows::register(builder);
 
     builder
         .invoke_handler(|invoke| {
@@ -1854,6 +1867,19 @@ pub fn run() {
                     release_info::get_release_info,
                     plugins::bridge::get_plugin_snapshot,
                     plugins::bridge::plugin_action,
+                    plugins::bridge::close_plugin_video_window,
+                    plugins::bridge::drag_plugin_video_window,
+                    plugins::bridge::get_plugin_manager_snapshot,
+                    plugins::bridge::get_plugin_settings,
+                    plugins::bridge::save_plugin_settings,
+                    plugins::bridge::get_retained_plugin_data,
+                    plugins::bridge::delete_retained_plugin_data,
+                    plugins::bridge::preview_plugin_package,
+                    plugins::bridge::install_plugin_package,
+                    plugins::bridge::discard_plugin_package,
+                    plugins::bridge::set_plugin_enabled,
+                    plugins::bridge::rollback_plugin_package,
+                    plugins::bridge::uninstall_plugin_package,
                     get_state,
                     get_setpoint_override,
                     set_setpoint_override,

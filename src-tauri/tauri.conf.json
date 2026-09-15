@@ -68,6 +68,9 @@
           "http://*",
           "https://*",
           "asset:",
+          "plugin-media:",
+          "http://plugin-media.localhost",
+          "https://plugin-media.localhost",
           "http://asset.localhost",
           "https://asset.localhost"
         ]

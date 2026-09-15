@@ -29,13 +29,14 @@
             <UiButton
               size="sm"
               :disabled="!canAct(plugin)"
-              :loading="pendingActions.has(actionKey(plugin.plugin_id, item.action_id))"
-              @click="runAction(plugin.plugin_id, item)"
+              :loading="pendingActions.has(actionKey(plugin.plugin_id, plugin.instance_id, item))"
+              :aria-label="`${item.title}: ${item.label}`"
+              @click="runAction(plugin.plugin_id, plugin.instance_id, item)"
             >
               {{ item.label }}
             </UiButton>
             <p
-              v-if="failedActions.has(actionKey(plugin.plugin_id, item.action_id))"
+              v-if="failedActions.has(actionKey(plugin.plugin_id, plugin.instance_id, item))"
               role="alert"
               class="text-[10px] text-consumption mt-0.5"
             >

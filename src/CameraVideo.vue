@@ -3,10 +3,13 @@
     <div class="h-screen w-screen bg-black flex flex-col select-none overflow-hidden">
       <div
         class="flex items-center justify-between px-3 py-2 bg-gradient-to-b from-black/90 to-transparent absolute top-0 left-0 right-0 z-50 pointer-events-auto"
+        role="toolbar"
+        aria-label="Camera window controls"
+        @mousedown.left="dragOwnedWindow"
       >
         <!-- Tauri 2 drag region: title strip only so the close button stays clickable -->
         <div
-          data-tauri-drag-region
+          :data-tauri-drag-region="isPluginMedia ? undefined : true"
           class="flex items-center gap-2 min-w-0 flex-1 h-full cursor-default"
         >
           <div
@@ -70,12 +73,14 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import { logger } from './logger'
+import { pluginVideoRoute } from './features/desktop/plugins/pluginVideoRoute'
 
 const videoUrl = ref('')
 const cameraName = ref('Camera')
 const errorMessage = ref('')
 const mediaKind = ref<'video' | 'image'>('video')
 const videoEl = ref<HTMLVideoElement | null>(null)
+const isPluginMedia = ref(false)
 let imageCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 function setName(name?: string | null) {
@@ -125,12 +130,21 @@ function showError(message: string, name?: string | null) {
 
 function onVideoError() {
   errorMessage.value = 'Failed to play camera clip. Local file may be missing or unsupported.'
-  logger.warn('Camera video playback error for', videoUrl.value)
+  if (isPluginMedia.value) logger.warn('Plugin video playback failed')
+  else logger.warn('Camera video playback error for', videoUrl.value)
   videoUrl.value = ''
 }
 
 async function closeWindow() {
   clearImageCloseTimer()
+  if (isPluginMedia.value) {
+    try {
+      await invoke('close_plugin_video_window')
+    } catch {
+      logger.warn('Cannot close owned plugin video window')
+    }
+    return
+  }
   try {
     await getCurrentWindow().close()
     return
@@ -144,8 +158,43 @@ async function closeWindow() {
   }
 }
 
+async function dragOwnedWindow(event: MouseEvent) {
+  if (
+    !isPluginMedia.value ||
+    !(event.target instanceof Element) ||
+    event.target.closest('button')
+  ) {
+    return
+  }
+  try {
+    await invoke('drag_plugin_video_window')
+  } catch {
+    logger.warn('Cannot drag owned plugin video window')
+  }
+}
+
 onMounted(() => {
   const params = new URLSearchParams(globalThis.location.search)
+  let label = ''
+  try {
+    label = getCurrentWindow().label
+  } catch {
+    // Browser-only previews have no native window or plugin media authority.
+  }
+  isPluginMedia.value = label.startsWith('plugin-video-') || params.has('pluginMedia')
+  if (isPluginMedia.value) {
+    const route = pluginVideoRoute(globalThis.location.search, label)
+    if (!route) {
+      showError('This video window is unavailable.')
+    } else if (route.failed) {
+      showError('Failed to download camera clip.', route.name)
+    } else {
+      setName(route.name)
+      mediaKind.value = 'video'
+      videoUrl.value = convertFileSrc(route.id, 'plugin-media')
+    }
+    return
+  }
   const name = params.get('name')
   const error = params.get('error')
   const localPath = params.get('localPath')

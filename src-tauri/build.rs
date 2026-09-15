@@ -14,6 +14,9 @@ fn main() {
     let frontend_receipt = root.join("dist/build-profile.json");
     println!("cargo:rerun-if-changed={}", frontend_receipt.display());
     let target = env::var("TARGET").unwrap_or_default();
+    if !target.contains("android") && !target.contains("apple-ios") {
+        println!("cargo:rustc-env=INVERTER_DESKTOP_TARGET={target}");
+    }
     let profile = env::var("PROFILE").unwrap_or_default();
     let receipt = std::fs::read_to_string(&frontend_receipt).ok();
     mobile_build::validate_frontend(&target, &profile, receipt.as_deref())
@@ -85,5 +88,22 @@ fn main() {
         println!("cargo:rerun-if-changed=src/mobile_credentials.m");
     }
 
-    tauri_build::build()
+    if target.ends_with("windows-msvc") {
+        // Tauri's default resource only reaches application binaries. The same
+        // Common Controls v6 dependency is required before tests and examples
+        // can load Tauri's dialog/tray imports (tauri-apps/tauri#13419).
+        let manifest = root.join("src-tauri/windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        // Preserve the original Tauri manifest without adding a UAC section.
+        println!("cargo:rustc-link-arg=/MANIFESTUAC:NO");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        // Keep Tauri's icon/version resources without embedding the manifest
+        // twice in the application. Link it consistently into every artifact.
+        let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
+        tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows))
+            .expect("Cannot build Windows application resources");
+    } else {
+        tauri_build::build()
+    }
 }

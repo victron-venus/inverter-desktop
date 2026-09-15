@@ -20,6 +20,15 @@ readme = "../README.md"
 name = "inverter_dashboard_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Explicit native-only smoke executable; production entry never invokes it.
+native-media-smoke = ["tauri/custom-protocol"]
+
+[[example]]
+name = "plugin-media-smoke"
+path = "examples/plugin-media-smoke.rs"
+required-features = ["native-media-smoke"]
+
 [profile.release]
 lto = true
 codegen-units = 1
@@ -64,15 +73,25 @@ tauri-plugin-fs = "2"
 tokio = { version = "1", features = ["process", "io-util"] }
 semver = "1"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+zip = { version = "8.6", default-features = false }
+ed25519-dalek = "3"
+sha2 = "0.10.9"
+tempfile = "3"
 futures-util = "0.3"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-window-state = "2"
+notify-rust = "4.18"
 image = { version = "0.25", default-features = false, features = ["png"] }
 keyring = "4.1"
 auto-launch = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ab_glyph = "0.2"
+mac-notification-sys = "0.6.15"
+
+[target.'cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # winreg removed - using autolaunch crate for cross-platform auto-start
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }

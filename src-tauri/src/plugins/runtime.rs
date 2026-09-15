@@ -1,17 +1,18 @@
 //! App-wide, desktop-only supervision for explicitly trusted worker executables.
 //!
 //! This is a process boundary, not an OS sandbox. Package discovery and executable
-//! authorization belong to the future signed installer; the webview cannot start
+//! authorization belong to the signed package layer; the webview cannot start
 //! an executable. Workers receive no inherited environment or core service handles.
 
+use super::generation::{GenerationLease, RevokeOnDrop};
 use super::protocol::{
-    encode_host_frame, parse_worker_frame, validate_handshake, validate_plugin_id,
-    DashboardContribution, HostMessage, WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS,
-    MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    encode_host_frame, parse_worker_frame, validate_handshake, validate_host_message,
+    validate_plugin_id, DashboardContribution, HostMessage, HttpVideoGrant, WorkerConfiguration,
+    WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -36,9 +37,79 @@ const RESTART_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_FRAMES_PER_SECOND: usize = 120;
 const MAX_CONTRIBUTIONS_PER_SECOND: usize = 10;
 const DEADLINE_TICK: Duration = Duration::from_millis(10);
+const NOTIFICATION_QUEUE_CAPACITY: usize = 16;
+const NOTIFICATIONS_PER_WORKER_PER_MINUTE: usize = 30;
+const NOTIFICATIONS_GLOBAL_PER_MINUTE: usize = 120;
+const NOTIFICATION_SEEN_CAPACITY: usize = 512;
+const NOTIFICATION_DEDUP_TTL: Duration = Duration::from_secs(10 * 60);
+const NOTIFICATION_DELIVERY_TTL: Duration = Duration::from_secs(30);
+
+const HTTP_VIDEO_QUEUE_CAPACITY: usize = 4;
+const HTTP_VIDEO_COOLDOWN: Duration = Duration::from_secs(45);
+
+/// Native ownership only: URLs/titles never enter public worker snapshots.
+pub(crate) struct QueuedHttpVideo {
+    pub lease: GenerationLease,
+    pub grant: HttpVideoGrant,
+    pub id: String,
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Default)]
+struct HttpVideoState {
+    pending: VecDeque<(QueuedHttpVideo, Instant)>,
+    seen: VecDeque<(String, Instant)>,
+    titles: VecDeque<(String, Instant)>,
+    rate: NotificationRate,
+}
 
 type ChangeCallback = Arc<dyn Fn() + Send + Sync>;
 type ActionReply = oneshot::Sender<Result<Value, PluginError>>;
+
+/// Native delivery only. Never serialize notification content into app snapshots.
+pub(crate) struct DesktopNotification {
+    pub plugin_id: String,
+    pub id: String,
+    pub title: String,
+    pub body: String,
+}
+
+struct QueuedNotification {
+    notification: DesktopNotification,
+    generation: u64,
+    created: Instant,
+}
+
+struct NotificationRate {
+    window: Instant,
+    count: usize,
+}
+
+impl Default for NotificationRate {
+    fn default() -> Self {
+        Self {
+            window: Instant::now(),
+            count: 0,
+        }
+    }
+}
+
+impl NotificationRate {
+    fn refresh(&mut self) {
+        if self.window.elapsed() >= Duration::from_secs(60) {
+            self.window = Instant::now();
+            self.count = 0;
+        }
+    }
+}
+
+#[derive(Default)]
+struct NotificationState {
+    pending: VecDeque<QueuedNotification>,
+    seen: VecDeque<(String, Instant)>,
+    rate: NotificationRate,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +126,8 @@ pub struct PluginSnapshot {
     pub plugin_id: String,
     pub state: WorkerState,
     pub generation: u64,
+    /// Opaque identity of the actual process, including after reinstall.
+    pub instance_id: Option<String>,
     pub restart_count: u32,
     pub contributions: Vec<DashboardContribution>,
     /// Host-owned diagnostic codes only. Worker stderr and response text never enter this field.
@@ -90,6 +163,10 @@ pub struct WorkerSpec {
     pub plugin_id: String,
     pub executable: PathBuf,
     pub args: Vec<OsString>,
+    pub configuration: Option<WorkerConfiguration>,
+    /// Granted only from the installed package's freshly verified manifest.
+    pub desktop_notifications: bool,
+    pub http_video: Option<HttpVideoGrant>,
 }
 
 struct WorkerEntry {
@@ -102,9 +179,90 @@ struct WorkerEntry {
     done: watch::Receiver<bool>,
     reaped: AtomicBool,
     changed: ChangeCallback,
+    notifications: Mutex<NotificationState>,
+    notification_rate: Arc<Mutex<NotificationRate>>,
+    generation_lease: Mutex<Option<GenerationLease>>,
+    http_videos: Mutex<HttpVideoState>,
 }
 
 impl WorkerEntry {
+    fn revoke_generation(&self) {
+        if let Some(lease) = self
+            .generation_lease
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            lease.revoke();
+        }
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .instance_id = None;
+        self.http_videos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .clear();
+    }
+
+    /// Called under authority; this only validates and enqueues native data.
+    fn queue_http_video(
+        &self,
+        grant: &HttpVideoGrant,
+        id: String,
+        url: String,
+        title: String,
+    ) -> bool {
+        let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if snapshot.state != WorkerState::Running
+            || *self.stop.borrow()
+            || self.reaped.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let lease = self
+            .generation_lease
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(lease) = lease.filter(GenerationLease::is_active) else {
+            return false;
+        };
+        let mut state = self.http_videos.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        state
+            .pending
+            .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DELIVERY_TTL);
+        state
+            .seen
+            .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DEDUP_TTL);
+        state
+            .titles
+            .retain(|(_, created)| now.duration_since(*created) < HTTP_VIDEO_COOLDOWN);
+        state.rate.refresh();
+        if state.pending.len() >= HTTP_VIDEO_QUEUE_CAPACITY
+            || state.seen.len() >= NOTIFICATION_SEEN_CAPACITY
+            || state.seen.iter().any(|(seen, _)| seen == &id)
+            || state.titles.iter().any(|(seen, _)| seen == &title)
+            || state.rate.count >= NOTIFICATIONS_PER_WORKER_PER_MINUTE
+        {
+            return false;
+        }
+        state.rate.count += 1;
+        let request = QueuedHttpVideo {
+            lease,
+            grant: grant.clone(),
+            id,
+            url,
+            title,
+        };
+        state.seen.push_back((request.id.clone(), now));
+        state.titles.push_back((request.title.clone(), now));
+        state.pending.push_back((request, now));
+        true
+    }
+
     fn authorized(&self) -> bool {
         let authority = self.authority.lock().unwrap_or_else(|e| e.into_inner());
         authority.enabled && authority.epoch == self.epoch
@@ -118,8 +276,65 @@ impl WorkerEntry {
     }
 
     fn update(&self, update: impl FnOnce(&mut PluginSnapshot)) {
-        update(&mut self.snapshot.lock().unwrap_or_else(|e| e.into_inner()));
+        {
+            let mut snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            update(&mut snapshot);
+            if snapshot.state != WorkerState::Running {
+                self.notifications
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .clear();
+            }
+        }
         (self.changed)();
+    }
+
+    /// Called with the authority guard held. Bounds and deduplication are local
+    /// to this worker registration; automatic restarts retain its recent IDs.
+    fn queue_notification(&self, notification: DesktopNotification) -> bool {
+        let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if snapshot.state != WorkerState::Running
+            || *self.stop.borrow()
+            || self.reaped.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let mut state = self.notifications.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        state
+            .seen
+            .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DEDUP_TTL);
+        state
+            .pending
+            .retain(|queued| now.duration_since(queued.created) < NOTIFICATION_DELIVERY_TTL);
+        state.rate.refresh();
+        if state.seen.iter().any(|(id, _)| id == &notification.id)
+            || state.pending.len() >= NOTIFICATION_QUEUE_CAPACITY
+            || state.rate.count >= NOTIFICATIONS_PER_WORKER_PER_MINUTE
+        {
+            return false;
+        }
+        let mut global = self
+            .notification_rate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        global.refresh();
+        if global.count >= NOTIFICATIONS_GLOBAL_PER_MINUTE {
+            return false;
+        }
+        global.count += 1;
+        state.rate.count += 1;
+        if state.seen.len() >= NOTIFICATION_SEEN_CAPACITY {
+            state.seen.pop_front();
+        }
+        state.seen.push_back((notification.id.clone(), now));
+        state.pending.push_back(QueuedNotification {
+            notification,
+            generation: snapshot.generation,
+            created: now,
+        });
+        true
     }
 }
 
@@ -134,6 +349,7 @@ struct HostInner {
     stopped: AtomicBool,
     next_request: AtomicU64,
     changed: ChangeCallback,
+    notification_rate: Arc<Mutex<NotificationRate>>,
 }
 
 impl Drop for HostInner {
@@ -145,6 +361,7 @@ impl Drop for HostInner {
             .unwrap_or_else(|e| e.into_inner())
             .values()
         {
+            entry.revoke_generation();
             let _ = entry.stop.send(true);
         }
     }
@@ -171,6 +388,7 @@ impl PluginHost {
             stopped: AtomicBool::new(false),
             next_request: AtomicU64::new(1),
             changed,
+            notification_rate: Arc::new(Mutex::new(NotificationRate::default())),
         }))
     }
 
@@ -180,6 +398,27 @@ impl PluginHost {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .epoch
+    }
+
+    /// Check the authority captured before an asynchronous package operation.
+    pub fn is_authorized_epoch(&self, epoch: u64) -> bool {
+        let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        !self.0.stopped.load(Ordering::Acquire) && authority.enabled && authority.epoch == epoch
+    }
+
+    /// Linearize a small synchronous package-state commit with session revocation.
+    /// The callback must not call the host or wait for asynchronous work.
+    pub(crate) fn commit_in_epoch<T>(
+        &self,
+        epoch: u64,
+        commit: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        if self.0.stopped.load(Ordering::Acquire) || !authority.enabled || authority.epoch != epoch
+        {
+            return Err("Plugin operation authorization changed".into());
+        }
+        commit()
     }
 
     pub fn snapshots(&self) -> Vec<PluginSnapshot> {
@@ -195,17 +434,164 @@ impl PluginHost {
         snapshots
     }
 
+    /// A cheap scheduling hint only; dispatch still checks authority and state.
+    pub(crate) fn has_pending_notifications(&self) -> bool {
+        self.0
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|entry| {
+                !entry
+                    .notifications
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .is_empty()
+            })
+    }
+
+    /// Deliver at most sixteen queued notifications per registered worker (128
+    /// globally). The callback runs synchronously under authority and worker
+    /// state guards: it must not reenter this host/auth or defer delivery.
+    pub(crate) fn dispatch_notifications(
+        &self,
+        mut deliver: impl FnMut(&DesktopNotification),
+    ) -> usize {
+        let entries: Vec<_> = self
+            .0
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        let mut delivered = 0;
+        for entry in entries {
+            for _ in 0..NOTIFICATION_QUEUE_CAPACITY {
+                // Release authority between submissions so a slow native
+                // notification service does not turn a batch into one lock hold.
+                let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+                let snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(queued) = entry
+                    .notifications
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .pop_front()
+                else {
+                    break;
+                };
+                if self.0.stopped.load(Ordering::Acquire)
+                    || !authority.enabled
+                    || authority.epoch != entry.epoch
+                    || *entry.stop.borrow()
+                    || entry.reaped.load(Ordering::Acquire)
+                    || snapshot.state != WorkerState::Running
+                    || snapshot.generation != queued.generation
+                    || queued.created.elapsed() >= NOTIFICATION_DELIVERY_TTL
+                {
+                    continue;
+                }
+                deliver(&queued.notification);
+                delivered += 1;
+            }
+        }
+        delivered
+    }
+
+    /// Cheap scheduling hint, without configuration/auth disk reads.
+    pub(crate) fn has_pending_http_videos(&self) -> bool {
+        self.0
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|entry| {
+                !entry
+                    .http_videos
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pending
+                    .is_empty()
+            })
+    }
+
+    /// Drain at most four items per registered worker. Callers perform live app
+    /// authentication first and retain/recheck the returned lease throughout I/O.
+    pub(crate) fn take_http_video_requests(&self) -> Vec<QueuedHttpVideo> {
+        let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        let mut requests = Vec::new();
+        let entries = self.0.entries.lock().unwrap_or_else(|e| e.into_inner());
+        for entry in entries.values() {
+            let snapshot = entry.snapshot();
+            let instance = entry
+                .generation_lease
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(GenerationLease::instance_id);
+            let mut state = entry.http_videos.lock().unwrap_or_else(|e| e.into_inner());
+            while let Some((request, created)) = state.pending.pop_front() {
+                if !self.0.stopped.load(Ordering::Acquire)
+                    && authority.enabled
+                    && authority.epoch == entry.epoch
+                    && !*entry.stop.borrow()
+                    && !entry.reaped.load(Ordering::Acquire)
+                    && snapshot.state == WorkerState::Running
+                    && request.lease.is_active()
+                    && request.lease.generation() == snapshot.generation
+                    && request.lease.epoch() == authority.epoch
+                    && request.lease.plugin_id() == snapshot.plugin_id
+                    && Some(request.lease.instance_id()) == instance
+                    && created.elapsed() < NOTIFICATION_DELIVERY_TTL
+                {
+                    requests.push(request);
+                }
+            }
+        }
+        requests
+    }
+
     /// Register a worker exactly once and begin its bounded startup/restart lifecycle.
     /// The returned snapshot is `starting`; readiness is signalled through snapshots.
     pub async fn start(&self, spec: WorkerSpec) -> Result<PluginSnapshot, PluginError> {
+        self.register(spec, None)
+    }
+
+    /// Register only in the session that authorized a package operation.
+    /// The epoch check and registration share the same authority lock.
+    pub async fn start_in_epoch(
+        &self,
+        spec: WorkerSpec,
+        epoch: u64,
+    ) -> Result<PluginSnapshot, PluginError> {
+        self.register(spec, Some(epoch))
+    }
+
+    fn register(
+        &self,
+        spec: WorkerSpec,
+        expected_epoch: Option<u64>,
+    ) -> Result<PluginSnapshot, PluginError> {
         if self.0.stopped.load(Ordering::Acquire) {
             return Err(PluginError::HostStopped);
         }
         if !spec.executable.is_absolute() || validate_plugin_id(&spec.plugin_id).is_err() {
             return Err(PluginError::InvalidWorker);
         }
+        if spec.http_video.is_some() && spec.configuration.is_none() {
+            return Err(PluginError::InvalidWorker);
+        }
+        if spec
+            .configuration
+            .as_ref()
+            .is_some_and(|configuration| configuration.validate().is_err())
+        {
+            return Err(PluginError::InvalidWorker);
+        }
         let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
-        if !authority.enabled {
+        if !authority.enabled || expected_epoch.is_some_and(|epoch| epoch != authority.epoch) {
             return Err(PluginError::Unavailable);
         }
         let (commands, receiver) = mpsc::channel(CONTROL_QUEUE_CAPACITY);
@@ -216,6 +602,7 @@ impl PluginHost {
                 plugin_id: spec.plugin_id.clone(),
                 state: WorkerState::Starting,
                 generation: 0,
+                instance_id: None,
                 restart_count: 0,
                 contributions: Vec::new(),
                 last_error: None,
@@ -228,6 +615,10 @@ impl PluginHost {
             epoch: authority.epoch,
             done,
             reaped: AtomicBool::new(true),
+            notifications: Mutex::new(NotificationState::default()),
+            generation_lease: Mutex::new(None),
+            http_videos: Mutex::new(HttpVideoState::default()),
+            notification_rate: self.0.notification_rate.clone(),
         });
         {
             let mut entries = self.0.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -272,6 +663,27 @@ impl PluginHost {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, PluginError> {
+        let epoch = self.authority_epoch();
+        let instance = self
+            .entry(plugin_id)?
+            .snapshot()
+            .instance_id
+            .ok_or(PluginError::Unavailable)?;
+        self.action_in_epoch(plugin_id, &instance, action_id, params, timeout, epoch)
+            .await
+    }
+
+    /// Enqueue only for the actual worker instance and session shown to the
+    /// caller. Reinstall can reuse generation counters but never this identity.
+    pub async fn action_in_epoch(
+        &self,
+        plugin_id: &str,
+        instance_id: &str,
+        action_id: &str,
+        params: Value,
+        timeout: Duration,
+        epoch: u64,
+    ) -> Result<Value, PluginError> {
         if self.0.stopped.load(Ordering::Acquire) {
             return Err(PluginError::HostStopped);
         }
@@ -280,7 +692,9 @@ impl PluginHost {
         }
         let entry = self.entry(plugin_id)?;
         let snapshot = entry.snapshot();
-        if snapshot.state != WorkerState::Running {
+        if snapshot.state != WorkerState::Running
+            || snapshot.instance_id.as_deref() != Some(instance_id)
+        {
             return Err(PluginError::Unavailable);
         }
         if !advertises(&snapshot.contributions, action_id, &params) {
@@ -297,13 +711,16 @@ impl PluginHost {
             params: params.clone(),
             deadline_ms: timeout.as_millis().max(1) as u64,
         };
-        let encoded = encode_host_frame(&message).map_err(|_| PluginError::InvalidRequest)?;
+        validate_host_message(&message).map_err(|_| PluginError::InvalidRequest)?;
         let (reply, response) = oneshot::channel();
         let (cancel, cancellation) = watch::channel(false);
         let deadline = Instant::now() + timeout;
         {
             let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
-            if !authority.enabled || authority.epoch != entry.epoch {
+            if self.0.stopped.load(Ordering::Acquire) {
+                return Err(PluginError::HostStopped);
+            }
+            if !authority.enabled || authority.epoch != epoch || entry.epoch != epoch {
                 return Err(PluginError::Unavailable);
             }
             entry
@@ -313,7 +730,6 @@ impl PluginHost {
                     generation: snapshot.generation,
                     action_id: action_id.to_owned(),
                     params,
-                    encoded,
                     cancellation,
                     deadline,
                     reply,
@@ -341,7 +757,11 @@ impl PluginHost {
 
     pub async fn stop(&self, plugin_id: &str) -> Result<(), PluginError> {
         let entry = self.entry(plugin_id)?;
-        let _ = entry.stop.send(true);
+        {
+            let _authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+            entry.revoke_generation();
+            let _ = entry.stop.send(true);
+        }
         wait_stopped(&entry).await;
         if !entry.reaped.load(Ordering::Acquire) {
             return Err(PluginError::WorkerError);
@@ -349,12 +769,46 @@ impl PluginHost {
         Ok(())
     }
 
+    /// Stop and reap before releasing a plugin's registry slot and contributions.
+    /// A concurrent replacement must never be removed on behalf of an old entry.
+    pub async fn remove(&self, plugin_id: &str) -> Result<(), PluginError> {
+        let entry = self.entry(plugin_id)?;
+        {
+            let _authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+            entry.revoke_generation();
+            let _ = entry.stop.send(true);
+        }
+        wait_stopped(&entry).await;
+        if !entry.reaped.load(Ordering::Acquire) {
+            return Err(PluginError::WorkerError);
+        }
+        {
+            let mut entries = self.0.entries.lock().unwrap_or_else(|e| e.into_inner());
+            match entries.get(plugin_id) {
+                Some(current) if Arc::ptr_eq(current, &entry) => {
+                    entries.remove(plugin_id);
+                }
+                Some(_) => return Err(PluginError::AlreadyRegistered),
+                None => return Ok(()),
+            }
+        }
+        (self.0.changed)();
+        Ok(())
+    }
+
     /// Revoke synchronously before publishing an application logout or policy change.
     /// Old generations stay unauthorized even if a later login resumes the host.
     pub fn revoke(&self) {
+        self.revoke_epoch();
+    }
+
+    /// Return this revocation's exact epoch, even if another session changes
+    /// authority before this caller can perform its follow-up work.
+    pub(crate) fn revoke_epoch(&self) -> u64 {
         let mut authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
         authority.enabled = false;
         authority.epoch = authority.epoch.wrapping_add(1);
+        let epoch = authority.epoch;
         let entries: Vec<_> = self
             .0
             .entries
@@ -364,13 +818,21 @@ impl PluginHost {
             .cloned()
             .collect();
         for entry in entries {
+            entry.revoke_generation();
             let _ = entry.stop.send(true);
             let mut snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             snapshot.state = WorkerState::Stopped;
             snapshot.contributions.clear();
+            entry
+                .notifications
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pending
+                .clear();
         }
         drop(authority);
         (self.0.changed)();
+        epoch
     }
 
     /// Resume native registration after a newly authorized session, without restarting workers.
@@ -379,6 +841,17 @@ impl PluginHost {
         if !self.0.stopped.load(Ordering::Acquire) {
             authority.enabled = true;
         }
+    }
+
+    /// Resume only the session transition that captured `epoch`; an older
+    /// unlock continuation must never undo a newer logout or terminal shutdown.
+    pub(crate) fn resume_in_epoch(&self, epoch: u64) -> bool {
+        let mut authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        if self.0.stopped.load(Ordering::Acquire) || authority.epoch != epoch {
+            return false;
+        }
+        authority.enabled = true;
+        true
     }
 
     /// Stop and reap registered children; later explicit starts remain possible after resume.
@@ -466,7 +939,6 @@ enum Control {
         generation: u64,
         action_id: String,
         params: Value,
-        encoded: Vec<u8>,
         cancellation: watch::Receiver<bool>,
         deadline: Instant,
         reply: ActionReply,
@@ -481,8 +953,14 @@ struct Pending {
 
 enum Outgoing {
     Control(Vec<u8>),
-    Action {
+    Configuration {
         encoded: Vec<u8>,
+        deadline: Instant,
+    },
+    Action {
+        request_id: String,
+        action_id: String,
+        params: Value,
         deadline: Instant,
         cancellation: watch::Receiver<bool>,
     },
@@ -507,6 +985,24 @@ async fn write_frames<W: AsyncWrite + Unpin>(
             message = outgoing.recv() => match message { Some(message) => message, None => return Ok(()) },
         };
         match message {
+            Outgoing::Configuration { encoded, deadline } => {
+                let authorized = {
+                    let guard = authority.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.enabled && guard.epoch == epoch
+                };
+                if !authorized || *stop.borrow() {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    return Err("worker_configuration_timeout");
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => return Ok(()),
+                    _ = time::sleep_until(deadline) => return Err("worker_configuration_timeout"),
+                    result = stdin.write_all(&encoded) => result.map_err(|_| "worker_write_failed")?,
+                }
+            }
             Outgoing::Control(bytes) => {
                 tokio::select! {
                     biased;
@@ -517,7 +1013,9 @@ async fn write_frames<W: AsyncWrite + Unpin>(
                 }
             }
             Outgoing::Action {
-                encoded,
+                request_id,
+                action_id,
+                params,
                 deadline,
                 mut cancellation,
             } => {
@@ -532,6 +1030,23 @@ async fn write_frames<W: AsyncWrite + Unpin>(
                 {
                     continue;
                 }
+                // Forward only the original request's remaining budget. Queue
+                // pressure must not give the worker a fresh full timeout.
+                let deadline_ms = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .try_into()
+                    .map_err(|_| "host_frame_invalid")?;
+                if deadline_ms == 0 {
+                    continue;
+                }
+                let encoded = encode_host_frame(&HostMessage::Action {
+                    request_id,
+                    action_id,
+                    params,
+                    deadline_ms,
+                })
+                .map_err(|_| "host_frame_invalid")?;
                 tokio::select! {
                     biased;
                     _ = stop.changed() => return Ok(()),
@@ -593,9 +1108,26 @@ impl WorkerPipes {
     }
 
     fn send(&self, message: &HostMessage) -> Result<(), &'static str> {
+        if matches!(message, HostMessage::Configuration { .. }) {
+            return Err("configuration_requires_authorized_writer");
+        }
         let bytes = encode_host_frame(message).map_err(|_| "host_frame_invalid")?;
         self.writer
             .try_send(Outgoing::Control(bytes))
+            .map_err(|_| "worker_write_queue_full")
+    }
+
+    fn configure(
+        &self,
+        configuration: &WorkerConfiguration,
+        deadline: Instant,
+    ) -> Result<(), &'static str> {
+        let encoded = encode_host_frame(&HostMessage::Configuration {
+            configuration: configuration.clone(),
+        })
+        .map_err(|_| "host_configuration_invalid")?;
+        self.writer
+            .try_send(Outgoing::Configuration { encoded, deadline })
             .map_err(|_| "worker_write_queue_full")
     }
 }
@@ -635,9 +1167,9 @@ fn spawn_generation(
     spec: &WorkerSpec,
     entry: &WorkerEntry,
     restart_count: u32,
-) -> Result<Option<Child>, &'static str> {
+) -> Result<Option<(Child, RevokeOnDrop)>, &'static str> {
     let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
-    if !authority.enabled || authority.epoch != entry.epoch {
+    if !authority.enabled || authority.epoch != entry.epoch || *entry.stop.borrow() {
         return Ok(None);
     }
     {
@@ -648,6 +1180,7 @@ fn spawn_generation(
             WorkerState::Restarting
         };
         snapshot.generation += 1;
+        snapshot.instance_id = None;
         snapshot.restart_count = restart_count;
         snapshot.contributions.clear();
     }
@@ -660,10 +1193,26 @@ fn spawn_generation(
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "worker_spawn_failed")?;
+    let lease = GenerationLease::new(
+        spec.plugin_id.clone(),
+        entry.epoch,
+        entry.snapshot().generation,
+    );
+    let generation_guard = RevokeOnDrop(lease.clone());
+    let instance_id = lease.instance_id().to_string();
+    *entry
+        .generation_lease
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(lease);
+    entry
+        .snapshot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .instance_id = Some(instance_id);
     entry.reaped.store(false, Ordering::Release);
     drop(authority);
     (entry.changed)();
-    Ok(Some(child))
+    Ok(Some((child, generation_guard)))
 }
 
 async fn supervise(
@@ -677,8 +1226,8 @@ async fn supervise(
         if *stop.borrow() || !entry.authorized() {
             break;
         }
-        let mut child = match spawn_generation(&spec, &entry, restart_count) {
-            Ok(Some(child)) => child,
+        let (mut child, _generation_guard) = match spawn_generation(&spec, &entry, restart_count) {
+            Ok(Some(generation)) => generation,
             Ok(None) => break,
             Err(code) => {
                 fail_entry(&entry, code);
@@ -686,6 +1235,7 @@ async fn supervise(
             }
         };
         let Some(mut pipes) = WorkerPipes::new(&mut child, &entry, stop.clone()) else {
+            entry.revoke_generation();
             entry
                 .reaped
                 .store(terminate(&mut child, None).await, Ordering::Release);
@@ -701,6 +1251,7 @@ async fn supervise(
             &mut stop,
         )
         .await;
+        entry.revoke_generation();
         // Remove stale contributions before awaiting grace, cancellation, or restart backoff.
         entry.update(|snapshot| {
             snapshot.contributions.clear();
@@ -767,11 +1318,19 @@ impl Outcome {
 }
 
 fn fail_entry(entry: &WorkerEntry, code: &str) {
+    entry.revoke_generation();
     entry.update(|snapshot| {
         snapshot.state = WorkerState::Failed;
         snapshot.last_error = Some(code.to_owned());
         snapshot.contributions.clear();
     });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartupPhase {
+    Identity,
+    Configuration,
+    Running,
 }
 
 async fn run_generation(
@@ -792,7 +1351,7 @@ async fn run_generation(
     }
     let generation = entry.snapshot().generation;
     let startup_deadline = Instant::now() + STARTUP_TIMEOUT;
-    let mut ready = false;
+    let mut startup = StartupPhase::Identity;
     let mut rate_window = Instant::now();
     let mut frame_count = 0;
     let mut contribution_count = 0;
@@ -807,7 +1366,7 @@ async fn run_generation(
                 break Outcome::Exited(if exit.is_ok() { "worker_exited" } else { "worker_wait_failed" });
             }
             _ = ticks.tick() => {
-                if !ready && Instant::now() >= startup_deadline { break Outcome::Failed("worker_startup_timeout"); }
+                if startup != StartupPhase::Running && Instant::now() >= startup_deadline { break Outcome::Failed("worker_startup_timeout"); }
                 expire_pending(&mut pending, pipes);
             }
             frame = pipes.frames.recv() => {
@@ -820,14 +1379,14 @@ async fn run_generation(
                 if frame_count > MAX_FRAMES_PER_SECOND || contribution_count > MAX_CONTRIBUTIONS_PER_SECOND {
                     break Outcome::Failed("worker_rate_limit");
                 }
-                match handle_frame(frame, spec, entry, &mut ready, &mut pending) {
+                match handle_frame(frame, spec, entry, &mut startup, &mut pending, pipes, startup_deadline) {
                     Ok(()) => {},
                     Err(outcome) => break outcome,
                 }
             }
             control = commands.recv() => {
                 match control {
-                    Some(control) => handle_control(control, entry, generation, ready, pipes, &mut pending),
+                    Some(control) => handle_control(control, entry, generation, startup == StartupPhase::Running, pipes, &mut pending),
                     None => break Outcome::Stopped,
                 }
             }
@@ -843,8 +1402,10 @@ fn handle_frame(
     frame: Option<Result<WorkerMessage, &'static str>>,
     spec: &WorkerSpec,
     entry: &WorkerEntry,
-    ready: &mut bool,
+    startup: &mut StartupPhase,
     pending: &mut HashMap<String, Pending>,
+    pipes: &WorkerPipes,
+    startup_deadline: Instant,
 ) -> Result<(), Outcome> {
     let message = match frame {
         Some(Ok(message)) => message,
@@ -853,14 +1414,36 @@ fn handle_frame(
         }
         Some(Err(code)) => return Err(Outcome::Failed(code)),
     };
-    if !*ready {
-        validate_handshake(&spec.plugin_id, &message)
-            .map_err(|_| Outcome::Failed("worker_handshake_invalid"))?;
+    if *startup != StartupPhase::Running {
+        if Instant::now() >= startup_deadline {
+            return Err(Outcome::Failed("worker_startup_timeout"));
+        }
+        match *startup {
+            StartupPhase::Identity => validate_handshake(&spec.plugin_id, &message)
+                .map_err(|_| Outcome::Failed("worker_handshake_invalid"))?,
+            StartupPhase::Configuration => {
+                if !matches!(&message, WorkerMessage::ConfigurationReady { revision }
+                    if spec.configuration.as_ref().is_some_and(|configuration| &configuration.revision == revision))
+                {
+                    return Err(Outcome::Failed("worker_configuration_ack_invalid"));
+                }
+            }
+            StartupPhase::Running => unreachable!(),
+        }
         let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
         if !authority.enabled || authority.epoch != entry.epoch {
             return Err(Outcome::Stopped);
         }
-        *ready = true;
+        if *startup == StartupPhase::Identity {
+            if let Some(configuration) = &spec.configuration {
+                pipes
+                    .configure(configuration, startup_deadline)
+                    .map_err(Outcome::Failed)?;
+                *startup = StartupPhase::Configuration;
+                return Ok(());
+            }
+        }
+        *startup = StartupPhase::Running;
         {
             let mut snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             snapshot.state = WorkerState::Running;
@@ -876,6 +1459,35 @@ fn handle_frame(
     }
     let mut notify = false;
     match message {
+        WorkerMessage::HttpVideo { id, url, title } => {
+            let grant = spec
+                .http_video
+                .as_ref()
+                .ok_or(Outcome::Failed("worker_http_video_unauthorized"))?;
+            grant
+                .validate_url(&url)
+                .map_err(|_| Outcome::Failed("worker_http_video_url_invalid"))?;
+            notify = entry.queue_http_video(grant, id.clone(), url, title.clone());
+            if notify && spec.desktop_notifications {
+                entry.queue_notification(DesktopNotification {
+                    plugin_id: spec.plugin_id.clone(),
+                    id,
+                    title,
+                    body: "Camera motion clip available".into(),
+                });
+            }
+        }
+        WorkerMessage::Notification { id, title, body } => {
+            if !spec.desktop_notifications {
+                return Err(Outcome::Failed("worker_notification_unauthorized"));
+            }
+            notify = entry.queue_notification(DesktopNotification {
+                plugin_id: spec.plugin_id.clone(),
+                id,
+                title,
+                body,
+            });
+        }
         WorkerMessage::Contributions { items } => {
             entry
                 .snapshot
@@ -901,7 +1513,9 @@ fn handle_frame(
         }
         WorkerMessage::Event { .. } => { /* Reserved worker-scoped data; no arbitrary app event forwarding. */
         }
-        WorkerMessage::Ready { .. } => return Err(Outcome::Failed("worker_duplicate_handshake")),
+        WorkerMessage::Ready { .. } | WorkerMessage::ConfigurationReady { .. } => {
+            return Err(Outcome::Failed("worker_duplicate_handshake"));
+        }
     }
     drop(authority);
     if notify {
@@ -930,7 +1544,6 @@ fn handle_control(
             generation: expected,
             action_id,
             params,
-            encoded,
             cancellation,
             deadline,
             reply,
@@ -958,7 +1571,9 @@ fn handle_control(
             if pipes
                 .writer
                 .try_send(Outgoing::Action {
-                    encoded,
+                    request_id: request_id.clone(),
+                    action_id,
+                    params,
                     deadline,
                     cancellation,
                 })

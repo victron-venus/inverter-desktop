@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "plugin_id": "inverter-desktop.home-assistant",
+  "version": "0.2.0",
+  "host_api": "^1.4",
+  "target": "TARGET",
+  "entrypoint": "bin/inverter-home-assistant-worker",
+  "permissions": ["dashboard_contributions", "plugin_configuration", "network_http"],
+  "config_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ha_base_url", "ha_token"],
+    "properties": {
+      "ha_base_url": {
+        "type": "string",
+        "title": "Home Assistant address",
+        "description": "Complete HTTP(S) address, including any port or path prefix. Credentials, query strings and fragments are not supported.",
+        "minLength": 1,
+        "maxLength": 2048
+      },
+      "watch_entities": {
+        "type": "string",
+        "title": "Entities to watch",
+        "description": "Entity IDs separated by commas or newlines. The ordered union with action targets is limited to 32 entities; read selection alone never enables writes.",
+        "maxLength": 4096,
+        "default": ""
+      },
+      "ha_token": {
+        "type": "string",
+        "title": "Home Assistant token",
+        "description": "Required token for this plugin. Reads and explicitly selected button/scene actions use its existing Home Assistant account permissions.",
+        "writeOnly": true,
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "action_entities": {
+        "type": "string",
+        "title": "Buttons and scenes to control",
+        "description": "Optional explicit button.* and scene.* IDs, up to 16, separated by commas or newlines. Targets are also watched. Leave blank for read-only use. These actions can control household devices.",
+        "maxLength": 4096,
+        "default": ""
+      }
+    }
+  },
+  "inventory": [],
+  "signature": null
+}

@@ -26,6 +26,9 @@ dist-ssr
 # Rust/Cargo
 target/
 Cargo.lock
+!desktop-plugins/frigate/Cargo.lock
+!desktop-plugins/home-assistant/Cargo.lock
+!desktop-plugins/worker-protocol/Cargo.lock
 src-tauri/advisory-db/
 
 # Fuzzing artifacts

@@ -18,6 +18,14 @@ CORE = (
 )
 
 
+def package_fixture(path, entries):
+    """Create a ZIP package fixture with exactly the supplied entries."""
+    with zipfile.ZipFile(path, "w") as archive:
+        for filename, payload in entries.items():
+            archive.writestr(filename, payload)
+    return path
+
+
 class MobileNativeBoundaryTests(unittest.TestCase):
     """Exercise rejection and acceptance using disposable native package fixtures."""
 
@@ -28,11 +36,7 @@ class MobileNativeBoundaryTests(unittest.TestCase):
 
     def archive(self, name, entries):
         """Create a ZIP package fixture with exactly the supplied entries."""
-        path = self.root / name
-        with zipfile.ZipFile(path, "w") as archive:
-            for filename, payload in entries.items():
-                archive.writestr(filename, payload)
-        return path
+        return package_fixture(self.root / name, entries)
 
     def test_passive_legacy_settings_are_allowed(self):
         """Retained configuration keys do not imply an active integration."""
@@ -216,6 +220,213 @@ class MobileNativeBoundaryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "camera-event"):
             boundary.verify_archive(path, "ios")
+
+
+class MobilePluginBoundaryTests(unittest.TestCase):
+    """Keep the signed package ecosystem out of native mobile inputs."""
+
+    def test_ha_worker_and_shared_protocol_are_not_mobile_dependencies_or_sources(self):
+        """An independent shared worker library must never become mobile core."""
+        for crate in ("inverter-home-assistant-worker", "inverter-worker-protocol"):
+            with self.subTest(crate=crate), self.assertRaisesRegex(ValueError, crate):
+                boundary.verify_dependency_tree(f"inverter-dashboard v1.0.0\n{crate} v0.1.0")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "library.d"
+            for source in ("home-assistant/src/main.rs", "worker-protocol/src/lib.rs"):
+                path.write_text(
+                    "/target/lib.a: /checkout/src-tauri/src/lib.rs "
+                    f"/checkout/desktop-plugins/{source}\n"
+                )
+                with (self.subTest(source=source),
+                      self.assertRaisesRegex(ValueError, "desktop-plugins")):
+                    boundary.verify_depfile(path)
+
+    def test_ha_worker_and_protocol_markers_are_rejected_in_every_mobile_package_format(self):
+        """Hard-coded expectations catch accidental removal from the native guard."""
+        self.assert_packaged_markers_rejected((
+            "inverter-desktop.home-assistant", "inverter-home-assistant-worker",
+            "inverter-worker-protocol", "inverter_worker_protocol",
+        ))
+
+    def test_ha_worker_assets_are_rejected_in_apk_aab_and_ipa(self):
+        """Clean native core cannot hide a package, binary, manifest or SDK asset."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in (
+                "inverter-home-assistant-worker", "inverter-home-assistant-worker.exe",
+                "HOME-ASSISTANT-MANIFEST.JSON", "home-assistant.idplugin",
+                "desktop-plugins/home-assistant/Cargo.toml",
+                "desktop-plugins/worker-protocol/src/lib.rs",
+            ):
+                for suffix, prefix in (("apk", ""), ("aab", "base/"), ("ipa", "")):
+                    if suffix == "ipa":
+                        entries = {
+                            "Payload/Energy.app/Info.plist": plistlib.dumps(
+                                {"CFBundleExecutable": "Energy"}
+                            ),
+                            "Payload/Energy.app/Energy": CORE,
+                            f"Payload/Energy.app/{asset}": b"desktop asset",
+                        }
+                        platform = "ios"
+                    else:
+                        entries = {
+                            f"{prefix}lib/arm64-v8a/libinverter_dashboard_lib.so": CORE,
+                            f"{prefix}assets/{asset}": b"desktop asset",
+                        }
+                        platform = "android"
+                    archive = package_fixture(root / f"app.{suffix}", entries)
+                    with (self.subTest(asset=asset, suffix=suffix),
+                          self.assertRaisesRegex(ValueError, "Desktop plugin asset")):
+                        boundary.verify_archive(archive, platform)
+
+    def test_external_frigate_crate_and_source_are_rejected(self):
+        """A separate worker cannot become a dependency or included mobile source."""
+        with self.assertRaisesRegex(ValueError, "inverter-frigate-worker"):
+            boundary.verify_dependency_tree(
+                "inverter-dashboard v1.0.0\ninverter-frigate-worker v0.1.0"
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "library.d"
+            path.write_text(
+                "/target/lib.a: /checkout/src-tauri/src/lib.rs "
+                "/checkout/desktop-plugins/frigate/src/main.rs\n"
+            )
+            with self.assertRaisesRegex(ValueError, "desktop-plugins"):
+                boundary.verify_depfile(path)
+
+    def test_external_worker_assets_are_rejected_in_mobile_archives(self):
+        """A clean main executable cannot hide a bundled plugin binary or archive."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in (
+                "inverter-frigate-worker",
+                "inverter-frigate-worker.exe",
+                "frigate.idplugin",
+                "desktop-plugins/frigate/Cargo.toml",
+            ):
+                for platform in ("android", "ios"):
+                    if platform == "android":
+                        entries = {"base/lib/arm64-v8a/libinverter_dashboard_lib.so": CORE}
+                        entries[f"base/assets/{asset}"] = b"external worker"
+                    else:
+                        entries = {
+                            "Payload/Energy.app/Info.plist": plistlib.dumps(
+                                {"CFBundleExecutable": "Energy"}
+                            ),
+                            "Payload/Energy.app/Energy": CORE,
+                            f"Payload/Energy.app/{asset}": b"external worker",
+                        }
+                    path = package_fixture(root / "mobile.zip", entries)
+                    with (
+                        self.subTest(platform=platform, asset=asset),
+                        self.assertRaisesRegex(ValueError, "Desktop plugin asset"),
+                    ):
+                        boundary.verify_archive(path, platform)
+
+    def test_external_worker_identity_is_rejected_in_mobile_executable(self):
+        """Neither inlining nor embedding the worker identity bypasses the gate."""
+        for marker in ("inverter-desktop.frigate", "inverter-frigate-worker"):
+            payload = CORE + marker.encode()
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, marker):
+                boundary.verify_native_payload(payload, "mobile")
+
+    def test_plugin_manager_commands_are_rejected_in_every_mobile_package_format(self):
+        """Shared handler registration cannot leak manager actions into mobile apps."""
+        # Keep the required manager surface explicit rather than deriving this
+        # fixture from the guard, so an omitted command fails the regression.
+        self.assert_packaged_markers_rejected((
+            "delete_retained_plugin_data",
+            "discard_plugin_package",
+            "get_plugin_manager_snapshot",
+            "get_plugin_settings",
+            "get_retained_plugin_data",
+            "install_plugin_package",
+            "preview_plugin_package",
+            "rollback_plugin_package",
+            "save_plugin_settings",
+            "set_plugin_enabled",
+            "uninstall_plugin_package",
+        ))
+
+    def test_plugin_media_markers_are_rejected_in_every_mobile_package_format(self):
+        """Explicit media expectations catch an accidentally omitted guard marker."""
+        self.assert_packaged_markers_rejected((
+            "close_plugin_video_window",
+            "drag_plugin_video_window",
+            "plugin-media",
+            "plugin-video-",
+            "desktop-plugin-media",
+        ))
+
+    def assert_packaged_markers_rejected(self, markers):
+        """Exercise the actual APK, AAB and IPA readers with a contaminated core."""
+        # TestCase exits this context even when a package assertion fails.
+        # pylint: disable-next=consider-using-with
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for marker in markers:
+            payload = CORE + b"\x00" + marker.encode()
+            for suffix, prefix in (("apk", ""), ("aab", "base/"), ("ipa", "")):
+                if suffix == "ipa":
+                    entries = {
+                        "Payload/Energy.app/Info.plist": plistlib.dumps(
+                            {"CFBundleExecutable": "Energy"}
+                        ),
+                        "Payload/Energy.app/Energy": payload,
+                    }
+                    platform = "ios"
+                else:
+                    entries = {
+                        f"{prefix}lib/arm64-v8a/libinverter_dashboard_lib.so": payload
+                    }
+                    platform = "android"
+                with self.subTest(marker=marker, suffix=suffix):
+                    archive = package_fixture(root / f"app.{suffix}", entries)
+                    with self.assertRaisesRegex(ValueError, "Desktop feature marker"):
+                        boundary.verify_archive(archive, platform)
+
+    def test_plugin_package_dependencies_are_rejected(self):
+        """Package verification and installation must not enter mobile runtime code."""
+        for crate in (
+            "ed25519-dalek", "curve25519-dalek", "zip", "notify-rust",
+            "mac-notification-sys",
+        ):
+            with self.subTest(crate=crate), self.assertRaisesRegex(ValueError, crate):
+                boundary.verify_dependency_tree(
+                    f"inverter-dashboard v1.0.0\npackage-adapter v1.0.0\n{crate} v1.0.0"
+                )
+
+    def test_compiler_graph_rejects_plugin_services_and_publisher_policy(self):
+        """Startup, storage, and embedded policy stay out even without handlers."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "library.d"
+            for source in (
+                "application.rs",
+                "bridge.rs",
+                "settings.rs",
+                "settings_store.rs",
+                "publishers.json",
+            ):
+                path.write_text(
+                    "/target/lib.a: /checkout/src-tauri/src/lib.rs "
+                    f"/checkout/src-tauri/src/plugins/{source}\n"
+                )
+                with (
+                    self.subTest(source=source),
+                    self.assertRaisesRegex(ValueError, "plugins"),
+                ):
+                    boundary.verify_depfile(path)
+
+    def test_shared_config_source_excludes_the_plugin_key_adapter_on_mobile(self):
+        """Core encryption remains shared; its desktop adapter needs its own guard."""
+        source = (SCRIPT.parents[1] / "src-tauri/src/config_store.rs").read_text()
+        # Depfiles correctly include config_store.rs on mobile. This narrow
+        # source check complements native target compilation for its one new
+        # desktop-only entry point, without excluding core credential storage.
+        self.assertRegex(
+            source,
+            r'#\[cfg\(not\(any\(target_os = "android", target_os = "ios"\)\)\)\]\s*'
+            r'pub\(crate\) fn plugin_settings_key\(',
+        )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The host API starts at **1.0.0**, independently of the application version. The
+The current host API is **1.4.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -45,7 +45,10 @@ The additional limits are:
   bytes. JSON data has at most eight levels below its root and 512 values; object
   keys occupy at most 128 bytes and cannot contain control characters.
 - Action deadlines are relative milliseconds in the range 1–60,000. The host
-  enforces its own deadline even when a worker does not cooperate.
+  forwards the remaining budget immediately before writing, subtracting time
+  spent in its queues and dropping requests with less than one millisecond left.
+  Its original absolute deadline and cancellation remain authoritative, including
+  during pipe transmission and when a worker does not cooperate.
 - Error codes follow the identifier rules. Error messages occupy at most 1,024
   bytes.
 
@@ -61,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.0.0",
+  "host_api_version": "1.4.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -73,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.0.0",
+  "host_api_version": "1.4.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -83,6 +86,82 @@ supported host API range belongs in its manifest; `ready.host_api_version`
 acknowledges the negotiated version and is not a version range. Identity comes
 from the host's selected worker, not from an arbitrary frame claiming to be a
 different plugin.
+
+## Startup configuration (host API 1.1)
+
+After a valid `ready`, a verified installed package declaring
+`plugin_configuration` receives exactly one configuration frame on stdin:
+
+```json
+{
+  "type": "configuration",
+  "configuration": {
+    "revision": "abceb85b-59bd-44d8-8135-e7f2ef873122",
+    "values": { "endpoint": "https://example.invalid", "enabled": true },
+    "secrets": { "token": "example-placeholder" }
+  }
+}
+```
+
+The worker must acknowledge the exact revision before contributing dashboard data
+or accepting actions or sending notifications:
+
+```json
+{
+  "type": "configuration_ready",
+  "revision": "abceb85b-59bd-44d8-8135-e7f2ef873122"
+}
+```
+
+The worker remains `starting` until both acknowledgments succeed. The existing
+startup deadline covers both steps. Early contributions, missing/mismatched or
+duplicate acknowledgments fail that generation. Packages without configuration
+permission receive no configuration frame and complete startup after `ready`.
+Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
+are incompatible with a 1.4 host. The wire protocol and manifest remain version 1.
+A configured worker should declare an API requirement such as `^1.1`.
+
+The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
+frame limit. Values and secrets are scoped to the verified plugin ID; fields not
+present in its current schema are retained on disk but withheld from the worker.
+The native service validates required values before launching. Missing required
+setup therefore requires installing disabled, saving settings, then enabling.
+
+Configuration is sent through the owned worker's startup pipe only. It is absent
+from command-line arguments, inherited environment, runtime snapshots, UI events,
+and host debug formatting. The pipe writer checks the originating authentication
+epoch, stop signal, and startup deadline before delivery; an interrupted partial
+frame fails that worker generation. A trusted native worker necessarily receives
+its own secrets and must not echo them into diagnostics, contributions, or action
+results. This is not process sandboxing or a guarantee against a malicious worker.
+
+Saving settings restarts an enabled worker with the new configuration; disabled
+workers remain stopped. There is no hot-reload or request-time secret API in this
+checkpoint. See [plugin settings](plugin-settings.md) for the schema, encryption,
+retention, revision, and failure contracts.
+
+## Displayed action authority (host API 1.4)
+
+Native dashboard snapshots include `instance_id`, an opaque identifier for the
+actual worker process, or null when no live instance is available. A new process
+always gets a fresh identity, including reinstall when generation counters repeat.
+The authenticated `plugin_action` application command requires that displayed
+identity as `instanceId`, plus the action ID and exact advertised preset params.
+The host rejects stale instances before enqueueing, and continues checking the
+session, generation, advertisement and deadline before writing the worker pipe.
+
+The frontend also rejects changed clicked descriptors instead of substituting new
+parameters. Pending and uncertain-result feedback belongs to the actual instance
+and operation; changing a label or temporarily withdrawing an action does not
+unlock duplicate dispatch. Snapshot requests are coalesced so live updates do not
+starve visible state. Authentication changes and instance removal revoke old UI
+work. None of this identity data is a publisher key or permission to bypass auth.
+
+This extends the native dashboard boundary, not the worker wire schema. Existing
+worker Action/Cancel/ActionResult/ActionError messages stay at protocol version 1.
+HA packages with service actions require `^1.4` so they cannot be installed on an
+older host without the displayed-instance check. Frigate remains compatible with
+its existing API range.
 
 ## Dashboard contributions
 
@@ -128,6 +207,134 @@ Four contribution kinds are supported:
 The UI renders text using text bindings. A string such as `<b>example</b>` is
 literal text, not markup. Metric formatting and visual appearance belong to
 the host. A worker supplies data, not application code.
+
+## Native desktop notifications (host API 1.2)
+
+A verified package declaring `desktop_notifications` may send a notification
+only after its startup handshake and required configuration acknowledgment:
+
+```json
+{
+  "type": "notification",
+  "id": "motion-13d7bbf9",
+  "title": "Frigate Garage camera motion detected",
+  "body": "Motion started"
+}
+```
+
+The ID follows the existing 128-byte identifier grammar. Title and body must be
+nonblank plain text without control characters, bounded to 128 and 1,024 UTF-8
+bytes respectively. Unknown fields, malformed content, missing permission, and
+messages before readiness fail that worker generation. There are no URLs,
+actions, images, sounds, Tauri commands, or arbitrary notification options.
+Packages using this capability must declare a compatible range such as `^1.2`.
+
+Delivery is best effort. Each registered worker has at most 16 queued notifications,
+30 accepted notifications per minute, and 512 recent IDs remembered for ten minutes.
+The host accepts at most 120 per minute globally; eight registered workers bound
+the aggregate queue to 128. Valid duplicate, rate-limited, or overflowing messages
+are dropped without failing the worker. The existing total frame-rate limit still
+applies. Pending notifications expire after 30 seconds. Deduplication survives
+automatic worker restarts; process/session replacement cannot revive a queued item.
+
+The native dispatcher checks the original session epoch, running process generation,
+stop signal, reaped state, and delivery age while holding the authority guard. The
+application keeps one dedicated dispatcher and one pending signal, so slow OS
+calls do not hold up the UI change-signal loop or create overlapping delivery tasks. Each started
+dispatch checks live authentication before entering the authority guard. Actual
+native submission happens inside the guard; the callback never defers unchecked
+delivery to another application task. Linux notification-service waits are bounded
+to two seconds; the macOS backend has its own two-second confirmation wait, whose
+timeout can still return success. Both remain best-effort OS submission. Notification text is absent from manager
+snapshots, webview events, and host logs. Freedesktop body markup is escaped so
+worker text remains literal. Disable, uninstall, logout, and shutdown discard
+pending work. Notifications already submitted to the operating system may remain
+visible; OS permission, presentation timing, and notification-center retention are
+outside the worker lifecycle contract. Native submission failures are not retried.
+
+No plugin notification IPC or worker dependency is added to Android/iOS. Core
+inverter notifications continue using their existing platform integration.
+
+## Owned HTTP video (host API 1.3)
+
+A package may declare `http_video` and `plugin_configuration`, with a matching
+manifest declaration referencing one non-secret configuration field:
+
+```json
+{ "http_video": { "base_url_setting": "frigate_base_url" } }
+```
+
+The host derives an immutable grant from the same verified startup configuration
+sent to that worker. An absent or blank base disables video requests while other
+configured features can continue. A configured base must use HTTP(S), with no
+userinfo, query, fragment, traversal, ambiguous encoded separators, or control
+characters. Explicit ports and reverse-proxy prefixes are preserved. Invalid
+candidate settings are rejected before an existing worker is stopped.
+
+After configuration acknowledgment, the worker can submit:
+
+```json
+{
+  "type": "http_video",
+  "id": "frigate-clip-event-hash",
+  "url": "http://frigate.example:5000/proxy/api/events/event-id/clip.mp4",
+  "title": "Frigate Front camera motion detected"
+}
+```
+
+IDs follow the bounded token grammar, titles use the notification plain-text
+128-byte limit, and URLs are bounded to 2,048 bytes. The request must remain in
+the configured origin and base path. The worker supplies no filesystem path,
+window route, request headers, cookies, HA token, or core settings reference.
+Downloads do not follow redirects or inherit the core HA credential lookup.
+HTTP credentials and custom headers are outside this direct-URL contract.
+
+Each worker has four pending requests, thirty admissions per minute, a ten-minute
+512-ID history, and a 45-second title cooldown. Pending requests expire after
+thirty seconds. The service independently bounds its queue to eight, transfers
+to two, and active/download-reserved windows to eight. It reserves up to 256 MiB
+per transfer within a 512 MiB media budget; completed smaller files release the
+unused reservation. Valid excess traffic is dropped without failing the worker.
+With `desktop_notifications`, admission also queues the existing bounded native
+clip-available notification. HTTP or display failure can still follow admission.
+
+The direct download policy retains eight attempts with 1/2/3/4/5/5/5-second retry
+delays, a 15-second connect timeout, 60-second idle-read timeout, ten-minute overall
+deadline, and 256 MiB per-file limit. Retryable responses include 400, 404, 408,
+425, 429, and 5xx; empty or interrupted bodies can retry. Oversized responses fail
+immediately. Playback begins only after the complete download succeeds.
+Already-started disk operations are awaited before file cleanup, including after
+cancellation; the network/retry deadline is not a forced interruption of filesystem I/O.
+
+Each launch receives a fresh native instance identity and cancellation lease;
+plugin ID, session epoch, and displayed generation alone are insufficient because
+generation counters can repeat after registration. Disable, replacement, settings
+restart, crash/restart, logout/expiry, uninstall, and shutdown revoke the original
+lease. Long HTTP/disk operations never hold host authority locks. Cancellation
+immediately denies media access and schedules owned-window destruction and file
+cleanup. Native visibility is asynchronous, so already submitted display work can
+briefly outlive its check; it cannot restore the revoked media authority.
+
+Files live in a private sibling `desktop-plugin-media` directory under the package
+manager's lifetime lease. The host creates hidden 330x186 windows, verifies their
+ownership again before showing them, and waits for actual destruction acknowledgments
+before releasing window slots. Failed native cleanup retains ownership and makes
+shutdown fail visibly; a subsequent quit can retry. Closing one window does not
+retire sibling media or reconnect core telemetry.
+
+The player receives an opaque UUID through the `plugin-media` scheme. Requests are
+bound to the exact requesting webview label and original running instance, with
+live authentication checks before and after disk reads. No global temporary asset
+scope is added. GET/HEAD support standard single byte ranges, at most 1 MiB per
+range and four owned response buffers. Full GET for larger files is rejected;
+native playback acceptance must establish range behavior on each supported webview.
+Core window-targeting permissions are absent: close and drag use commands that
+operate only on their native invoking window. Android/iOS include none of these
+commands, routes, windows, workers, or media services.
+
+The [native media smoke harness](native-plugin-media-smoke.md) exercises actual
+desktop webview playback separately from the signed-worker/MQTT and HTTP-service
+fixtures. It is an explicit feature-only example, not a production startup mode.
 
 ## Actions, cancellation, and results
 
@@ -226,10 +433,11 @@ The manifest contract defines package identity and compatibility:
 ```
 
 The example digest and file size are illustrative metadata, not a usable
-package. The current native development launcher selects an executable through
-a trusted `WorkerSpec`; it does not load packages or enforce manifest permissions.
-The manifest parser is available for subsequent package handling, which must
-validate identity and compatibility before launching an installed worker.
+package. A native development launcher can select a fixture executable through
+trusted `WorkerSpec`. Application package selection instead goes through the
+[verified preview and installation pipeline](plugin-packages.md); only that native
+pipeline derives a worker executable from a verified installed package. Manifest
+parsing by itself neither loads a package nor enforces its permission declarations.
 
 Manifest parsing rejects unknown fields and permissions. The version
 must be semantic version syntax; the host API requirement must match the
@@ -255,11 +463,12 @@ filesystem, or verify their digests. Those checks belong to package handling.
 `config_schema` is bounded object-schema metadata, using the same depth and
 node limits as message data and a 16,384-byte limit. Its root must declare
 `"type": "object"`; schema references (`$ref`, `$dynamicRef`, `$recursiveRef`)
-are unsupported. The contract does not fetch external schemas or implement a
-configuration editor or configuration migration engine.
+are unsupported. The package settings service further compiles the bounded
+[declarative subset](plugin-settings.md) for its editor and startup configuration.
+It does not fetch external schemas or migrate legacy feature configuration.
 
 The permission vocabulary is `dashboard_contributions`,
-`plugin_configuration`, `network_http`, and `network_mqtt`. Duplicate and
+`plugin_configuration`, `desktop_notifications`, `http_video`, `network_http`, and `network_mqtt`. Duplicate and
 unknown permissions are rejected. These names declare feature requirements;
 they do not grant Tauri commands, access to core MQTT controls, or operating
 system isolation. Access to a network MQTT service from a native worker must
@@ -267,10 +476,11 @@ not be confused with a host API for publishing arbitrary core control messages.
 
 A non-null `signature` object contains `algorithm: "ed25519"`, a bounded
 `key_id`, and a `signature` string of exactly 128 lowercase hexadecimal digits.
-This phase validates its encoding only. Trusted keys, canonical signed bytes,
-cryptographic verification, and production install policy remain later package
-work. An unsigned or syntactically signed manifest must never be described as
-a verified package based on this parser alone.
+The protocol parser validates its encoding only. The separate
+[package pipeline](plugin-packages.md) defines canonical signed bytes, publisher
+trust, cryptographic verification, and file verification. An unsigned or
+syntactically signed manifest must never be described as a verified package based
+on this parser alone.
 
 ## Compatibility and implementation
 
@@ -287,10 +497,15 @@ references, and signature encoding without claiming signature verification.
 
 ## Application lifecycle and authority
 
-Tauri owns one desktop `PluginHost`, shared by all windows. The shipped app
-registers no workers automatically and exposes no executable-path or start-worker
-IPC. `WorkerSpec` is a trusted native development API, exercised by a separately
-compiled fixture executable; it is not an installed-package trust decision.
+Tauri owns one desktop `PluginHost` and application package service, shared by all
+windows. A clean profile starts with no package workers. The current embedded
+publisher policy is empty, so installation is disabled. After authentication, the
+application may restore packages already recorded as enabled, verifying their
+archives and installed payloads before starting fresh workers. Disabled packages
+stay stopped; legacy HA/camera settings never imply installation. There is no
+executable-path or start-worker IPC. `WorkerSpec` is a trusted native API, exercised
+by a separately compiled fixture executable. The package manager constructs it only after package
+verification; a manually constructed spec itself is not a package trust decision.
 
 Only authenticated `main` and `config` windows can call `get_plugin_snapshot` or
 `plugin_action`. The latter accepts a worker ID, an advertised action ID, and the
@@ -298,17 +513,35 @@ exact advertised parameters; it cannot select a core Tauri or MQTT command.
 The host rechecks the process generation, current session epoch, and deadline
 before dispatch. A logout or authentication-policy change synchronously revokes
 the old epoch, clears contributions, and stops its workers. Logging in again
-does not restart those workers or authorize their delayed responses. Background
-session expiry is checked at one-second intervals while workers are active;
-each IPC call independently requires a current session.
+can restore enabled packages in a new epoch, but cannot revive old processes or
+authorize their delayed responses. Background session expiry is checked at
+one-second intervals while workers or package operations are active; each IPC
+call independently requires a current session.
 
 The fixed `plugin-host-update` event contains no worker data. The app coalesces
 updates to at most 20 refresh signals per second, and windows retrieve an
 authorized snapshot. The desktop dashboard renders text, metrics, status, and
-preset actions; an empty host renders no plugin panel. Settings, media, and
-notification services remain later contribution surfaces.
+preset actions; an empty host renders no plugin panel. The desktop Plugins settings tab manages package lifecycle through separate
+settings-window-only IPC, including native selection and a single-use verified
+preview token. The management frontend coalesces snapshot requests and the native
+service caches inventory metadata by revision. Configuration-capable packages also
+use a native-validated declarative settings editor with isolated encrypted storage
+and startup configuration delivery. Worker-driven settings contributions, request-time
+secret access and general network/media host services remain future work. Scoped
+HTTP video uses the owned transfer and window contract above. Native
+desktop notifications use the permission and delivery contract above. The first
+[Frigate worker](../desktop-plugins/frigate/README.md) owns its MQTT connection;
+`network_mqtt` is a declaration, not an OS firewall or a core MQTT host service.
+The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md)
+owns its authenticated REST/WebSocket connection and emits only declarative
+connection/entity cards. Its `network_http` declaration similarly grants no
+generic host proxy and provides no OS sandbox. Both workers reuse a small bounded
+stdio library, while identity negotiation, configuration and network behavior
+stay feature-owned. Their crates, binaries and manifests are excluded from mobile.
 
-Normal application exit first stops and reaps workers, then permits exit.
+Normal application exit waits for package initialization and transactions, stops
+and reaps workers, drains owned media/windows, and releases the package-store lease
+before permitting exit.
 Repeated quit requests continue waiting for the same cleanup. Shutdown also
 prevents subsequent registration and actions. Runtime policy caps registered
 workers, in-flight actions, pipe queues, startup time, message/update rates,

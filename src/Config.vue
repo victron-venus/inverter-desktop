@@ -265,6 +265,7 @@
               v-model:config="featureConfig"
               :controls="controls"
             />
+            <FeaturePluginManager v-if="activeTab === featurePluginManagerTabId" />
             <div v-if="activeTab === 'devices'" class="flex flex-col gap-4">
               <!-- Cerbo Water & EV (MQTT instance discovery) -->
               <div class="flex flex-col gap-3 p-3 classic-inset !rounded-lg !p-3">
@@ -732,6 +733,8 @@ import {
 import {
   HeaderControlsEditor,
   FeatureConfigSection,
+  FeaturePluginManager,
+  featurePluginManagerTabId,
   FeatureSectionVisibility,
   FeatureControlsEditor,
   FeatureDiscoveryDialog,
@@ -816,15 +819,18 @@ function ingestDiscovered(list: DiscoveredInst[] | null | undefined) {
 let unlistenMqttState: UnlistenFn | null = null
 let disposed = false
 
-const sections = [
+const sections = computed(() => [
   { id: 'mqtt', label: 'MQTT Broker', icon: Wifi },
   { id: 'gateway', label: 'Remote Gateway', icon: Cloud },
   { id: 'devices', label: 'Cerbo Devices', icon: Settings },
-  ...featureConfigSections,
+  ...featureConfigSections.map((section) => ({
+    ...section,
+    label: section.labelKey ? $t(section.labelKey) : section.label,
+  })),
   { id: 'entities', label: 'UI Controls', icon: Layout },
   { id: 'sections', label: 'Sections', icon: Eye },
   { id: 'backup', label: 'Backup', icon: Archive },
-]
+])
 
 const testingGateway = ref(false)
 const gatewayTestResult = ref('')

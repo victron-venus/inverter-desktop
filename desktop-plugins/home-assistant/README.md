@@ -1,0 +1,200 @@
+# Home Assistant worker
+
+`inverter-home-assistant-worker` is the separate desktop package
+`inverter-desktop.home-assistant`, version 0.2.0, requiring host API `^1.4`.
+Connection status and selected entity states are read-only by default. An explicit
+optional action list enables fixed button presses and scene activation. There is
+no generic service proxy, core MQTT/IGW connection, inverter-control alias lookup,
+camera authority or dependency on the bundled HA client.
+
+The existing desktop HA integration remains bundled until its remaining features
+have package parity. Android and iOS contain neither this worker nor the shared
+worker protocol library, its package metadata, or the desktop plugin manager.
+The production publisher policy remains empty, so installation is disabled in
+shipped builds. This work creates no production publisher keys and adds no
+application or worker code-signing/notarization prerequisite. Package signatures use the existing
+native archive pipeline and an externally supplied publisher key.
+
+## Configuration and read scope
+
+Configure this package in its native settings editor. Values and write-only
+secrets use the existing encrypted per-plugin record; the host sends the exact
+configuration revision through the startup pipe. The worker validates and
+acknowledges it before opening a network connection. Saving settings restarts an
+enabled worker. Disabling, logout and uninstall stop its work without changing
+the core telemetry connection.
+
+- `ha_base_url`: required complete HTTP(S) address, at most 2,048 UTF-8 bytes.
+  Include the actual port and optional reverse-proxy prefix; no HA-specific port
+  is added automatically. Credentials, query strings, fragments, whitespace,
+  backslashes and ambiguous path segments are rejected. Safe encoded prefixes
+  such as `space%20prefix` are preserved; encoded separators, dot segments,
+  double escapes and control characters are rejected. HTTPS uses certificate
+  verification and the matching secure WebSocket scheme. Redirects are not followed.
+- `watch_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
+  Separate entity IDs with commas or newlines. Blank entries are ignored and
+  duplicate IDs count once. The ordered union with action targets is limited to
+  32 entities: watched IDs come first, followed by previously unseen action IDs.
+  Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
+  underscores. IDs are preserved literally, including names resembling inverter
+  control flags; there is no core alias resolution.
+- `action_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
+  Explicitly select up to 16 unique literal `button.*` or `scene.*` IDs separated
+  by commas or newlines. Targets are also watched within the total 32-entity
+  limit. Only this list enables actions; selecting an entity for reads never does.
+  Other domains and arbitrary service definitions are rejected.
+- `ha_token`: required write-only token, 1–4,096 bytes of visible ASCII without
+  whitespace or control characters. It is not read from core configuration or
+  placed in arguments, inherited environment, dashboard contributions or logs.
+  The token retains its account's Home Assistant permissions; this package does
+  not create a restricted server-side token. Reads and explicitly selected
+  button/scene actions use that token.
+
+With a nonempty combined selection, initial REST reads request only
+`/api/states/<entity_id>` beneath the configured prefix. The worker never requests
+the all-entity REST collection or WebSocket `get_states`. Live updates use
+`subscribe_events` with `event_type: state_changed`. **That server stream covers
+all entities**: the worker immediately discards unwatched entities and retains
+only its configured list. This is local filtering, not a claim of server-side
+subscription filtering or token-level access restriction.
+
+When both lists are empty, the worker still establishes the authenticated
+WebSocket connection for connection status, but makes no entity REST reads or
+event subscription. A change
+to either list is applied through the normal settings restart. Entity state
+and labels are bounded plain data; the host renders contributions, and the worker
+supplies no frontend code or arbitrary navigation URLs.
+
+The worker subscribes before starting initial reads. A live update or deletion
+received during a slow initial read wins over that older REST result. Numeric
+states become metric cards; other values remain plain text, with explicit unknown
+and unavailable states. Disconnect clears stale values. Dashboard updates are
+coalesced to four per second, independently of socket reads and heartbeat checks.
+Authentication rejection stops reconnect attempts until settings restart the
+worker; network failures reconnect with a bounded delay.
+
+## Explicit button and scene actions
+
+A configured `button.*` target offers a press button; a `scene.*` target offers
+activation. Labels identify the selected target. The worker publishes the action
+only while HA is connected and that entity has been observed and is not deleted
+or unavailable. An `unknown` state before first button/scene use is valid. The
+worker rechecks availability at dispatch, independently of the host's Running
+state, and resolves the target from configuration rather than caller parameters.
+
+Each preset has empty params and a stable `ha-action-<index>` ID in configured
+action order. The fixed request is POST `<base>/api/services/button/press` or
+`<base>/api/services/scene/turn_on`, with only `{"entity_id":"<literal target>"}`
+in its JSON body. Explicit URL ports/prefixes and verified TLS are preserved.
+Redirects and automatic HTTP retries are disabled. No action uses the legacy
+`perform_action` path, core alias resolution or a fallback to MQTT.
+
+At most two service requests can be active; additional requests are rejected
+without a service backlog. Responses are limited to 1 MiB and never forwarded to
+the dashboard. The worker honors the original 1–30,000 ms deadline from receipt
+(the app normally supplies five seconds, minus time spent in host queues),
+correlates results, and keeps live reads and heartbeat running during a stalled POST. Cancellation, disconnect,
+authentication rejection and worker teardown stop pending local work.
+
+A timeout, dropped response or cancellation can follow an operation HA already
+accepted. The worker never retries a service POST automatically or claims that
+cancellation undoes it. The dashboard reports that the result could not be
+confirmed and asks the user to check state. State cards continue to follow HA
+updates, rather than assuming the HTTP result proves a physical device change.
+
+Host API 1.4 binds each dashboard click to the actual displayed worker instance
+and exact preset. A settings restart or reinstall cannot redirect an old click
+to a newly configured target, even if a generation counter or action ID repeats.
+Empty action configuration preserves the existing read-only behavior.
+
+The wire behavior follows the official
+[WebSocket API](https://developers.home-assistant.io/docs/api/websocket/) and
+[REST API](https://developers.home-assistant.io/docs/api/rest/).
+
+The `network_http` permission describes this trusted native executable's direct
+HTTP/WebSocket behavior. It is not an OS network sandbox or a host API for arbitrary
+requests. The package declares only `plugin_configuration`,
+`dashboard_contributions` and `network_http`.
+
+## Build and stage
+
+The worker has its own Cargo workspace and checked-in lockfile. It depends on
+the local `desktop-plugins/worker-protocol` crate only for bounded stdio framing
+and output. Identity, configuration, HA authentication and networking remain in
+this worker. Build it separately from the host to keep machine load bounded:
+
+```bash
+CARGO_BUILD_JOBS=2 cargo build --release --locked \
+  --manifest-path desktop-plugins/home-assistant/Cargo.toml
+```
+
+For a native Apple Silicon build, stage a new directory:
+
+```bash
+python3 scripts/plugins/prepare-plugin-package.py --plugin home-assistant \
+  --worker desktop-plugins/home-assistant/target/release/inverter-home-assistant-worker \
+  --target aarch64-apple-darwin \
+  --output /private/tmp/home-assistant-package-stage
+```
+
+Use the actual compilation target on other systems and the `.exe` suffix on
+Windows. The staging parent must already exist and the output directory must be
+new. The helper accepts fixed built-in metadata and checks target executable
+headers, bounded file contents, symlinks/reparse points, original path identities
+and observable changes through its open handle. These checks do not establish
+compiler provenance or a filesystem transaction. The helper does not execute the
+worker, read keys, sign or install anything. It copies only the selected binary.
+
+The result is `manifest.json` plus `payload/`. Pass them to the existing
+[native package encoder](../../docs/plugin-packages.md#producing-an-archive) when
+producing an archive. The old `prepare-frigate-package.py` command remains a
+compatibility entry point for the Frigate package; it shares the same guarded
+staging implementation.
+
+## Validation boundaries
+
+Run worker and shared-library checks independently:
+
+```bash
+cargo fmt --manifest-path desktop-plugins/home-assistant/Cargo.toml -- --check
+CARGO_BUILD_JOBS=2 cargo clippy --locked --manifest-path desktop-plugins/home-assistant/Cargo.toml --all-targets -- -D warnings
+CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path desktop-plugins/home-assistant/Cargo.toml --all-targets -- --test-threads=2
+CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path desktop-plugins/worker-protocol/Cargo.toml --all-targets -- --test-threads=2
+cargo audit --file desktop-plugins/home-assistant/Cargo.lock
+cargo audit --file desktop-plugins/worker-protocol/Cargo.lock
+python3 -m unittest discover -s tests -p 'test_*package.py'
+```
+
+CI runs formatting, strict Clippy and tests for both workers and the shared
+library on Linux, macOS and Windows. Executable workers also receive release
+builds and actual binary staging/header checks. Every independent lockfile has
+its own advisory audit without borrowing host-only exceptions.
+
+TLS subprocess fixtures use a disposable loopback certificate and child-only CA
+file; they never alter the system trust store. All three desktop platforms check
+untrusted-certificate rejection and verified WSS authentication. Linux also checks
+selected initial HTTPS reads with the temporary CA. On macOS/Windows the HTTPS
+platform verifier continues using OS trust, and the fixture expects rejection of
+that disposable CA after WSS authentication. This does not establish successful
+HTTPS against a production HA installation on those platforms.
+
+The separately selected native acceptance tests require an actual compiled
+worker, a fresh desktop frontend build, and a private Mosquitto executable for
+an independent core telemetry probe. It supplies its own temporary HTTP and
+WebSocket HA fixture; no production Home Assistant is contacted:
+
+```bash
+INVERTER_HOME_ASSISTANT_WORKER=/absolute/path/inverter-home-assistant-worker \
+MOSQUITTO_BIN=/absolute/path/mosquitto \
+CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --lib \
+  plugins::home_assistant_integration_tests::signed_home_assistant_package_lifecycle \
+  -- --exact --ignored --test-threads=1
+# Repeat with signed_home_assistant_package_actions for selected service actions.
+```
+
+Ordinary native tests do not build another crate or silently launch this external
+fixture. CI explicitly selects it and rejects zero-test success. Its temporary
+signed package uses disposable fixture trust; it does not provision production
+publishers. Process tests, signed-package lifecycle, hosted CI and a real HA
+installation are separate evidence. Demonstrated local checks and remaining
+hosted/runtime boundaries are recorded in [TODO.md](../../TODO.md).

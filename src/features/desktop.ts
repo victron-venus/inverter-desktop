@@ -1,6 +1,6 @@
 /** Desktop compatibility composition. Installable package delivery is tracked in TODO.md. */
 import { provide, type Component } from 'vue'
-import { Home, Lightbulb, WashingMachine, PlugZap } from '@lucide/vue'
+import { Home, Lightbulb, WashingMachine, PlugZap, Puzzle } from '@lucide/vue'
 import { useHA } from '../composables/useHA'
 import { initHomeNotifications } from './desktop/homeNotifications'
 import CameraVideo from '../CameraVideo.vue'
@@ -11,6 +11,7 @@ export { default as DashboardFeatureActions } from './desktop/CameraAction.vue'
 export { default as DashboardFeatureStatus } from './desktop/HomeStatus.vue'
 export { default as DashboardConnectionStatus } from './desktop/CameraStatus.vue'
 export { default as FeatureConfigSection } from './desktop/IntegrationConfig.vue'
+export { default as FeaturePluginManager } from './desktop/plugins/PluginManager.vue'
 export { default as FeatureSectionVisibility } from './desktop/SectionVisibility.vue'
 export { default as FeatureControlsEditor } from './desktop/HomeControlsEditor.vue'
 export { default as FeatureDiscoveryDialog } from './desktop/DiscoveryDialog.vue'
@@ -23,7 +24,9 @@ export { featureDefaultConfig } from './desktop/defaultConfig'
 
 export const featureConfigSections = [
   { id: 'integrations', label: 'Home Assistant & Cameras', icon: Home },
+  { id: 'plugins', label: '', labelKey: 'plugins.manager.title', icon: Puzzle },
 ]
+export const featurePluginManagerTabId = 'plugins'
 export const featureSetupAvailable = true
 export const isMobileApp = false
 

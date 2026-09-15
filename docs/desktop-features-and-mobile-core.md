@@ -1,20 +1,25 @@
 # Desktop features and the mobile core
 
 Android and iOS ship the inverter core only. Home Assistant integration, cameras,
-and future package installation are exclusive to desktop. The core retains
+and package management are exclusive to desktop. The core retains
 Victron/Cerbo telemetry, MQTT/IGW selection, MQTT inverter-control flags, battery/
 solar/grid statistics, EV and water/pump controls, authentication, notifications,
 configuration, and app updates.
 Grid submeter telemetry and daemon setpoint override also remain core features;
 the packaged native check requires the override commands on both mobile platforms.
 
-This implementation checkpoint separates feature source code and enforces mobile
-exclusion. Desktop still bundles its existing HA/camera implementations. It does
-not yet offer independently installable packages. A desktop worker host now supplies
-versioned process communication, session-aware supervision, and generic dashboard
-contributions; see the [worker protocol](plugin-worker-protocol.md). The shipped
-host starts empty. Package installation, HA/camera migration, and the remaining
-contribution surfaces are tracked in [TODO](../TODO.md).
+The current checkpoint connects the desktop worker host and signed package
+pipeline to application authentication, startup, settings, and shutdown. The
+**Plugins** settings tab reviews a natively selected package before installation,
+and manages installed workers. The embedded publisher policy is currently empty,
+so installation is disabled and a clean profile has no plugin workers. Existing
+HA/camera implementations remain bundled; the manager does not move, disable, or
+uninstall those legacy features. Production trust, HA/camera extraction, and the
+remaining contribution services stay in [TODO](../TODO.md).
+
+See the [worker protocol](plugin-worker-protocol.md) for process communication and
+[plugin packages](plugin-packages.md) for the review, installation, and session
+lifecycle contracts.
 
 ## Frontend composition
 
@@ -23,7 +28,9 @@ contribution surfaces are tracked in [TODO](../TODO.md).
 `@feature-messages` to the corresponding translation composition. The desktop port
 supplies feature panels, settings, setup, status, camera routes, and lifecycle.
 The fixed mobile composition supplies empty contributions without importing those
-implementations; it contains no plugin manager or package loader.
+implementations. `FeaturePluginManager` resolves to the desktop manager component
+only on desktop; mobile resolves it to an empty component, has no manager tab ID
+or label, and imports no manager controller, translations, or package loader.
 
 `@feature-defaults` resolves directly to the platform's data-only defaults module.
 Core configuration must not import the UI contribution entry point: that would
@@ -45,14 +52,32 @@ Legacy field names are passive compatibility data, not a mobile integration.
 Rust compiles HA sessions, REST/WS clients, camera adapters/downloads/windows,
 managed feature state, command registrations, and authorization entries only
 under `cfg(desktop)`. Camera MQTT parsing is separated into
-`src-tauri/src/mqtt/camera_events.rs`. WebSocket dependencies are target-scoped.
+`src-tauri/src/mqtt/camera_events.rs`. WebSocket and package verification/storage
+dependencies are target-scoped. The embedded publisher policy and all package
+source files are excluded from mobile compilation. `application.rs` and the native
+manager commands are also desktop-only; mobile never opens a package store or
+restores package workers.
 Shared HTTP, MQTT, authentication, and notification dependencies remain in core.
+The standalone Frigate and Home Assistant workers and their shared stdio library
+have independent Cargo workspaces with desktop-only dependencies and explicit
+mobile build rejection. Their crates and fixed package manifests are also
+forbidden in mobile dependency graphs and packaged assets.
+
+Owned plugin video also stays behind that desktop boundary: generation leases,
+HTTP downloads, private media files, the `plugin-media` scheme, and
+`close_plugin_video_window`/`drag_plugin_video_window` commands are not registered
+on mobile. The reused `CameraVideo.vue` player and its route helper remain in the
+desktop frontend graph. Both mobile configuration overlays replace the desktop
+media CSP with only `'self'` and `blob:` and keep the asset scope empty. The
+`plugin-video-windows` capability explicitly targets Linux, macOS, and Windows.
 
 Mobile registers the core commands and rejects non-core control targets. The
 seven daemon flag keys and legacy `input_boolean.<flag>` aliases retain the MQTT
 normalization path. No mobile feature startup task or placeholder HA/camera command
 is registered. Camera windows have desktop-only capabilities; mobile configuration
-has no camera asset scope.
+has no camera asset scope. Management commands are absent from mobile handlers,
+not registered as no-ops. The artifact verifier rejects their command markers as
+well as package source, dependencies, and publisher policy.
 
 ## Build and verification commands
 
@@ -72,7 +97,9 @@ Play jobs also select the mobile profile.
 
 Vite examines its actual source module graph and emits `dist/build-profile.json`.
 The mobile build fails if a desktop implementation enters that graph, including a
-static import hidden behind an unused runtime branch. A native mobile release
+static import hidden behind an unused runtime branch. The audit includes worker
+modules and package metadata under `desktop-plugins/` and `scripts/plugins/`, so
+moving an accidental import outside `src` cannot bypass it. A native mobile release
 also requires a valid mobile graph receipt, preventing a raw Cargo build from
 embedding stale desktop assets.
 
@@ -85,6 +112,12 @@ python3 scripts/check-mobile-native-boundary.py --platform ios --artifact app.ip
 python3 scripts/check-mobile-native-boundary.py --platform android --artifact app.aab app.apk
 ```
 
+The native verifier rejects the media commands, scheme/window/cache markers,
+worker payloads, and any compiled `plugins/` source. Its independent fixture
+tests put the new markers into APK, AAB, and IPA executables, independently of the
+verifier's own marker lists. Hosted mobile build and release jobs run the same
+verifier against their actual artifacts.
+
 For a locally built mobile library, use `--native-library PATH --target TRIPLE`
 with the appropriate `--target-dir` and `--profile` if they differ from Cargo's
 defaults. The verifier never executes or installs the inspected artifact.
@@ -92,3 +125,5 @@ defaults. The verifier never executes or installs the inspected artifact.
 Frontend graph checks, native compilation/payload checks, and device behavior are
 separate evidence. Local tests and CI do not verify the user's HA installation,
 issue physical inverter commands, or prove usability on every mobile device.
+Desktop package tests additionally run on Windows in the reusable Rust CI workflow,
+covering file replacement, leases, and actual worker cleanup on that platform.

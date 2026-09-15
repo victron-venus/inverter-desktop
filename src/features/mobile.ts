@@ -11,11 +11,18 @@ export const DashboardFeatureActions = Empty
 export const DashboardFeatureStatus = Empty
 export const DashboardConnectionStatus = Empty
 export const FeatureConfigSection = Empty
+export const FeaturePluginManager = Empty
+export const featurePluginManagerTabId = undefined
 export const FeatureSectionVisibility = Empty
 export const FeatureControlsEditor = Empty
 export const FeatureDiscoveryDialog = Empty
 export const FeatureSetup = Empty
-export const featureConfigSections: Array<{ id: string; label: string; icon: Component }> = []
+export const featureConfigSections: Array<{
+  id: string
+  label: string
+  labelKey?: string
+  icon: Component
+}> = []
 export const featureSetupAvailable = false
 export const isMobileApp = true
 export { featureDefaultConfig } from './defaults.mobile'

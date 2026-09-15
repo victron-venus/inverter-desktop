@@ -1,7 +1,11 @@
+import pluginManagerMessages from './plugins/locales/en.json'
+
 export default {
   plugins: {
+    manager: pluginManagerMessages,
     unavailable: 'Temporarily unavailable',
-    actionFailed: 'Unable to complete the action. Try again.',
+    actionFailed:
+      'The action could not be confirmed. It may have completed. Check the current state before taking further action.',
   },
   status: {
     haStale: 'Home Assistant offline — last known values',

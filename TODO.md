@@ -33,12 +33,485 @@ The completed resilience checklist is preserved in
 
 ## Delivery strategy and current checkpoint
 
-The first checkpoint establishes core/mobile build boundaries and separates core
-from desktop feature contributions. Desktop retains bundled HA/camera behavior
-during this compatibility stage. This is **not** completion of installable plugins. The second checkpoint adds
-a versioned worker protocol, real process supervision, and declarative dashboard
-contributions. Its shipped registry remains empty until package installation is
-implemented; legacy HA/camera features are still bundled.
+The first checkpoint established core/mobile build boundaries and separated core
+from desktop feature contributions. The second added a versioned worker protocol,
+real process supervision, and declarative dashboard contributions. The third
+implemented deterministic signed archives, publisher/content verification, and
+transactional native package APIs exercised with real workers.
+
+[PR #422](https://github.com/victron-venus/inverter-desktop/pull/422) completed
+application integration and the package manager. [PR #423](https://github.com/victron-venus/inverter-desktop/pull/423)
+added isolated encrypted settings, a declarative editor, and verified worker
+startup configuration on main. Both checkpoints passed hosted mobile artifact
+checks. [PR #424](https://github.com/victron-venus/inverter-desktop/pull/424) adds
+inventory and cleanup for retained plugin data on main. [PR #425](https://github.com/victron-venus/inverter-desktop/pull/425)
+completed the standalone Frigate motion worker on main at `5254610`, with all
+hosted worker/host/security/mobile artifact checks passing for
+[the final PR head](https://github.com/victron-venus/inverter-desktop/commit/ed3aadd5f27260c6e4334c018d016d36f2154837).
+[PR #426](https://github.com/victron-venus/inverter-desktop/pull/426) completed direct
+Frigate clips and owned video windows on main, with macOS native playback and all
+hosted checks passing. [PR #427](https://github.com/victron-venus/inverter-desktop/pull/427)
+completed the independent read-only HA worker on main at `3d731a3`. The current
+iteration adds explicitly selected HA button/scene actions and instance-bound
+dashboard dispatch, reusing the separate workers and bounded process transport.
+
+**The embedded production publisher policy is still empty, so installation is
+disabled in the shipped configuration.** This checkpoint does not introduce new
+publisher keys or app signing. Existing HA/camera implementations remain bundled
+desktop features until real package parity is verified. Network/media host services,
+legacy configuration migration, and feature extraction remain unfinished.
+
+### Completed checkpoint: Frigate motion worker and native notifications
+
+This iteration delivers a separately built first-party worker for Frigate MQTT
+motion-start notifications and connection status. It does not claim camera feature
+parity: snapshots, completed clips, media windows, Kerberos/Ring, optional HA proxy
+support, and legacy camera migration remain later work. The bundled desktop
+camera implementation remains available during that transition.
+
+- [x] Extend host API to 1.2 with an explicit verified `desktop_notifications`
+      permission and bounded plain-text notifications; preserve wire/manifest v1.
+- [x] Bound notification queues, rates, identity history, and age; reject malformed,
+      unauthorized, or premature messages, and drop excess valid traffic safely.
+- [x] Submit notifications only for the current running worker generation and
+      authenticated session. Reject queued work after disable, removal, logout,
+      expiry, restart, or shutdown; keep event text out of UI snapshots and logs.
+- [x] Add synchronous native OS submission with literal text handling. Keep the
+      native plugin path out of Android/iOS and preserve core notifications.
+- [x] Build an independent desktop-only Rust Frigate worker, with its own locked
+      dependency graph, bounded stdin/stdout protocol, and no core/Tauri imports.
+- [x] Require configuration acknowledgment before connecting to MQTT. Accept one
+      explicit broker and exact topic, isolated write-only credentials, optional
+      certificate-verified TLS, and no core control subscriptions or publishing.
+- [x] Parse Frigate motion starts, preserve the 45-second per-camera cooldown and
+      ten-minute event deduplication, bound incoming data/state, and ignore retained
+      replay. Report generic connection status and recover after broker restarts.
+- [x] Make shutdown/EOF cancel reconnect and network activity promptly, including
+      when the peer stops reading stdout. Keep credentials out of diagnostics.
+- [x] Add a target-specific manifest template and deterministic staging helper;
+      use the existing archive encoder and disposable test signing keys only.
+- [x] Retain inspected file/directory identities while staging, reject replacement
+      before creating output, and compare Windows path/handle timestamps using
+      matching semantics. Cover the reproduced races and metadata regression.
+- [x] Exercise the actual packaged worker against a private loopback Mosquitto
+      broker: subscription isolation, motion, duplicates, cooldown, reconnect,
+      changed settings, disable, logout, and uninstall.
+- [x] Add worker Linux/macOS/Windows build/test/lint checks, dependency audit, and
+      an explicitly required real-broker acceptance check to hosted CI.
+- [x] Extend mobile dependency/source/archive checks to reject worker code,
+      executable payloads, package assets, and notification host services.
+- [x] Complete independent code reviews, focused regressions, native/frontend
+      validation, and both production frontend builds with serialized local load.
+- [x] Update English documentation and this checklist with demonstrated local
+      results. Final hosted checks and merge are recorded separately below.
+
+No production publisher keys are introduced. Package authentication is separate
+from desktop application signing; this work adds no requirement to sign or
+notarize the desktop application or worker executable. Operating-system display
+permission and notification-center behavior require platform runtime verification.
+
+Local validation passed: 353 macOS native tests across all targets and strict
+Clippy, plus the explicitly selected real signed-package/Mosquitto acceptance
+(1 passed, 0 ignored). The ordinary native suite leaves that one broker test
+ignored; CI selects it separately and rejects zero-test success. Worker validation
+passed 9 unit tests, 6 subprocess/TCP tests, strict Clippy, formatting, debug/release builds,
+and a refreshed dependency audit without advisory exceptions. The actual macOS
+release binary passed staging/header/hash validation and the real signed-package/
+Mosquitto acceptance. Frontend checks passed 277 tests
+(32 manager tests), 8 mobile tests, 4 profile checks, typecheck, formatting, lint,
+and both builds; final output is desktop. Packaging/mobile Python suites passed
+19 and 25 tests respectively, with Pylint 10/10 and no scoped frontend diagnostics.
+
+Independent reviews found and fixed strict Shutdown decoding, notification-service
+liveness, UI signal coalescing, and repeated macOS backend initialization. All
+regressions passed. Final-head hosted worker/host/security/mobile artifact checks
+and review passed, and PR #425 merged into main. Local native collection is not proof
+of OS display; TLS process checks cover ClientHello/no plaintext fallback, not a
+complete certificate-trust/hostname fixture. No physical camera or inverter command
+was exercised. The PR records final hosted status separately from this completed
+source/local acceptance checklist.
+
+CI review reproduced a staging input replacement race and a Windows Python 3.12
+path-stat/fstat timestamp mismatch. The helper now preserves the original file
+and directory identities, validates before creating output, and compares creation
+timestamps across Windows APIs while retaining full open-handle change checks.
+Older Windows Python uses its matching creation-time fallback. Packaging tests
+now run in all three desktop worker jobs, in addition to actual release staging.
+
+### Next iteration: explicit HA button and scene actions
+
+Keep the default HA package read-only. Add explicitly selected `button.press` and
+`scene.turn_on` actions through existing declarative plugin buttons, preserving
+the legacy POST mappings without importing core flag aliases or MQTT fallbacks.
+The read-only worker was delivered in PR #427; this iteration builds on it.
+
+- [x] Add optional `action_entities` (empty by default), at most 16 unique literal
+      `button.*`/`scene.*` IDs. Watch the ordered union with `watch_entities`, at
+      most 32 entities total; read selection alone never enables an action.
+- [x] Add strict bounded Action/Cancel decoding to the shared stdio protocol.
+      Preserve independent EOF/Shutdown delivery and Frigate rejection of actions.
+- [x] Advertise one fixed, self-contained action per configured target only while
+      HA is connected and the target exists and is not unavailable. Unknown
+      button/scene state before first use remains actionable. Use immutable empty
+      params; resolve the entity and fixed service exclusively inside the worker.
+- [x] Send exactly one authenticated, TLS-verified, non-redirecting service POST
+      beneath the configured URL prefix. Bound concurrency, response bytes and
+      original request deadlines; never retry a submitted service operation.
+- [x] Keep live reads and heartbeat responsive during pending actions. Correlate
+      success/error, reject changed params/unadvertised actions, handle Cancel,
+      and prevent queued work after disconnect/auth rejection/settings restart.
+      Cancellation cannot undo an operation already accepted by HA.
+- [x] Bind native dashboard clicks to an opaque actual worker-instance identity,
+      including reinstall with reused generation counters. Preserve exact preset
+      equality and reject stale clicks before the replacement worker sees them.
+- [x] Forward only the remaining original deadline after host queue pressure,
+      preserving request identity and params. Exercise the real bounded pipe
+      writer, submillisecond expiry and cancellation during partial frames.
+- [x] Reject stale clicked descriptors rather than substituting new parameters.
+      Scope pending/error feedback to the actual instance and action identity;
+      coalesce snapshot refreshes and explain unknown service outcomes without
+      encouraging automatic retries. Verify accessible action names.
+- [x] Exercise real subprocess service behavior, no-retry after lost responses,
+      deadline/cancel/EOF/output pressure, read-only defaults and literal targets
+      against disposable HA fixtures. Preserve all read/TLS/Frigate regressions.
+- [x] Exercise an actual installed signed package, native action admission,
+      configuration replacement during a stalled service request and removal,
+      alongside independent MQTT flags. Use disposable trust and private services.
+- [x] Update package version/manifest, English documentation and this checklist;
+      run serialized lint/tests/builds and desktop/mobile boundaries.
+- [ ] Resolve PR comments in English, pass final-head CI, merge and synchronize main.
+
+Local admission checks pass 36 native runtime tests, including reinstall with
+reused generation counters, reduced budgets after queue pressure and expiry
+before pipe delivery. Frontend changes pass 58 focused tests (26 dashboard,
+32 manager), typecheck, scoped lint and formatting. The shared protocol passes
+nine unit tests and strict Clippy. The action worker passes 21 unit tests and
+20 real subprocess scenarios, including the reviewed late-poll deadline regression
+and repeated cancellation/deadline acceptance. Packaging and mobile-native
+boundary suites pass 27 and 29 tests. The complete frontend suite passes 308 tests,
+plus eight mobile tests and five build-profile checks. The complete native suite
+passes 384 tests. All four separately selected installed-package scenarios pass:
+Frigate events/clips and HA reads/actions, using actual release worker binaries,
+disposable package trust and private services. The new action fixture confirms
+exactly six explicit service POSTs, closes stalled work during settings replacement,
+disable and uninstall, rejects stale instances/presets, and observes zero core MQTT
+commands while independently consuming both values of the real charger flag.
+
+Strict all-target Clippy passes for the host and all worker crates. Both frontend
+profiles build, and actual native release workers pass staging checks. The first
+full native compilation exhausted local disk space; after removing only task
+intermediate build files, the complete native and installed-package runs passed.
+PR review, final-head CI and merge receipts remain the delivery gate.
+
+No production HA service or physical appliance is exercised by these fixtures.
+Stateful toggles, number/cover inputs, media controls, discovery, full appliance
+layout and legacy migration remain subsequent parity work.
+
+### Completed checkpoint: standalone Home Assistant read-only worker
+
+Implement the first independently installable HA slice: connection status and
+live state for an explicit, bounded list of entities. Preserve the bundled HA
+integration until its remaining UI/service/configuration behavior has package
+parity. Core inverter-control flags and transports never depend on this worker.
+
+- [x] Extract only the common bounded stdio framing/output primitives into a
+      desktop worker library. Keep identity, configuration validation, and network
+      behavior in each worker; preserve Frigate handshake/EOF/backpressure behavior.
+- [x] Add a separate `inverter-desktop.home-assistant` worker, package manifest,
+      independent locked build, and explicit HTTP(S) base URL configuration.
+      Deliver its HA token only through the encrypted plugin-secret mechanism.
+- [x] Support a bounded explicit entity watch list and render plain-text/metric
+      dashboard contributions with connection and unavailable states. Treat HA
+      text as data and limit all frames, state fields, maps, queues, and rates.
+- [x] Acknowledge validated configuration before any network request. Implement
+      authenticated initial state plus WebSocket state changes, heartbeat,
+      bounded reconnect, cancellation, and token rejection without logging secrets.
+- [x] Reconcile initial reads and live updates without overwriting a newer live
+      state with an older REST response. Keep subscription/output backpressure
+      from growing memory or blocking heartbeat/shutdown indefinitely.
+- [x] Limit this slice to reads. Add no HA service invocation, arbitrary HTTP
+      proxy, core MQTT subscription/publish, inverter flag alias, or core config
+      lookup. Preserve actual HA entity IDs even when their names resemble flags.
+- [x] Verify URL prefix/port/TLS behavior and no redirects/credential forwarding;
+      use an explicit read-only fake HA server for process and installed-package
+      acceptance. Never connect to a user's production HA during these fixtures.
+- [x] Exercise the actual executable through pipes: configuration before network,
+      auth success/rejection, initial/live/unavailable states, reconnect, malformed
+      and oversized traffic, stalled peers, output pressure, EOF, and shutdown.
+- [x] Exercise a real signed HA worker package and temporary HA fixture through
+      install, settings restart, disable, logout, and uninstall, while an
+      independent core telemetry connection remains usable. Disposable keys only.
+- [x] Extend package staging, independent mobile source/module/dependency/archive
+      guards, and Linux/macOS/Windows build/test/lint/audit CI for both workers and
+      the shared worker library. Keep Android/iOS entirely outside this ecosystem.
+- [x] Rebuild the real Frigate worker after extraction and rerun its unit/process
+      and signed-package MQTT/clip acceptance; common transport reuse must preserve
+      existing behavior rather than rely only on compilation.
+- [x] Complete independent reviews, serialized local verification, English docs
+      and checklist updates. Add a simultaneous HA-on/core-off regression.
+- [x] Pass final-head hosted checks and resolve review comments, then merge the
+      separate HA worker PR and synchronize canonical main after PR #426.
+
+Local checks now pass strict all-target Clippy and 14 HA unit tests, 16 actual
+subprocess/network scenarios, and three macOS TLS subprocess tests. TLS establishes
+untrusted-certificate rejection, authenticated WSS with a child-only temporary CA,
+and continued HTTPS OS-verifier rejection of that CA. Successful selected HTTPS
+reads with the fixture CA are Linux-specific CI coverage, not a local macOS claim.
+Shared transport passes seven tests; Frigate passes 15 unit and ten process tests
+after extraction. All three independent advisory audits pass without exceptions.
+The frontend passes five build-profile checks (including real imports outside
+`src`), eight mobile tests, typecheck, formatting, lint and both production builds.
+The retained packaging suite passes 27 tests and mobile payload checks pass 29.
+Native host Clippy and its 381-test default suite pass; the three external-package
+tests also pass when selected explicitly with actual release workers (3 passed,
+0 ignored). The HA fixture uses
+the real `do_not_supply_charger` MQTT flag, alternates both boolean values, and
+reads an HA `input_boolean.do_not_supply_charger` literally without core aliasing.
+The simultaneous collision probe confirms HA remains on while core is off.
+Both real release workers and native-header staging pass, including the retained
+Frigate staging CLI. The installed-package fixtures verify HA settings restart,
+disable, logout and uninstall alongside an independent core MQTT connection,
+and preserve Frigate motion/clip behavior after transport extraction. Hosted
+checks and reviewed PR delivery completed at head `dabb0f1`, merged as `3d731a3`
+in PR #427. All product checks passed, including desktop worker/host checks and
+Android APK/AAB/iOS IPA inspection; review had no unresolved threads. Canonical
+main was synchronized cleanly with the identical tested tree, preserved private
+files and all six stashes. These results do not claim a production HA installation. Hosted Android setup exposed an unavailable `tools`
+package in the pinned setup action default. All three Android CI/release setup
+steps now request `platform-tools` explicitly and retain their subsequent required
+SDK/NDK installation, build and artifact-inspection gates.
+
+The production publisher policy stays empty and this iteration creates no
+production keys or application-signing prerequisite. HA services, full legacy feature extraction,
+configuration migration, and Linux/Windows native camera playback remain tracked
+work. Kerberos producer URL/auth/origin requirements still need source or runtime
+evidence; the inspected tracked repositories currently establish consumers only.
+
+### Completed checkpoint: Frigate clips in owned desktop windows
+
+Deliver one actual feature slice: Frigate `end` with boolean `has_clip: true`
+opens its downloaded MP4 in a plugin-owned window. Reuse the existing complete-
+download-before-playback behavior; incremental HTTP receipt is not streaming
+playback. Keep this implementation separate from the current motion checkpoint.
+
+- [x] Add optional direct `frigate_base_url` configuration; no base URL means
+      motion notifications continue and clip handling remains inactive. Preserve
+      explicit ports and reverse-proxy path prefixes; encode event IDs as one
+      URL path segment and reject unsupported URL forms.
+- [x] Parse completed events with separate ten-minute ID history and 45-second
+      camera cooldown. A start notification must not consume a later clip; clip
+      notification IDs need a distinct namespace. Do not reject long recordings
+      using the motion parser's start-time freshness cutoff.
+- [x] Implement the existing clip-available notification and automatic opening
+      after complete download. Record dedupe when the event is admitted, matching
+      current behavior, and keep MQTT polling responsive during downloads.
+- [x] Add a versioned, permission-checked HTTP-video operation and native media
+      ownership keyed by plugin, authentication epoch, worker generation, and
+      opaque media ID. Use a fresh revocable instance identity for every spawn:
+      generation numbers alone can repeat after removal and registration. Workers
+      never choose host paths or native window routes.
+- [x] Extract reusable HTTP transfer policy without importing core HA credential
+      lookup. Bind allowed HTTP(S) origins and path prefixes to the installed
+      plugin's non-secret configuration; accept no HTTP credentials or injected
+      headers in this slice and keep URLs out of logs.
+- [x] Preserve eight attempts, retry delays 1/2/3/4/5/5/5 seconds, 15-second connect,
+      60-second idle-read, ten-minute overall deadline, 256 MiB limit, and no
+      redirects. Retry empty/progressive-body failures and currently retryable
+      HTTP statuses; reject oversized bodies immediately.
+- [x] Bound concurrent transfers, queued requests, windows, and aggregate media
+      storage. Write private host-owned files, clean partial writes and startup
+      leftovers, and avoid holding runtime/auth locks during HTTP or disk I/O.
+- [x] Cancel downloads, revoke media access, and close owned windows on disable,
+      settings restart, crash/restart, update, rollback, logout/expiry, uninstall,
+      and app shutdown. Reject late completion before window creation and clean
+      files if window construction fails.
+- [x] Serve completed files through an opaque, requesting-window-bound media
+      route with bounded byte-range responses. Do not broaden the existing global
+      temporary-directory asset scope or reuse URL-based webview media IPC.
+- [x] Implement the built-in player and 330x186 unfocused borderless windows, top-right
+      stacking/reflow, muted autoplay, and close-on-completion. Each clip gets its
+      own window; closing one must preserve sibling media and core telemetry.
+- [x] Exercise the actual release worker in a signed package with private Mosquitto
+      and HTTP fixtures: start then end with an old recording timestamp, duplicate
+      clips, exact URL prefix and ranges, settings restart, disable with ready media,
+      revocation during a stalled body, and uninstall. Keep an independent core
+      MQTT telemetry connection alive across those lifecycle operations. Native
+      window creation/destruction is simulated in this backend acceptance test.
+- [x] Cover transfer failures and service bounds separately with HTTP/service tests:
+      delayed availability, empty/truncated bodies, progressive receipt, idle stalls,
+      oversized bodies, redirects, total deadline, cancellation, byte ranges,
+      storage/queue/window limits, orphan recovery, and failed cleanup retries.
+- [x] Add component tests for opaque IDs, exact window ownership, muted inline
+      autoplay, owned close/drag commands, safe errors, and legacy-path rejection.
+- [x] Add an explicit, feature-gated [native media smoke harness](docs/native-plugin-media-smoke.md)
+      that uses isolated fixture grants and never starts normal authentication,
+      keychain/configuration, core MQTT, or bundled cameras. Its temporary package
+      manager has empty trust and no installed workers.
+- [x] Verify actual macOS playback, focus, window stacking, user close, lease
+      revocation, automatic close at video end, and complete cleanup in the
+      isolated native harness, separately from backend fixtures.
+- [ ] Run graphical playback/window acceptance on Linux and Windows. Their CI
+      compilation and non-graphical `--help` checks do not establish playback.
+- [x] Extend Android/iOS source/dependency/asset checks; add no mobile media plugin
+      route, window, package, worker, or optional integration implementation.
+      Add independent new media-marker regressions for APK, AAB, and IPA payloads.
+- [x] Complete local native/frontend checks, both frontend builds, actual package
+      and native playback acceptance, formatting, and strict Clippy for both the
+      normal and opt-in smoke-feature builds.
+- [x] Pass current mobile target/artifact checks, review, and exact-commit hosted
+      CI before merging [PR #426](https://github.com/victron-venus/inverter-desktop/pull/426).
+
+Direct Frigate is the scope of this checkpoint. HA proxy enrichment, snapshots,
+Kerberos/Ring, configuration migration, and removing bundled compatibility code
+remain later work. The legacy media command is not a safe lifecycle shortcut: it
+reads shared configuration and lacks plugin/generation ownership across downloads.
+
+Final local checks passed 381 native tests, 295 frontend tests, and worker strict
+Clippy plus 17 unit and 10 actual subprocess/TCP tests. The worker release build,
+fresh advisory audit, real-binary package staging, and 19 packaging tests passed.
+Both explicitly selected release-worker/signed-package/Mosquitto tests passed
+(motion and clips, 2/2); they use simulated native windows and do not prove decoding
+or native focus/stacking. The mobile boundary verifier now passes 26 Python tests,
+including every new media marker in APK/AAB/IPA fixtures, with Pylint 10/10.
+The macOS native smoke passed with exit code 0 and complete cleanup: a 24-second
+640x360 H.264 fixture decoded through the actual player, two 330x186 windows stayed
+unfocused and nonoverlapping, the focused anchor was preserved, and owned close,
+revocation, video-end close, bounded range reads and wrong-window rejection passed.
+The test exposed two production bugs that are now fixed: placement uses the
+monitor work area, and showing a plugin window on macOS no longer makes it the
+key window. The [native smoke record](docs/native-plugin-media-smoke.md#recorded-macos-acceptance)
+details the evidence. Linux/Windows graphical playback remains pending; CI
+explicitly compiles/lints the opt-in example on Linux and runs its non-graphical
+`--help` on Linux and Windows. The explicit smoke input-policy test and all-targets
+Clippy with and without the smoke feature also passed. All hosted checks passed
+at [the tested head](https://github.com/victron-venus/inverter-desktop/commit/fc340fef7803bab1eb34dfc24f1f747f9aba6e13),
+including Android/iOS packaged boundaries and Linux/macOS/Windows worker checks.
+PR #426 was squash-merged as [the main checkpoint](https://github.com/victron-venus/inverter-desktop/commit/3173bc078394a3eb1c6d771b79b6cf58be027331).
+
+### Completed checkpoint: retained data inventory and cleanup
+
+- [x] Expose bounded, deterministic metadata for stored records without reading
+      plaintext or requesting the credential key. Preserve lazy empty-store reads
+      and report record/byte quotas, including transaction overhead.
+- [x] Map records only to IDs currently present in the native installed inventory.
+      Present records with unknown owners honestly; a filename hash cannot recover
+      an uninstalled plugin's name. Expose no filesystem paths or stored values.
+- [x] Allow explicit deletion of an unchanged, canonical record using its opaque
+      ID and ciphertext revision. Support corrupt or empty bounded ciphertext and
+      unavailable credentials; reject unsafe links, paths, and oversized files.
+- [x] Serialize inventory and cleanup with package lifecycle operations. Protect
+      all installed owners, including disabled packages and invalid payloads;
+      reject stale authentication epochs and preserve owned work after IPC cancellation.
+- [x] Add an on-demand desktop inventory with usage, refresh, empty/error states,
+      installed-owner guidance, and explicit deletion confirmation. Invalidate
+      stale responses and consent across authentication and package changes.
+- [x] Keep cleanup independent from worker restarts and core transports. Do not
+      scan retained files in response to high-frequency worker contribution events.
+- [x] Test quota recovery, corrupt/unknown records, stale revisions, reinstall
+      races, cancellation/logout, UI confirmation, and desktop/mobile boundaries.
+- [x] Complete independent reviews, lint/format/typecheck, focused and full relevant
+      suites, and both frontend builds. Fix the cross-window invalidation and
+      enable/disable refresh issues found during review with regression tests.
+
+Local validation: 340 macOS native tests and strict Clippy, 275 frontend tests,
+8 mobile frontend tests, 4 build-profile checks, and 22 native mobile-boundary
+tests passed. Both frontend production builds passed; final desktop output is
+restored. Formatting/typecheck passed, changed frontend files have no lint
+diagnostics, and Python lint scored 10/10. Final head `c8d7dcf` passed all hosted
+checks, including Linux/Windows and actual Android APK/AAB/iOS IPA inspection in
+[quality gate 34880350283](https://github.com/victron-venus/inverter-desktop/actions/runs/34880350283).
+PR #424 merged as `5791d21`; canonical main was synchronized with an identical
+validated source tree, a clean checkout, and preserved private files and stashes.
+
+This iteration does not add a plaintext identity catalog, migrate legacy feature
+configuration, install a package, or introduce production publisher keys. Unsafe
+filesystem entries remain explicit errors; cleanup never follows links or accepts
+arbitrary paths. Real HA/camera extraction and device parity remain later phases.
+
+### Completed checkpoint: isolated settings and worker configuration
+
+- [x] Add a versioned, encrypted record per plugin ID outside package contents;
+      reuse the existing application encryption key with a separate authenticated
+      encryption domain. Missing records must not touch the OS credential store.
+- [x] Bound records, retained data, field counts, input sizes, filesystem entries,
+      and temporary transactions; reject unsafe links and corrupt ciphertext.
+- [x] Compile a flat declarative schema subset with typed ordinary values and
+      write-only string secrets. Validate defaults, required fields, enums, and
+      bounds natively; reject unsupported schema features.
+- [x] Return only ordinary values and secret-presence flags to the settings UI.
+      Support explicit secret replacement/clear and preserve omitted secrets.
+      Prevent an updated schema from exposing a previously secret field.
+- [x] Bind saves to both archive identity and data revision; preserve unknown
+      stored fields through updates/rollback and reject stale editors.
+- [x] Stage encrypted writes before the auth commit, serialize them with package
+      lifecycle operations, survive IPC cancellation, and reject stale epochs.
+- [x] Send configuration only to a verified worker declaring configuration
+      permission; require an exact startup acknowledgment before accepting data.
+      Keep secrets out of argv, environment, runtime snapshots, and host logging.
+- [x] Save before restarting an enabled worker; keep disabled workers stopped
+      and distinguish successful persistence from failed runtime activation.
+- [x] Add a desktop-only typed settings editor with English/Russian messages,
+      secret draft cleanup, auth/lifecycle invalidation, and cross-window races.
+- [x] Offer explicit settings deletion on uninstall, defaulting to retention;
+      deletion must remain within the same authorized package operation.
+- [x] Verify schema/storage failure cases, real worker startup/save/restart,
+      auth races, UI flows, and mobile absence. Keep heavy local checks serialized.
+- [x] Update protocol/package documentation and complete independent reviews of
+      storage, schema/application integration, protocol/lifecycle, UI, and mobile
+      boundaries. Address the review findings with focused regressions.
+
+- [x] Update rustls to 0.23.45 and its required crypto dependencies for
+      RUSTSEC-2026-0285; preserve advisory enforcement and verify Cargo Deny.
+
+Validation for PR #423: 323 macOS native tests and strict Clippy, 252 frontend tests,
+8 mobile frontend checks, 4 build-profile checks, and 22 native mobile-boundary
+tests passed. Both frontend production builds passed. Hosted Linux passed 321
+tests, Windows passed 136, and final Android APK/AAB and iOS IPA inspection passed
+for head `c47ecc5` in [quality gate 34872923208](https://github.com/victron-venus/inverter-desktop/actions/runs/34872923208).
+The PR merged as `61b1e18`; the canonical main checkout was synchronized cleanly.
+This checkpoint does not establish real HA/camera package or physical-device parity.
+
+### Completed checkpoint: application integration and management UI
+
+- [x] Open one private package store per application, retaining its exclusive
+      lease across authenticated sessions and releasing it after worker cleanup.
+- [x] Restore previously enabled packages only in the current authenticated
+      session; reverify each package, surface failures, and keep disabled packages
+      stopped. A queued restore must not undo an explicit disable/uninstall.
+- [x] Add settings-window-only lifecycle IPC. Select package files through a
+      native dialog; accept no webview-supplied archive or executable path or key.
+- [x] Keep one bounded, expiring native preview bound to its originating window
+      and authentication epoch. Verify target/API compatibility, show verified
+      identity, versions, target, publisher, and declared capabilities, and commit
+      the exact reviewed archive bytes. Invalidate stale or replaced consent.
+- [x] Add a desktop-only Plugins settings panel with inventory, runtime status,
+      install/update review, enable/disable, rollback, uninstall confirmation,
+      readable errors, and English/Russian messages.
+- [x] Report an empty publisher policy accurately; provide no unsigned, fixture
+      key, environment, or user-supplied trust fallback in application builds.
+- [x] Share native inventory and worker state across windows without reloading
+      core configuration or reconnecting MQTT/IGW during package operations.
+      Cache inventory metadata by revision and coalesce UI snapshot requests.
+- [x] Connect logout, expiry, policy-change, and normal-quit cleanup to the package
+      service: revoke previews and workers and retain the store lease until owned
+      operations and process cleanup finish.
+- [x] Exclude native management commands, frontend manager code/messages, package
+      store startup, and management routes from Android/iOS. Verify the frontend
+      boundary with mobile tests and the actual production module graph and JS.
+- [x] Exercise the initial native application service with real signed archives
+      and workers, including review/install file replacement, restoration, auth
+      races, cancellation, initialization/quit ordering, and empty trust.
+- [x] Verify review/install/update/enable/disable/rollback/uninstall UI workflows,
+      escaped metadata and errors, busy states, stale asynchronous responses,
+      listener cleanup, and bounded refreshes. Build both frontend profiles.
+- [x] Document the implemented checkpoint and remaining delivery limits.
+- [x] Complete the operation-activity/expiry regression and pass the full macOS
+      native/frontend suites, typecheck, formatting, lint, and strict Clippy after
+      the integration fixes. Keep target builds and hosted checks separate.
+- [x] Pass local native `cargo check --locked --all-features` for the iOS
+      simulator and Android aarch64 targets.
+- [x] Bind advertised actions to their original session and reject stale calls
+      before enqueueing to a replacement worker; pass the real-worker regression.
 
 The intended package is a signed first-party `.idplugin` archive: a versioned
 manifest, a target-specific executable worker, and declarative UI contributions.
@@ -129,13 +602,18 @@ mobile gate fail. A successful desktop build is insufficient evidence.
       bounded retries/backoff, queue/process/message limits, and normal app shutdown.
 - [x] Render generic text, metric, status, and preset-action dashboard contributions
       without HA entity types, executable UI, or remote navigation.
-- [ ] Extend contributions to settings, notifications, and owned media surfaces.
+- [x] Add declarative installed-package settings with validated secret handling.
+- [x] Extend contributions to native desktop notifications with verified permission,
+      bounded queues/rates, and generation/session-aware OS submission.
+- [x] Add owned media surfaces with lifecycle cleanup and scoped access.
+      Frigate HTTP video and owned windows passed the PR #426 checkpoint.
 - [x] Limit worker IPC to authenticated dashboard/settings windows and advertised
       action parameters. Revoke old session epochs on logout/policy change/expiry;
       reject stale queued writes, contributions, and action results after re-login.
-- [ ] Authorize scoped host services for plugin settings/secrets, permitted
-      origins/topics, and owned files. Manifest permission metadata alone grants
-      none of these services.
+- [x] Authorize scoped settings/secrets delivery through the verified startup
+      configuration handshake for packages declaring configuration permission.
+- [ ] Authorize scoped host services for permitted origins/topics and owned files.
+      Manifest permission metadata alone grants none of these services.
 - [x] Keep inverter writes in core; expose no arbitrary Tauri invocation or
       core MQTT publishing operation to workers.
 - [x] Exercise a separately compiled fixture executable through actual pipes:
@@ -147,41 +625,68 @@ mobile gate fail. A successful desktop build is insufficient evidence.
       real multiwindow interaction during final operational acceptance.
 
 Acceptance for the runtime checkpoint: a separately built worker completes the
-lifecycle through the actual host. Its executable is selected by trusted native
-test/development code; there is no executable-path IPC or automatic package
-loading. Complete phase 4 acceptance also requires the remaining contribution
+lifecycle through the actual host. The original executable proof used trusted native test/development code. The
+application now constructs workers from verified installed packages and restores
+only previously enabled packages after authentication; there is still no
+executable-path IPC or automatic installation. Complete phase 4 acceptance also requires the remaining contribution
 surfaces and scoped host services above. A fake registry or statically linked
 feature implementation does not satisfy worker lifecycle verification.
 
-### 5. Installation, update, rollback, and removal
+### 5. Installation, update, rollback, and removal — application/UI checkpoint
 
-- [ ] Produce deterministic `.idplugin` archives for supported macOS, Linux, and
-      Windows architectures.
-- [ ] Verify publisher signature, API range, target, schema, complete file
+- [x] Implement a deterministic, bounded `.idplugin` format and a native packaging
+      CLI that signs actual file inventories with an externally supplied key.
+- [ ] Produce and publish real worker archives for supported macOS, Linux, and
+      Windows architectures; a host-platform fixture does not establish delivery
+      on every desktop target. No new application/executable signing prerequisite
+      is introduced by the desktop plugin architecture.
+- [x] Verify publisher signature, API range, target, schema, complete file
       inventory, sizes, and digests before executing package content.
-- [ ] Reject traversal, absolute paths, links, duplicate/case-colliding entries,
+- [x] Reject traversal, absolute paths, links, duplicate/case-colliding entries,
       oversized archives, unexpected files, and unsupported schemas.
-- [ ] Stage privately and atomically activate immutable versions after validation
+- [x] Stage privately and atomically activate immutable versions after validation
       and a successful startup handshake; retain a working rollback version.
-- [ ] Serialize install/update/remove operations and recover after interruption.
-- [ ] Add desktop install/enable/disable/update/uninstall UI with compatibility
-      errors, declared permissions, and restart requirements.
-- [ ] Separate installed package inventory from feature settings and secrets.
-- [ ] Stop before removing: cancel work, remove contributions, close owned windows,
-      and clean owned temporary files.
-- [ ] Offer retention/deletion of plugin settings on uninstall; preserve core data.
-- [ ] Test clean install, update, failed activation, rollback, and uninstall with
-      actual produced archives.
+- [x] Serialize native install/update/remove operations; recover interrupted
+      initialization, staging, and inventory changes without executing workers.
+- [x] Bind asynchronous activation to its original authentication epoch and
+      release worker registry capacity only after process reaping.
+- [x] Embed a release-owned publisher policy scoped to exact plugin IDs; reject
+      unknown keys and never trust a key supplied by the package or webview.
+- [ ] Configure real production publisher keys and signing provenance in a
+      reviewed release. Disposable fixture keys must never become shipped trust.
+- [x] Add desktop install/enable/disable/update/uninstall UI with verified review,
+      compatibility errors, declared capabilities, rollback target, and immediate
+      application of changes without an app restart.
+- [x] Connect the native package manager to authenticated application startup,
+      settings, and shutdown without automatically installing legacy features.
+- [x] Separate installed package inventory from feature settings and secrets.
+- [x] Stop before removing package files: cancel actions, remove contributions,
+      confirm process reaping, and release the worker registry entry.
+- [x] Close owned video windows and clean owned media/temporary files when the
+      owning worker/session is revoked; verified in the Frigate clips checkpoint.
+- [x] Offer retention/deletion of plugin settings on uninstall; preserve core data.
+- [x] Add a retained-data inventory and explicit cleanup for uninstalled packages
+      and unknown owners before end-user release, including quota recovery.
+- [x] Test native clean install, update, failed activation, rollback, and uninstall
+      with actual signed archives and executable workers.
 
 Acceptance: a clean core installation contains no HA/camera payloads. Installing
 or removing a package changes available features without reinstalling the app.
+Native lifecycle and desktop application/UI integration are implemented. Full
+phase acceptance still requires final integration checks, production trust and
+worker distribution, remaining host services, and migrated HA/camera packages.
 
 ### 6. Cameras package
 
-- [ ] Move camera MQTT client and Frigate/Kerberos/Ring adapters to the worker,
-      separately from core Cerbo MQTT and source selection.
-- [ ] Preserve deduplication/cooldowns, snapshots, configured topics, reconnect,
-      clip behavior, and window stacking.
+- [x] Add a separately built Frigate MQTT motion worker with isolated configuration,
+      status, exact-topic subscription, deduplication/cooldown, and broker recovery.
+      Prove package lifecycle against a real local broker without HA/core MQTT.
+- [x] Move direct Frigate clips into the standalone worker with owned HTTP video
+      and native window cleanup; preserve independent core telemetry.
+- [ ] Move Kerberos/Ring adapters to workers separately from core Cerbo MQTT
+      and source selection, after verifying producer URL/auth requirements.
+- [ ] Preserve snapshots, complete configured-topic coverage, clip behavior, and
+      window stacking; verify actual native notification display on supported OSes.
 - [ ] Move URL resolution, download validation, clip ownership/cancellation,
       temporary-file cleanup, settings, translations, and media contributions.
 - [ ] Add optional origin-scoped HA proxy/name enrichment; verify direct camera
@@ -198,8 +703,9 @@ or removing a package changes available features without reinstalling the app.
       behavior, and cancellation when configuration changes.
 - [ ] Move appliance/entity UI, settings, translations, and assets into package
       contributions.
-- [ ] Retain all seven inverter flags, metadata, saved controls, and MQTT routing
-      in core, including `input_boolean.<flag>` aliases.
+- [x] Retain all seven inverter flags, metadata, saved controls, and MQTT routing
+      in core, including `input_boolean.<flag>` aliases. The HA worker treats
+      independently configured HA entity IDs literally without this alias lookup.
 - [ ] Verify HA-only install, real HA IDs resembling flag names, service scopes,
       worker restart, and removal during requests.
 - [ ] Remove bundled HA implementation after installable parity is verified.
@@ -297,9 +803,88 @@ or removing a package changes available features without reinstalling the app.
   local HTTP fixture required localhost permission; no working service was used.
 - Mobile guards reject both worker IPC commands and the fixed host event;
   all 18 packaged-verifier fixtures passed. Final Android/iOS archive checks
-  remain required in the PR quality gate before merge.
+  passed in [PR #420](https://github.com/victron-venus/inverter-desktop/pull/420):
+  [quality gate 34809280336](https://github.com/victron-venus/inverter-desktop/actions/runs/34809280336)
+  verified the IPA and APK/AAB for integration head `82bd964`; merged as `5b80aaa`.
+  Hosted Rust passed 195 Linux tests and strict clippy.
 - Scope: no installed plugin package, signature verification, HA/camera migration,
   physical inverter write, or real-device deployment is claimed by this checkpoint.
+
+### Native package checkpoint
+
+- Baseline: merged worker-host PR #420, main `5b80aaa`.
+- Branch: `feat/desktop-plugin-packages`, isolated from the canonical checkout.
+- Acceptance requires actual signed archives and executable worker lifecycle tests,
+  including tampering, unknown publishers, wrong target/API, failed activation,
+  rollback, interrupted work, disabled startup, and removal after process reaping.
+- The compiled publisher policy starts empty. No production key is invented or
+  inferred from archive contents; configuring release trust remains unchecked.
+- At the native API checkpoint, desktop still kept an empty worker registry;
+  application/UI integration is recorded separately below. HA/camera migration and
+  final operational acceptance remain open.
+- Package verification: 19 tests passed with real Ed25519 signatures, canonical
+  manifests, ZIP structure/CRC rejection, exact publisher scope, and file integrity.
+- Packaging: 11 local tests passed. The actual CLI produced byte-identical archives
+  containing a compiled worker; Python `cryptography` independently verified the
+  Ed25519 signature, and Python `zipfile` checked CRC and inventory digests.
+  Existing output and accidental private-seed inclusion were rejected.
+- Native lifecycle: 21 focused tests passed, including real cross-process locking,
+  failed activation and rollback, authentication epochs, caller cancellation,
+  corruption, initialization recovery, and file-count/disk quota preflight.
+- Integration: all 256 macOS Rust tests and strict all-targets clippy passed after
+  integrating main `8c995d7` (Frigate progressive clip streaming). Hosted
+  Windows/Linux/Android/iOS gates were still required at that local validation stage.
+- Frontend/core: all 212 desktop tests and eight mobile tests passed, along with
+  typecheck/build, formatting, and lint (existing lint warnings remain).
+- Mobile boundary verifier: all 20 fixtures passed, including the new package
+  dependency and embedded publisher-policy rejection checks.
+- Mobile compilation: iOS simulator and Android aarch64
+  `cargo check --locked --all-features` passed; both frontend profile builds passed.
+- Hosted CI follow-up: update signature decoding for the newer Clippy rule and
+  embed Tauri's existing Common Controls v6 dependency in Windows test/example
+  executables as well as the application. The initial Windows run compiled but
+  its loader exited before tests; successful compilation alone is not acceptance.
+- Windows portability follow-up: admit regular-file modes emitted by Windows ZIP
+  tooling without admitting links or special files, pin producer creator metadata
+  across operating systems, and preserve raw `..` components in traversal fixtures
+  instead of letting Windows verbatim-path joining normalize them first.
+- After the portability fixes, all 77 local plugin tests, strict all-targets
+  clippy, formatting, and the independent real-CLI signature/archive checks passed.
+
+### Application and manager checkpoint
+
+- Baseline: merged native package PR #421, main `0c27c54`.
+- Branch: `feat/desktop-plugin-manager`, isolated from the canonical checkout.
+- Initial native validation: all 94 plugin tests passed, including application
+  service tests with actual signed archives and executable workers. This precedes
+  the final operation-activity/expiry regression and full native integration run.
+- Frontend: 35 focused tests passed (17 manager, 13 dashboard, five desktop
+  configuration). Coverage includes native selection cancellation, verified review,
+  explicit install/update, declared capabilities, enable/disable, named rollback,
+  concrete uninstall consent, auth/teardown races, and 100-event refresh bursts.
+- Eight mobile tests passed, including the empty manager contribution and absence
+  of its settings tab. Both frontend production builds passed; inspection of the
+  mobile receipt and generated JavaScript found no manager module, lifecycle IPC
+  names, or manager labels. Desktop output includes the manager.
+- Full local integration: all 276 macOS native tests and all 229 desktop frontend
+  tests passed. Strict Clippy, frontend typecheck, formatting, and Biome passed;
+  existing repository lint warnings/information remain. Native metadata caching
+  and one-in-flight UI refresh avoid repeated verification per worker event;
+  launch verification remains mandatory.
+- Browser visual smoke exercised the actual manager component with disposable
+  mocked native IPC: English/light verified update to 2.0.0 and disable, plus
+  Russian/dark empty-publisher policy with installation disabled. The fixture and
+  server were removed afterward. This does not test the real native file-dialog GUI.
+- Local iOS simulator and Android aarch64 native
+  `cargo check --locked --all-features` passed.
+- Final action/session fix: all 96 plugin tests passed, including a delayed
+  old-session crash action rejected before reaching the replacement worker;
+  a new-session echo action succeeded. The other 181 native tests are unchanged.
+- Implementation commit: `b0e6dbd`. Hosted APK/AAB/IPA validation, exact-commit
+  review/check results, and merge status are recorded in
+  [PR #422](https://github.com/victron-venus/inverter-desktop/pull/422).
+  Local results do not prove production publisher provisioning, migrated HA/camera
+  packages, physical inverter commands, or real-device behavior.
 
 ## Reference constraints
 

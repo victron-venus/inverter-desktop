@@ -224,6 +224,13 @@ pub(super) fn save_config_encrypted(
     Ok(())
 }
 
+/// Desktop plugin records share the existing application encryption key, with
+/// their own authenticated encryption domain and storage format.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) fn plugin_settings_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
+    get_or_create_encryption_key(app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

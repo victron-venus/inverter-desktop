@@ -3,14 +3,14 @@
 //! Validation here establishes a wire contract, not a process sandbox, publisher
 //! trust, or verification of the files described by a manifest.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.0.0";
+pub const HOST_API_VERSION: &str = "1.4.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -19,6 +19,9 @@ pub const MAX_ACTION_PARAMS_BYTES: usize = 4 * 1024;
 pub const MAX_ACTION_RESULT_BYTES: usize = 16 * 1024;
 pub const MAX_ACTION_DEADLINE_MS: u64 = 60_000;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
+pub const MAX_NOTIFICATION_TITLE_BYTES: usize = 128;
+pub const MAX_NOTIFICATION_BODY_BYTES: usize = 1024;
 const MAX_JSON_DEPTH: usize = 8;
 const MAX_JSON_NODES: usize = 512;
 const MAX_INVENTORY_FILES: usize = 128;
@@ -41,6 +44,9 @@ pub enum HostMessage {
         host_api_version: String,
         plugin_id: String,
     },
+    Configuration {
+        configuration: WorkerConfiguration,
+    },
     Action {
         request_id: String,
         action_id: String,
@@ -54,7 +60,7 @@ pub enum HostMessage {
     Shutdown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerMessage {
     Ready {
@@ -62,9 +68,22 @@ pub enum WorkerMessage {
         host_api_version: String,
         plugin_id: String,
     },
+    ConfigurationReady {
+        revision: String,
+    },
     /// Replaces this worker's entire contribution snapshot.
     Contributions {
         items: Vec<DashboardContribution>,
+    },
+    HttpVideo {
+        id: String,
+        url: String,
+        title: String,
+    },
+    Notification {
+        id: String,
+        title: String,
+        body: String,
     },
     ActionResult {
         request_id: String,
@@ -80,6 +99,54 @@ pub enum WorkerMessage {
         name: String,
         data: Value,
     },
+}
+
+// Diagnostics never render worker data, including private media URLs/titles.
+impl std::fmt::Debug for WorkerMessage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WorkerMessage { contents: [redacted] }")
+    }
+}
+
+/// Delivered only to the owning worker through its authenticated startup pipe.
+/// Debug output deliberately omits both maps, including accidental secrets in values.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerConfiguration {
+    pub revision: String,
+    pub values: Value,
+    pub secrets: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for WorkerConfiguration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WorkerConfiguration { contents: [redacted] }")
+    }
+}
+
+impl WorkerConfiguration {
+    pub fn validate(&self) -> Result<(), String> {
+        token(&self.revision, "configuration revision")?;
+        if !self.values.is_object() {
+            return Err("worker configuration values must be an object".into());
+        }
+        bounded_json(&self.values, MAX_CONFIGURATION_BYTES)?;
+        for key in self.secrets.keys() {
+            token(key, "secret key")?;
+            if self.values.get(key).is_some() {
+                return Err("worker values and secrets must have separate keys".into());
+            }
+        }
+        if self.secrets.len() > MAX_JSON_NODES
+            || serde_json::to_vec(self)
+                .map_err(|_| "cannot encode worker configuration")?
+                .len()
+                > MAX_CONFIGURATION_BYTES
+        {
+            return Err("worker configuration exceeds byte or field limit".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -133,6 +200,8 @@ pub struct PluginManifest {
     /// Bounded JSON Schema metadata. No schema is fetched or executed here.
     pub config_schema: Value,
     pub permissions: Vec<PluginPermission>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_video: Option<HttpVideoDeclaration>,
     pub inventory: Vec<InventoryEntry>,
     /// Optional for local development. Presence does not establish authenticity.
     pub signature: Option<SignatureMetadata>,
@@ -143,8 +212,128 @@ pub struct PluginManifest {
 pub enum PluginPermission {
     DashboardContributions,
     PluginConfiguration,
+    DesktopNotifications,
+    HttpVideo,
     NetworkHttp,
     NetworkMqtt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HttpVideoDeclaration {
+    pub base_url_setting: String,
+}
+
+/// Only native installation may derive a grant from verified startup settings.
+#[derive(Clone)]
+pub struct HttpVideoGrant {
+    base: reqwest::Url,
+}
+impl std::fmt::Debug for HttpVideoGrant {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HttpVideoGrant { base: [redacted] }")
+    }
+}
+
+fn validated_video_url(value: &str) -> Result<reqwest::Url, String> {
+    if value.is_empty()
+        || value.len() > 2048
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+        || value.contains('\\')
+    {
+        return Err("Invalid HTTP video URL".into());
+    }
+    if !value.contains("://") {
+        return Err("Invalid HTTP video URL".into());
+    }
+    let url = reqwest::Url::parse(value).map_err(|_| "Invalid HTTP video URL")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Invalid HTTP video URL".into());
+    }
+    // Reject alternate encodings of path separators and traversal before any
+    // server-specific decoding can reinterpret the allowed prefix.
+    let raw_path = value
+        .split_once("://")
+        .and_then(|(_, tail)| tail.find('/').map(|i| &tail[i..]))
+        .unwrap_or("");
+    for segment in raw_path.split('/') {
+        let lower = segment.to_ascii_lowercase();
+        if matches!(segment, "." | "..")
+            || lower.contains("%2e")
+            || lower.contains("%2f")
+            || lower.contains("%5c")
+            || lower.contains("%25")
+        {
+            return Err("Invalid HTTP video URL path".into());
+        }
+        let mut decoded = Vec::with_capacity(segment.len());
+        let mut bytes = segment.bytes();
+        while let Some(byte) = bytes.next() {
+            if byte == b'%' {
+                let high = bytes.next().and_then(|b| (b as char).to_digit(16));
+                let low = bytes.next().and_then(|b| (b as char).to_digit(16));
+                let (Some(high), Some(low)) = (high, low) else {
+                    return Err("Invalid HTTP video URL path".into());
+                };
+                decoded.push((high * 16 + low) as u8);
+            } else {
+                decoded.push(byte);
+            }
+        }
+        if std::str::from_utf8(&decoded).map_or(true, |text| text.chars().any(char::is_control)) {
+            return Err("Invalid HTTP video URL path".into());
+        }
+    }
+    Ok(url)
+}
+
+impl HttpVideoGrant {
+    pub(crate) fn from_manifest_configuration(
+        manifest: &PluginManifest,
+        configuration: Option<&WorkerConfiguration>,
+    ) -> Result<Option<Self>, String> {
+        manifest.validate_http_video()?;
+        let Some(declaration) = &manifest.http_video else {
+            return Ok(None);
+        };
+        let configuration = configuration.ok_or("HTTP video startup configuration missing")?;
+        if configuration
+            .secrets
+            .contains_key(&declaration.base_url_setting)
+        {
+            return Err("HTTP video base cannot be secret".into());
+        }
+        let Some(value) = configuration
+            .values
+            .get(&declaration.base_url_setting)
+            .filter(|value| !value.is_null())
+        else {
+            return Ok(None);
+        };
+        let base = value.as_str().ok_or("HTTP video base must be a string")?;
+        if base.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            base: validated_video_url(base)?,
+        }))
+    }
+
+    pub fn validate_url(&self, value: &str) -> Result<reqwest::Url, String> {
+        let url = validated_video_url(value)?;
+        let prefix = self.base.path().trim_end_matches('/');
+        if url.origin() != self.base.origin() || !url.path().starts_with(&format!("{prefix}/")) {
+            return Err("HTTP video URL is outside its configured scope".into());
+        }
+        Ok(url)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,6 +473,7 @@ pub fn validate_host_message(message: &HostMessage) -> Result<(), String> {
             validate_versions(*protocol_version, host_api_version)?;
             validate_plugin_id(plugin_id)?;
         }
+        HostMessage::Configuration { configuration } => configuration.validate()?,
         HostMessage::Action {
             request_id,
             action_id,
@@ -379,7 +569,20 @@ pub fn validate_worker_message(message: &WorkerMessage) -> Result<(), String> {
             validate_versions(*protocol_version, host_api_version)?;
             validate_plugin_id(plugin_id)?;
         }
+        WorkerMessage::ConfigurationReady { revision } => {
+            token(revision, "configuration revision")?
+        }
         WorkerMessage::Contributions { items } => validate_contributions(items)?,
+        WorkerMessage::HttpVideo { id, url, title } => {
+            token(id, "HTTP video id")?;
+            label(title, "HTTP video title", 128)?;
+            validated_video_url(url)?;
+        }
+        WorkerMessage::Notification { id, title, body } => {
+            token(id, "notification id")?;
+            label(title, "notification title", MAX_NOTIFICATION_TITLE_BYTES)?;
+            label(body, "notification body", MAX_NOTIFICATION_BODY_BYTES)?;
+        }
         WorkerMessage::ActionResult { request_id, value } => {
             token(request_id, "request_id")?;
             bounded_json(value, MAX_ACTION_RESULT_BYTES)?;
@@ -451,7 +654,7 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<PluginManifest, String> {
     Ok(manifest)
 }
 
-fn relative_path(path: &str) -> Result<(), String> {
+pub fn validate_package_path(path: &str) -> Result<(), String> {
     if path.is_empty() || path.len() > 240 || path.contains('\\') || path.contains(':') {
         return Err("entrypoint and inventory paths must be portable relative paths".into());
     }
@@ -526,7 +729,7 @@ impl PluginManifest {
         if !DESKTOP_TARGETS.contains(&self.target.as_str()) {
             return Err("plugin target must be a supported desktop target".into());
         }
-        relative_path(&self.entrypoint)?;
+        validate_package_path(&self.entrypoint)?;
         bounded_json(&self.config_schema, MAX_ACTION_RESULT_BYTES)?;
         if !self.config_schema.is_object()
             || self.config_schema.get("type").and_then(Value::as_str) != Some("object")
@@ -538,6 +741,7 @@ impl PluginManifest {
         if permissions.len() != self.permissions.len() {
             return Err("duplicate plugin permission".into());
         }
+        self.validate_http_video()?;
         self.validate_inventory()?;
         if let Some(signature) = &self.signature {
             if signature.algorithm != "ed25519" || !lowercase_hex(&signature.signature, 128) {
@@ -555,6 +759,36 @@ impl PluginManifest {
         Ok(())
     }
 
+    fn validate_http_video(&self) -> Result<(), String> {
+        let permitted = self.permissions.contains(&PluginPermission::HttpVideo);
+        if permitted != self.http_video.is_some() {
+            return Err("HTTP video permission requires its scoped declaration".into());
+        }
+        if let Some(declaration) = &self.http_video {
+            token(&declaration.base_url_setting, "HTTP video setting")?;
+            let field = self
+                .config_schema
+                .get("properties")
+                .and_then(|fields| fields.get(&declaration.base_url_setting));
+            if !self
+                .permissions
+                .contains(&PluginPermission::PluginConfiguration)
+                || field
+                    .and_then(|field| field.get("type"))
+                    .and_then(Value::as_str)
+                    != Some("string")
+                || field
+                    .and_then(|field| field.get("writeOnly"))
+                    .is_some_and(|value| value.as_bool() != Some(false))
+            {
+                return Err(
+                    "HTTP video base must name a nonsecret string configuration setting".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn validate_inventory(&self) -> Result<(), String> {
         if self.inventory.is_empty() || self.inventory.len() > MAX_INVENTORY_FILES {
             return Err("invalid plugin inventory file count".into());
@@ -563,7 +797,7 @@ impl PluginManifest {
         let mut total_size = 0_u64;
         let mut has_entrypoint = false;
         for item in &self.inventory {
-            relative_path(&item.path)?;
+            validate_package_path(&item.path)?;
             // Case-insensitive collisions cannot be portable across our targets.
             if !paths.insert(item.path.to_ascii_lowercase()) {
                 return Err("duplicate plugin inventory path".into());
@@ -607,6 +841,109 @@ mod tests {
         }
     }
 
+    fn video_manifest() -> PluginManifest {
+        let mut value = manifest();
+        value.permissions.extend([
+            PluginPermission::PluginConfiguration,
+            PluginPermission::HttpVideo,
+        ]);
+        value.http_video = Some(HttpVideoDeclaration {
+            base_url_setting: "base".into(),
+        });
+        value.config_schema =
+            serde_json::json!({"type":"object","properties":{"base":{"type":"string"}}});
+        value
+    }
+
+    #[test]
+    fn http_video_grant_is_scoped_to_the_verified_nonsecret_startup_setting() {
+        let mut manifest = video_manifest();
+        manifest.validate().unwrap();
+        let mut configuration = WorkerConfiguration {
+            revision: "test".into(),
+            values: serde_json::json!({"base":"https://camera.test:9443/frigate/"}),
+            secrets: BTreeMap::new(),
+        };
+        let grant = HttpVideoGrant::from_manifest_configuration(&manifest, Some(&configuration))
+            .unwrap()
+            .unwrap();
+        assert!(grant
+            .validate_url("https://camera.test:9443/frigate/api/events/id/clip.mp4")
+            .is_ok());
+        for url in [
+            "http://camera.test:9443/frigate/clip.mp4",
+            "https://camera.test/frigate/clip.mp4",
+            "https://other.test:9443/frigate/clip.mp4",
+            "https://camera.test:9443/frigate-other/clip.mp4",
+            "https://camera.test:9443/frigate/../outside",
+            "https://camera.test:9443/frigate/%2e%2e/outside",
+            "https://camera.test:9443/frigate/a%2fb",
+            "https://camera.test:9443/frigate/%0a",
+            "https://camera.test:9443/frigate/%C2%85",
+            "https://camera.test:9443/frigate/%zz",
+            "https://u:p@camera.test:9443/frigate/clip.mp4",
+            "https://camera.test:9443/frigate/clip.mp4?token=x",
+            "https://camera.test:9443/frigate/clip.mp4#fragment",
+            "file:///tmp/clip.mp4",
+        ] {
+            assert!(grant.validate_url(url).is_err(), "{url}");
+        }
+        assert!(grant
+            .validate_url("https://camera.test:9443/frigate/a%20b%C3%A9%3F%23/clip.mp4")
+            .is_ok());
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"base":null}),
+            serde_json::json!({"base":" "}),
+        ] {
+            configuration.values = value;
+            assert!(
+                HttpVideoGrant::from_manifest_configuration(&manifest, Some(&configuration))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        manifest.config_schema["properties"]["base"]["writeOnly"] = serde_json::json!(true);
+        assert!(manifest.validate().is_err());
+        manifest.config_schema["properties"]["base"]["writeOnly"] = serde_json::json!(false);
+        manifest
+            .permissions
+            .retain(|permission| *permission != PluginPermission::HttpVideo);
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn http_video_wire_fields_are_bounded_plain_data_and_debug_is_redacted() {
+        let valid = WorkerMessage::HttpVideo {
+            id: "clip-1".into(),
+            url: "https://private-camera.test/base/clip.mp4".into(),
+            title: "Private camera".into(),
+        };
+        validate_worker_message(&valid).unwrap();
+        assert!(!format!("{valid:?}").contains("private-camera"));
+        for (id, url, title) in [
+            (
+                "x".repeat(129),
+                "https://camera.test/x".into(),
+                "Camera".into(),
+            ),
+            (
+                "x".into(),
+                format!("https://camera.test/{}", "x".repeat(2048)),
+                "Camera".into(),
+            ),
+            ("x".into(), "https://camera.test/x".into(), "x".repeat(129)),
+            (
+                "x".into(),
+                "https://camera.test/x".into(),
+                "Camera\n".into(),
+            ),
+        ] {
+            assert!(validate_worker_message(&WorkerMessage::HttpVideo { id, url, title }).is_err());
+        }
+        assert!(parse_worker_frame(br#"{"type":"http_video","id":"x","url":"https://camera.test/x","title":"Camera","headers":{}}"#).is_err());
+    }
+
     fn manifest() -> PluginManifest {
         PluginManifest {
             schema_version: MANIFEST_SCHEMA_VERSION,
@@ -617,6 +954,7 @@ mod tests {
             entrypoint: "bin/demo-worker".into(),
             config_schema: json!({"type":"object","properties":{}}),
             permissions: vec![PluginPermission::DashboardContributions],
+            http_video: None,
             inventory: vec![InventoryEntry {
                 path: "bin/demo-worker".into(),
                 size: 100,
@@ -844,5 +1182,74 @@ mod tests {
             .permissions
             .push(PluginPermission::DashboardContributions);
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn notifications_are_bounded_plain_text_without_additional_host_operations() {
+        let valid = json!({"type":"notification","id":"motion-1:front","title":"Motion","body":"Person detected"});
+        assert!(parse_worker_frame(&serde_json::to_vec(&valid).unwrap()).is_ok());
+        for (field, value) in [
+            ("id", "../outside".to_owned()),
+            ("id", "x".repeat(129)),
+            ("title", "x".repeat(MAX_NOTIFICATION_TITLE_BYTES + 1)),
+            ("title", "é".repeat(65)),
+            ("title", " ".to_owned()),
+            ("body", "x".repeat(MAX_NOTIFICATION_BODY_BYTES + 1)),
+            ("body", "line\nbreak".to_owned()),
+            ("body", "\0".to_owned()),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value.into();
+            assert!(parse_worker_frame(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
+        for field in ["url", "html", "command", "icon", "actions"] {
+            let mut invalid = valid.clone();
+            invalid[field] = "untrusted host operation".into();
+            assert!(parse_worker_frame(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
+        assert_eq!(
+            serde_json::to_string(&PluginPermission::DesktopNotifications).unwrap(),
+            "\"desktop_notifications\""
+        );
+    }
+
+    #[test]
+    fn worker_configuration_is_bounded_strict_and_redacted() {
+        let mut configuration = WorkerConfiguration {
+            revision: "revision-1".into(),
+            values: json!({"server":"https://plugin.example"}),
+            secrets: [("token".into(), "sensitive-fixture-value".into())].into(),
+        };
+        let message = HostMessage::Configuration {
+            configuration: configuration.clone(),
+        };
+        assert!(validate_host_message(&message).is_ok());
+        let encoded = encode_host_frame(&message).unwrap();
+        assert!(String::from_utf8(encoded)
+            .unwrap()
+            .contains("sensitive-fixture-value"));
+        assert!(!format!("{message:?}").contains("sensitive-fixture-value"));
+        assert!(!format!("{message:?}").contains("plugin.example"));
+        assert!(
+            parse_worker_frame(br#"{"type":"configuration_ready","revision":"revision-1"}"#)
+                .is_ok()
+        );
+        assert!(parse_worker_frame(
+            br#"{"type":"configuration_ready","revision":"revision-1","secret":"not-allowed"}"#
+        )
+        .is_err());
+        configuration.values = json!({"token":"public-reclassification"});
+        assert!(configuration.validate().is_err());
+        configuration.values = json!({});
+        configuration
+            .secrets
+            .insert("token".into(), "x".repeat(MAX_CONFIGURATION_BYTES));
+        assert!(configuration.validate().is_err());
+        configuration.secrets.clear();
+        configuration.revision = "bad\nrevision".into();
+        assert!(configuration.validate().is_err());
+        configuration.revision = "valid".into();
+        configuration.values = json!([]);
+        assert!(configuration.validate().is_err());
     }
 }
