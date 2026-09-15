@@ -69,7 +69,7 @@
 
     <!-- Setpoint -->
     <div
-      class="classic-card metric-card px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
+      class="classic-card metric-card metric-card-setpoint px-2 py-2 flex flex-col items-center justify-center min-h-[76px]"
     >
       <div class="classic-stat-label flex items-center justify-center gap-1">
         Setpoint

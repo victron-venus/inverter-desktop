@@ -110,6 +110,11 @@
                 />
               </div>
             </div>
+            <label class="flex items-center gap-2 text-[12px]">
+              <input id="setup_mqtt_tls" v-model="config.mqtt_tls" type="checkbox" />
+              TLS encrypted connection
+            </label>
+            <p class="text-[11px] text-muted">TLS is required when using a username or password.</p>
           </div>
 
           <div v-else class="flex flex-col gap-3">
@@ -193,6 +198,7 @@
         class="px-5 py-4 border-t border-black/[0.06] dark:border-white/[0.07] flex flex-col gap-2"
       >
         <p v-if="error" class="text-[11px] text-consumption text-center">{{ error }}</p>
+        <PrivacyLink class="text-[12px]" />
         <UiButton variant="primary" size="lg" class="w-full" :loading="saving" @click="handleSave">
           Save &amp; Continue
         </UiButton>
@@ -210,6 +216,7 @@ import type { AppConfig } from '../config'
 import { defaultConfig } from '../config'
 import { logger } from '../logger'
 import UiButton from './UiButton.vue'
+import PrivacyLink from './PrivacyLink.vue'
 
 const emit = defineEmits<{
   complete: [config: AppConfig]
@@ -244,6 +251,8 @@ function validateMain(): string | null {
   if (connectionMode.value === 'mqtt') {
     if (!config.mqtt_host?.trim()) return 'MQTT host is required'
     if (!config.mqtt_port || config.mqtt_port <= 0) return 'MQTT port is required'
+    if (!config.mqtt_tls && (config.mqtt_login || config.mqtt_password))
+      return 'Enable TLS before using an MQTT username or password'
     return null
   }
   if (!(config.gateway_url || '').trim()) return 'Gateway URL is required'

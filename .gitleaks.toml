@@ -9,3 +9,7 @@ condition = "AND"
 paths = ['''^desktop-plugins/home-assistant/tests/fixtures/tls/server-key\.pem$''']
 regexTarget = "match"
 regexes = ['''(?m)^MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggFRMQ6ICrNJ2o0/F\r?\n/ccg3GjYwD/NROh2Kre/fHwc8U2hRANCAASzsIVdYLOvy/lucGpzxPoUXpzZY7Jf\r?\naLk2oHb/bFfjR3ZaZCAuVzNYGHez7kitCyj1\+5HUVi1mgVLwLaO8w8co(?:\r?\n|$)''']
+
+[[allowlists]]
+description = "Disposable localhost key used only by the MQTT TLS regression tests"
+paths = ['''^src-tauri/src/mqtt/testdata/localhost-key\.pem$''']

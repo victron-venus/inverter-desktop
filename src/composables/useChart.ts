@@ -1,4 +1,5 @@
 import { type Ref, ref } from 'vue'
+import { isMobileApp } from '@features'
 
 const MAX_HISTORY_POINTS = 1800
 const CHART_UPDATE_INTERVAL_MS = 2000
@@ -76,6 +77,7 @@ export function useChart(isDarkRef: Ref<boolean>) {
     const dark = isDarkRef.value
     const textColor = dark ? '#98989d' : '#636366'
     const gridColor = dark ? 'rgba(255,255,255,0.055)' : 'rgba(0,0,0,0.055)'
+    const fontSize = isMobileApp ? 12 : 10
     const timeData = timestamps.map((ts) => ts * 1000)
 
     chartOption.value = {
@@ -83,12 +85,13 @@ export function useChart(isDarkRef: Ref<boolean>) {
       backgroundColor: 'transparent',
       tooltip: {
         trigger: 'axis',
+        confine: isMobileApp,
         backgroundColor: dark ? '#1c1c1e' : '#ffffff',
         borderColor: dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
         borderWidth: 1,
         extraCssText: 'border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,0.16);padding:7px 9px;',
         axisPointer: { type: 'cross', label: { backgroundColor: dark ? '#3a3a3c' : '#8e8e93' } },
-        textStyle: { color: dark ? '#f5f5f7' : '#1c1c1e', fontSize: 10 },
+        textStyle: { color: dark ? '#f5f5f7' : '#1c1c1e', fontSize },
         formatter: (params: TooltipParam[]) => {
           const date = new Date(params[0].value[0])
           const timeStr = date.toLocaleTimeString([], {
@@ -110,7 +113,7 @@ export function useChart(isDarkRef: Ref<boolean>) {
         top: 0,
         itemWidth: 12,
         itemHeight: 8,
-        textStyle: { color: textColor, fontSize: 10, fontWeight: 500 },
+        textStyle: { color: textColor, fontSize, fontWeight: 500 },
       },
       grid: { top: 28, bottom: 24, left: 42, right: 12, containLabel: false },
       xAxis: {
@@ -118,7 +121,8 @@ export function useChart(isDarkRef: Ref<boolean>) {
         axisLine: { lineStyle: { color: gridColor } },
         axisLabel: {
           color: textColor,
-          fontSize: 10,
+          fontSize,
+          hideOverlap: isMobileApp,
           formatter: '{HH}:{mm}',
         },
         splitLine: { show: false },
@@ -128,7 +132,7 @@ export function useChart(isDarkRef: Ref<boolean>) {
         splitLine: { lineStyle: { color: gridColor, type: 'dashed' } },
         axisLabel: {
           color: textColor,
-          fontSize: 10,
+          fontSize,
           formatter: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v),
         },
       },

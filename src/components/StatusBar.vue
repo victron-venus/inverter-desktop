@@ -1,6 +1,6 @@
 <template>
   <div
-    class="flex items-center justify-center gap-2 text-[10px] font-medium text-muted mt-1 pb-0.5"
+    class="dashboard-status flex items-center justify-center gap-2 text-[10px] font-medium text-muted mt-1 pb-0.5"
   >
     <slot name="leading" />
     <div class="flex items-center gap-1">

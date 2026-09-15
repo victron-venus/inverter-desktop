@@ -62,6 +62,7 @@ function mqttConnectArgs(config: AppConfig) {
   return {
     host: config.mqtt_host,
     port: config.mqtt_port,
+    tls: config.mqtt_tls === true,
     username: config.mqtt_login || null,
     password: config.mqtt_password || null,
     portalId: config.portal_id || null,
@@ -87,6 +88,7 @@ async function probeMqttReachable(config: AppConfig): Promise<boolean> {
     await invoke('test_mqtt_connection', {
       host: config.mqtt_host,
       port: config.mqtt_port,
+      tls: config.mqtt_tls === true,
       username: config.mqtt_login || null,
       password: config.mqtt_password || null,
     })
@@ -202,6 +204,7 @@ export function useConnection() {
       const nextKey = JSON.stringify([
         config.mqtt_host,
         config.mqtt_port,
+        config.mqtt_tls === true,
         config.portal_id,
         config.gateway_url,
         config.water_tank_instance,

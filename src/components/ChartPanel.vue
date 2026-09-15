@@ -1,7 +1,7 @@
 <template>
-  <div class="classic-card h-full overflow-hidden flex flex-col">
+  <div class="classic-card power-chart h-full overflow-hidden flex flex-col">
     <div class="classic-header">
-      <span class="text-[10px] font-semibold tracking-tight">Power · 24h</span>
+      <span class="chart-title text-[10px] font-semibold tracking-tight">Power · 24h</span>
     </div>
     <VChart
       class="chart-wrap w-full flex-1"

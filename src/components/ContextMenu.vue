@@ -18,9 +18,10 @@
       Settings
     </button>
 
-    <div class="my-1 mx-1 h-px bg-black/[0.06] dark:bg-white/[0.08]"></div>
+    <div v-if="!isMobileApp" class="my-1 mx-1 h-px bg-black/[0.06] dark:bg-white/[0.08]"></div>
 
     <button
+      v-if="!isMobileApp"
       type="button"
       class="w-full text-left px-2.5 py-1.5 rounded-md text-[12px] font-semibold tracking-tight flex items-center gap-2 text-main hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
       @click="$emit('check-updates')"
@@ -37,6 +38,7 @@
 
 <script setup lang="ts">
 import { Settings, Download } from '@lucide/vue'
+import { isMobileApp } from '@features'
 
 defineProps<{
   show: boolean

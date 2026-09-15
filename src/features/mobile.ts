@@ -24,6 +24,7 @@ export const featureConfigSections: Array<{
   icon: Component
 }> = []
 export const featureSetupAvailable = false
+export const isMobileApp = true
 export { featureDefaultConfig } from './defaults.mobile'
 export function prepareFeatureConfig(_config: AppConfig) {
   // Mobile preserves opaque desktop settings without interpreting or normalizing them.

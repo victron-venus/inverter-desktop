@@ -1,5 +1,5 @@
 <template>
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+  <div class="device-panels grid grid-cols-1 md:grid-cols-2 gap-1.5">
     <!-- Batteries Section -->
     <div v-if="showBatteries !== false" class="classic-card">
       <div class="classic-header"><BatteryMedium :size="10" /> Batteries</div>

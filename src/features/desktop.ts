@@ -28,6 +28,7 @@ export const featureConfigSections = [
 ]
 export const featurePluginManagerTabId = 'plugins'
 export const featureSetupAvailable = true
+export const isMobileApp = false
 
 export function prepareFeatureConfig(config: AppConfig) {
   config.ha_use_direct_api = !!(config.ha_url?.trim() && config.ha_longlived_token?.trim())

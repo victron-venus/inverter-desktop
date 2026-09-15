@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 #set -x
 # gh workflow run Release --repo victron-venus/inverter-desktop --ref main
-set -uo pipefail
+set -euo pipefail
 
 OUTPUT_DIR="dist/android"
 ANDROID_DIR="src-tauri/gen/android"
+ANDROID_API=36
+BUILD_TOOLS_VERSION=36.0.0
+DEFAULT_NDK_VERSION=28.2.13676358
 
 # Signing configuration (can be set via env vars or .env.local)
 ANDROID_KEYSTORE_PATH="${ANDROID_KEYSTORE_PATH:-}"
@@ -14,7 +17,18 @@ ANDROID_KEY_PASSWORD="${ANDROID_KEY_PASSWORD:-}"
 SIGN_APK="${SIGN_APK:-false}"
 
 # Version from Cargo.toml (source of truth for Tauri)
-VERSION=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
+VERSION=$(awk -F'"' '/^version = / { print $2; exit }' src-tauri/Cargo.toml)
+if [ -z "$VERSION" ]; then
+  echo "  ✗ No application version found in src-tauri/Cargo.toml" >&2
+  exit 1
+fi
+
+require_artifact() {
+  if [ ! -s "$1" ]; then
+    echo "  ✗ Build did not produce a nonempty artifact: $1" >&2
+    exit 1
+  fi
+}
 
 usage() {
   echo "Usage: $0 [--clean] [--dev] [--sign] [--update-deps]"
@@ -75,7 +89,7 @@ fi
 
 if [ "$CLEAN" = true ]; then
   echo "===> Cleaning project..."
-  rm -rf node_modules pnpm-lock.yaml package-lock.json dist src-tauri/target
+  rm -rf node_modules dist src-tauri/target
   echo "  ✓ Cleaned"
   echo ""
 fi
@@ -110,7 +124,8 @@ if ! command -v java >/dev/null 2>&1; then
     exit 1
   fi
 else
-  echo "  ✓ Java: $(java -version 2>&1 | head -1)"
+  JAVA_VERSION=$(java -version 2>&1)
+  echo "  ✓ Java: ${JAVA_VERSION%%$'\n'*}"
 fi
 
 # ---------- Android SDK ----------
@@ -133,12 +148,17 @@ fi
 
 SDKMAN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
-if [ ! -f "$ANDROID_HOME/platforms/android-34/android.jar" ]; then
+if [ ! -f "$ANDROID_HOME/platforms/android-$ANDROID_API/android.jar" ] || \
+   [ ! -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/zipalign" ] || \
+   [ ! -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" ]; then
   echo "  → Installing Android SDK platform & build-tools..."
-  yes | "$SDKMAN" --sdk_root="$ANDROID_HOME" \
-    "platforms;android-34" \
-    "build-tools;34.0.0" 2>&1 | tail -3 || true
-  if [ ! -f "$ANDROID_HOME/platforms/android-34/android.jar" ]; then
+  # Keep sdkmanager's exit status; a closed stdin pipe may terminate yes normally.
+  "$SDKMAN" --sdk_root="$ANDROID_HOME" \
+    "platforms;android-$ANDROID_API" \
+    "build-tools;$BUILD_TOOLS_VERSION" < <(yes) 2>&1 | tail -3
+  if [ ! -f "$ANDROID_HOME/platforms/android-$ANDROID_API/android.jar" ] || \
+     [ ! -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/zipalign" ] || \
+     [ ! -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" ]; then
     echo "  ✗ SDK install failed — check '$SDKMAN --list'"
     exit 1
   fi
@@ -146,36 +166,20 @@ fi
 
 # ---------- NDK ----------
 if [ -z "${NDK_HOME:-}" ]; then
-  NDK_SEARCH=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d -name "*" ! -path "$ANDROID_HOME/ndk" 2>/dev/null | head -1)
-  if [ -n "$NDK_SEARCH" ]; then
-    NDK_HOME="$NDK_SEARCH"
-    export NDK_HOME
+  # Match the Play build instead of choosing an arbitrary installed NDK.
+  NDK_HOME="$ANDROID_HOME/ndk/$DEFAULT_NDK_VERSION"
+  if [ ! -d "$NDK_HOME" ]; then
+    echo "  → Installing Android NDK (ndk;$DEFAULT_NDK_VERSION)..."
+    "$SDKMAN" --sdk_root="$ANDROID_HOME" \
+      "ndk;$DEFAULT_NDK_VERSION" < <(yes) 2>&1 | tail -3
   fi
 fi
-
-if [ -z "${NDK_HOME:-}" ] || [ ! -d "$NDK_HOME" ]; then
-  # Pick the latest NDK version available
-  NDK_VERSION="ndk;27.0.12077973"
-  LATEST_NDK=$(yes | "$SDKMAN" --sdk_root="$ANDROID_HOME" \
-    --list 2>/dev/null | grep "^[[:space:]]*ndk;" | tail -1 | awk -F'|' '{print $1}' | tr -d ' ')
-  if [ -n "$LATEST_NDK" ]; then
-    NDK_VERSION="$LATEST_NDK"
-  fi
-  NDK_DIR=$(echo "$NDK_VERSION" | cut -d';' -f2)
-  NDK_HOME="$ANDROID_HOME/ndk/$NDK_DIR"
-  if [ ! -d "$NDK_HOME" ]; then
-    echo "  → Installing Android NDK ($NDK_VERSION)..."
-    yes | "$SDKMAN" --sdk_root="$ANDROID_HOME" \
-      "$NDK_VERSION" 2>&1 | tail -3 || true
-  fi
-  if [ ! -d "$NDK_HOME" ]; then
-    echo "  ✗ NDK install failed — check '$SDKMAN --list'"
-    echo "  You can set NDK_VERSION manually, e.g.:"
-    echo '    export NDK_VERSION=ndk;27.0.12077973'
-    exit 1
-  fi
-  export NDK_HOME
+if [ ! -d "$NDK_HOME" ]; then
+  echo "  ✗ NDK directory not found: $NDK_HOME" >&2
+  echo "    Set NDK_HOME to an installed Android NDK directory." >&2
+  exit 1
 fi
+export NDK_HOME
 
 # Set for this session
 export ANDROID_HOME
@@ -184,8 +188,9 @@ echo "  ✓ ANDROID_HOME=$ANDROID_HOME"
 echo "  ✓ NDK_HOME=$NDK_HOME"
 
 # ---------- Rust targets ----------
+INSTALLED_TARGETS=$(rustup target list --installed)
 for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android; do
-  if ! rustup target list --installed | grep -q "$target"; then
+  if ! grep -Fxq "$target" <<< "$INSTALLED_TARGETS"; then
     echo "  → Installing Rust target: $target"
     rustup target add "$target"
   fi
@@ -204,18 +209,30 @@ else
   echo "  ✓ Android project already exists"
 fi
 
+APK_DIR="$ANDROID_DIR/app/build/outputs/apk"
+AAB_DIR="$ANDROID_DIR/app/build/outputs/bundle"
+UNSIGNED_APK="$APK_DIR/universal/release/app-universal-release-unsigned.apk"
+SIGNED_APK="$APK_DIR/universal/release/Inverter.Desktop_${VERSION}_signed.apk"
+RELEASE_AAB="$AAB_DIR/universalRelease/app-universal-release.aab"
+
+# Never accept outputs left by an earlier invocation if a build produces nothing.
+if [ "$RELEASE" = true ]; then
+  rm -f "$UNSIGNED_APK" "$SIGNED_APK" "$SIGNED_APK.aligned" "$RELEASE_AAB"
+else
+  rm -f "$APK_DIR/universal/debug/"*.apk
+fi
+
 if [ "$RELEASE" = true ]; then
   echo ""
   echo "===> Building Android (release)..."
   pnpm tauri android build --ci
+  require_artifact "$UNSIGNED_APK"
+  require_artifact "$RELEASE_AAB"
 
   # ---------- Sign APK if requested ----------
   if [ "$SIGN_APK" = true ]; then
     echo ""
     echo "===> Signing APK..."
-
-    # APK output directory (needed for signing)
-    APK_DIR="$ANDROID_DIR/app/build/outputs/apk"
 
     # Check for keystore config
     if [ -z "$ANDROID_KEYSTORE_PATH" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
@@ -232,19 +249,11 @@ if [ "$RELEASE" = true ]; then
       exit 1
     fi
 
-    UNSIGNED_APK="$APK_DIR/universal/release/app-universal-release-unsigned.apk"
-    SIGNED_APK="$APK_DIR/universal/release/Inverter.Desktop_${VERSION}_signed.apk"
-
-    if [ ! -f "$UNSIGNED_APK" ]; then
-      echo "  ✗ Unsigned APK not found at: $UNSIGNED_APK"
-      exit 1
-    fi
-
     echo "  → Aligning APK..."
-    "$ANDROID_HOME/build-tools/34.0.0/zipalign" -v -p 4 "$UNSIGNED_APK" "$SIGNED_APK.aligned"
+    "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/zipalign" -v -P 16 4 "$UNSIGNED_APK" "$SIGNED_APK.aligned"
 
     echo "  → Signing APK..."
-    "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
+    "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" sign \
       --ks "$ANDROID_KEYSTORE_PATH" \
       --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
       --ks-key-alias "$ANDROID_KEY_ALIAS" \
@@ -253,7 +262,9 @@ if [ "$RELEASE" = true ]; then
       "$SIGNED_APK.aligned"
 
     echo "  → Verifying signature..."
-    "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$SIGNED_APK"
+    "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --verbose "$SIGNED_APK"
+    "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/zipalign" -c -P 16 4 "$SIGNED_APK"
+    require_artifact "$SIGNED_APK"
 
     rm -f "$SIGNED_APK.aligned"
     echo "  ✓ APK signed: $SIGNED_APK"
@@ -268,18 +279,28 @@ echo ""
 echo "===> Collecting artifacts..."
 mkdir -p "$OUTPUT_DIR"
 
-APK_DIR="$ANDROID_DIR/app/build/outputs/apk"
-AAB_DIR="$ANDROID_DIR/app/build/outputs/bundle"
-
 if [ "$RELEASE" = true ]; then
-  if [ "$SIGN_APK" = true ] && [ -f "$APK_DIR/universal/release/Inverter.Desktop_${VERSION}_signed.apk" ]; then
-    cp "$APK_DIR/universal/release/Inverter.Desktop_${VERSION}_signed.apk" "$OUTPUT_DIR/" && echo "  ✓ Signed APK copied"
+  if [ "$SIGN_APK" = true ]; then
+    cp "$SIGNED_APK" "$OUTPUT_DIR/"
+    echo "  ✓ Signed APK copied"
   else
-    cp "$APK_DIR/universal/release/app-universal-release-unsigned.apk" "$OUTPUT_DIR/Inverter.Desktop_${VERSION}-unsigned.apk" 2>/dev/null && echo "  ✓ APK copied" || echo "  ! No APK found"
+    cp "$UNSIGNED_APK" "$OUTPUT_DIR/Inverter.Desktop_${VERSION}-unsigned.apk"
+    echo "  ✓ APK copied"
   fi
-  cp "$AAB_DIR/universalRelease/app-universal-release.aab" "$OUTPUT_DIR/Inverter.Desktop_${VERSION}.aab" 2>/dev/null && echo "  ✓ AAB copied" || echo "  ! No AAB found"
+  cp "$RELEASE_AAB" "$OUTPUT_DIR/Inverter.Desktop_${VERSION}.aab"
+  echo "  ✓ AAB copied"
 else
-  cp "$APK_DIR/universal/debug/"*.apk "$OUTPUT_DIR/" 2>/dev/null && echo "  ✓ Debug APK copied" || echo "  ! No APK found"
+  shopt -s nullglob
+  DEBUG_APKS=("$APK_DIR/universal/debug/"*.apk)
+  if [ "${#DEBUG_APKS[@]}" -eq 0 ]; then
+    echo "  ✗ Build did not produce a debug APK" >&2
+    exit 1
+  fi
+  for artifact in "${DEBUG_APKS[@]}"; do
+    require_artifact "$artifact"
+    cp "$artifact" "$OUTPUT_DIR/"
+  done
+  echo "  ✓ Debug APK copied"
 fi
 
 echo ""
