@@ -1,0 +1,254 @@
+/* Mobile density follows logical viewport dimensions, not physical pixels or zoom.
+   Keep the root font and user accessibility scaling intact. Desktop is unaffected. */
+.mobile-shell {
+  --mobile-gap: clamp(6px, 1.6vw, 10px);
+  --mobile-value-size: clamp(1.375rem, 6vw, 1.75rem);
+  --mobile-chart-height: clamp(160px, 27svh, 240px);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.mobile-shell .dashboard {
+  padding: var(--mobile-gap);
+  gap: var(--mobile-gap);
+}
+
+.mobile-shell .dashboard-content {
+  gap: var(--mobile-gap);
+  padding-right: 0;
+  overscroll-behavior-y: contain;
+}
+
+.mobile-shell .dashboard-content > * {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.mobile-shell .stat-cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mobile-gap);
+}
+
+.mobile-shell .metric-card {
+  min-width: 0;
+  min-height: 68px;
+  padding: 6px 8px;
+}
+
+.mobile-shell .classic-stat-label {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.mobile-shell .classic-stat-value {
+  max-width: 100%;
+  font-size: var(--mobile-value-size);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.mobile-shell .classic-stat-meta {
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mobile-shell .metric-card-setpoint {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'label value' 'label meta';
+  gap: 0 8px;
+  min-height: 52px;
+  padding: 4px 8px;
+}
+
+.mobile-shell .metric-card-setpoint .classic-stat-label {
+  grid-area: label;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mobile-shell .metric-card-setpoint .classic-stat-value {
+  grid-area: value;
+}
+
+.mobile-shell .metric-card-setpoint .classic-stat-meta {
+  grid-area: meta;
+  text-align: right;
+}
+
+.mobile-shell .setpoint-control {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.mobile-shell .setpoint-control output {
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mobile-shell .dashboard-panels {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  gap: var(--mobile-gap);
+}
+
+.mobile-shell .dashboard-chart {
+  grid-column: auto;
+  min-width: 0;
+  min-height: 0;
+  height: var(--mobile-chart-height);
+}
+
+.mobile-shell .power-chart .chart-wrap {
+  min-height: 0;
+}
+
+.mobile-shell .chart-title,
+.mobile-shell .classic-header {
+  font-size: 12px;
+}
+
+.mobile-shell .dashboard-side {
+  grid-column: auto;
+  min-width: 0;
+}
+
+.mobile-shell .daily-stats:empty,
+.mobile-shell .dashboard-side:has(> .side-panel:empty) {
+  display: none;
+}
+
+.mobile-shell .daily-stat-group,
+.mobile-shell .daily-battery-values {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
+.mobile-shell .device-panels {
+  gap: var(--mobile-gap);
+}
+
+.mobile-shell .dashboard-status {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 0;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+/* Include dialogs teleported outside MobileShell. A compact surface must still
+   have finger-sized controls and readable form values. */
+html[data-app-profile='mobile'] .classic-btn {
+  min-height: 44px;
+  min-width: 44px;
+  height: auto;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+html[data-app-profile='mobile'] button {
+  min-height: 44px;
+  min-width: 44px;
+  font-size: 12px;
+}
+
+html[data-app-profile='mobile'] .classic-input {
+  min-height: 44px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+html[data-app-profile='mobile'] input:not([type='checkbox']):not([type='radio']),
+html[data-app-profile='mobile'] select {
+  min-height: 44px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+html[data-app-profile='mobile'] .classic-label {
+  font-size: 12px;
+}
+
+html[data-app-profile='mobile'] .classic-btn-tile {
+  min-height: 44px !important;
+  max-height: none !important;
+}
+
+html[data-app-profile='mobile'] .home-tile-label {
+  font-size: 12px;
+  max-height: none;
+}
+
+html[data-app-profile='mobile'] .notification-history-panel {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: 64px;
+  width: auto;
+  max-height: min(60dvh, 320px);
+  margin-inline: auto;
+  max-width: 400px;
+}
+
+html[data-app-profile='mobile'] .override-backdrop,
+html[data-app-profile='mobile'] .auth-screen {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+html[data-app-profile='mobile'] .override-dialog,
+html[data-app-profile='mobile'] .auth-card {
+  max-width: 100%;
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* A wide phone in landscape has enough width for one metric row, but little
+   height. Tablets gain a two-column chart/detail area without inflating type. */
+@media (min-width: 680px) {
+  .mobile-shell .stat-cards {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .mobile-shell .metric-card-setpoint {
+    grid-column: auto;
+    display: flex;
+    padding: 6px 8px;
+    gap: 0;
+  }
+
+  .mobile-shell .metric-card-setpoint .classic-stat-label {
+    justify-content: center;
+  }
+
+  .mobile-shell .metric-card-setpoint .classic-stat-meta {
+    text-align: center;
+  }
+
+  .mobile-shell .device-panels {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 840px) {
+  .mobile-shell .dashboard-panels:has(.side-panel:not(:empty)) {
+    grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+  }
+}
+
+@media (max-height: 500px) and (min-width: 600px) {
+  .mobile-shell {
+    --mobile-chart-height: 160px;
+  }
+}

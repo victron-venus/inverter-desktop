@@ -1,5 +1,5 @@
 <template>
-  <span class="inline-flex items-center gap-1 normal-case">
+  <span class="setpoint-control inline-flex items-center gap-1 normal-case">
     <button
       ref="trigger"
       type="button"

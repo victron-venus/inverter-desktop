@@ -10,6 +10,8 @@ import { i18n } from './i18n'
 import { logger } from './logger'
 import './style.css'
 
+document.documentElement.dataset.appProfile = isMobileApp ? 'mobile' : 'desktop'
+
 const path = globalThis.location.pathname
 const isConfigWindow = path === '/config'
 const isAboutWindow = path === '/about'

@@ -12,6 +12,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import App from './App.vue'
 import Config from './Config.vue'
 import { logger } from './logger'
+import './mobile.css'
 
 const settingsOpen = ref(globalThis.location.hash === '#settings')
 const unlisteners: UnlistenFn[] = []

@@ -107,10 +107,19 @@ describe('mobile build feature boundary', () => {
           })
       },
     })
-    const wrapper = mount(Harness, { global: globalOptions })
+    const wrapper = mount(Harness, { global: globalOptions, attachTo: document.body })
     expect(wrapper.text()).toContain('Export limit')
     expect(wrapper.text()).not.toContain('Living room lamp')
+    const disclosure = wrapper.find('button[aria-expanded]')
+    expect(disclosure.attributes('aria-label')).toBe('Controls')
+    expect(disclosure.text()).toBe('Controls')
+    expect(disclosure.attributes('aria-expanded')).toBe('false')
     const button = wrapper.findAll('button').find((entry) => entry.text() === 'Export limit')!
+    expect(button.isVisible()).toBe(false)
+    await disclosure.trigger('click')
+    expect(disclosure.attributes('aria-expanded')).toBe('true')
+    expect(button.isVisible()).toBe(true)
+    expect(invoke).not.toHaveBeenCalled()
     await button.trigger('click')
     expect(invoke).toHaveBeenCalledWith('perform_action', {
       action: 'toggle',
@@ -123,6 +132,84 @@ describe('mobile build feature boundary', () => {
       payload: { value: true },
     })
     wrapper.unmount()
+  })
+
+  it('keeps core header actions available while expanding and collapsing long control labels', async () => {
+    const longEss = 'Charger only with an extended operating status'
+    const longLabel = 'Allow battery charging from available surplus solar generation'
+    const wrapper = mount(AppHeader, {
+      attachTo: document.body,
+      props: {
+        dryRun: true,
+        essClass: 'on',
+        essText: longEss,
+        headerControls: [{ id: 'charge', label: longLabel, entity: 'charge_battery' }],
+        controlStates: { charge: 'on' },
+        isDark: true,
+        showHeaderToggles: true,
+      },
+    })
+    try {
+      const row = wrapper.find('.mobile-header-row')
+      const disclosure = row.find('button[aria-expanded]')
+      const region = wrapper.find('fieldset[aria-label="Inverter controls"]')
+      expect(disclosure.attributes('aria-controls')).toBe(region.attributes('id'))
+      expect(region.isVisible()).toBe(false)
+      expect(row.findAll('button')).toHaveLength(5)
+      await disclosure.trigger('click')
+      expect(region.isVisible()).toBe(true)
+      expect(region.text()).toBe(longLabel)
+      expect(wrapper.emitted('send')).toBeUndefined()
+      expect(row.findAll('button').every((button) => button.isVisible())).toBe(true)
+
+      await row.find('button[aria-label="Settings"]').trigger('click')
+      await row.find('button[aria-label="Light mode"]').trigger('click')
+      expect(wrapper.emitted('open-config')).toEqual([[]])
+      expect(wrapper.emitted('toggle-theme')).toEqual([[]])
+      expect(wrapper.emitted('send')).toBeUndefined()
+      await row
+        .findAll('button')
+        .find((button) => button.text() === longEss)!
+        .trigger('click')
+      await row
+        .findAll('button')
+        .find((button) => button.text() === 'DRY')!
+        .trigger('click')
+      expect(wrapper.emitted('send')).toEqual([['ess_mode'], ['dry_run', { value: false }]])
+
+      await disclosure.trigger('click')
+      expect(disclosure.attributes('aria-expanded')).toBe('false')
+      expect(region.isVisible()).toBe(false)
+      expect(wrapper.emitted('send')).toHaveLength(2)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('omits the mobile disclosure when header toggles are hidden or absent', async () => {
+    const wrapper = mount(AppHeader, {
+      props: {
+        dryRun: false,
+        essClass: 'off',
+        essText: 'ESS',
+        headerControls: [{ id: 'limit', label: 'Export limit', entity: 'no_feed' }],
+        controlStates: {},
+        isDark: false,
+        showHeaderToggles: false,
+      },
+    })
+    try {
+      expect(wrapper.find('button[aria-expanded]').exists()).toBe(false)
+      expect(wrapper.find('fieldset').exists()).toBe(false)
+      expect(wrapper.find('.mobile-header-row').findAll('button')).toHaveLength(4)
+      await wrapper.setProps({ showHeaderToggles: true, headerControls: [] })
+      expect(wrapper.find('button[aria-expanded]').exists()).toBe(false)
+      expect(wrapper.find('fieldset').exists()).toBe(false)
+      expect(wrapper.find('button[aria-label="Dark mode"]').exists()).toBe(true)
+      expect(wrapper.emitted('send')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('starts and stops the core setpoint override from mobile StatCards without optional services', async () => {

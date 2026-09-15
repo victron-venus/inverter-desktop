@@ -12,7 +12,7 @@
 
     <div
       v-if="showPanel"
-      class="absolute bottom-full right-0 mb-2 w-72 max-h-80 overflow-y-auto apple-card z-50"
+      class="notification-history-panel absolute bottom-full right-0 mb-2 w-72 max-h-80 overflow-y-auto apple-card z-50"
     >
       <div
         class="flex items-center justify-between px-2.5 py-1.5 border-b border-black/[0.06] dark:border-white/[0.08]"

@@ -3,7 +3,7 @@
     <section
       id="app"
       aria-label="Inverter dashboard"
-      class="app-shell h-screen flex flex-col p-1.5 gap-1 select-none overflow-hidden"
+      class="app-shell dashboard h-screen flex flex-col p-1.5 gap-1 select-none overflow-hidden"
       @contextmenu.prevent="onContextMenu"
     >
       <!-- Dashboard Header: Compact buttons and theme switcher -->
@@ -25,7 +25,9 @@
       </div>
 
       <!-- Dashboard Content: Grid and Panels -->
-      <div class="flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1.5 scrollbar-hide min-h-0">
+      <div
+        class="dashboard-content flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1.5 scrollbar-hide min-h-0"
+      >
         <DailyStats v-if="appConfig?.show_daily_stats !== false" />
 
         <NotificationBanner />
@@ -53,11 +55,11 @@
           :inverterState="state.inverter_state"
         />
 
-        <div class="grid grid-cols-1 md:grid-cols-12 gap-1.5 md:auto-rows-fr">
-          <div class="md:col-span-8 h-[280px] md:h-auto md:min-h-[280px]">
+        <div class="dashboard-panels grid grid-cols-1 md:grid-cols-12 gap-1.5 md:auto-rows-fr">
+          <div class="dashboard-chart md:col-span-8 h-[280px] md:h-auto md:min-h-[280px]">
             <ChartPanel :chartOption="chartOption" />
           </div>
-          <div class="md:col-span-4">
+          <div class="dashboard-side md:col-span-4">
             <SidePanel
               :showEv="appConfig?.show_ev !== false"
               :evSectionVisible="evSectionVisible"

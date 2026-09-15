@@ -1,8 +1,8 @@
 <template>
   <div
-    class="classic-card px-2 py-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-main"
+    class="daily-stats classic-card px-2 py-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-main"
   >
-    <div v-if="hasSolar" class="flex items-center gap-1.5 mr-0.5">
+    <div v-if="hasSolar" class="daily-stat-group flex items-center gap-1.5 mr-0.5">
       <span class="text-solar font-semibold flex items-center gap-1 tabular">☀️ {{ prod }}kWh</span>
       <span v-if="fcToday" class="text-muted text-[10px] font-semibold tracking-tight tabular"
         >[{{ fcToday }}]</span
@@ -15,17 +15,17 @@
       <span v-if="hasDollars" class="text-battery font-semibold tabular">(${{ dollars }})</span>
     </div>
 
-    <div v-if="hasGrid" class="flex items-center gap-1.5 mr-0.5">
+    <div v-if="hasGrid" class="daily-stat-group flex items-center gap-1.5 mr-0.5">
       <div v-if="hasSolar" class="soft-divider"></div>
       <Zap :size="13" class="text-muted" />
       <span class="font-semibold text-main tabular">{{ grid }}kWh</span>
       <span class="text-battery font-semibold tabular">(${{ gridCost }})</span>
     </div>
 
-    <div v-if="hasBattery" class="flex items-center gap-1.5 flex-1 min-w-fit">
+    <div v-if="hasBattery" class="daily-stat-group flex items-center gap-1.5 flex-1 min-w-fit">
       <div v-if="hasSolar || hasGrid" class="soft-divider"></div>
       <BatteryIcon :size="13" class="text-battery" />
-      <div class="flex items-center gap-1.5 tabular">
+      <div class="daily-battery-values flex items-center gap-1.5 tabular">
         <span class="text-muted text-[10px] font-semibold tracking-tight">I:</span>
         <span class="font-semibold text-main">{{ batIn }}kWh</span>
         <span class="text-muted text-[10px] font-semibold">({{ batInY }})</span>
