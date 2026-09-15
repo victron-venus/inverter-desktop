@@ -72,7 +72,7 @@ publisher keys or app signing. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
-### Current checkpoint: grouped HA entity cards
+### Completed checkpoint: grouped HA entity cards
 
 Start from verified main `e6de910`. Present each explicitly selected HA entity's
 state and already authorized controls in one generic desktop card. Keep the flat
@@ -112,7 +112,7 @@ on controls. Do not infer ownership from friendly names, action IDs or HA domain
 - [x] Run appropriate formatting, lint, typechecking, frontend builds/tests,
       native/worker checks, packaging and mobile boundary tests. Independently
       review the implementation and inspect the rendered grouped cards.
-- [ ] Push a separate PR, address comments in English, pass final-head checks,
+- [x] Push a separate PR, address comments in English, pass final-head checks,
       merge as authorized and verify canonical clean main and its source CI.
 
 This iteration changes presentation of already permitted controls. It does not
@@ -142,6 +142,23 @@ no overflow in either theme. All 92 focused dashboard/numeric tests, typecheckin
 scoped formatting/lint and the desktop build passed after that correction.
 These fixtures do not establish graphical acceptance on Linux/Windows or behavior
 against a production HA installation or physical household devices.
+
+Delivery verified: [PR #440](https://github.com/victron-venus/inverter-desktop/pull/440)
+merged as `3c90b4f4554bcd96ef34070810f3ff4e920dcc14`. Final reviewed head
+`41a5f6eff2cac7c30f1c57d3d0e67c908e4b608b` passed all 41 executed PR checks,
+including both Windows lifecycle jobs and Android/iOS artifact checks. Three
+auxiliary checks were skipped. The final head was approved with no unresolved
+review threads.
+
+All six ordinary main workflows passed on the merge commit, comprising 17 jobs:
+[CI](https://github.com/victron-venus/inverter-desktop/actions/runs/34984591301),
+[Cargo Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/34984591359),
+[Cargo Security Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/34984591268),
+[CodeQL](https://github.com/victron-venus/inverter-desktop/actions/runs/34984591331),
+[Unit Tests](https://github.com/victron-venus/inverter-desktop/actions/runs/34984591421)
+and [Code Quality](https://github.com/victron-venus/inverter-desktop/actions/runs/34984590881).
+The canonical checkout was verified clean on main with the exact reviewed file
+tree. All six existing stashes and the private ignored `AGENTS.md` were preserved.
 
 ### Completed checkpoint: Frigate motion worker and native notifications
 
