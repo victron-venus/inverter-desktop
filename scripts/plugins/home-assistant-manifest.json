@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "host_api": "^1.6",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",
@@ -21,7 +21,7 @@
       "watch_entities": {
         "type": "string",
         "title": "Entities to watch",
-        "description": "Entity IDs separated by commas or newlines. The ordered union with all control targets is limited to 32 entities. All control lists together allow 31 controls: one per button/scene, three per media player, two per on/off target, three per cover and one per numeric input. Read selection alone never enables writes.",
+        "description": "Entity IDs separated by commas or newlines. The ordered union with all control targets and dishwasher roles is limited to 32 entities. All control lists together allow 31 controls: one per button/scene, three per media player, two per on/off target, three per cover and one per numeric input. Read selection alone never enables writes.",
         "maxLength": 4096,
         "default": ""
       },
@@ -30,6 +30,22 @@
         "title": "Sensor prefixes to discover",
         "description": "Optional read-only sensor. or binary_sensor. prefixes, up to eight, separated by commas or newlines. Use lowercase letters, digits and underscores after the dot, such as sensor.kitchen_; a bare domain prefix matches all its sensors. No wildcards or other domains. Discovery fills unused slots within the 32-entity limit after explicit selections and never enables actions. Leave blank to disable discovery.",
         "maxLength": 1024,
+        "default": "",
+        "omitEmpty": true
+      },
+      "dishwasher_running_entity": {
+        "type": "string",
+        "title": "Dishwasher running entity",
+        "description": "Optional single entity ID for a read-only dishwasher state card. Adds this exact entity to watched reads. Matches on/running and off/idle; other states remain literal. No actions are enabled. Leave blank to disable the profile.",
+        "maxLength": 128,
+        "default": "",
+        "omitEmpty": true
+      },
+      "dishwasher_duration_entity": {
+        "type": "string",
+        "title": "Dishwasher runtime entity",
+        "description": "Optional single entity ID reporting runtime since midnight, shown in the running entity card as received without inferred units or a countdown. Requires a different dishwasher running entity. Adds this exact entity to watched reads and never enables actions.",
+        "maxLength": 128,
         "default": "",
         "omitEmpty": true
       },

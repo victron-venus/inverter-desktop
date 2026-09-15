@@ -303,7 +303,7 @@ export function useHA() {
     return lower === 'on' || lower === 'running'
   })
 
-  const dishwasherRemainingTime = computed(() => {
+  const dishwasherRuntime = computed(() => {
     if (!haEnabled.value) return null
     const entity = (appConfig.value?.ha_dishwasher_duration_entity || '').trim()
     if (!entity) return null
@@ -393,7 +393,7 @@ export function useHA() {
     haScenes,
     haWeather,
     dishwasherActive,
-    dishwasherRemainingTime,
+    dishwasherRuntime,
     washerActive,
     washerRemainingTime,
     dryerActive,

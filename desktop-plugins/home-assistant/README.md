@@ -1,7 +1,7 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.9.0, requiring host API `^1.6`.
+`inverter-desktop.home-assistant`, version 0.10.0, requiring host API `^1.6`.
 Connection status and selected entity states are read-only by default. Optional
 sensor-prefix discovery fills unused state slots without granting actions. Explicit
 optional action lists enable fixed button presses, scene activation, media
@@ -17,7 +17,8 @@ read-only selections and discoveries remain without controls. The flat snapshot,
 stable contribution/action IDs and 32-state/31-control limits are unchanged.
 Availability and capability changes withdraw or restore controls under the same
 state anchor; grouping adds no service authority and does not alter input revisions.
-Appliance role layouts, entity-picker UI and legacy configuration migration remain
+An explicit read-only dishwasher profile combines its assigned running and runtime
+readings in the existing running entity card. Other appliance profiles, entity-picker UI and legacy configuration migration remain
 separate work.
 
 The existing desktop HA integration remains bundled until its remaining features
@@ -46,10 +47,10 @@ the core telemetry connection.
   verification and the matching secure WebSocket scheme. Redirects are not followed.
 - `watch_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Separate entity IDs with commas or newlines. Blank entries are ignored and
-  duplicate IDs count once. The ordered union with action targets is limited to
+  duplicate IDs count once. The ordered union with action targets and dishwasher roles is limited to
   32 entities: watched IDs come first, followed by previously unseen button/scene
   targets, media-player targets, on/off targets, cover targets, number targets
-  and finally cover-position targets. New selections preserve older target indices.
+  and cover-position targets, then dishwasher running and duration roles. New selections preserve older target indices.
   Each ID is at most 128 bytes with two nonempty `domain.object_id` parts using lowercase ASCII letters, digits and
   underscores. IDs are preserved literally, including names resembling inverter
   control flags; there is no core alias resolution.
@@ -64,6 +65,15 @@ the core telemetry connection.
   other domain support. Only valid literal entity IDs can be discovered. These
   read-only targets fill remaining slots after all explicit selections; discovery
   never creates fixed actions or numeric inputs. Leave empty to disable it.
+- `dishwasher_running_entity`: optional string, default empty, at most 128 raw
+  UTF-8 bytes. Assign one literal entity ID to the read-only dishwasher profile.
+  Surrounding whitespace is trimmed; list separators and multiple IDs are rejected.
+  The ID uses the same grammar as explicit watched entities, without inferring a
+  role from its domain or friendly name. Leave empty to disable the profile.
+- `dishwasher_duration_entity`: optional string with the same single-ID format,
+  empty default and 128-byte bound. Assign the entity reporting runtime since
+  midnight. Requires a nonempty, different running entity. Both roles add explicit
+  watched reads and count once in the 32-entity union, but never grant controls.
 - `action_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Explicitly select up to 16 unique literal `button.*` or `scene.*` IDs separated
   by commas or newlines. Targets are also watched within the total 32-entity
@@ -112,7 +122,7 @@ host's 64-contribution limit. Duplicate IDs count once within their list. All
 previously valid configurations remain within this budget when new fields are empty.
 Omitted or empty new fields also preserve the prior serialized 32 KiB
 configuration validation boundary.
-The two numeric fields and `discovery_prefixes` use host API 1.5's explicit `omitEmpty` schema option:
+The two numeric fields, `discovery_prefixes` and both dishwasher roles use host API 1.5's explicit `omitEmpty` schema option:
 empty values remain visible in settings, use the empty default when saved, and
 add no bytes to startup configuration. This preserves native storage/envelope
 limits as well as worker-side validation; nonempty selections are counted normally.
@@ -125,7 +135,7 @@ with `event_type: state_changed`. **That server stream covers all entities**:
 the worker filters it locally to explicit selections and eligible discoveries.
 This is not server-side subscription filtering or a token-level access restriction.
 
-When `watch_entities`, all six action lists and `discovery_prefixes` are empty,
+When `watch_entities`, all six action lists, `discovery_prefixes` and both dishwasher roles are empty,
 the worker still establishes the authenticated WebSocket connection for status,
 but makes no entity REST reads or event subscription. A change to any list is
 applied through the normal settings restart. Entity state
@@ -139,6 +149,41 @@ and unavailable states. Disconnect clears stale values. Dashboard updates are
 coalesced to four per second, independently of socket reads and heartbeat checks.
 Authentication rejection stops reconnect attempts until settings restart the
 worker; network failures reconnect with a bounded delay.
+
+## Read-only dishwasher profile
+
+Select `dishwasher_running_entity` and optionally `dishwasher_duration_entity`
+in the plugin's settings. Selection is explicit and independent of the bundled
+HA settings. The profile uses the running entity's existing state ID and friendly
+title; the ordinary duration entity card remains visible. It adds no state slot,
+contribution kind, action, automatic discovery or host API requirement.
+
+The summary labels the operating state as `State: Running` for `on` or `running`,
+and `State: Idle` for `off` or `idle`, after trimming and ASCII case folding for
+these comparisons. Other accepted states remain literal after `State:` instead
+of being guessed idle. Unknown, unavailable or missing primary state uses the
+existing status card. An empty, overlong or malformed primary value shows
+Unavailable. Accepted source state strings are trimmed, at most 128 UTF-8 bytes,
+and contain no embedded control characters; fields are kept whole.
+
+A valid duration reading adds a new line, for example
+`Runtime since midnight: 01:23:45`. It remains visible while idle because it is
+cumulative runtime, not remaining time. The worker accepts a complete trimmed
+source state string of at most 128 UTF-8 bytes, with no embedded controls. Empty,
+unknown, unavailable, off, idle and nonfinite numeric strings are omitted.
+Other literal and finite numeric strings are kept as reported; the worker does
+not parse duration formats, append an attribute unit, infer units, convert values
+or start a countdown. Invalid duration removes only the detail, not the primary
+state. The combined text remains within the existing 512-byte limit.
+
+Updates or deletion of either role refresh the composite. Each source keeps its
+own live-over-initial-REST ordering, and reconnect, disconnect or authentication
+failure clears retained readings. A settings restart replaces the previous
+instance normally. The overlay preserves raw entity observations and action
+eligibility: a profile alone grants no writes, while separately selected controls
+keep their existing authority, IDs, parameters and state references. Reads use
+the existing individual state endpoints and filtered `state_changed` events.
+There are no new service routes or core MQTT commands.
 
 ## Read-only weather summaries
 
@@ -210,7 +255,7 @@ update or the next connection's snapshot. Disconnect clears discovered state,
 and reconnect resamples the collection. Discovery failures do not change explicit
 action IDs, presets, numeric grants or core transport ownership.
 
-This slice does not add an entity picker, appliance summaries, forecast retrieval,
+Discovery does not add an entity picker, infer appliance roles, retrieve forecasts or provide
 grouped household layouts or automatic migration of bundled HA settings. The
 bundled desktop integration remains available while that parity work continues.
 

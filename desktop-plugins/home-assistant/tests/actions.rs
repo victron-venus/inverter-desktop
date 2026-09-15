@@ -498,6 +498,8 @@ fn initialize_configuration(
         "cover_entities",
         "number_entities",
         "cover_position_entities",
+        "dishwasher_running_entity",
+        "dishwasher_duration_entity",
     ] {
         for name in frame["configuration"]["values"][field]
             .as_str()
@@ -550,8 +552,10 @@ fn initialize_configuration(
         let position_selected = selected("cover_position_entities");
         let state = if cover_selected || position_selected {
             "closed"
-        } else if binary_selected {
+        } else if binary_selected || selected("dishwasher_running_entity") {
             "off"
+        } else if selected("dishwasher_duration_entity") {
+            "01:23:45"
         } else if name.starts_with("media_player.") {
             "paused"
         } else {
@@ -3322,6 +3326,8 @@ fn start_discovery(
         "cover_entities",
         "number_entities",
         "cover_position_entities",
+        "dishwasher_running_entity",
+        "dishwasher_duration_entity",
     ] {
         for name in config["configuration"]["values"][field]
             .as_str()
@@ -4582,5 +4588,553 @@ fn weather_utf8_projection_fits_the_actual_64_item_frame_with_unchanged_control_
         assert!(projected.get("state_id").is_none());
     }
     no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+fn dishwasher_configuration(
+    fixture: &TcpListener,
+    watch: &str,
+    running: Option<&str>,
+    duration: Option<&str>,
+) -> Value {
+    let mut frame = configuration(fixture, watch, None);
+    for (field, value) in [
+        ("dishwasher_running_entity", running),
+        ("dishwasher_duration_entity", duration),
+    ] {
+        if let Some(value) = value {
+            frame["configuration"]["values"][field] = json!(value);
+        }
+    }
+    frame
+}
+
+fn profile_barrier(
+    worker: &mut Worker,
+    socket: &mut WebSocket<TcpStream>,
+    id: &str,
+    serial: usize,
+) -> Value {
+    live(
+        socket,
+        "sensor.barrier",
+        Some(entity("sensor.barrier", &serial.to_string())),
+    );
+    worker.until(|frame| {
+        item(frame, id).is_some_and(|item| item["value"].as_f64() == Some(serial as f64))
+    })
+}
+
+#[test]
+fn dishwasher_defaults_keep_ordinary_cards_and_role_only_configuration_reads_exact_deduplicated_targets(
+) {
+    for empty in [None, Some("")] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let config = dishwasher_configuration(
+            &fixture,
+            "sensor.barrier,binary_sensor.dishwasher,sensor.runtime",
+            empty,
+            empty,
+        );
+        let mut socket = initialize_configuration(&mut worker, &fixture, config);
+        live(
+            &mut socket,
+            "binary_sensor.dishwasher",
+            Some(entity("binary_sensor.dishwasher", "on")),
+        );
+        live(
+            &mut socket,
+            "sensor.runtime",
+            Some(entity("sensor.runtime", "01:23:45")),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, 1);
+        assert_eq!(item(&frame, "entity-1").unwrap()["text"], "on");
+        assert_eq!(item(&frame, "entity-2").unwrap()["text"], "01:23:45");
+        assert_weather_read_only(&frame);
+        no_request(&fixture, Duration::from_millis(30));
+        worker.stop(false);
+    }
+    for (running, duration, expected, count) in [
+        ("switch.dishwasher", None, "State: Idle", 2),
+        (
+            "binary_sensor.dishwasher",
+            Some("sensor.runtime"),
+            "State: Idle\nRuntime since midnight: 01:23:45",
+            3,
+        ),
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let config = dishwasher_configuration(&fixture, "", Some(running), duration);
+        let _socket = initialize_configuration(&mut worker, &fixture, config);
+        let frame = weather_text(&mut worker, "entity-0", expected);
+        assert_eq!(frame["items"].as_array().unwrap().len(), count);
+        assert_weather_read_only(&frame);
+        no_request(&fixture, Duration::from_millis(30));
+        worker.stop(false);
+    }
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let config = dishwasher_configuration(
+        &fixture,
+        "sensor.runtime,sensor.barrier,sensor.runtime",
+        Some("binary_sensor.dishwasher"),
+        Some("sensor.runtime"),
+    );
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let frame = weather_text(
+        &mut worker,
+        "entity-2",
+        "State: Idle\nRuntime since midnight: 01:23:45",
+    );
+    assert_eq!(frame["items"].as_array().unwrap().len(), 4);
+    assert_eq!(item(&frame, "entity-0").unwrap()["text"], "01:23:45");
+    live(
+        &mut socket,
+        "binary_sensor.unselected",
+        Some(entity("binary_sensor.unselected", "running")),
+    );
+    live(
+        &mut socket,
+        "sensor.unselected",
+        Some(entity("sensor.unselected", "never-selected")),
+    );
+    let frame = profile_barrier(&mut worker, &mut socket, "entity-1", 2);
+    assert_eq!(
+        item(&frame, "entity-2").unwrap()["text"],
+        "State: Idle\nRuntime since midnight: 01:23:45"
+    );
+    assert!(!frame.to_string().contains("never-selected"));
+    assert_weather_read_only(&frame);
+    for (index, action) in [
+        "dishwasher",
+        "dishwasher-profile",
+        "entity-2",
+        "entity-0",
+        "binary_sensor.dishwasher",
+        "ha-action-0",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let request = format!("dishwasher-denied-{index}");
+        worker.action(&request, action, 5000);
+        worker.error(&request, "invalid_action");
+    }
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(true);
+}
+
+#[test]
+fn dishwasher_independent_role_updates_withdraw_stale_details_and_preserve_ordinary_duration_cards()
+{
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let config = dishwasher_configuration(
+        &fixture,
+        "sensor.barrier",
+        Some("binary_sensor.dishwasher"),
+        Some("sensor.runtime"),
+    );
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    weather_text(
+        &mut worker,
+        "entity-1",
+        "State: Idle\nRuntime since midnight: 01:23:45",
+    );
+    for (index, state, expected) in [
+        (0, "on", "Running"),
+        (1, "running", "Running"),
+        (2, "off", "Idle"),
+        (3, "idle", "Idle"),
+        (4, "rinsing", "rinsing"),
+    ] {
+        live(
+            &mut socket,
+            "binary_sensor.dishwasher",
+            Some(entity("binary_sensor.dishwasher", state)),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 1);
+        assert_eq!(
+            item(&frame, "entity-1").unwrap()["text"],
+            format!("State: {expected}\nRuntime since midnight: 01:23:45")
+        );
+    }
+    let mut duration = entity("sensor.runtime", "37");
+    duration["attributes"]["unit_of_measurement"] = json!("min");
+    live(&mut socket, "sensor.runtime", Some(duration));
+    let frame = numeric_barrier(&mut worker, &mut socket, 10);
+    assert_eq!(
+        item(&frame, "entity-1").unwrap()["text"],
+        "State: rinsing\nRuntime since midnight: 37"
+    );
+    assert_eq!(item(&frame, "entity-2").unwrap()["kind"], "metric");
+    assert_eq!(item(&frame, "entity-2").unwrap()["value"], 37.0);
+    assert_eq!(item(&frame, "entity-2").unwrap()["unit"], "min");
+    live(&mut socket, "sensor.runtime", None);
+    let frame = numeric_barrier(&mut worker, &mut socket, 11);
+    assert_eq!(item(&frame, "entity-1").unwrap()["text"], "State: rinsing");
+    assert_eq!(item(&frame, "entity-2").unwrap()["value"], "Unavailable");
+    for (index, state, expected) in [(0, "unknown", "Unknown"), (1, "unavailable", "Unavailable")] {
+        live(
+            &mut socket,
+            "binary_sensor.dishwasher",
+            Some(entity("binary_sensor.dishwasher", state)),
+        );
+        live(
+            &mut socket,
+            "sensor.runtime",
+            Some(entity("sensor.runtime", "02:34:56")),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 20);
+        assert_eq!(item(&frame, "entity-1").unwrap()["kind"], "status");
+        assert_eq!(item(&frame, "entity-1").unwrap()["value"], expected);
+        assert_eq!(item(&frame, "entity-2").unwrap()["text"], "02:34:56");
+        assert!(item(&frame, "entity-1").unwrap().get("text").is_none());
+    }
+    live(&mut socket, "binary_sensor.dishwasher", None);
+    live(
+        &mut socket,
+        "sensor.runtime",
+        Some(entity("sensor.runtime", "03:00:00")),
+    );
+    let frame = numeric_barrier(&mut worker, &mut socket, 30);
+    assert_eq!(item(&frame, "entity-1").unwrap()["value"], "Unavailable");
+    let mut restored = entity("binary_sensor.dishwasher", "on");
+    restored["attributes"]["friendly_name"] = json!("Renamed dishwasher");
+    live(&mut socket, "binary_sensor.dishwasher", Some(restored));
+    let frame = numeric_barrier(&mut worker, &mut socket, 31);
+    assert_eq!(
+        item(&frame, "entity-1").unwrap()["text"],
+        "State: Running\nRuntime since midnight: 03:00:00"
+    );
+    assert_eq!(
+        item(&frame, "entity-1").unwrap()["title"],
+        "Renamed dishwasher"
+    );
+    assert_weather_read_only(&frame);
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn dishwasher_runtime_is_a_complete_bounded_literal_without_units_countdowns_or_nonfinite_numbers()
+{
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let config = dishwasher_configuration(
+        &fixture,
+        "sensor.barrier",
+        Some("binary_sensor.dishwasher"),
+        Some("sensor.runtime"),
+    );
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    for (index, value) in [
+        "",
+        "unknown",
+        "unavailable",
+        "off",
+        "idle",
+        "NaN",
+        "inf",
+        "-inf",
+        "1e999",
+        "01:\n23:45",
+        &"x".repeat(129),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        live(
+            &mut socket,
+            "sensor.runtime",
+            Some(entity("sensor.runtime", value)),
+        );
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 1);
+        assert_eq!(item(&frame, "entity-1").unwrap()["text"], "State: Idle");
+    }
+    for (index, raw, expected) in [
+        (0, " 01:23:45 ", "01:23:45"),
+        (1, "0", "0"),
+        (2, "2.15e1", "2.15e1"),
+        (3, "source supplied", "source supplied"),
+    ] {
+        let mut duration = entity("sensor.runtime", raw);
+        duration["attributes"]["unit_of_measurement"] =
+            json!("invented-unit-must-not-enter-summary");
+        live(&mut socket, "sensor.runtime", Some(duration));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 20);
+        assert_eq!(
+            item(&frame, "entity-1").unwrap()["text"],
+            format!("State: Idle\nRuntime since midnight: {expected}")
+        );
+    }
+    for (index, state) in [json!(false), json!(37), Value::Null]
+        .into_iter()
+        .enumerate()
+    {
+        let mut duration = entity("sensor.runtime", "01:23:45");
+        duration["state"] = state;
+        live(&mut socket, "sensor.runtime", Some(duration));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 30);
+        assert_eq!(item(&frame, "entity-1").unwrap()["text"], "State: Idle");
+    }
+    for (index, state) in [
+        json!(false),
+        json!(""),
+        json!("on\nmalformed"),
+        json!("x".repeat(129)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut running = entity("binary_sensor.dishwasher", "on");
+        running["state"] = state;
+        live(&mut socket, "binary_sensor.dishwasher", Some(running));
+        let frame = numeric_barrier(&mut worker, &mut socket, index + 40);
+        assert_eq!(item(&frame, "entity-1").unwrap()["value"], "Unavailable");
+    }
+    no_request(&fixture, Duration::from_millis(80));
+    worker.stop(false);
+}
+
+#[test]
+fn dishwasher_configuration_rejects_multiple_or_invalid_roles_missing_primary_and_union_overflow() {
+    let fixture = listener();
+    for (running, duration) in [
+        (None, Some("sensor.runtime")),
+        (Some(""), Some("sensor.runtime")),
+        (Some("sensor.same"), Some("sensor.same")),
+        (Some(" sensor.same "), Some("sensor.same")),
+        (Some("sensor.one,sensor.two"), None),
+        (Some("sensor.one\nsensor.two"), None),
+        (Some("sensor.*"), None),
+        (Some("sensor.A"), None),
+        (Some("sensor.a/b"), None),
+        (Some("sensor.one"), Some("sensor.a,sensor.b")),
+    ] {
+        let mut worker = Worker::start();
+        worker.send(hello());
+        worker.next();
+        worker.send(dishwasher_configuration(&fixture, "", running, duration));
+        worker.finish(false);
+    }
+    let full = (0..32)
+        .map(|index| format!("sensor.e{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for config in [
+        dishwasher_configuration(&fixture, &full, Some("sensor.extra"), None),
+        dishwasher_configuration(&fixture, &full, Some("sensor.e0"), Some("sensor.extra")),
+        dishwasher_configuration(
+            &fixture,
+            "",
+            Some(&format!("{}sensor.a", " ".repeat(121))),
+            None,
+        ),
+    ] {
+        let mut worker = Worker::start();
+        worker.send(hello());
+        worker.next();
+        worker.send(config);
+        worker.finish(false);
+    }
+    no_request(&fixture, Duration::from_millis(50));
+}
+
+#[test]
+fn dishwasher_both_late_initial_roles_are_processed_before_live_barriers_and_reconnect_clears_them()
+{
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let watch = "binary_sensor.dishwasher,sensor.runtime,sensor.after_running,sensor.after_duration,sensor.barrier";
+    worker.configure_frame(dishwasher_configuration(
+        &fixture,
+        watch,
+        Some("binary_sensor.dishwasher"),
+        Some("sensor.runtime"),
+    ));
+    let mut socket = authorize(&fixture, true);
+    let mut initial = [request(&fixture), request(&fixture)];
+    let running = initial
+        .iter()
+        .position(|request| {
+            request.line == "GET /reverse/proxy/ha/api/states/binary_sensor.dishwasher HTTP/1.1"
+        })
+        .unwrap();
+    let duration = 1 - running;
+    assert_eq!(
+        initial[duration].line,
+        "GET /reverse/proxy/ha/api/states/sensor.runtime HTTP/1.1"
+    );
+    live(
+        &mut socket,
+        "binary_sensor.dishwasher",
+        Some(entity("binary_sensor.dishwasher", "on")),
+    );
+    live(
+        &mut socket,
+        "sensor.runtime",
+        Some(entity("sensor.runtime", "02:34:56")),
+    );
+    weather_text(
+        &mut worker,
+        "entity-0",
+        "State: Running\nRuntime since midnight: 02:34:56",
+    );
+    respond(
+        &mut initial[running].stream,
+        200,
+        entity("binary_sensor.dishwasher", "off"),
+    );
+    let mut third = request(&fixture);
+    assert_eq!(
+        third.line,
+        "GET /reverse/proxy/ha/api/states/sensor.after_running HTTP/1.1"
+    );
+    let first_barrier = profile_barrier(&mut worker, &mut socket, "entity-4", 10);
+    assert_eq!(
+        item(&first_barrier, "entity-0").unwrap()["text"],
+        "State: Running\nRuntime since midnight: 02:34:56"
+    );
+    respond(
+        &mut initial[duration].stream,
+        200,
+        entity("sensor.runtime", "00:00:01"),
+    );
+    let mut fourth = request(&fixture);
+    assert_eq!(
+        fourth.line,
+        "GET /reverse/proxy/ha/api/states/sensor.after_duration HTTP/1.1"
+    );
+    let second_barrier = profile_barrier(&mut worker, &mut socket, "entity-4", 11);
+    assert_eq!(
+        item(&second_barrier, "entity-0").unwrap()["text"],
+        "State: Running\nRuntime since midnight: 02:34:56"
+    );
+    assert_eq!(
+        item(&second_barrier, "entity-1").unwrap()["text"],
+        "02:34:56"
+    );
+    respond(&mut third.stream, 200, entity("sensor.after_running", "1"));
+    respond(
+        &mut fourth.stream,
+        200,
+        entity("sensor.after_duration", "2"),
+    );
+    let mut last = request(&fixture);
+    assert_eq!(
+        last.line,
+        "GET /reverse/proxy/ha/api/states/sensor.barrier HTTP/1.1"
+    );
+    respond(&mut last.stream, 200, entity("sensor.barrier", "0"));
+    drop(socket);
+    let disconnected = worker.until(|frame| {
+        item(frame, "connection").is_some_and(|item| item["value"] == "Disconnected")
+    });
+    assert_eq!(
+        item(&disconnected, "entity-0").unwrap()["value"],
+        "Unavailable"
+    );
+    assert!(!disconnected.to_string().contains("Runtime since midnight"));
+    let mut socket = authorize(&fixture, true);
+    let waiting = connected(&mut worker, 0);
+    assert!(item(&waiting, "entity-0").unwrap().get("text").is_none());
+    let mut seen = HashSet::new();
+    for _ in 0..5 {
+        let mut request = request(&fixture);
+        let name = request
+            .line
+            .strip_prefix("GET /reverse/proxy/ha/api/states/")
+            .and_then(|name| name.strip_suffix(" HTTP/1.1"))
+            .unwrap();
+        assert!(seen.insert(name.to_owned()));
+        assert!(watch.split(',').any(|selected| selected == name));
+        let state = match name {
+            "binary_sensor.dishwasher" => "off",
+            "sensor.runtime" => "00:01:00",
+            _ => "0",
+        };
+        respond(&mut request.stream, 200, entity(name, state));
+    }
+    let frame = weather_text(
+        &mut worker,
+        "entity-0",
+        "State: Idle\nRuntime since midnight: 00:01:00",
+    );
+    assert_weather_read_only(&frame);
+    live(&mut socket, "sensor.runtime", None);
+    let frame = profile_barrier(&mut worker, &mut socket, "entity-4", 12);
+    assert_eq!(item(&frame, "entity-0").unwrap()["text"], "State: Idle");
+    no_request(&fixture, Duration::from_millis(50));
+    worker.stop(true);
+}
+
+#[test]
+fn dishwasher_profile_uses_existing_state_slots_and_keeps_31_controls_in_a_64_item_frame() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let watch = std::iter::once("sensor.barrier".to_owned())
+        .chain((0..8).map(|index| format!("sensor.e{index}")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut config = dishwasher_configuration(
+        &fixture,
+        &watch,
+        Some("binary_sensor.dishwasher"),
+        Some("sensor.runtime"),
+    );
+    config["configuration"]["values"]["action_entities"] = json!((0..16)
+        .map(|index| format!("button.e{index}"))
+        .collect::<Vec<_>>()
+        .join(","));
+    config["configuration"]["values"]["media_player_entities"] = json!((0..4)
+        .map(|index| format!("media_player.e{index}"))
+        .collect::<Vec<_>>()
+        .join(","));
+    config["configuration"]["values"]["cover_entities"] = json!("cover.shade");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let literal = "🌦".repeat(32);
+    let mut running = entity("binary_sensor.dishwasher", &literal);
+    running["attributes"]["friendly_name"] = json!("\"".repeat(128));
+    live(&mut socket, "binary_sensor.dishwasher", Some(running));
+    live(
+        &mut socket,
+        "sensor.runtime",
+        Some(entity("sensor.runtime", &"\"".repeat(128))),
+    );
+    let frame = numeric_barrier(&mut worker, &mut socket, 10);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 64);
+    assert_eq!(actions(&frame).len(), 31);
+    assert_eq!(
+        item(&frame, "entity-30").unwrap()["title"]
+            .as_str()
+            .unwrap()
+            .len(),
+        128
+    );
+    assert_eq!(
+        item(&frame, "entity-30").unwrap()["text"],
+        format!(
+            "State: {literal}\nRuntime since midnight: {}",
+            "\"".repeat(128)
+        )
+    );
+    assert_eq!(item(&frame, "entity-31").unwrap()["text"], "\"".repeat(128));
+    assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
+    assert_eq!(
+        frame["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<HashSet<_>>()
+            .len(),
+        64
+    );
+    worker.action("profile-card-not-action", "entity-30", 5000);
+    worker.error("profile-card-not-action", "invalid_action");
+    no_request(&fixture, Duration::from_millis(50));
     worker.stop(false);
 }

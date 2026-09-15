@@ -421,13 +421,19 @@ fn omit_empty_preserves_effective_values_and_only_canonicalizes_opted_in_empty_s
     }
 }
 
-const HA_OMIT_EMPTY_SELECTIONS: [&str; 3] = [
+const HA_DISHWASHER_ROLES: [&str; 2] = ["dishwasher_running_entity", "dishwasher_duration_entity"];
+
+const HA_OMIT_EMPTY_SELECTIONS: [&str; 5] = [
     "number_entities",
     "cover_position_entities",
     "discovery_prefixes",
+    "dishwasher_running_entity",
+    "dishwasher_duration_entity",
 ];
 
-fn ha_optional_selection_upgrade() -> (PluginManifest, SettingsSchema, SettingsData) {
+fn ha_optional_selection_upgrade(
+    additions: &[&str],
+) -> (PluginManifest, SettingsSchema, SettingsData) {
     let package: Value = serde_json::from_str(include_str!(
         "../../../scripts/plugins/home-assistant-manifest.json"
     ))
@@ -437,12 +443,12 @@ fn ha_optional_selection_upgrade() -> (PluginManifest, SettingsSchema, SettingsD
     let properties = previous_metadata.config_schema["properties"]
         .as_object_mut()
         .unwrap();
-    for key in HA_OMIT_EMPTY_SELECTIONS {
+    for &key in additions {
         assert_eq!(metadata.config_schema["properties"][key]["omitEmpty"], true);
         properties.remove(key).unwrap();
     }
     let previous = SettingsSchema::compile(&previous_metadata).unwrap();
-    let data = SettingsData {
+    let mut data = SettingsData {
         revision: "12345678-1234-1234-1234-123456789abc".into(),
         values: serde_json::from_value(json!({
             "ha_base_url":"http://localhost","watch_entities":"\u{b}".repeat(4096),
@@ -453,38 +459,51 @@ fn ha_optional_selection_upgrade() -> (PluginManifest, SettingsSchema, SettingsD
         secrets: BTreeMap::from([("ha_token".into(), "fixture-token".into())]),
         secret_fields: BTreeSet::from(["ha_token".into()]),
     };
+    // Also exercise the immediately preceding HA schema with active numeric
+    // selections and discovery, rather than only the oldest optional-field set.
+    for (key, value) in [
+        ("number_entities", "number.a"),
+        ("cover_position_entities", "cover.a"),
+        ("discovery_prefixes", "sensor."),
+    ] {
+        if !additions.contains(&key) {
+            data.values.insert(key.into(), json!(value));
+        }
+    }
     (metadata, previous, data)
 }
 
 #[test]
 fn ha_optional_selections_preserve_the_exact_previous_worker_configuration_byte_boundary() {
-    let (metadata, previous, mut data) = ha_optional_selection_upgrade();
-    let maximum = super::super::protocol::MAX_CONFIGURATION_BYTES;
-    let padding = maximum
-        - serde_json::to_vec(&previous.configuration(&data).unwrap())
+    for additions in [&HA_OMIT_EMPTY_SELECTIONS[..], &HA_DISHWASHER_ROLES[..]] {
+        let (metadata, previous, mut data) = ha_optional_selection_upgrade(additions);
+        let maximum = super::super::protocol::MAX_CONFIGURATION_BYTES;
+        let padding = maximum
+            - serde_json::to_vec(&previous.configuration(&data).unwrap())
+                .unwrap()
+                .len();
+        data.secrets
+            .get_mut("ha_token")
             .unwrap()
-            .len();
-    data.secrets
-        .get_mut("ha_token")
-        .unwrap()
-        .push_str(&"x".repeat(padding));
-    let original = serde_json::to_vec(&previous.configuration(&data).unwrap()).unwrap();
-    assert_eq!(original.len(), maximum);
-    let upgraded = SettingsSchema::compile(&metadata).unwrap();
-    for explicit_empty in [false, true] {
-        if explicit_empty {
-            for key in HA_OMIT_EMPTY_SELECTIONS {
-                data.values.insert(key.into(), json!(""));
+            .push_str(&"x".repeat(padding));
+        let original = serde_json::to_vec(&previous.configuration(&data).unwrap()).unwrap();
+        assert_eq!(original.len(), maximum);
+        let upgraded = SettingsSchema::compile(&metadata).unwrap();
+        for explicit_empty in [false, true] {
+            if explicit_empty {
+                for &key in additions {
+                    data.values.insert(key.into(), json!(""));
+                }
             }
+            assert_eq!(
+                serde_json::to_vec(&upgraded.configuration(&data).unwrap()).unwrap(),
+                original
+            );
         }
-        assert_eq!(
-            serde_json::to_vec(&upgraded.configuration(&data).unwrap()).unwrap(),
-            original
-        );
+        data.secrets.get_mut("ha_token").unwrap().push('x');
+        assert!(previous.configuration(&data).is_err());
+        assert!(upgraded.configuration(&data).is_err());
     }
-    data.secrets.get_mut("ha_token").unwrap().push('x');
-    assert!(previous.configuration(&data).is_err());
-    assert!(upgraded.configuration(&data).is_err());
 }
 
 #[test]
@@ -492,77 +511,181 @@ fn ha_optional_selection_upgrade_can_resave_a_previous_settings_record_at_the_st
     use super::super::settings_store::{SettingsStore, MAX_SETTINGS_PLAINTEXT_BYTES};
     use std::sync::Arc;
 
-    let (metadata, previous, mut data) = ha_optional_selection_upgrade();
-    let padding = MAX_SETTINGS_PLAINTEXT_BYTES - serde_json::to_vec(&data).unwrap().len();
-    data.secrets
-        .get_mut("ha_token")
-        .unwrap()
-        .push_str(&"x".repeat(padding));
-    assert_eq!(
-        serde_json::to_vec(&data).unwrap().len(),
-        MAX_SETTINGS_PLAINTEXT_BYTES
-    );
-    let original = serde_json::to_vec(&previous.configuration(&data).unwrap()).unwrap();
+    for additions in [&HA_OMIT_EMPTY_SELECTIONS[..], &HA_DISHWASHER_ROLES[..]] {
+        let (metadata, previous, mut data) = ha_optional_selection_upgrade(additions);
+        let padding = MAX_SETTINGS_PLAINTEXT_BYTES - serde_json::to_vec(&data).unwrap().len();
+        data.secrets
+            .get_mut("ha_token")
+            .unwrap()
+            .push_str(&"x".repeat(padding));
+        assert_eq!(
+            serde_json::to_vec(&data).unwrap().len(),
+            MAX_SETTINGS_PLAINTEXT_BYTES
+        );
+        let original = serde_json::to_vec(&previous.configuration(&data).unwrap()).unwrap();
 
-    let directory = tempfile::tempdir().unwrap();
-    let package_root = directory.path().join("package-store");
-    let builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    let builder = {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = builder;
-        builder.mode(0o700);
-        builder
-    };
-    builder.create(&package_root).unwrap();
-    let store = SettingsStore::new(
-        package_root.canonicalize().unwrap(),
-        Arc::new(|| Ok(vec![7; 32])),
-    );
-    store
-        .prepare_write(&metadata.plugin_id, &data)
-        .unwrap()
-        .commit()
-        .unwrap();
-    let stored = store.read(&metadata.plugin_id).unwrap();
-    assert!(stored == data);
+        let directory = tempfile::tempdir().unwrap();
+        let package_root = directory.path().join("package-store");
+        let builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
+            builder.mode(0o700);
+            builder
+        };
+        builder.create(&package_root).unwrap();
+        let store = SettingsStore::new(
+            package_root.canonicalize().unwrap(),
+            Arc::new(|| Ok(vec![7; 32])),
+        );
+        store
+            .prepare_write(&metadata.plugin_id, &data)
+            .unwrap()
+            .commit()
+            .unwrap();
+        let stored = store.read(&metadata.plugin_id).unwrap();
+        assert!(stored == data);
 
-    let mut unfiltered_metadata = metadata.clone();
-    for key in HA_OMIT_EMPTY_SELECTIONS {
-        unfiltered_metadata.config_schema["properties"][key]["omitEmpty"] = json!(false);
+        let mut unfiltered_metadata = metadata.clone();
+        for &key in additions {
+            unfiltered_metadata.config_schema["properties"][key]["omitEmpty"] = json!(false);
+        }
+        assert!(SettingsSchema::compile(&unfiltered_metadata)
+            .unwrap()
+            .configuration(&stored)
+            .is_err());
+        let upgraded = SettingsSchema::compile(&metadata).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&upgraded.configuration(&stored).unwrap()).unwrap(),
+            original
+        );
+        let view = upgraded.view(&metadata, "upgraded", &stored).unwrap();
+        for &key in additions {
+            assert_eq!(view.values[key], "");
+        }
+        let saved = upgraded
+            .merge(
+                "upgraded",
+                &stored,
+                &view.revision,
+                view.values,
+                BTreeMap::new(),
+            )
+            .unwrap();
+        assert!(saved == stored);
+        store
+            .prepare_write(&metadata.plugin_id, &saved)
+            .unwrap()
+            .commit()
+            .unwrap();
+        assert!(store.read(&metadata.plugin_id).unwrap() == saved);
+        let mut oversized = saved;
+        oversized.secrets.get_mut("ha_token").unwrap().push('x');
+        assert!(store
+            .prepare_write(&metadata.plugin_id, &oversized)
+            .is_err());
     }
-    assert!(SettingsSchema::compile(&unfiltered_metadata)
-        .unwrap()
-        .configuration(&stored)
-        .is_err());
-    let upgraded = SettingsSchema::compile(&metadata).unwrap();
-    assert_eq!(
-        serde_json::to_vec(&upgraded.configuration(&stored).unwrap()).unwrap(),
-        original
-    );
-    let view = upgraded.view(&metadata, "upgraded", &stored).unwrap();
-    for key in HA_OMIT_EMPTY_SELECTIONS {
-        assert_eq!(view.values[key], "");
-    }
-    let saved = upgraded
+}
+
+#[test]
+fn ha_dishwasher_roles_are_opt_in_and_survive_schema_rollback() {
+    let (metadata, previous, _) = ha_optional_selection_upgrade(&HA_DISHWASHER_ROLES);
+    let schema = SettingsSchema::compile(&metadata).unwrap();
+    let initial = schema
         .merge(
-            "upgraded",
-            &stored,
+            "current",
+            &SettingsData::default(),
+            "current:0",
+            BTreeMap::from([
+                ("ha_base_url".into(), json!("https://ha.example.invalid")),
+                ("watch_entities".into(), json!("sensor.existing")),
+                ("action_entities".into(), json!("button.explicit")),
+            ]),
+            BTreeMap::from([("ha_token".into(), Some("fixture-token".into()))]),
+        )
+        .unwrap();
+    let mut view = schema.view(&metadata, "current", &initial).unwrap();
+    let initial_startup = schema.configuration(&initial).unwrap();
+    for key in HA_DISHWASHER_ROLES {
+        assert_eq!(view.values[key], "");
+        assert!(!initial.values.contains_key(key));
+        assert!(initial_startup.values.get(key).is_none());
+    }
+    let selections = [
+        "binary_sensor.dishwasher_running",
+        "sensor.dishwasher_elapsed",
+    ];
+    for (key, entity) in HA_DISHWASHER_ROLES.into_iter().zip(selections) {
+        view.values.insert(key.into(), json!(entity));
+    }
+    let selected = schema
+        .merge(
+            "current",
+            &initial,
             &view.revision,
             view.values,
             BTreeMap::new(),
         )
         .unwrap();
-    assert!(saved == stored);
-    store
-        .prepare_write(&metadata.plugin_id, &saved)
-        .unwrap()
-        .commit()
+    let startup = schema.configuration(&selected).unwrap();
+    for (key, entity) in HA_DISHWASHER_ROLES.into_iter().zip(selections) {
+        assert_eq!(selected.values[key], entity);
+        assert_eq!(startup.values[key], entity);
+    }
+    assert_eq!(startup.values["watch_entities"], "sensor.existing");
+    assert_eq!(startup.values["action_entities"], "button.explicit");
+    assert_eq!(startup.secrets, initial_startup.secrets);
+
+    // A previous worker must not receive unsupported role fields. Its settings
+    // editor still preserves the user's explicit selection for a later upgrade.
+    let old_view = previous.view(&metadata, "previous", &selected).unwrap();
+    for key in HA_DISHWASHER_ROLES {
+        assert!(!old_view.values.contains_key(key));
+        assert!(previous
+            .configuration(&selected)
+            .unwrap()
+            .values
+            .get(key)
+            .is_none());
+    }
+    let resaved = previous
+        .merge(
+            "previous",
+            &selected,
+            &old_view.revision,
+            old_view.values,
+            BTreeMap::new(),
+        )
         .unwrap();
-    assert!(store.read(&metadata.plugin_id).unwrap() == saved);
-    let mut oversized = saved;
-    oversized.secrets.get_mut("ha_token").unwrap().push('x');
-    assert!(store
-        .prepare_write(&metadata.plugin_id, &oversized)
-        .is_err());
+    assert!(resaved == selected);
+    let mut restored_view = schema.view(&metadata, "restored", &resaved).unwrap();
+    for (key, entity) in HA_DISHWASHER_ROLES.into_iter().zip(selections) {
+        assert_eq!(restored_view.values[key], entity);
+        assert_eq!(schema.configuration(&resaved).unwrap().values[key], entity);
+        restored_view.values.insert(key.into(), json!(""));
+    }
+    let cleared = schema
+        .merge(
+            "restored",
+            &resaved,
+            &restored_view.revision,
+            restored_view.values,
+            BTreeMap::new(),
+        )
+        .unwrap();
+    for key in HA_DISHWASHER_ROLES {
+        assert!(!cleared.values.contains_key(key));
+        assert!(schema
+            .configuration(&cleared)
+            .unwrap()
+            .values
+            .get(key)
+            .is_none());
+        assert_eq!(
+            schema.view(&metadata, "cleared", &cleared).unwrap().values[key],
+            ""
+        );
+    }
+    assert_eq!(cleared.secrets, initial.secrets);
 }

@@ -44,6 +44,10 @@ pub struct Values {
     pub cover_position_entities: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub discovery_prefixes: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dishwasher_running_entity: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dishwasher_duration_entity: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -62,7 +66,13 @@ pub struct Validated {
     pub number_entities: Vec<String>,
     pub cover_position_entities: Vec<String>,
     pub discovery_prefixes: Vec<String>,
+    pub dishwasher: Option<DishwasherProfile>,
     pub token: String,
+}
+
+pub struct DishwasherProfile {
+    pub running_entity: String,
+    pub duration_entity: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -319,6 +329,29 @@ impl Configuration {
                 entities.push(entity.clone());
             }
         }
+        let running_entity = optional_entity(&self.values.dishwasher_running_entity)?;
+        let duration_entity = optional_entity(&self.values.dishwasher_duration_entity)?;
+        let dishwasher = match (running_entity, duration_entity) {
+            (None, None) => None,
+            (Some(running_entity), duration_entity)
+                if duration_entity.as_ref() != Some(&running_entity) =>
+            {
+                Some(DishwasherProfile {
+                    running_entity,
+                    duration_entity,
+                })
+            }
+            _ => return Err("invalid dishwasher roles"),
+        };
+        if let Some(profile) = &dishwasher {
+            for entity in
+                std::iter::once(&profile.running_entity).chain(profile.duration_entity.as_ref())
+            {
+                if !entities.contains(entity) {
+                    entities.push(entity.clone());
+                }
+            }
+        }
         if entities.len() > MAX_ENTITIES {
             return Err("too many watched entities");
         }
@@ -333,6 +366,7 @@ impl Configuration {
             number_entities,
             cover_position_entities,
             discovery_prefixes,
+            dishwasher,
             token: self.secrets.ha_token,
         })
     }
@@ -398,6 +432,20 @@ fn literal_entity(entity: &str) -> bool {
                     .chain(object.bytes())
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
         })
+}
+
+fn optional_entity(value: &str) -> Result<Option<String>, &'static str> {
+    if value.len() > 128 {
+        return Err("invalid dishwasher entity");
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if !literal_entity(value) {
+        return Err("invalid dishwasher entity");
+    }
+    Ok(Some(value.to_owned()))
 }
 
 fn discovery_prefixes(value: &str) -> Result<Vec<String>, &'static str> {
@@ -1448,6 +1496,216 @@ mod tests {
         ));
         assert_eq!(
             serde_json::from_value::<Configuration>(previous)
+                .unwrap()
+                .validate()
+                .err(),
+            Some("invalid configuration")
+        );
+    }
+
+    #[test]
+    fn dishwasher_roles_are_optional_single_literal_ids_with_distinct_meanings() {
+        for running in [
+            "binary_sensor.dishwasher",
+            "sensor.running",
+            "switch.run",
+            "button.start",
+            "weather.home",
+        ] {
+            let mut value = configuration("http://localhost", "");
+            value.values.dishwasher_running_entity = format!(" {running} ");
+            let config = value.validate().unwrap();
+            assert_eq!(config.entities, [running]);
+            let profile = config.dishwasher.as_ref().unwrap();
+            assert_eq!(profile.running_entity, running);
+            assert!(profile.duration_entity.is_none());
+            assert!(config.actions().is_empty());
+            assert!(config.inputs().is_empty());
+        }
+        let mut value = configuration("http://localhost", "");
+        value.values.dishwasher_duration_entity = "sensor.duration".into();
+        assert_eq!(value.validate().err(), Some("invalid dishwasher roles"));
+        let mut value = configuration("http://localhost", "");
+        value.values.dishwasher_running_entity = " sensor.same ".into();
+        value.values.dishwasher_duration_entity = "sensor.same".into();
+        assert_eq!(value.validate().err(), Some("invalid dishwasher roles"));
+        for malformed in [
+            "sensor.a,sensor.a",
+            "sensor.a,",
+            ",sensor.a",
+            "sensor.a\nsensor.a",
+            "sensor.*",
+            "sensor.",
+            ".value",
+            "Sensor.a",
+            "sensor.a/b",
+            "sensor.a b",
+            "sensor.a.b",
+            "sensor.é",
+        ] {
+            for duration in [false, true] {
+                let mut value = configuration("http://localhost", "");
+                value.values.dishwasher_running_entity = "sensor.running".into();
+                if duration {
+                    value.values.dishwasher_duration_entity = malformed.into();
+                } else {
+                    value.values.dishwasher_running_entity = malformed.into();
+                }
+                assert_eq!(
+                    value.validate().err(),
+                    Some("invalid dishwasher entity"),
+                    "{malformed}"
+                );
+            }
+        }
+        for field in ["dishwasher_running_entity", "dishwasher_duration_entity"] {
+            for value in [json!(null), json!(true), json!(17), json!([]), json!({})] {
+                let mut config =
+                    serde_json::to_value(configuration("http://localhost", "")).unwrap();
+                config["values"][field] = value;
+                assert!(serde_json::from_value::<Configuration>(config).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn dishwasher_role_input_limit_applies_before_trimming() {
+        let exact = format!("sensor.{}", "x".repeat(121));
+        assert_eq!(exact.len(), 128);
+        for role in ["dishwasher_running_entity", "dishwasher_duration_entity"] {
+            for (value, valid) in [
+                (exact.clone(), true),
+                (format!("{exact} "), false),
+                (" ".repeat(128), true),
+                (" ".repeat(129), false),
+            ] {
+                let mut config =
+                    serde_json::to_value(configuration("http://localhost", "")).unwrap();
+                config["values"]["dishwasher_running_entity"] = json!("sensor.running");
+                config["values"][role] = json!(value);
+                assert_eq!(
+                    serde_json::from_value::<Configuration>(config)
+                        .unwrap()
+                        .validate()
+                        .is_ok(),
+                    valid
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dishwasher_reads_follow_the_existing_ordered_union_without_new_control_reservations() {
+        let mut value = configuration("http://localhost", "sensor.duration,sensor.manual");
+        value.values.action_entities = "button.run".into();
+        value.values.binary_entities = "switch.run".into();
+        value.values.number_entities = "number.duration".into();
+        value.values.dishwasher_running_entity = "switch.run".into();
+        value.values.dishwasher_duration_entity = "sensor.duration".into();
+        let config = value.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            [
+                "sensor.duration",
+                "sensor.manual",
+                "button.run",
+                "switch.run",
+                "number.duration"
+            ]
+        );
+        assert_eq!(config.actions().len(), 3);
+        assert_eq!(config.inputs().len(), 1);
+        let mut value = configuration("http://localhost", "sensor.manual");
+        value.values.action_entities = "button.run".into();
+        value.values.dishwasher_running_entity = "binary_sensor.run".into();
+        value.values.dishwasher_duration_entity = "sensor.duration".into();
+        let config = value.validate().unwrap();
+        assert_eq!(
+            config.entities,
+            [
+                "sensor.manual",
+                "button.run",
+                "binary_sensor.run",
+                "sensor.duration"
+            ]
+        );
+        assert_eq!(config.actions().len(), 1);
+        assert!(config.inputs().is_empty());
+        let targets = (0..32)
+            .map(|index| format!("sensor.e{index}"))
+            .collect::<Vec<_>>();
+        let mut value = configuration("http://localhost", &targets.join(","));
+        value.values.dishwasher_running_entity = "sensor.e0".into();
+        value.values.dishwasher_duration_entity = "sensor.e1".into();
+        assert_eq!(value.validate().unwrap().entities, targets);
+        let mut value = configuration("http://localhost", &targets[..31].join(","));
+        value.values.dishwasher_running_entity = "binary_sensor.run".into();
+        assert_eq!(value.validate().unwrap().entities.len(), 32);
+        let mut value = configuration("http://localhost", &targets[..31].join(","));
+        value.values.dishwasher_running_entity = "binary_sensor.run".into();
+        value.values.dishwasher_duration_entity = "sensor.duration".into();
+        assert_eq!(value.validate().err(), Some("too many watched entities"));
+    }
+
+    #[test]
+    fn omitted_and_empty_dishwasher_roles_preserve_the_previous_exact_32k_boundary() {
+        let mut previous = json!({"revision":"previous-appliance-limit","values":{
+            "ha_base_url":"http://localhost","watch_entities":"\u{b}".repeat(4096),"action_entities":"\u{b}".repeat(1200),"media_player_entities":"",
+            "binary_entities":"light.a","cover_entities":"cover.a","number_entities":"number.a","cover_position_entities":"cover.a","discovery_prefixes":"sensor."},
+            "secrets":{"ha_token":"fixture-token"}});
+        let padding = MAX_CONFIGURATION_BYTES - serde_json::to_vec(&previous).unwrap().len();
+        previous["secrets"]["ha_token"] = json!(format!("fixture-token{}", "x".repeat(padding)));
+        for explicit_empty in [false, true] {
+            if explicit_empty {
+                previous["values"]["dishwasher_running_entity"] = json!("");
+                previous["values"]["dishwasher_duration_entity"] = json!("");
+            }
+            let config: Configuration = serde_json::from_value(previous.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&config).unwrap().len(),
+                MAX_CONFIGURATION_BYTES
+            );
+            let config = config.validate().unwrap();
+            assert!(config.dishwasher.is_none());
+            assert_eq!(config.entities, ["light.a", "cover.a", "number.a"]);
+            assert_eq!(config.inputs().len(), 2);
+        }
+        previous["secrets"]["ha_token"] = json!(format!(
+            "{}x",
+            previous["secrets"]["ha_token"].as_str().unwrap()
+        ));
+        assert_eq!(
+            serde_json::from_value::<Configuration>(previous)
+                .unwrap()
+                .validate()
+                .err(),
+            Some("invalid configuration")
+        );
+    }
+
+    #[test]
+    fn configured_dishwasher_fields_count_toward_the_same_32k_configuration_budget() {
+        let mut config = json!({"revision":"configured-appliance-limit","values":{
+            "ha_base_url":"http://localhost","watch_entities":"\u{b}".repeat(4096),"action_entities":"\u{b}".repeat(1200),"media_player_entities":"",
+            "dishwasher_running_entity":"binary_sensor.run","dishwasher_duration_entity":"sensor.runtime"},
+            "secrets":{"ha_token":"fixture-token"}});
+        let padding = MAX_CONFIGURATION_BYTES - serde_json::to_vec(&config).unwrap().len();
+        config["secrets"]["ha_token"] = json!(format!("fixture-token{}", "x".repeat(padding)));
+        let exact: Configuration = serde_json::from_value(config.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&exact).unwrap().len(),
+            MAX_CONFIGURATION_BYTES
+        );
+        assert_eq!(
+            exact.validate().unwrap().entities,
+            ["binary_sensor.run", "sensor.runtime"]
+        );
+        config["secrets"]["ha_token"] = json!(format!(
+            "{}x",
+            config["secrets"]["ha_token"].as_str().unwrap()
+        ));
+        assert_eq!(
+            serde_json::from_value::<Configuration>(config)
                 .unwrap()
                 .validate()
                 .err(),
