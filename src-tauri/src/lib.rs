@@ -24,6 +24,7 @@ mod gateway_actions;
 mod ha_api;
 mod inverter_control;
 pub(crate) mod mqtt;
+mod plugin_config;
 #[cfg(desktop)]
 pub mod plugins;
 
@@ -43,6 +44,10 @@ use log::{info, warn};
 use mqtt::{HeaderToggle, InverterState, MqttClient, SetpointOverrideStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+
+// Serialize native read/validate/write cycles, including migration and import.
+// A stale frontend save is compared against the latest plugin declarations.
+static CONFIG_UPDATE_GATE: Mutex<()> = Mutex::new(());
 #[cfg(desktop)]
 use std::time::Duration;
 
@@ -112,6 +117,8 @@ struct HomeButtonConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct FullConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    desktop_plugins: Vec<plugin_config::DesktopPluginConfig>,
     mqtt_host: String,
     mqtt_port: u16,
     #[serde(default)]
@@ -220,6 +227,7 @@ fn default_ev_instance() -> Option<u32> {
 impl Default for FullConfig {
     fn default() -> Self {
         Self {
+            desktop_plugins: Vec::new(),
             mqtt_host: DEFAULT_MQTT_HOST.to_string(),
             mqtt_port: DEFAULT_MQTT_PORT,
             mqtt_tls: false,
@@ -680,6 +688,9 @@ fn needs_setup(config: &FullConfig, had_saved_config: bool) -> bool {
 
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
+    let _update = CONFIG_UPDATE_GATE
+        .lock()
+        .map_err(|_| "Config update lock failed")?;
     let mut config = load_config(&app)?;
 
     let store = app
@@ -803,11 +814,21 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 }
 
 #[tauri::command]
-async fn save_config(app: tauri::AppHandle, mut config: FullConfig) -> Result<(), String> {
+async fn save_config(
+    app: tauri::AppHandle,
+    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    mut config: FullConfig,
+) -> Result<(), String> {
+    let _update = CONFIG_UPDATE_GATE
+        .lock()
+        .map_err(|_| "Config update lock failed")?;
     let previous = load_config(&app)?;
     auth::validate_policy(&config)?;
     // Any explicit save (wizard or Config UI) completes first-run setup.
     config.setup_completed = true;
+    #[cfg(desktop)]
+    plugins::bridge::save_configuration(&app, &window, &previous, &config)?;
+    #[cfg(mobile)]
     save_config_encrypted(&app, &config)?;
     // Fixed / newly configured entity IDs should be polled again without app restart.
     #[cfg(desktop)]
@@ -815,6 +836,10 @@ async fn save_config(app: tauri::AppHandle, mut config: FullConfig) -> Result<()
     #[cfg(desktop)]
     ha_api::notify_config_changed();
     auth::revoke_if_policy_changed(&app, &previous, &config)?;
+    #[cfg(desktop)]
+    if previous.desktop_plugins != config.desktop_plugins {
+        plugins::bridge::configuration_changed(&app);
+    }
     Ok(())
 }
 
@@ -843,7 +868,10 @@ async fn backup_config(app: tauri::AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
+async fn restore_config(
+    app: tauri::AppHandle,
+    #[allow(unused_variables)] window: tauri::WebviewWindow,
+) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let file = app
@@ -858,13 +886,23 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
     };
 
     let content = config_file_io::read(&app, file)?;
+    let _update = CONFIG_UPDATE_GATE
+        .lock()
+        .map_err(|_| "Config update lock failed")?;
     let previous = load_config(&app)?;
     let config = config_backup::restore(&content, &previous)?;
+    #[cfg(desktop)]
+    plugins::bridge::save_configuration(&app, &window, &previous, &config)?;
+    #[cfg(mobile)]
     save_config_encrypted(&app, &config)?;
     #[cfg(desktop)]
     ha_api::clear_entity_skip_list();
     #[cfg(desktop)]
     ha_api::notify_config_changed();
+    #[cfg(desktop)]
+    if previous.desktop_plugins != config.desktop_plugins {
+        plugins::bridge::configuration_changed(&app);
+    }
     info!("Config backup restored");
     Ok(true)
 }
@@ -1937,6 +1975,7 @@ pub fn run() {
                     plugins::bridge::close_plugin_video_window,
                     plugins::bridge::drag_plugin_video_window,
                     plugins::bridge::get_plugin_manager_snapshot,
+                    plugins::bridge::retry_configured_plugins,
                     plugins::bridge::get_plugin_settings,
                     plugins::bridge::save_plugin_settings,
                     plugins::bridge::get_retained_plugin_data,

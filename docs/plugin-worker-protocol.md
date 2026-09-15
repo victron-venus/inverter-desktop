@@ -596,11 +596,14 @@ references, and signature encoding without claiming signature verification.
 ## Application lifecycle and authority
 
 Tauri owns one desktop `PluginHost` and application package service, shared by all
-windows. A clean profile starts with no package workers. The current embedded
-publisher policy is empty, so installation is disabled. After authentication, the
-application may restore packages already recorded as enabled, verifying their
-archives and installed payloads before starting fresh workers. Disabled packages
-stay stopped; legacy HA/camera settings never imply installation. There is no
+windows. A clean profile starts with no package workers. After authentication,
+explicit `desktop_plugins` declarations can download and install exact HTTPS
+archive pins; cached enabled packages restore without another download. The
+empty embedded publisher policy only disables the separate manual signed-file
+flow. Archives and installed payloads are verified against their approved pin or
+publisher before starting fresh workers. Configured disabled packages stay
+stopped; legacy HA/camera settings never imply installation. Configuration edits
+revoke obsolete work before publishing the replacement declaration set. There is no
 executable-path or start-worker IPC. `WorkerSpec` is a trusted native API, exercised
 by a separately compiled fixture executable. The package manager constructs it only after package
 verification; a manually constructed spec itself is not a package trust decision.

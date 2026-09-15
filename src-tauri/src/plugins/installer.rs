@@ -6,7 +6,8 @@
 //! execution remains outside this package integrity boundary.
 
 use super::package::{
-    read_regular_file, verify_archive_bytes, TrustStore, VerifiedPackage, MAX_ARCHIVE_BYTES,
+    read_regular_file, verify_archive_bytes, verify_pinned_archive_bytes, TrustStore,
+    VerifiedPackage, MAX_ARCHIVE_BYTES,
 };
 use super::protocol::{
     validate_plugin_id, PluginManifest, PluginPermission, WorkerConfiguration, DESKTOP_TARGETS,
@@ -38,6 +39,21 @@ const STORE_SENTINEL: &str = "store-v1";
 pub struct PackageVersion {
     pub version: String,
     pub sha256: String,
+    /// This exact artifact was authorized by native application configuration.
+    /// Local configuration and inventory are in the same-user trust boundary;
+    /// the retained digest still verifies every archive and extracted payload.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archive_pin: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl PackageVersion {
+    fn same_content(&self, other: &Self) -> bool {
+        self.version == other.version && self.sha256 == other.sha256
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,13 +304,9 @@ impl PackageManager {
         tokio::spawn(async move {
             let _operation = manager.0.operation.lock().await;
             manager.check_epoch(epoch)?;
-            // A VerifiedPackage may have been produced by another trust store.
-            // Its immutable bytes must still satisfy this manager's policy.
-            let package = verify_archive_bytes(
-                package.archive_bytes().to_vec(),
-                &manager.0.trust,
-                &manager.0.target,
-            )?;
+            // Signed packages still require this manager's publisher policy;
+            // explicit native pins retain their exact immutable authorization.
+            let package = package.reverify(&manager.0.trust, &manager.0.target)?;
             manager.install_package_locked(package, enable, epoch).await
         })
         .await
@@ -688,6 +700,7 @@ impl PackageManager {
         let next = PackageVersion {
             version: verified.manifest().version.clone(),
             sha256: verified.archive_sha256().into(),
+            archive_pin: verified.archive_pin(),
         };
         let previous = original.plugins.get(&id).cloned();
         if previous.is_none() && original.plugins.len() >= MAX_PLUGINS {
@@ -701,7 +714,13 @@ impl PackageManager {
                 Version::parse(&previous.active.version).map_err(|_| "invalid stored version")?;
             let next_version =
                 Version::parse(&next.version).map_err(|_| "invalid package version")?;
-            if next != previous.active && next_version <= current_version {
+            // Explicit native configuration authorizes the exact pinned bytes,
+            // including rebuilt versions or an intentional downgrade. Manual
+            // publisher-signed installs retain the newer immutable version rule.
+            if !verified.archive_pin()
+                && !next.same_content(&previous.active)
+                && next_version <= current_version
+            {
                 return Err(
                     "updates require a newer immutable version; use rollback for retained versions"
                         .into(),
@@ -719,7 +738,7 @@ impl PackageManager {
         self.stage_package(&verified)?;
         self.check_epoch(epoch)?;
         let rollback = previous.as_ref().and_then(|record| {
-            if record.active == next {
+            if record.active.same_content(&next) {
                 record.rollback.clone()
             } else {
                 Some(record.active.clone())
@@ -1020,6 +1039,7 @@ impl PackageManager {
         let version = PackageVersion {
             version: package.manifest().version.clone(),
             sha256: package.archive_sha256().into(),
+            archive_pin: package.archive_pin(),
         };
         let destination = self.version_path(&package.manifest().plugin_id, &version);
         if destination.try_exists().map_err(io_error)? {
@@ -1095,11 +1115,18 @@ impl PackageManager {
         check_directory(&plugin, true)?;
         let directory = self.version_path(id, version);
         check_directory(&directory, true)?;
-        let package = verify_archive_bytes(
-            read_regular_file(&directory.join("archive.idplugin"), MAX_ARCHIVE_BYTES)?,
-            &self.0.trust,
-            &self.0.target,
-        )?;
+        let bytes = read_regular_file(&directory.join("archive.idplugin"), MAX_ARCHIVE_BYTES)?;
+        let package = if version.archive_pin {
+            verify_pinned_archive_bytes(
+                bytes,
+                id,
+                &version.version,
+                &self.0.target,
+                &version.sha256,
+            )?
+        } else {
+            verify_archive_bytes(bytes, &self.0.trust, &self.0.target)?
+        };
         if package.archive_sha256() != version.sha256
             || package.manifest().version != version.version
             || package.manifest().plugin_id != id
@@ -1151,7 +1178,7 @@ impl PackageManager {
             validate_version(&record.active)?;
             if let Some(rollback) = &record.rollback {
                 validate_version(rollback)?;
-                if *rollback == record.active {
+                if rollback.same_content(&record.active) {
                     return Err("duplicate rollback version".into());
                 }
             }

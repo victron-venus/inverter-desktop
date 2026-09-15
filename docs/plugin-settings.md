@@ -1,11 +1,45 @@
 # Desktop plugin settings
 
-This checkpoint adds settings for verified installed desktop packages. It does
-not migrate legacy Home Assistant/camera configuration or extract those features.
-The production publisher policy remains empty, so ordinary application builds
-still cannot install packages. No new publisher or application signing keys are
-introduced here. Android and iOS include none of this settings implementation,
-its UI, native commands, storage adapter, or worker configuration protocol.
+Verified installed desktop packages have isolated settings. Installation can use
+an exact archive pin in application configuration or a manually reviewed signed
+package. Configured downloads need no publisher or application signing keys;
+the empty publisher policy keeps manual signed-file selection unavailable.
+Legacy Home Assistant/camera settings are not migrated automatically. Android
+and iOS preserve package declarations as dormant configuration data but include
+none of this editor, native commands, storage adapter, or worker protocol.
+
+## Application declarations and restoration
+
+The application configuration's `desktop_plugins` list records package IDs,
+exact versions, enabled preferences, and per-platform HTTPS URLs and SHA-256
+digests. It contains download metadata, not plugin connection settings or secrets.
+See [declaring plugins](plugin-packages.md#declaring-plugins-in-application-configuration)
+for the schema and automatic installation behavior.
+
+The exact archive pin selects desired content, so an explicit declaration change
+may install rebuilt bytes at the same worker version or intentionally select an
+older version. The previous active package is retained for rollback. Existing
+pins stay unchanged until edited or imported; application upgrades do not follow
+newer package releases automatically.
+
+An application upgrade or reinstall that preserves its data preserves both the
+declarations and the encrypted plugin records. A portable application backup
+includes declarations; restoring it on a clean installation lets desktop fetch
+the packages again. It does not restore plugin settings or credentials from a
+wiped installation. Missing required settings leave a newly installed package
+stopped and visible in the manager. Saving valid settings retries activation when
+the declaration requests `enabled: true`. A declaration with `enabled: false`
+keeps the package stopped after settings changes.
+
+Removing a declaration releases configuration management and retains the current
+installed package and its settings. Uninstall remains an explicit separate action.
+To reinstall a damaged but manageable package, remove the declaration, uninstall
+with settings retained, then restore the declaration and retry. Corrupt store
+inventory is reported and never automatically erased to force restoration.
+Ordinary credential-free backup/import policy is unchanged: exported declarations
+are portable, while passwords, tokens, and local authentication policy are not
+exported. Unknown declaration metadata survives mobile save/export roundtrips;
+desktop rejects unknown declaration fields before interpreting or installing them.
 
 ## Editor and lifecycle
 
@@ -28,7 +62,8 @@ lifecycle actions and settings changes share one owned native operation lock;
 a cancelled IPC caller does not abandon an in-progress authorized transaction.
 
 Settings save commits before activation. An enabled worker is stopped and starts
-again with the new values; a disabled worker stays stopped. If activation fails,
+again with the new values; a manually disabled worker stays stopped. A configured
+package awaiting required settings is retried according to its declaration. If activation fails,
 the saved values and enabled preference remain, and the UI reports the restart
 failure separately. Authentication revocation prevents a stale operation from
 committing or delivering configuration into a later session. A committed change
@@ -116,8 +151,8 @@ plugin-settings format/domain and the exact plugin ID, rejecting substitution
 between plugins or with core configuration.
 
 The encryption key comes from the application's existing protected key provider.
-This introduces no extra keychain entry and does not change the core configuration
-format, exports, or legacy credential migration. Merely constructing the store or
+This introduces no extra keychain entry or change to legacy credential migration.
+Plugin records are separate from portable application exports. Merely constructing the store or
 reading missing settings does not create files or request a key. A corrupt record
 or unavailable key is an explicit failure; neither silently resets settings.
 

@@ -26,6 +26,29 @@
     </div>
 
     <template v-if="snapshot">
+      <p v-if="snapshot.configuration_error" role="alert" class="text-[12px] text-consumption">
+        {{ snapshot.configuration_error }}
+      </p>
+      <section v-if="snapshot.configured?.length" class="classic-card p-3 flex flex-col gap-2">
+        <h3 class="classic-subsection-title">{{ $t('plugins.manager.configuredTitle') }}</h3>
+        <p class="text-[11px] text-muted">{{ $t('plugins.manager.configuredHelp') }}</p>
+        <div
+          v-for="plugin in snapshot.configured"
+          :key="plugin.plugin_id"
+          class="text-[12px] min-w-0"
+        >
+          <p class="break-words">{{ plugin.plugin_id }} · {{ plugin.version }}</p>
+          <output class="text-[11px] text-muted">{{
+            $t(`plugins.manager.restoreState.${plugin.state}`)
+          }}</output>
+          <p v-if="plugin.error" role="alert" class="text-[11px] text-consumption break-words">
+            {{ plugin.error }}
+          </p>
+        </div>
+        <UiButton :disabled="!canManage" @click="retryConfigured">
+          {{ $t('plugins.manager.retryConfigured') }}
+        </UiButton>
+      </section>
       <p v-if="snapshot.ready && !snapshot.installation_available" class="text-[12px] text-muted">
         {{ $t('plugins.manager.noPublishers') }}
       </p>
@@ -97,6 +120,9 @@
           <span class="text-muted">{{ plugin.version }}</span>
         </div>
         <output class="text-[11px] text-muted">{{ stateLabel(plugin) }}</output>
+        <p v-if="plugin.configuration_managed" class="text-[11px] text-muted">
+          {{ $t('plugins.manager.configurationManaged') }}
+        </p>
         <p v-if="plugin.error" role="alert" class="text-[11px] text-consumption break-words">
           {{ plugin.error }}
         </p>
@@ -108,17 +134,23 @@
           >
             {{ $t('plugins.manager.settings') }}
           </UiButton>
-          <UiButton :disabled="!canManage" @click="setEnabled(plugin.plugin_id, !plugin.enabled)">
+          <UiButton
+            :disabled="!canManage || plugin.configuration_managed"
+            @click="setEnabled(plugin.plugin_id, !plugin.enabled)"
+          >
             {{ $t(plugin.enabled ? 'plugins.manager.disable' : 'plugins.manager.enable') }}
           </UiButton>
           <UiButton
             v-if="plugin.rollback_version"
-            :disabled="!canManage"
+            :disabled="!canManage || plugin.configuration_managed"
             @click="rollback(plugin.plugin_id)"
           >
             {{ $t('plugins.manager.rollback', { version: plugin.rollback_version }) }}
           </UiButton>
-          <UiButton :disabled="!canManage" @click="requestRemoval(plugin.plugin_id)">
+          <UiButton
+            :disabled="!canManage || plugin.configuration_managed"
+            @click="requestRemoval(plugin.plugin_id)"
+          >
             {{ $t('plugins.manager.remove') }}
           </UiButton>
         </div>
@@ -198,6 +230,7 @@ const {
   canManage,
   canInstall,
   retry,
+  retryConfigured,
   pickPackage,
   clearPreview,
   install,

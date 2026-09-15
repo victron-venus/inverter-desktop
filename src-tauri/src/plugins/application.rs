@@ -4,8 +4,11 @@ use super::installer::{InstalledPluginDetails, PackageManager};
 use super::package::{TrustStore, VerifiedPackage};
 use super::protocol::{validate_plugin_id, PluginPermission};
 use super::runtime::{PluginHost, PluginSnapshot};
+#[path = "reconciliation.rs"]
+mod reconciliation;
 use super::settings::{PluginSettingsView, SettingsSchema};
 use super::settings_store::{SettingsKeyProvider, SettingsStore};
+use reconciliation::{ConfiguredStatus, Reconciliation};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -57,10 +60,13 @@ pub(crate) struct ManagerSnapshot {
     pub target: String,
     pub data_revision: String,
     pub plugins: Vec<ManagedPlugin>,
+    pub configured: Vec<ConfiguredStatus>,
+    pub configuration_error: Option<String>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct ManagedPlugin {
+    configuration_managed: bool,
     plugin_id: String,
     version: String,
     rollback_version: Option<String>,
@@ -107,6 +113,7 @@ enum StoreStatus {
 }
 
 struct ApplicationInner {
+    reconciliation: Reconciliation,
     host: PluginHost,
     media: Option<super::media::MediaService>,
     target: String,
@@ -144,6 +151,7 @@ impl PackageApplication {
         media: Option<super::media::MediaService>,
     ) -> Self {
         Self(Arc::new(ApplicationInner {
+            reconciliation: Reconciliation::default(),
             host,
             media,
             target,
@@ -427,6 +435,8 @@ impl PackageApplication {
             target: self.0.target.clone(),
             data_revision: self.0.metadata_revision.load(Ordering::Acquire).to_string(),
             plugins: Vec::new(),
+            configured: self.0.reconciliation.statuses(),
+            configuration_error: self.0.reconciliation.error(),
         };
         let manager = match self.manager() {
             Ok(manager) => manager,
@@ -466,7 +476,12 @@ impl PackageApplication {
         snapshot.ready = true;
         snapshot.plugins = details
             .into_iter()
-            .map(|details| managed_plugin(details, &runtimes, &failures))
+            .map(|details| {
+                let managed = self.0.reconciliation.contains(&details.record.plugin_id);
+                let mut plugin = managed_plugin(details, &runtimes, &failures);
+                plugin.configuration_managed = managed;
+                plugin
+            })
             .collect();
         Ok(snapshot)
     }
@@ -661,6 +676,7 @@ impl PackageApplication {
                 .ok_or_else(|| "Package review is unavailable".into())
         })?;
         let id = package.manifest().plugin_id.clone();
+        self.require_unmanaged(&id)?;
         self.run_operation(id, epoch, activity, async move {
             manager
                 .install_verified_in_epoch(package, enable, epoch)
@@ -677,6 +693,7 @@ impl PackageApplication {
         epoch: u64,
     ) -> Result<(), String> {
         let activity = self.begin_activity();
+        self.require_unmanaged(id)?;
         self.prepare_mutation(id, epoch)?;
         let manager = self.manager()?;
         let id = id.to_owned();
@@ -692,6 +709,7 @@ impl PackageApplication {
     }
 
     pub(crate) async fn rollback(&self, id: &str, epoch: u64) -> Result<(), String> {
+        self.require_unmanaged(id)?;
         let activity = self.begin_activity();
         self.prepare_mutation(id, epoch)?;
         let manager = self.manager()?;
@@ -714,6 +732,7 @@ impl PackageApplication {
         epoch: u64,
     ) -> Result<(), String> {
         let activity = self.begin_activity();
+        self.require_unmanaged(id)?;
         self.prepare_mutation(id, epoch)?;
         let manager = self.manager()?;
         let store = self.settings_store()?;
@@ -787,7 +806,24 @@ impl PackageApplication {
     }
 
     /// Session revocation is synchronous; restoration is a separate, epoch-bound task.
+    #[cfg(any(test, feature = "native-media-smoke"))]
     pub(crate) fn session_changed(&self, unlocked: bool) -> Option<u64> {
+        self.transition_session(unlocked, None)
+    }
+
+    pub(crate) fn session_configured(
+        &self,
+        unlocked: bool,
+        configuration: Result<Vec<crate::plugin_config::DesktopPluginConfig>, String>,
+    ) -> Option<u64> {
+        self.transition_session(unlocked, Some(configuration))
+    }
+
+    fn transition_session(
+        &self,
+        unlocked: bool,
+        configuration: Option<Result<Vec<crate::plugin_config::DesktopPluginConfig>, String>>,
+    ) -> Option<u64> {
         let epoch = self.0.host.revoke_epoch();
         self.0.metadata_revision.fetch_add(1, Ordering::AcqRel);
         self.clear_preview();
@@ -796,6 +832,10 @@ impl PackageApplication {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clear();
+        // Do not publish a new authorized epoch with the previous declarations.
+        if let Some(configuration) = configuration {
+            self.configure(configuration);
+        }
         if unlocked && !self.0.closing.load(Ordering::Acquire) && self.0.host.resume_in_epoch(epoch)
         {
             Some(epoch)
@@ -810,9 +850,7 @@ impl PackageApplication {
         run_owned(activity, async move {
             let manager = service.wait_manager().await?;
             service.check_epoch(epoch)?;
-            for result in manager.restore_enabled_in_epoch(epoch).await? {
-                service.record_result(&result.plugin_id, epoch, &result.error.map_or(Ok(()), Err));
-            }
+            service.reconcile(manager, epoch).await?;
             service.check_epoch(epoch)
         })
         .await
@@ -875,6 +913,7 @@ fn managed_plugin(
                 .and_then(|worker| worker.last_error.clone())
         });
     ManagedPlugin {
+        configuration_managed: false,
         plugin_id: id,
         version: details.record.active.version,
         rollback_version: details.record.rollback.map(|version| version.version),

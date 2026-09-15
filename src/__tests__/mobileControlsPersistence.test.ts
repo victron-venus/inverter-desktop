@@ -9,6 +9,25 @@ const saved = {
   mqtt_host: 'Cerbo',
   mqtt_port: 1883,
   ha_url: 'http://existing-home',
+  desktop_plugins: [
+    {
+      plugin_id: 'example.monitor',
+      version: '1.2.3',
+      enabled: false,
+      artifacts: {
+        'aarch64-apple-darwin': {
+          url: 'https://packages.example.invalid/monitor-macos.idplugin',
+          sha256: 'a'.repeat(64),
+          future_artifact: { retained: true },
+        },
+        'x86_64-pc-windows-msvc': {
+          url: 'https://packages.example.invalid/monitor-windows.idplugin',
+          sha256: 'b'.repeat(64),
+        },
+      },
+      future_metadata: { labels: ['home', 'status'] },
+    },
+  ],
   ha_entities: [
     {
       id: 'lamp',
@@ -61,6 +80,7 @@ describe('mobile control configuration roundtrip', () => {
     ])
     expect(written.ha_entities).toEqual(saved.ha_entities)
     expect(written.ha_url).toBe(saved.ha_url)
+    expect(written.desktop_plugins).toEqual(saved.desktop_plugins)
   })
 
   it('resets visible controls without deleting hidden desktop definitions', async () => {
@@ -74,6 +94,7 @@ describe('mobile control configuration roundtrip', () => {
     const written = invoke.mock.calls.find(([command]) => command === 'save_config')?.[1].config
     expect(written.header_toggles_config).toEqual([saved.header_toggles_config[1]])
     expect(written.ha_entities).toEqual([saved.ha_entities[0]])
+    expect(written.desktop_plugins).toEqual(saved.desktop_plugins)
   })
   it('reserves hidden IDs for presets and automatically named controls', async () => {
     const form = useConfigForm()

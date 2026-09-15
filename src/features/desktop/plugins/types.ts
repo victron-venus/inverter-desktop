@@ -48,6 +48,7 @@ export type ActionContribution = Extract<DashboardContribution, { kind: 'action'
 export type NumberInputContribution = Extract<DashboardContribution, { kind: 'number_input' }>
 
 export interface ManagedPlugin {
+  configuration_managed?: boolean
   plugin_id: string
   version: string
   rollback_version: string | null
@@ -58,6 +59,14 @@ export interface ManagedPlugin {
 }
 
 export interface PluginManagerSnapshot {
+  configured?: Array<{
+    plugin_id: string
+    version: string
+    enabled: boolean
+    state: 'pending' | 'downloading' | 'installing' | 'ready' | 'disabled' | 'failed'
+    error: string | null
+  }>
+  configuration_error?: string | null
   ready: boolean
   error: string | null
   installation_available: boolean

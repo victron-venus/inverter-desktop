@@ -153,4 +153,45 @@ mod tests {
         assert!(restore("[]", &FullConfig::default()).is_err());
         assert!(restore("{}", &FullConfig::default()).is_err());
     }
+
+    #[test]
+    fn portable_backup_restores_package_declarations_without_credentials() {
+        let source = FullConfig {
+            desktop_plugins: crate::plugin_config::test_declarations(),
+            mqtt_password: Some("source-mqtt-secret".into()),
+            ha_longlived_token: Some("source-ha-secret".into()),
+            ..FullConfig::default()
+        };
+        let backup = redacted(&source).unwrap();
+        let text = backup.to_string();
+        assert!(!text.contains("source-mqtt-secret"));
+        assert!(!text.contains("source-ha-secret"));
+        assert_eq!(
+            backup["desktop_plugins"],
+            serde_json::to_value(&source.desktop_plugins).unwrap()
+        );
+        let restored = restore(&text, &FullConfig::default()).unwrap();
+        assert_eq!(restored.desktop_plugins, source.desktop_plugins);
+        assert!(restored.mqtt_password.is_none());
+        assert!(restored.ha_longlived_token.is_none());
+    }
+
+    #[test]
+    fn imported_declarations_replace_existing_pins_and_preserve_disabled_state() {
+        let mut current = FullConfig {
+            desktop_plugins: crate::plugin_config::test_declarations(),
+            ..FullConfig::default()
+        };
+        let imported = redacted(&current).unwrap();
+        current.desktop_plugins[0].enabled = true;
+        current.desktop_plugins[0].version = "9.0.0".into();
+        let restored = restore(&imported.to_string(), &current).unwrap();
+        assert!(!restored.desktop_plugins[0].enabled);
+        assert_eq!(restored.desktop_plugins[0].version, "1.2.3");
+        let legacy = redacted(&FullConfig::default()).unwrap();
+        assert!(restore(&legacy.to_string(), &current)
+            .unwrap()
+            .desktop_plugins
+            .is_empty());
+    }
 }

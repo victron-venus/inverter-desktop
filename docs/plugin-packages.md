@@ -1,21 +1,99 @@
 # Desktop plugin packages
 
-The desktop application now connects its signed package pipeline to settings,
-authentication, startup, and shutdown. **Configuration → Plugins** shows installed
-workers and supports native package selection, verified install/update review,
-enable/disable, version-specific rollback, typed settings, and confirmed uninstall.
+The desktop application installs packages declared in application configuration
+using exact version, platform, and archive SHA-256 pins. It also retains a separate
+manual signed-package review flow. **Configuration → Plugins** shows download and
+restoration results, installed workers, typed settings, and package lifecycle actions.
 
-The embedded production publisher policy is currently empty. The manager therefore
-shows **This build has no approved plugin publishers** and disables package
-selection and installation. This checkpoint provides no unsigned fallback or user
-trust override. Home Assistant and cameras remain bundled desktop features; they
-have not yet been extracted into packages and are not managed by this tab.
+Configured downloads can use unsigned packages and need no publisher or app
+signing keys. The embedded publisher policy is currently empty, so manual package
+selection remains unavailable. Home Assistant and cameras still have bundled
+desktop implementations alongside the separately packaged workers; full migration
+and bundled-feature removal remain unfinished.
 
 Android and iOS compile neither the manager UI nor its native commands, package
 store startup, publisher policy, cryptographic verifier, ZIP handling, or packaging
-implementation. Mobile artifact gates reject these desktop-only surfaces.
+implementation. Mobile preserves declarations as dormant configuration data;
+it does not interpret, fetch or execute them. Mobile artifact gates reject the
+desktop implementations.
 
-## Selecting and reviewing a package
+## Declaring plugins in application configuration
+
+Add a `desktop_plugins` list to the application settings or merge the corresponding
+fragment from a published release into your settings backup before importing it.
+The fragment contains package declarations, not a complete application backup.
+Keep only the plugins you want. To share a configuration between desktop
+platforms, combine their artifact maps under one declaration for each plugin.
+Each declaration supplies an exact plugin ID and version, an enabled preference,
+and one or more desktop target artifacts. For example:
+
+```json
+{
+  "desktop_plugins": [
+    {
+      "plugin_id": "example.monitor",
+      "version": "1.2.3",
+      "enabled": true,
+      "artifacts": {
+        "aarch64-apple-darwin": {
+          "url": "https://packages.example.invalid/monitor-1.2.3.idplugin",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      }
+    }
+  ]
+}
+```
+
+The example is illustrative; use the URL and checksum of the actual released
+archive. Desktop accepts at most eight unique plugin declarations. Versions are
+exact semantic versions, not ranges or `latest`. Artifact keys must be supported
+desktop Rust target triples. Every configured URL must use HTTPS and contain no
+credentials, query, or fragment; SHA-256 uses 64 lowercase hexadecimal characters.
+Unknown declaration and artifact fields are rejected on desktop. Mobile preserves
+future metadata without interpreting it. Omitted `enabled` means true; explicit
+false permits installation but never launches that worker.
+
+After authentication, startup, configuration import/save, and **Retry restoration**
+reconcile the declarations with the private package store. Missing
+packages are downloaded with bounded HTTPS requests, checked against their exact
+identity/version/target/hash, and installed through the existing verified package
+lifecycle. Healthy matching installations are reused without downloading or
+restarting them. A missing artifact for this target or a failed download appears
+in the manager. A failed package change preserves the previous installed version.
+The full pin describes the desired content: editing or importing a declaration
+can replace an archive with different bytes at the same worker version or select
+an older version intentionally. Replacement is transactional and retains the
+previous active archive for rollback. The app follows the saved pins; upgrading
+the application does not silently select a newer release or rebuild. Change the
+declaration's URL/hash and, when needed, version to select different content.
+
+Declared plugins take their package version and enabled state from configuration.
+The native API and manager prevent manual replacement, enable/disable, rollback,
+or uninstall while a declaration owns that ID. Settings remain editable. Remove
+the declaration to release management; doing so retains installed state and data.
+Uninstall afterward if the package should also be removed.
+
+An app upgrade or reinstall that preserves app data preserves declarations and
+encrypted plugin settings. If app data was deleted, import a saved application
+backup to restore the declarations and fetch missing packages. The portable backup
+does not include plugin settings or secrets. A newly downloaded package needing
+credentials remains installed and stopped until valid settings are saved, then
+activation is retried if enabled in the declaration. Missing local data cannot be
+recovered without a backup. A missing package can be downloaded again, but damaged
+installed content is not automatically overwritten or erased. To reinstall a
+damaged package that remains manageable, remove its declaration, uninstall the
+package while retaining settings, then restore the declaration and retry. An
+unreadable or corrupt store inventory is reported without deleting it; this flow
+does not bypass an inventory error or silently reset the store. Source declarations
+do not migrate bundled HA/camera settings or change the core inverter MQTT connection.
+
+Hosted desktop releases generate `.idplugin` assets, `.sha256` files, and
+`desktop-plugins-<target>.json` fragments. Their pinned URLs refer to that frozen
+release tag and become usable only after publication. See the
+[release output contract](release-workflow.md#desktop-plugin-release-assets).
+
+## Selecting and reviewing a signed package
 
 1. Open **Plugins** in desktop settings and choose a package through the native
    file dialog. Cancelling the dialog changes nothing. Selection is available only
@@ -38,6 +116,12 @@ the originating settings window and authentication epoch and expires after five
 minutes. Replacement, cancellation, closing that window, logout, or authentication
 policy changes invalidate it. An install attempt consumes the review; an expired
 or failed attempt requires selecting and reviewing the package again.
+
+Manual signed-file updates require a newer version and reject different content
+under an already installed version. Use the retained **Rollback** action to return
+to its previous archive. Explicit configuration pins have the separate content
+selection behavior described above, including same-version replacement and
+intentional downgrade.
 
 Installed cards show their version and running, starting, failed, installed, or
 disabled state. Rollback names the retained version. Uninstall requires an inline
@@ -72,8 +156,12 @@ directories, extra fields,
 comments, ZIP64, data descriptors, duplicate paths, and unlisted payloads are not
 part of this format. The entire archive is bounded to 64 MiB.
 
-The manifest uses the [worker manifest schema](plugin-worker-protocol.md), with
-a mandatory Ed25519 signature. The signing message is the ASCII domain prefix
+The manifest uses the [worker manifest schema](plugin-worker-protocol.md).
+Manual file selection requires an Ed25519 signature from an approved publisher.
+Configured downloads instead authorize the exact archive SHA-256 recorded in
+application settings; their manifest may have `signature: null`. Both paths enforce
+the same target/API, archive structure, and complete payload inventory checks.
+The signing message is the ASCII domain prefix
 `inverter-desktop:idplugin:manifest:v1` followed by a NUL byte and compact UTF-8
 JSON serialization of the typed manifest with `signature` set to `null`. Object
 keys within schema metadata are sorted recursively. Verification requires the
@@ -88,7 +176,7 @@ archive structure and file inventory before returning an immutable
 reopening a caller-controlled archive after verification.
 
 The parser's larger declared-inventory limit does not relax the stricter archive
-limit. A signed manifest with incompatible target/API, unsafe paths, unexpected
+limit. A manifest with incompatible target/API, unsafe paths, unexpected
 files, missing files, or incorrect lengths/digests is rejected.
 
 ## Frigate worker package
@@ -201,14 +289,29 @@ disposable package trust, a temporary HA HTTP/WebSocket fixture and an independe
 core MQTT connection. Separate read-only and action fixtures cover settings
 restart, disable, logout/uninstall, exact service POSTs and stale action rejection.
 Current demonstrated results and pending checks are recorded in TODO.md. A production HA installation, service/UI
-parity, entity-picker UI, remaining appliance profiles, modern forecast retrieval and legacy migration
+parity, entity-picker UI, full appliance presentation, modern forecast retrieval and legacy migration
 remain separate work. The release trust policy stays
 empty and this slice does not create signing keys.
 
 ## Producing an archive
 
 Build the frontend once, then run the desktop packaging tool from the repository
-root with an existing publisher seed file:
+root. For a package installed through an exact configuration pin, no key is needed:
+
+```bash
+pnpm build
+cargo run --locked --manifest-path src-tauri/Cargo.toml --example plugin-package -- \
+  --unsigned \
+  --manifest /absolute/path/plugin-manifest.json \
+  --root /absolute/path/payload \
+  --output /absolute/path/plugin.idplugin
+```
+
+The unsigned mode removes any input signature, rebuilds the payload inventory,
+and uses the same deterministic ZIP and source protections. Compute SHA-256 of
+the resulting complete archive and place that exact digest in its declaration.
+For manual publisher review, the existing signed mode takes an externally
+supplied seed file:
 
 ```bash
 pnpm build
@@ -222,7 +325,7 @@ cargo run --locked --manifest-path src-tauri/Cargo.toml --example plugin-package
 
 The manifest input supplies all `PluginManifest` metadata fields. Set `inventory`
 to `[]` and `signature` to `null`; the tool replaces both using the actual payload
-files and the supplied key. The target is the worker's Rust desktop target triple,
+files and, in signed mode, the supplied key. The target is the worker's Rust desktop target triple,
 and the entrypoint is a portable path relative to the payload root.
 
 The key file contains exactly 32 raw Ed25519 seed bytes, not hexadecimal, Base64,
@@ -254,11 +357,11 @@ public key encoded as 64 lowercase hexadecimal digits, and an explicit list of
 plugin IDs that key may sign. Key rotation can retain the old and new key IDs
 for the same plugin during a release transition.
 
-The initial policy has no publishers. A maintainer must configure real publisher
-keys through a reviewed application release before enabling package installation.
-There is no trust-on-first-use, package-provided public key, webview override,
-environment override, or unsigned installation fallback. Fixture signing keys
-exist only in tests and are never added to this policy.
+The policy has no publishers. It applies to manual signed-file selection;
+configured exact archive pins are independently authorized by saved application
+configuration and need no publisher keys. The manual path has no trust-on-first-use,
+package-provided public key, webview key override, or environment override.
+Fixture signing keys exist only in tests and are never added to this policy.
 
 Native test or development callers may construct their own `TrustStore`; that is
 an explicit native trust boundary, not an application user setting. A key valid
@@ -277,7 +380,8 @@ packages. File dialogs and trusted publisher configuration remain native-owned.
 The management IPC surface is:
 
 - `get_plugin_manager_snapshot`: authenticated inventory, runtime status,
-  initialization errors, and installation availability.
+  initialization errors, configured-plugin results, and manual installation availability.
+- `retry_configured_plugins`: retry saved declarations in the current authenticated session.
 - `preview_plugin_package`: takes no path argument; opens the native dialog and
   returns `null` on cancellation or verified metadata with an opaque token.
 - `install_plugin_package({ token, enable })` and
@@ -306,8 +410,9 @@ confirmed, the lease must remain held until the hosting process exits.
 
 The store uses an atomically created `store-v1/` ownership directory, a bounded
 `state.json` inventory, private
-staging directories, and content-addressed package versions. Each immutable
-version retains its verified archive and extracted payload. At most eight plugins,
+staging directories, and content-addressed package records. Each immutable archive
+record retains its verified bytes and extracted payload; a configured replacement
+may have the same semantic version with a different archive digest. At most eight plugins,
 two retained versions per plugin after recovery, 512 MiB of total store data, and
 8,192 filesystem entries are admitted. These storage limits are independent of
 the worker's runtime CPU or memory use.
@@ -326,12 +431,13 @@ owned package files. The package manager has no MQTT/IGW handle and does not
 reconnect core telemetry.
 
 Opening a package store recovers metadata and interrupted staging work without
-executing workers. A separate application restoration pass starts only packages
-already recorded as enabled, after successful authentication. Every launch
-rechecks the signed archive and installed payload. Disabled packages stay stopped;
+executing workers. After successful authentication, configured declarations are
+reconciled and other installed packages recorded as enabled can resume. Every launch
+rechecks the archive against its configured pin or approved publisher and verifies
+the installed payload. Disabled packages stay stopped;
 a queued restore cannot undo an explicit disable or uninstall. A failed restore
-is visible in the manager. Empty inventory and preserved HA/camera settings never
-cause automatic installation.
+is visible in the manager. Only explicit package declarations cause automatic
+downloads; preserved bundled HA/camera settings do not.
 
 Logout, policy changes, and session expiry revoke the old epoch, clear previews
 and contributions, and stop its workers. A later login may restore enabled packages
@@ -376,7 +482,7 @@ current checkpoint's local suite results, remaining target/artifact checks, and 
 merge are tracked separately in [TODO.md](../TODO.md). Browser visual smoke uses
 mocked native IPC and does not establish native file-dialog GUI behavior.
 
-A verified package authenticates content and publisher scope. Its worker still
+A verified package establishes exact pinned content or approved publisher scope. Its worker still
 runs with the user's OS privileges; this is not an OS sandbox. Permission
 metadata alone does not grant host services. This checkpoint implements scoped
 native settings and startup configuration for `plugin_configuration`, plus bounded
@@ -387,6 +493,6 @@ through this protocol.
 The remaining contribution services and HA/camera parity work stay in
 [TODO.md](../TODO.md).
 
-This checkpoint does not establish production publisher provisioning, signed
-macOS/Windows worker distribution, complete HA/camera parity, physical inverter
+This checkpoint does not establish production publisher provisioning, platform
+code signing, complete HA/camera parity, physical inverter
 commands, or mobile device usability.

@@ -301,6 +301,7 @@ mod tests {
         let config = FullConfig {
             mqtt_password: Some("test-credential".into()),
             show_batteries: Some(false),
+            desktop_plugins: crate::plugin_config::test_declarations(),
             ..Default::default()
         };
         let encrypted = encrypt_config(&config, &[1; 32]).unwrap();
@@ -313,6 +314,12 @@ mod tests {
         assert_eq!(
             decrypt_config(&encrypted, &[1; 32]).unwrap().show_batteries,
             Some(false)
+        );
+        assert_eq!(
+            decrypt_config(&encrypted, &[1; 32])
+                .unwrap()
+                .desktop_plugins,
+            config.desktop_plugins
         );
     }
 }

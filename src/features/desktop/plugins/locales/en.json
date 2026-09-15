@@ -12,7 +12,7 @@
   "numericReview": "Use latest settings",
   "numericReset": "Use current value",
   "refresh": "Refresh",
-  "noPublishers": "This build has no approved plugin publishers.",
+  "noPublishers": "Local signed-file installation has no approved publishers in this build. Configured archive downloads remain available.",
   "choosePackage": "Choose plugin package…",
   "reviewPackage": "Review package",
   "plugin": "Plugin",
@@ -49,7 +49,7 @@
   "notReady": "Plugin management is not ready. Refresh to try again.",
   "pickAgain": "Select the package again to review it before another installation attempt.",
   "settings": "Settings",
-  "settingsHelp": "Saving restarts an enabled plugin. Disabled plugins stay disabled.",
+  "settingsHelp": "Saving restarts enabled plugins and retries plugins enabled by the application configuration.",
   "settingsSaved": "Settings saved.",
   "settingsRestartFailed": "Settings were saved, but the plugin could not restart.",
   "settingsFailed": "Unable to read or save plugin settings. Reload the settings and try again.",
@@ -75,5 +75,17 @@
   "deleteStoredData": "Delete stored data…",
   "confirmDeleteData": "Permanently delete stored data record {record} ({bytes} bytes)? Its settings and secrets cannot be recovered.",
   "deleteDataPermanently": "Permanently delete data",
-  "closeStoredData": "Close stored data"
+  "closeStoredData": "Close stored data",
+  "configuredTitle": "Configured plugins",
+  "configuredHelp": "These packages are restored automatically from the saved application configuration.",
+  "configurationManaged": "Version and enabled state are managed in desktop_plugins. Remove its declaration before managing this package manually.",
+  "retryConfigured": "Retry restoration",
+  "restoreState": {
+    "pending": "Waiting to restore",
+    "downloading": "Downloading",
+    "installing": "Installing",
+    "ready": "Ready",
+    "disabled": "Installed, disabled",
+    "failed": "Restoration needs attention"
+  }
 }

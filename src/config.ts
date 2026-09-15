@@ -6,6 +6,22 @@ import type { DashboardControl } from './inverterControl'
 /** Default MQTT broker address – configure to match your local setup */
 const DEFAULT_MQTT_HOST = 'Cerbo'
 
+/** Portable package declarations; only desktop interprets or installs them. */
+export interface DesktopPluginArtifact {
+  url: string
+  sha256: string
+  [key: string]: unknown
+}
+
+export interface DesktopPluginConfig {
+  plugin_id: string
+  version: string
+  /** Omission enables the configured plugin; false retains an inactive installation. */
+  enabled?: boolean
+  artifacts: Record<string, DesktopPluginArtifact>
+  [key: string]: unknown
+}
+
 export interface AppConfig {
   mqtt_host: string
   mqtt_port: number
@@ -104,6 +120,8 @@ export interface AppConfig {
   gateway_api_token?: string | null
   /** First-run setup wizard completed (migrated true for existing installs) */
   setup_completed?: boolean
+  /** Preserved on mobile without loading the desktop package lifecycle. */
+  desktop_plugins?: DesktopPluginConfig[]
 }
 
 // Single source of truth for section visibility defaults

@@ -102,6 +102,10 @@ jobs:
         run: python3 scripts/collect-release-desktop.py
         env:
           TAURI_TARGET: ${{ matrix.target }}
+      - name: Build pinned desktop plugin packages
+        run: python3 scripts/build-release-plugins.py
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
       - name: Bind desktop packages to the release plan
         run: >-
           python3 scripts/version_receipt.py create --plan .release-plan.json --inputs .release-inputs.json

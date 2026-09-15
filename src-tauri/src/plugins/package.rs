@@ -1,6 +1,7 @@
 //! Verification of the deliberately small, stored-only `.idplugin` ZIP format.
 //!
-//! Trust is supplied by native host policy; a package cannot introduce a key.
+//! Authorization comes from native publisher policy or an exact configured
+//! archive pin; a package cannot introduce a key or authorize its own digest.
 //! See `docs/plugin-packages.md` for the signing bytes and archive restrictions.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -106,6 +107,7 @@ pub struct VerifiedPackage {
     archive: Vec<u8>,
     archive_sha256: String,
     files: Vec<ArchiveEntry>,
+    archive_pin: bool,
 }
 
 impl std::fmt::Debug for VerifiedPackage {
@@ -130,6 +132,26 @@ impl VerifiedPackage {
 
     pub fn archive_bytes(&self) -> &[u8] {
         &self.archive
+    }
+
+    pub(crate) fn archive_pin(&self) -> bool {
+        self.archive_pin
+    }
+
+    /// Preserve native authorization provenance while checking immutable bytes
+    /// against the receiving manager's target and publisher policy.
+    pub(crate) fn reverify(&self, trust: &TrustStore, target: &str) -> Result<Self, String> {
+        if self.archive_pin {
+            verify_pinned_archive_bytes(
+                self.archive.clone(),
+                &self.manifest.plugin_id,
+                &self.manifest.version,
+                target,
+                &self.archive_sha256,
+            )
+        } else {
+            verify_archive_bytes(self.archive.clone(), trust, target)
+        }
     }
 
     /// Only inventory payloads; the signed manifest is available separately.
@@ -290,6 +312,51 @@ pub fn verify_archive_bytes(
     trust: &TrustStore,
     target: &str,
 ) -> Result<VerifiedPackage, String> {
+    verify_archive_contents(bytes, target, false, |manifest, _| {
+        verify_publisher(manifest, trust)
+    })
+}
+
+/// Authorize one exact archive selected in native application configuration.
+/// The local configuration and installed inventory share the same-user trust
+/// boundary. A URL, package manifest, or downloaded checksum cannot grant this
+/// authorization; the expected identity, version, target, and SHA-256 are inputs
+/// from the configuration accepted before the download began.
+pub fn verify_pinned_archive_bytes(
+    bytes: Vec<u8>,
+    plugin_id: &str,
+    version: &str,
+    target: &str,
+    sha256: &str,
+) -> Result<VerifiedPackage, String> {
+    validate_plugin_id(plugin_id)?;
+    if version.is_empty()
+        || version.len() > 128
+        || semver::Version::parse(version).is_err()
+        || sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid configured plugin version or archive digest".into());
+    }
+    verify_archive_contents(bytes, target, true, |manifest, digest| {
+        if manifest.plugin_id != plugin_id || manifest.version != version || digest != sha256 {
+            return Err(
+                "plugin package does not match its configured identity, version, or archive digest"
+                    .into(),
+            );
+        }
+        Ok(())
+    })
+}
+
+fn verify_archive_contents(
+    bytes: Vec<u8>,
+    target: &str,
+    archive_pin: bool,
+    authorize: impl FnOnce(&PluginManifest, &str) -> Result<(), String>,
+) -> Result<VerifiedPackage, String> {
     if bytes.len() > MAX_ARCHIVE_BYTES {
         return Err("plugin package exceeds archive size limit".into());
     }
@@ -300,9 +367,10 @@ pub fn verify_archive_bytes(
     if canonical_manifest_bytes(&manifest)? != manifest_bytes {
         return Err("plugin manifest is not in canonical package encoding".into());
     }
-    verify_publisher(&manifest, trust)?;
+    let archive_sha256 = sha256_hex(&bytes);
+    authorize(&manifest, &archive_sha256)?;
     if manifest.inventory.len() != files.len() - 1 {
-        return Err("plugin archive does not match its signed inventory".into());
+        return Err("plugin archive does not match its inventory".into());
     }
     let inventory: HashMap<_, _> = manifest
         .inventory
@@ -315,18 +383,18 @@ pub fn verify_archive_bytes(
             .ok_or("plugin archive contains an unlisted file")?;
         let data = &bytes[entry.data.clone()];
         if item.size != data.len() as u64 || item.sha256 != sha256_hex(data) {
-            return Err("plugin file does not match its signed size and digest".into());
+            return Err("plugin file does not match its inventory size and digest".into());
         }
     }
     // The strict scanner bounds all metadata before the ZIP library allocates.
     // Independently read each entry to EOF, which checks ZIP CRC integrity.
     check_zip_reader(&bytes, &files)?;
-    let archive_sha256 = sha256_hex(&bytes);
     Ok(VerifiedPackage {
         manifest,
         archive: bytes,
         archive_sha256,
         files,
+        archive_pin,
     })
 }
 

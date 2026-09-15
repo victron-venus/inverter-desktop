@@ -1,4 +1,4 @@
-use super::super::package::PublisherTrust;
+use super::super::package::{canonical_manifest_bytes, sha256_hex, PublisherTrust};
 use super::super::packaging::build_package;
 use super::super::protocol::{PluginManifest, PluginPermission};
 use super::*;
@@ -149,6 +149,40 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
     let archive = directory.join(format!("archive-{}.idplugin", uuid::Uuid::new_v4()));
     fs::write(&archive, bytes).unwrap();
     archive
+}
+
+fn pinned_package(directory: &Path, version: &str, mode: &str) -> VerifiedPackage {
+    pinned_package_revision(directory, version, mode, None)
+}
+
+fn pinned_package_revision(
+    directory: &Path,
+    version: &str,
+    mode: &str,
+    revision: Option<&str>,
+) -> VerifiedPackage {
+    let original = fs::read(package(directory, version, mode)).unwrap();
+    let signed = verify_archive_bytes(original, &trust(), &host_target()).unwrap();
+    let mut manifest = signed.manifest().clone();
+    manifest.signature = None;
+    if let Some(revision) = revision {
+        manifest.config_schema["description"] = json!(revision);
+    }
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .unix_permissions(0o755);
+    writer.start_file("manifest.json", options).unwrap();
+    writer
+        .write_all(&canonical_manifest_bytes(&manifest).unwrap())
+        .unwrap();
+    for (path, bytes) in signed.files() {
+        writer.start_file(path, options).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    let bytes = writer.finish().unwrap().into_inner();
+    let digest = sha256_hex(&bytes);
+    verify_pinned_archive_bytes(bytes, PLUGIN, version, &host_target(), &digest).unwrap()
 }
 
 async fn manager(directory: &TestDirectory) -> (PackageManager, PluginHost) {
@@ -945,6 +979,20 @@ async fn signed_install_update_rollback_disable_enable_and_remove_use_real_worke
         .await
         .unwrap();
     assert_eq!(second.rollback.as_ref(), Some(&first.active));
+    for rejected in [
+        package(&directory.0, "1.1.0", "notifications_authorized"),
+        package(&directory.0, "1.0.0", "normal"),
+    ] {
+        assert!(manager
+            .install(rejected, true)
+            .await
+            .unwrap_err()
+            .contains("newer immutable version"));
+        assert_eq!(
+            manager.list().await.unwrap().as_slice(),
+            std::slice::from_ref(&second)
+        );
+    }
     assert_eq!(manager.rollback(PLUGIN).await.unwrap().active, first.active);
     assert_eq!(
         manager.rollback(PLUGIN).await.unwrap().active,
@@ -971,6 +1019,215 @@ async fn signed_install_update_rollback_disable_enable_and_remove_use_real_worke
     assert!(manager.list().await.unwrap().is_empty());
     assert!(host.snapshots().is_empty());
     assert!(!manager.0.root.join("content").join(PLUGIN).exists());
+    manager.close().await.unwrap();
+}
+
+#[test]
+fn legacy_package_versions_remain_signature_authorized_and_pins_are_explicit() {
+    let legacy = json!({"version":"1.0.0","sha256":"a".repeat(64)});
+    let version: PackageVersion = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(!version.archive_pin);
+    assert_eq!(serde_json::to_value(&version).unwrap(), legacy);
+    let pinned = PackageVersion {
+        archive_pin: true,
+        ..version.clone()
+    };
+    assert_eq!(serde_json::to_value(&pinned).unwrap()["archive_pin"], true);
+    assert_eq!(
+        serde_json::from_value::<PackageVersion>(serde_json::to_value(&pinned).unwrap()).unwrap(),
+        pinned
+    );
+    assert!(pinned.same_content(&version));
+    for invalid in [json!(null), json!("true"), json!(1)] {
+        let mut record = legacy.clone();
+        record["archive_pin"] = invalid;
+        assert!(serde_json::from_value::<PackageVersion>(record).is_err());
+    }
+}
+
+#[tokio::test]
+async fn pinned_install_reopen_update_and_rollback_keep_exact_archive_authorization() {
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        TrustStore::default(),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    let initial = pinned_package(&directory.0, "1.0.0", "normal");
+    assert!(initial.manifest().signature.is_none());
+    let first = manager
+        .install_verified_in_epoch(initial, true, host.authority_epoch())
+        .await
+        .unwrap();
+    assert!(first.active.archive_pin);
+    wait_running(&host).await;
+    manager.close().await.unwrap();
+    assert!(host.snapshots().is_empty());
+
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        TrustStore::default(),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        manager.list().await.unwrap().as_slice(),
+        std::slice::from_ref(&first)
+    );
+    assert!(host.snapshots().is_empty());
+    let restored = manager
+        .restore_enabled_in_epoch(host.authority_epoch())
+        .await
+        .unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].plugin_id, PLUGIN);
+    assert!(restored[0].error.is_none());
+    wait_running(&host).await;
+    let second = manager
+        .install_verified_in_epoch(
+            pinned_package(&directory.0, "1.1.0", "normal"),
+            true,
+            host.authority_epoch(),
+        )
+        .await
+        .unwrap();
+    assert!(second.active.archive_pin);
+    assert_eq!(second.rollback.as_ref(), Some(&first.active));
+    let same = manager.verify_installed(PLUGIN, &second.active).unwrap();
+    assert_eq!(
+        manager
+            .install_verified_in_epoch(same, true, host.authority_epoch())
+            .await
+            .unwrap(),
+        second
+    );
+    let older = manager.verify_installed(PLUGIN, &first.active).unwrap();
+    let downgraded = manager
+        .install_verified_in_epoch(older, true, host.authority_epoch())
+        .await
+        .unwrap();
+    assert_eq!(downgraded.active, first.active);
+    assert_eq!(downgraded.rollback.as_ref(), Some(&second.active));
+    assert_eq!(
+        manager.rollback(PLUGIN).await.unwrap().active,
+        second.active
+    );
+    assert_eq!(
+        manager.list().await.unwrap().as_slice(),
+        std::slice::from_ref(&second)
+    );
+    manager.close().await.unwrap();
+
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        TrustStore::default(),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        manager.list().await.unwrap().as_slice(),
+        std::slice::from_ref(&second)
+    );
+    assert_eq!(manager.rollback(PLUGIN).await.unwrap().active, first.active);
+    wait_running(&host).await;
+    assert_eq!(
+        manager.rollback(PLUGIN).await.unwrap().active,
+        second.active
+    );
+    wait_running(&host).await;
+    let rebuilt = manager
+        .install_verified_in_epoch(
+            pinned_package_revision(&directory.0, "1.1.0", "normal", Some("rebuilt artifact")),
+            true,
+            host.authority_epoch(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rebuilt.active.version, second.active.version);
+    assert_ne!(rebuilt.active.sha256, second.active.sha256);
+    assert_eq!(rebuilt.rollback.as_ref(), Some(&second.active));
+    assert_eq!(
+        manager.rollback(PLUGIN).await.unwrap().active,
+        second.active
+    );
+    assert_eq!(
+        manager.rollback(PLUGIN).await.unwrap().active,
+        rebuilt.active
+    );
+    wait_running(&host).await;
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["ok"],
+        true
+    );
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn pinned_failed_activation_restores_the_prior_worker_and_tampering_still_blocks_launch() {
+    let directory = TestDirectory::new();
+    let host = PluginHost::default();
+    let manager = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        TrustStore::default(),
+        host.clone(),
+    )
+    .await
+    .unwrap();
+    let first = manager
+        .install_verified_in_epoch(
+            pinned_package(&directory.0, "1.0.0", "normal"),
+            true,
+            host.authority_epoch(),
+        )
+        .await
+        .unwrap();
+    wait_running(&host).await;
+    assert!(manager
+        .install_verified_in_epoch(
+            pinned_package(&directory.0, "1.1.0", "bad_identity"),
+            true,
+            host.authority_epoch(),
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        manager.list().await.unwrap().as_slice(),
+        std::slice::from_ref(&first)
+    );
+    wait_running(&host).await;
+    assert_eq!(
+        host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap()["ok"],
+        true
+    );
+    manager.disable(PLUGIN).await.unwrap();
+    let executable = manager
+        .version_path(PLUGIN, &first.active)
+        .join("payload")
+        .join(format!("worker{}", std::env::consts::EXE_SUFFIX));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    fs::write(executable, b"changed unsigned worker").unwrap();
+    assert!(manager.enable(PLUGIN).await.is_err());
+    assert!(host.snapshots().is_empty());
+    assert_eq!(manager.list().await.unwrap()[0].active, first.active);
     manager.close().await.unwrap();
 }
 

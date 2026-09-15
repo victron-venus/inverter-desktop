@@ -66,11 +66,65 @@ executed checks, with review approved and no open threads.
 Open/Close/Stop on main at `c614f07`; all 41 executed checks passed for `f55ace8`,
 with exact-head approval and no unresolved review threads.
 
-**The embedded production publisher policy is still empty, so installation is
-disabled in the shipped configuration.** This checkpoint does not introduce new
-publisher keys or app signing. Existing HA/camera implementations remain bundled
+**Configured archive downloads use explicit SHA-256 pins and need no publisher
+keys or app signing.** The embedded publisher policy remains empty and only the
+manual signed-file selection flow is unavailable. Existing HA/camera implementations remain bundled
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
+
+### Current checkpoint: configuration-driven desktop plugin restoration
+
+Start from verified main `46abfd3`. A portable `desktop_plugins` declaration
+selects an exact version and an HTTPS archive/SHA-256 pair for each supported
+desktop target. The native application reconciles this desired state after
+authenticated startup and configuration save/import. An app upgrade retains the
+pins; restoring a configuration backup after a clean reinstall restores the
+package selection. Android/iOS preserve declarations as inert configuration data
+without downloading packages or including the desktop runtime.
+
+- [x] Add shared, backward-compatible configuration data and verify encrypted
+      persistence, secret-free backup/import and desktop/mobile round trips.
+- [x] Validate bounded declarations, exact versions, unique plugin identities,
+      target-specific HTTPS sources and complete archive SHA-256 pins on desktop.
+- [x] Add bounded HTTPS download with certificate verification, HTTPS-only
+      redirects, deadlines, byte limits and errors that do not expose URLs.
+- [x] Authorize explicitly configured archive pins without publisher keys or app
+      signing. Retain canonical manifest, target/API, ZIP and payload checks;
+      preserve signature-only authorization for ordinary local-file installation.
+- [x] Persist native pin authorization for installed and rollback versions and
+      reverify archives and extracted payloads before each worker launch.
+- [x] Reconcile absent packages, configured updates and enabled/disabled intent
+      without downloading or restarting already matching healthy packages.
+      Keep a newly installed package available when its settings are incomplete.
+- [x] Bind downloads and installation to the authenticated configuration
+      generation. Revoke obsolete work on edits/logout/shutdown; serialize
+      reconciliation and expose per-plugin restoration progress/errors.
+- [x] Make configuration-managed package controls explicit so manual actions do
+      not silently conflict with the desired state. Retain settings and working
+      versions when downloads, validation or activation fail.
+- [x] Produce deterministic unsigned packages for configuration pins and wire
+      desktop release archives, checksums and portable config fragments into
+      the existing release receipts and publication workflow.
+      Leave mobile artifact production free of plugin packages.
+- [x] Exercise empty-store reinstall, retained-data upgrade, offline cached
+      startup, rejected downloads, stale work, disabled intent, rollback and
+      mobile exclusion with deterministic fixtures and independent review.
+- [x] Update user/developer documentation with configuration examples and exact
+      reinstall limits: deleted credentials are not reconstructed, changing the
+      selected version is explicit, and corrupt stores are not silently erased.
+- [x] Run formatting, lint, appropriate tests/builds and independent source review.
+- [ ] Deliver the PR in English, pass final-head CI, merge as authorized and
+      verify clean canonical main and the published desktop plugin assets.
+
+Local validation passed: 485 native library tests, all nine explicitly run
+installed HA/Frigate scenarios, 420 frontend tests, 17 mobile tests, five build
+profile tests, 35 package preparation/release orchestration tests and 29 mobile
+native-boundary tests. Strict all-target Clippy, formatting, frontend lint and
+type checking, mobile/desktop builds and pre-commit passed. Independent review
+closed configuration epoch-publication and save/logout races. Local graphical
+fixtures verified English/Russian restoration states, retry, disabled managed
+controls and available settings in light/dark themes without browser errors or
+horizontal overflow. These fixtures do not establish live HA/device acceptance.
 
 ### Completed checkpoint: explicit read-only washer and dryer profiles
 
@@ -1476,8 +1530,9 @@ mobile gate fail. A successful desktop build is insufficient evidence.
 Acceptance for the runtime checkpoint: a separately built worker completes the
 lifecycle through the actual host. The original executable proof used trusted native test/development code. The
 application now constructs workers from verified installed packages and restores
-only previously enabled packages after authentication; there is still no
-executable-path IPC or automatic installation. Complete phase 4 acceptance also requires the remaining contribution
+previously enabled packages and explicitly configured downloads after authentication;
+there is still no executable-path IPC or automatic legacy-feature migration.
+Complete phase 4 acceptance also requires the remaining contribution
 surfaces and scoped host services above. A fake registry or statically linked
 feature implementation does not satisfy worker lifecycle verification.
 
@@ -1501,8 +1556,9 @@ feature implementation does not satisfy worker lifecycle verification.
       release worker registry capacity only after process reaping.
 - [x] Embed a release-owned publisher policy scoped to exact plugin IDs; reject
       unknown keys and never trust a key supplied by the package or webview.
-- [ ] Configure real production publisher keys and signing provenance in a
-      reviewed release. Disposable fixture keys must never become shipped trust.
+- [ ] If manual signed-file distribution is introduced, configure its production
+      publisher keys and provenance in a reviewed release. This is optional for
+      configured archive pins; disposable fixture keys must never become shipped trust.
 - [x] Add desktop install/enable/disable/update/uninstall UI with verified review,
       compatibility errors, declared capabilities, rollback target, and immediate
       application of changes without an app restart.
@@ -1522,8 +1578,8 @@ feature implementation does not satisfy worker lifecycle verification.
 Acceptance: a clean core installation contains no HA/camera payloads. Installing
 or removing a package changes available features without reinstalling the app.
 Native lifecycle and desktop application/UI integration are implemented. Full
-phase acceptance still requires final integration checks, production trust and
-worker distribution, remaining host services, and migrated HA/camera packages.
+phase acceptance still requires final integration checks and worker distribution,
+remaining host services, and migrated HA/camera packages.
 
 ### 6. Cameras package
 

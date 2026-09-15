@@ -7,6 +7,7 @@
 
 pub(crate) mod application;
 pub(crate) mod bridge;
+pub(crate) mod download;
 pub(crate) mod generation;
 mod http_video;
 pub mod installer;
