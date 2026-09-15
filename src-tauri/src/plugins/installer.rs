@@ -963,7 +963,12 @@ impl PackageManager {
                 match snapshot.state {
                     WorkerState::Running => return Ok(()),
                     WorkerState::Failed | WorkerState::Stopped => {
-                        return Err("package worker handshake failed".into())
+                        #[cfg(test)]
+                        eprintln!(
+                            "Package worker startup failure: state={:?}, code={:?}",
+                            snapshot.state, snapshot.last_error
+                        );
+                        return Err("package worker handshake failed".into());
                     }
                     _ => {}
                 }

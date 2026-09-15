@@ -9,6 +9,7 @@ fn configuration(base: &str) -> Validated {
         base: url::Url::parse(base).unwrap(),
         entities: vec!["sensor.selected".into()],
         action_entities: vec![],
+        media_player_entities: vec![],
         token: "fixture-token-only".into(),
     }
 }

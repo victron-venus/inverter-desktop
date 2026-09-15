@@ -122,10 +122,11 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.2 requires host API
+worker supplies connection status and state cards. Version 0.3 requires host API
 `^1.4` and keeps service actions disabled unless `action_entities` explicitly
-selects literal `button.*` or `scene.*` targets. Only fixed button presses and
-scene activation are supported; there is no generic service proxy, core MQTT
+selects literal `button.*` or `scene.*` targets or `media_player_entities` selects
+literal media players. Fixed button presses, scene activation and media-player
+Play/Pause/Stop are supported; there is no generic service proxy, core MQTT
 access, camera authority, or inverter flag alias lookup. Initial
 REST reads select individual configured entities; the broader `state_changed`
 event stream is filtered locally. Network permissions describe trusted worker
