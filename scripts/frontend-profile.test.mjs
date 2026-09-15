@@ -58,8 +58,47 @@ test('audit accepts shared core but rejects desktop implementation and translati
     'src/composables/useHA.ts',
     'src/CameraVideo.vue',
     'src/plugins/manager.ts',
+    'desktop-plugins/home-assistant/src/main.rs',
+    'desktop-plugins/worker-protocol/src/lib.rs',
+    'scripts/plugins/home-assistant-manifest.json',
   ]) {
     assert.throws(() => assertMobileModuleGraph(['src/main.ts', id]), /Desktop feature modules/)
+  }
+})
+
+test('real mobile graph rejects worker modules and metadata outside src', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'inverter-mobile-worker-graph-'))
+  try {
+    await mkdir(path.join(root, 'src'), { recursive: true })
+    await writeFile(
+      path.join(root, 'index.html'),
+      '<script type="module" src="/src/main.ts"></script>'
+    )
+    for (const [relative, content] of [
+      ['desktop-plugins/home-assistant/source.ts', 'export default "ha worker"'],
+      ['desktop-plugins/worker-protocol/source.ts', 'export default "worker protocol"'],
+      ['scripts/plugins/home-assistant-manifest.json', '{"plugin_id":"test.home-assistant"}'],
+    ]) {
+      const filename = path.join(root, relative)
+      await mkdir(path.dirname(filename), { recursive: true })
+      await writeFile(filename, content)
+      await writeFile(
+        path.join(root, 'src/main.ts'),
+        `import value from "../${relative}"; if (false) console.log(value)`
+      )
+      await assert.rejects(
+        build({
+          root,
+          configFile: false,
+          logLevel: 'silent',
+          plugins: [frontendProfileAudit(root, 'mobile')],
+          build: { write: false },
+        }),
+        /Desktop feature modules/
+      )
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })
 

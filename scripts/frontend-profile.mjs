@@ -50,6 +50,7 @@ export function featureAliases(root, profile) {
 // A direct import added to a shared screen must fail the mobile build, even when
 // the UI would be hidden by a runtime setting or the module is tree-shaken later.
 export const desktopModulePatterns = [
+  /^(?:desktop-plugins|scripts\/plugins)\//,
   /^src\/features\/desktop[/.]/,
   /^src\/features\/messages\.desktop\./,
   /^src\/plugins\//,
@@ -81,7 +82,12 @@ export function frontendProfileAudit(root, profile) {
               const clean = id.replaceAll('\\', '/').split('?')[0]
               return clean.startsWith(prefix) ? clean.slice(prefix.length) : ''
             })
-            .filter((id) => id.startsWith('src/'))
+            .filter(
+              (id) =>
+                id.startsWith('src/') ||
+                id.startsWith('desktop-plugins/') ||
+                id.startsWith('scripts/plugins/')
+            )
         ),
       ].sort((left, right) => left.localeCompare(right, 'en'))
       if (!modules.includes('src/main.ts')) throw new Error('Frontend module graph is empty')

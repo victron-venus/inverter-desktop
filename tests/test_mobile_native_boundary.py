@@ -225,6 +225,60 @@ class MobileNativeBoundaryTests(unittest.TestCase):
 class MobilePluginBoundaryTests(unittest.TestCase):
     """Keep the signed package ecosystem out of native mobile inputs."""
 
+    def test_ha_worker_and_shared_protocol_are_not_mobile_dependencies_or_sources(self):
+        """An independent shared worker library must never become mobile core."""
+        for crate in ("inverter-home-assistant-worker", "inverter-worker-protocol"):
+            with self.subTest(crate=crate), self.assertRaisesRegex(ValueError, crate):
+                boundary.verify_dependency_tree(f"inverter-dashboard v1.0.0\n{crate} v0.1.0")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "library.d"
+            for source in ("home-assistant/src/main.rs", "worker-protocol/src/lib.rs"):
+                path.write_text(
+                    "/target/lib.a: /checkout/src-tauri/src/lib.rs "
+                    f"/checkout/desktop-plugins/{source}\n"
+                )
+                with (self.subTest(source=source),
+                      self.assertRaisesRegex(ValueError, "desktop-plugins")):
+                    boundary.verify_depfile(path)
+
+    def test_ha_worker_and_protocol_markers_are_rejected_in_every_mobile_package_format(self):
+        """Hard-coded expectations catch accidental removal from the native guard."""
+        self.assert_packaged_markers_rejected((
+            "inverter-desktop.home-assistant", "inverter-home-assistant-worker",
+            "inverter-worker-protocol", "inverter_worker_protocol",
+        ))
+
+    def test_ha_worker_assets_are_rejected_in_apk_aab_and_ipa(self):
+        """Clean native core cannot hide a package, binary, manifest or SDK asset."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in (
+                "inverter-home-assistant-worker", "inverter-home-assistant-worker.exe",
+                "HOME-ASSISTANT-MANIFEST.JSON", "home-assistant.idplugin",
+                "desktop-plugins/home-assistant/Cargo.toml",
+                "desktop-plugins/worker-protocol/src/lib.rs",
+            ):
+                for suffix, prefix in (("apk", ""), ("aab", "base/"), ("ipa", "")):
+                    if suffix == "ipa":
+                        entries = {
+                            "Payload/Energy.app/Info.plist": plistlib.dumps(
+                                {"CFBundleExecutable": "Energy"}
+                            ),
+                            "Payload/Energy.app/Energy": CORE,
+                            f"Payload/Energy.app/{asset}": b"desktop asset",
+                        }
+                        platform = "ios"
+                    else:
+                        entries = {
+                            f"{prefix}lib/arm64-v8a/libinverter_dashboard_lib.so": CORE,
+                            f"{prefix}assets/{asset}": b"desktop asset",
+                        }
+                        platform = "android"
+                    archive = package_fixture(root / f"app.{suffix}", entries)
+                    with (self.subTest(asset=asset, suffix=suffix),
+                          self.assertRaisesRegex(ValueError, "Desktop plugin asset")):
+                        boundary.verify_archive(archive, platform)
+
     def test_external_frigate_crate_and_source_are_rejected(self):
         """A separate worker cannot become a dependency or included mobile source."""
         with self.assertRaisesRegex(ValueError, "inverter-frigate-worker"):

@@ -7,8 +7,8 @@ on:
     paths:
       - 'src-tauri/Cargo.toml'
       - 'src-tauri/Cargo.lock'
-      - 'desktop-plugins/frigate/Cargo.toml'
-      - 'desktop-plugins/frigate/Cargo.lock'
+      - 'desktop-plugins/**/Cargo.toml'
+      - 'desktop-plugins/**/Cargo.lock'
   pull_request:
     branches: [main]
   schedule:
@@ -37,7 +37,7 @@ jobs:
             echo "any_changed=true" >> "$GITHUB_OUTPUT"
           else
             base="${{ github.event.pull_request.base.sha || github.event.before }}"
-            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^(src-tauri|desktop-plugins/frigate)/Cargo\.(toml|lock)$'; then
+            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^(src-tauri|desktop-plugins/[^/]+)/Cargo\.(toml|lock)$'; then
               echo "any_changed=true" >> "$GITHUB_OUTPUT"
             else
               echo "any_changed=false" >> "$GITHUB_OUTPUT"
@@ -59,6 +59,8 @@ jobs:
           workspaces: |
             src-tauri -> target
             desktop-plugins/frigate -> target
+            desktop-plugins/home-assistant -> target
+            desktop-plugins/worker-protocol -> target
 
       - name: Install cargo-audit
         if: steps.changed.outputs.any_changed == 'true'
@@ -95,14 +97,14 @@ jobs:
           --ignore RUSTSEC-2026-0194
           --ignore RUSTSEC-2026-0195
 
-      - name: Fetch independent Frigate worker dependencies
+      - name: Audit the independent workers and shared protocol
         if: steps.changed.outputs.any_changed == 'true'
-        run: cargo fetch --locked --manifest-path desktop-plugins/frigate/Cargo.toml
-
-      - name: Audit the independent Frigate worker lockfile
-        if: steps.changed.outputs.any_changed == 'true'
-        # Host-only advisory exceptions do not apply to this separate executable.
-        run: cargo audit --file desktop-plugins/frigate/Cargo.lock
+        # Host-only advisory exceptions do not apply to the separate workers.
+        run: |
+          for plugin in frigate home-assistant worker-protocol; do
+            cargo fetch --locked --manifest-path "desktop-plugins/$plugin/Cargo.toml"
+            cargo audit --file "desktop-plugins/$plugin/Cargo.lock"
+          done
 
       - name: Skip (no Cargo changes)
         if: steps.changed.outputs.any_changed != 'true'

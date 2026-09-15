@@ -116,6 +116,32 @@ or replace the bundled camera feature; current acceptance results stay in TODO.m
 optional HA proxy access, other camera adapters, and legacy configuration
 migration remain unfinished.
 
+## Home Assistant worker package
+
+The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md)
+uses the same package/configuration lifecycle with a bounded explicit entity list,
+an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
+contributions, plugin configuration, and direct HTTP/WebSocket networking. The
+worker supplies connection status and read-only state cards; it has no service
+actions, core MQTT access, camera authority, or inverter flag aliases. Initial
+REST reads select individual configured entities; the broader `state_changed`
+event stream is filtered locally. Network permissions describe trusted worker
+behavior and do not sandbox its operating-system access.
+
+`prepare-plugin-package.py --plugin home-assistant` stages this worker using
+fixed built-in metadata and the same native header/path checks as Frigate. The
+old Frigate staging command remains supported. The small shared
+`desktop-plugins/worker-protocol` library owns bounded stdio framing and flushed
+output only; it has no feature configuration or network clients. Neither worker
+is linked into the main executable or mobile build.
+
+The explicit installed-package acceptance uses the actual release worker,
+disposable package trust, a temporary HA HTTP/WebSocket fixture and an independent
+core MQTT connection. It covers settings restart, disable, logout and uninstall;
+current results are recorded in TODO.md. A production HA installation, service/UI
+parity and legacy migration remain separate work. The release trust policy stays
+empty and this slice does not create signing keys.
+
 ## Producing an archive
 
 Build the frontend once, then run the desktop packaging tool from the repository
