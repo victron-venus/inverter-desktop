@@ -3,6 +3,7 @@ mod auth;
 #[cfg(desktop)]
 mod camera;
 mod config_backup;
+mod config_file_io;
 mod config_store;
 #[cfg(desktop)]
 mod ha_session;
@@ -12,6 +13,7 @@ mod mobile_build;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_credentials;
 mod release_info;
+mod tls;
 #[cfg(desktop)]
 use camera::download_camera_clip;
 #[cfg(desktop)]
@@ -53,7 +55,9 @@ const DEFAULT_HA_PORT: u16 = 8123;
 const ABOUT_WINDOW_W: f64 = 380.0;
 #[cfg(desktop)]
 const ABOUT_WINDOW_H: f64 = 320.0;
+#[cfg(desktop)]
 const CONFIG_WINDOW_W: f64 = 850.0;
+#[cfg(desktop)]
 const CONFIG_WINDOW_H: f64 = 700.0;
 #[cfg(desktop)]
 const CAMERA_VIDEO_WINDOW_W: f64 = 330.0;
@@ -109,6 +113,8 @@ struct HomeButtonConfig {
 struct FullConfig {
     mqtt_host: String,
     mqtt_port: u16,
+    #[serde(default)]
+    mqtt_tls: bool,
     mqtt_login: Option<String>,
     mqtt_password: Option<String>,
     mqtt_ha_host: Option<String>,
@@ -215,6 +221,7 @@ impl Default for FullConfig {
         Self {
             mqtt_host: DEFAULT_MQTT_HOST.to_string(),
             mqtt_port: DEFAULT_MQTT_PORT,
+            mqtt_tls: false,
             mqtt_login: None,
             mqtt_password: None,
             mqtt_ha_host: Some(DEFAULT_MQTT_HOST.to_string()),
@@ -757,7 +764,7 @@ async fn save_config(app: tauri::AppHandle, mut config: FullConfig) -> Result<()
 
 #[tauri::command]
 async fn backup_config(app: tauri::AppHandle) -> Result<bool, String> {
-    use tauri_plugin_dialog::{DialogExt, FilePath};
+    use tauri_plugin_dialog::DialogExt;
 
     let file = app
         .dialog()
@@ -766,23 +773,22 @@ async fn backup_config(app: tauri::AppHandle) -> Result<bool, String> {
         .add_filter("JSON", &["json"])
         .blocking_save_file();
 
-    let path = match file {
-        Some(FilePath::Path(p)) => p,
-        // User cancelled the dialog
-        _ => return Ok(false),
+    let file = match file {
+        Some(file) => file,
+        None => return Ok(false),
     };
 
     let config = config_backup::redacted(&load_config(&app)?)?;
     let json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
-    info!("Config backed up to {}", path.display());
+    config_file_io::write(&app, file, &json)?;
+    info!("Config backup saved");
     Ok(true)
 }
 
 #[tauri::command]
 async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
-    use tauri_plugin_dialog::{DialogExt, FilePath};
+    use tauri_plugin_dialog::DialogExt;
 
     let file = app
         .dialog()
@@ -790,14 +796,12 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
         .add_filter("JSON", &["json"])
         .blocking_pick_file();
 
-    let path = match file {
-        Some(FilePath::Path(p)) => p,
-        // User cancelled the dialog
-        _ => return Ok(false),
+    let file = match file {
+        Some(file) => file,
+        None => return Ok(false),
     };
 
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read backup file: {}", e))?;
+    let content = config_file_io::read(&app, file)?;
     let previous = load_config(&app)?;
     let config = config_backup::restore(&content, &previous)?;
     save_config_encrypted(&app, &config)?;
@@ -805,7 +809,7 @@ async fn restore_config(app: tauri::AppHandle) -> Result<bool, String> {
     ha_api::clear_entity_skip_list();
     #[cfg(desktop)]
     ha_api::notify_config_changed();
-    info!("Config restored from {}", path.display());
+    info!("Config backup restored");
     Ok(true)
 }
 
@@ -873,6 +877,7 @@ async fn acknowledge_victron_banner(
 async fn connect_mqtt(
     host: String,
     port: u16,
+    tls: Option<bool>,
     username: Option<String>,
     password: Option<String>,
     portal_id: Option<String>,
@@ -890,6 +895,7 @@ async fn connect_mqtt(
     connect_mqtt_impl(
         host,
         port,
+        tls.unwrap_or(false),
         username,
         password,
         portal_id,
@@ -913,6 +919,7 @@ async fn connect_mqtt(
 async fn connect_mqtt(
     host: String,
     port: u16,
+    tls: Option<bool>,
     username: Option<String>,
     password: Option<String>,
     portal_id: Option<String>,
@@ -929,6 +936,7 @@ async fn connect_mqtt(
     connect_mqtt_impl(
         host,
         port,
+        tls.unwrap_or(false),
         username,
         password,
         portal_id,
@@ -949,6 +957,7 @@ async fn connect_mqtt(
 async fn connect_mqtt_impl(
     host: String,
     port: u16,
+    tls: bool,
     username: Option<String>,
     password: Option<String>,
     portal_id: Option<String>,
@@ -963,6 +972,13 @@ async fn connect_mqtt_impl(
     gateway_client: State<'_, GatewayState>,
     lifecycle: State<'_, InverterLifecycle>,
 ) -> Result<(), String> {
+    let mut client = MqttClient::new(
+        host,
+        port,
+        username,
+        password,
+        "inverter-dashboard-desktop".to_string(),
+    );
     // Serialize shutdown, startup and slot installation across Tauri command threads.
     let _lifecycle = lifecycle
         .0
@@ -988,13 +1004,9 @@ async fn connect_mqtt_impl(
             old.stop();
         }
     }
-    let mut client = MqttClient::new(
-        host,
-        port,
-        username,
-        password,
-        "inverter-dashboard-desktop".to_string(),
-    );
+    // A newly saved config may be invalid. Stop the old source before rejecting
+    // it so controls cannot target an old broker under the new endpoint's UI.
+    client.configure_transport(tls)?;
     #[cfg(desktop)]
     client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app);
@@ -1076,13 +1088,20 @@ async fn connect_gateway(
 async fn test_mqtt_connection(
     host: String,
     port: u16,
+    tls: Option<bool>,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<(), String> {
     let user = username.clone();
     let pass = password.clone();
     tokio::task::spawn_blocking(move || {
-        mqtt::test_mqtt_connection(&host, port, user.as_deref(), pass.as_deref())
+        mqtt::test_mqtt_connection(
+            &host,
+            port,
+            user.as_deref(),
+            pass.as_deref(),
+            tls.unwrap_or(false),
+        )
     })
     .await
     .map_err(|e| format!("MQTT probe join error: {e}"))?
@@ -1109,18 +1128,12 @@ async fn test_gateway_connection(
     access_client_secret: String,
     api_token: Option<String>,
 ) -> Result<GatewayHealthResult, String> {
-    let base = url.trim().trim_end_matches('/').to_string();
-    if base.is_empty() {
-        return Err("Gateway URL is required".into());
-    }
+    let base = gateway::validate_base_url(&url)?;
     if access_client_id.trim().is_empty() || access_client_secret.trim().is_empty() {
         return Err("Cloudflare Access Client ID and Secret are required".into());
     }
     let health_url = format!("{}/health", base);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = gateway::http_client()?;
     let mut req = client
         .get(&health_url)
         .header("CF-Access-Client-Id", access_client_id.trim())
@@ -1265,23 +1278,31 @@ async fn open_config_window(app: tauri::AppHandle) -> Result<(), String> {
     }
     // Already open? Bring it to front instead of failing on duplicate label.
     // (unminimize/focused are desktop-only APIs)
-    #[cfg(desktop)]
-    if let Some(window) = app.get_webview_window("config") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
+    #[cfg(mobile)]
+    {
+        app.emit_to("main", "mobile-open-settings", ())
+            .map_err(|e| e.to_string())
     }
-    #[allow(unused_mut)]
-    let mut builder =
-        tauri::WebviewWindowBuilder::new(&app, "config", tauri::WebviewUrl::App("config".into()))
-            .title("Configuration")
-            .inner_size(CONFIG_WINDOW_W, CONFIG_WINDOW_H)
-            .resizable(true);
     #[cfg(desktop)]
-    let builder = builder.focused(true);
-    builder.build().map_err(|e| e.to_string())?;
-    Ok(())
+    {
+        if let Some(window) = app.get_webview_window("config") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+            return Ok(());
+        }
+        let builder = tauri::WebviewWindowBuilder::new(
+            &app,
+            "config",
+            tauri::WebviewUrl::App("config".into()),
+        )
+        .title("Configuration")
+        .inner_size(CONFIG_WINDOW_W, CONFIG_WINDOW_H)
+        .resizable(true)
+        .focused(true);
+        builder.build().map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 #[cfg(desktop)]
@@ -1603,7 +1624,16 @@ async fn close_camera_video_window(window: tauri::Window) -> Result<(), String> 
 
 #[tauri::command]
 async fn close_config_window(window: tauri::Window) -> Result<(), String> {
-    window.close().map_err(|e| e.to_string())
+    #[cfg(mobile)]
+    {
+        window
+            .emit("mobile-close-settings", ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(desktop)]
+    {
+        window.close().map_err(|e| e.to_string())
+    }
 }
 
 // === Auto-start management ===
@@ -1805,6 +1835,9 @@ pub fn run() {
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.plugin(mobile_credentials::init());
+
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_fs::init());
 
     #[cfg(desktop)]
     // Camera clip windows are ephemeral (fixed small size, stacked top-right); do not

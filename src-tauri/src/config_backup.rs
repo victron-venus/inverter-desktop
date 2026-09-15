@@ -68,7 +68,7 @@ pub(super) fn restore(content: &str, current: &FullConfig) -> Result<FullConfig,
     // Never pair credentials from this installation with a newly imported server.
     for (endpoints, credentials) in [
         (
-            &["mqtt_host", "mqtt_port"][..],
+            &["mqtt_host", "mqtt_port", "mqtt_tls"][..],
             &["mqtt_login", "mqtt_password"][..],
         ),
         (
@@ -132,6 +132,22 @@ mod tests {
             current.ring_snapshot_url_template
         );
     }
+    #[test]
+    fn importing_a_tls_downgrade_clears_mqtt_credentials() {
+        let current = FullConfig {
+            mqtt_tls: true,
+            mqtt_login: Some("test-user".into()),
+            mqtt_password: Some("test-password".into()),
+            ..FullConfig::default()
+        };
+        let mut backup = redacted(&current).unwrap();
+        backup["mqtt_tls"] = Value::Bool(false);
+        let restored = restore(&backup.to_string(), &current).unwrap();
+        assert!(!restored.mqtt_tls);
+        assert!(restored.mqtt_login.is_none());
+        assert!(restored.mqtt_password.is_none());
+    }
+
     #[test]
     fn invalid_backup_does_not_become_default_settings() {
         assert!(restore("[]", &FullConfig::default()).is_err());

@@ -1,6 +1,8 @@
 <template>
-  <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/55 backdrop-blur-md">
-    <div class="w-[320px] classic-card !rounded-xl shadow-2xl p-6 flex flex-col gap-4">
+  <div
+    class="auth-screen fixed inset-0 z-[200] flex items-center justify-center bg-black/55 backdrop-blur-md"
+  >
+    <div class="auth-card w-[320px] classic-card !rounded-xl shadow-2xl p-6 flex flex-col gap-4">
       <div class="flex flex-col items-center gap-2">
         <div
           class="w-11 h-11 rounded-full flex items-center justify-center bg-accent/15 text-accent"
