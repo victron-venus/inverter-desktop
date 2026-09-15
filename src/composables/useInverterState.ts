@@ -17,6 +17,8 @@ export interface GridBackupStatus {
 }
 
 export interface InverterState {
+  /** Backend IGW snapshots replace their owned fields; MQTT events stay partial. */
+  gateway_snapshot?: boolean
   grid_backup?: GridBackupStatus | null
   grid_using_backup?: boolean
   grid_backup_observed_at?: number
@@ -187,6 +189,38 @@ export function resetInverterState() {
   }
 }
 
+// Independent Home Assistant/plugin overlays (notably ha_direct_connected and
+// appliance fields) are not part of IGW's authoritative snapshot.
+const GATEWAY_OWNED_FIELDS = [
+  'booleans',
+  'dry_run',
+  'ess_mode',
+  'ui_config',
+  'features',
+  'version',
+  'uptime',
+  'ha_connected',
+  'daily_stats',
+  'solar_forecast',
+  'setpoint_override',
+  'grid_backup',
+  'grid_using_backup',
+  'grid_backup_observed_at',
+  'water_level',
+  'pump_switch',
+  'water_valve',
+  'water_pump_mode',
+  'water_valve_mode',
+  'car_soc',
+  'car_charging_power',
+  'ev_charging_power',
+  'ev_power',
+  'ev_charging_kw',
+  'ev_present',
+  'evcharger_present',
+  'discovered_water_ev',
+] as const
+
 /** Non-destructive merge into dashboard state. Skips null/undefined so partial
  *  MQTT snapshots and serde nulls cannot wipe live telemetry. Always assigns a
  *  new markRaw object so shallowRef watchers/tiles re-render. */
@@ -196,6 +230,13 @@ export function applyInverterState(
 ) {
   const prev = state.value
   const merged: InverterState = { ...prev }
+  if (newState.gateway_snapshot) {
+    for (const key of GATEWAY_OWNED_FIELDS) {
+      if ((newState as Record<string, unknown>)[key] == null) {
+        delete (merged as Record<string, unknown>)[key]
+      }
+    }
+  }
   for (const [key, val] of Object.entries(newState)) {
     if (val !== undefined && val !== null) {
       ;(merged as Record<string, unknown>)[key] = val
@@ -245,12 +286,18 @@ export function applyInverterState(
     const observedAt = observation.observedAt ?? Date.now()
     const source = observation.source ?? dataSource.value
     const fields = { ...telemetry.value.fields }
+    if (newState.gateway_snapshot) {
+      for (const key of GATEWAY_OWNED_FIELDS) {
+        if ((newState as Record<string, unknown>)[key] == null) delete fields[key]
+      }
+    }
     let observed = false
     for (const [key, value] of Object.entries(newState)) {
       if (value === null || value === undefined) continue
       // Discovery/config metadata has no periodic measurement cadence.
       if (
         [
+          'gateway_snapshot',
           'ui_config',
           'features',
           'version',

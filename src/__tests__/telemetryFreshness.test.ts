@@ -45,3 +45,84 @@ describe('telemetry observation quality', () => {
     expect(telemetry.value.quality).toBe('unknown')
   })
 })
+
+describe('authoritative IGW fields', () => {
+  it('clears expired controller and disconnected device values while retaining independent overlays', () => {
+    applyInverterState(
+      {
+        booleans: { no_feed: true },
+        dry_run: true,
+        ess_mode: { is_external: true },
+        pump_switch: true,
+        water_valve: false,
+        water_pump_mode: 1,
+        car_soc: 60,
+        car_charging_power: 1500,
+        ev_charging_power: 1600,
+        ha_direct_connected: true,
+        grid_backup: {
+          enabled: true,
+          available: true,
+          service: 'test',
+          name: 'Test',
+          power: 100,
+          device_instance: 2,
+          measurement_time: 1000,
+          age_seconds: 1,
+        },
+        grid_backup_observed_at: 1000,
+      },
+      { source: 'igw', observedAt: 1000 }
+    )
+    applyInverterState(
+      {
+        gateway_snapshot: true,
+        booleans: {},
+        grid_backup: null,
+        grid_using_backup: false,
+        pump_switch: null,
+        water_valve: null,
+        car_soc: null,
+        car_charging_power: null,
+        ev_charging_power: null,
+        ev_present: false,
+        evcharger_present: false,
+      },
+      { source: 'igw', observedAt: 2000 }
+    )
+    expect(state.value.booleans).toEqual({})
+    for (const field of [
+      'dry_run',
+      'ess_mode',
+      'pump_switch',
+      'water_pump_mode',
+      'car_soc',
+      'car_charging_power',
+      'ev_charging_power',
+      'grid_backup_observed_at',
+    ]) {
+      expect((state.value as Record<string, unknown>)[field]).toBeUndefined()
+      expect(telemetry.value.fields[field]).toBeUndefined()
+    }
+    expect(state.value.grid_backup).toBeUndefined()
+    expect(state.value.grid_using_backup).toBe(false)
+    expect(state.value.ha_direct_connected).toBe(true)
+  })
+
+  it('preserves null holding for ordinary MQTT and non-authoritative snapshots', () => {
+    applyInverterState({ pump_switch: true, car_soc: 60 })
+    applyInverterState({ pump_switch: null, car_soc: null }, { source: 'mqtt' })
+    expect(state.value.pump_switch).toBe(true)
+    expect(state.value.car_soc).toBe(60)
+  })
+
+  it('accepts authoritative zero and false values including cached IGW snapshots', () => {
+    applyInverterState({ car_soc: 60, pump_switch: true })
+    applyInverterState(
+      { gateway_snapshot: true, car_soc: 0, pump_switch: false },
+      { snapshot: true }
+    )
+    expect(state.value.car_soc).toBe(0)
+    expect(state.value.pump_switch).toBe(false)
+  })
+})

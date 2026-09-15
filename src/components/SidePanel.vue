@@ -22,7 +22,7 @@
             {{ $t('sections.evcharger') }}
           </div>
         </div>
-        <div v-if="carSoc != null && carSoc > 0">
+        <div v-if="carSoc != null">
           <div class="text-[15px] font-bold text-accent leading-none tabular tracking-tight">
             {{ Math.floor(carSoc) }}%
           </div>

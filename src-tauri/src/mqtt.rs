@@ -211,6 +211,9 @@ pub struct GridBackupStatus {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InverterState {
+    /// Full IGW update: clear absent IGW-owned fields, unlike partial MQTT events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_snapshot: Option<bool>,
     pub grid_backup: Option<GridBackupStatus>,
     pub grid_using_backup: Option<bool>,
     /// Genuine daemon receipt time; unrelated Cerbo overlays never renew it.

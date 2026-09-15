@@ -251,7 +251,11 @@ describe('mobile build feature boundary', () => {
           ['get_setpoint_override', 'set_setpoint_override'].includes(command)
         )
       ).toBe(true)
-      expect(listen.mock.calls.every(([name]) => name === 'setpoint-override-update')).toBe(true)
+      expect(
+        listen.mock.calls.every(([name]) =>
+          ['setpoint-override-update', 'mqtt-connection-status'].includes(name)
+        )
+      ).toBe(true)
     } finally {
       wrapper.unmount()
     }

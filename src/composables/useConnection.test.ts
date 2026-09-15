@@ -96,6 +96,11 @@ describe('inverter transport configuration lifecycle', () => {
         accessClientId: '',
         accessClientSecret: '',
         apiToken: 'read-token',
+        waterTankInstance: defaultConfig.water_tank_instance ?? null,
+        waterPumpInstance: defaultConfig.water_pump_instance ?? null,
+        waterValveInstance: defaultConfig.water_valve_instance ?? null,
+        evInstance: defaultConfig.ev_instance ?? null,
+        evchargerInstance: defaultConfig.evcharger_instance ?? null,
       })
       expect(boundary.invoke).not.toHaveBeenCalledWith('connect_mqtt', expect.anything())
       expect(dataSource.value).toBe('igw')
@@ -117,6 +122,11 @@ describe('inverter transport configuration lifecycle', () => {
       accessClientId: 'client-id',
       accessClientSecret: 'client-secret',
       apiToken: null,
+      waterTankInstance: defaultConfig.water_tank_instance ?? null,
+      waterPumpInstance: defaultConfig.water_pump_instance ?? null,
+      waterValveInstance: defaultConfig.water_valve_instance ?? null,
+      evInstance: defaultConfig.ev_instance ?? null,
+      evchargerInstance: defaultConfig.evcharger_instance ?? null,
     })
   })
 

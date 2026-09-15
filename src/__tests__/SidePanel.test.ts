@@ -138,3 +138,29 @@ describe('core controls without optional connections', () => {
     expect(wrapper.text()).not.toContain('status.haStale')
   })
 })
+
+describe('native IGW values', () => {
+  it('shows valid zero SOC and both independently measured charging powers', () => {
+    const wrapper = mount(SidePanel, { props: { ...baseProps, carSoc: 0 } })
+    expect(wrapper.text()).toContain('0%')
+    expect(wrapper.text()).toContain('sections.ev')
+  })
+
+  it('dispatches pump and valve modes and removes controls when values become unknown', async () => {
+    const wrapper = mount(SidePanel, {
+      props: { ...baseProps, pumpSwitch: true, waterValve: false },
+    })
+    const water = wrapper
+      .findAll('.classic-card')
+      .find((card) => card.text().includes('sections.water'))!
+    await water.findAll('button')[0].trigger('click')
+    expect(wrapper.emitted('send')?.[0]).toEqual(['water_mode', { which: 'pump', mode: 2 }])
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    await water.findAll('button')[1].trigger('click')
+    expect(confirm).toHaveBeenCalledOnce()
+    confirm.mockRestore()
+    expect(wrapper.emitted('send')?.[1]).toEqual(['water_mode', { which: 'valve', mode: 1 }])
+    await wrapper.setProps({ pumpSwitch: null, waterValve: null })
+    expect(water.findAll('button')).toHaveLength(0)
+  })
+})
