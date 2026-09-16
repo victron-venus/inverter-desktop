@@ -97,7 +97,16 @@ normal-start acceptance; delayed/denied Keychain recovery remains fixture eviden
 not a forced live fault. See the
 [delivery record](docs/desktop-plugin-delivery.md).
 
-### Follow-up: manage configured plugins from the Plugins tab
+The configured-package lifecycle correction is now merged through
+[PR #461](https://github.com/victron-venus/inverter-desktop/pull/461) at `cda1225`.
+Its reviewed head `aab952c` passed 59 checks with three skips. Release
+`v2.5.42-beta.47` is published, independently verified, and installed; run
+`35127066014` passed 37 jobs with two skips. All three selected plugins show
+Ready/Running/Connected with active Disable/Uninstall controls. Frigate's uninstall
+confirmation was inspected and cancelled, leaving configuration, settings, and
+pins unchanged. No live uninstall or household commands were performed.
+
+### Delivered follow-up: manage configured plugins from the Plugins tab
 
 Beta.45 incorrectly disabled individual enable/disable and uninstall buttons for
 every configuration-managed package. Configuration ownership must preserve exact
@@ -122,14 +131,30 @@ package pins without preventing users from removing an optional feature.
 - [x] Cover stale saves, restore races, authorization changes, cancelled requests,
       persistence and cleanup failures, settings retention, and retry behavior.
 - [x] Update the configuration, lifecycle, and settings documentation in English.
-      Pass 545 native tests, two package CLI tests, 433 frontend tests, 18 mobile
-      tests, 29 mobile boundary tests, desktop/mobile builds, typecheck, strict
+      Pass 545 native tests (including six focused lifecycle regressions), plus
+      two packaging CLI tests, 433 frontend tests, 18 mobile tests, 29 mobile
+      boundary tests, desktop/mobile builds, typecheck, strict
       Clippy, formatting, and lint. Existing lint warnings remain unchanged.
       Independent native/concurrency, UI, and documentation reviews are clear.
-- [ ] Push a PR, address review comments, and merge the exact checked head.
-- [ ] Verify the resulting published application, install it with a matched
-      backup, and inspect enabled removal controls and their confirmation in the
-      installed GUI. Keep household commands out of acceptance traffic.
+- [x] Deliver PR #461 and merge the exact checked head on 2026-09-16 at
+      `17:15:37Z`: 59 checks succeeded, three were skipped, exact head
+      `aab952c87c492271b52fdcfdf65ecd43ceacb7a3` was approved, and no review threads
+      remained unresolved. Merge revision:
+      `cda1225235a04bcc782fd4e6e71ae070fd4c23f0`.
+- [x] Verify published `v2.5.42-beta.47` against the merged source and release
+      receipts. Release run `35127066014` passed 37 jobs with two skips; publication
+      completed on 2026-09-16 at `18:12:26Z`. Record public verification, staging,
+      and installed executable hashes in the delivery document.
+- [x] Install the verified application with a matched backup. Independent checks
+      pass all five backup fingerprints and four protected security groups;
+      beta.45 remains intact for rollback. Configuration ciphertext, all three
+      encrypted settings records, and selected package declarations/pins are unchanged.
+- [x] Inspect installed beta.47: all three plugins show Ready/Running/Connected
+      with active Disable/Uninstall buttons. Open Frigate's confirmation, verify
+      settings retained by default and the declaration-removal/restoration warning,
+      then cancel. Confirm live IGW data, Control 1.23.4, seven core flags, Cameras ON,
+      and all 15 Home controls. No live uninstall or household commands are sent;
+      removal and failure behavior is covered by isolated lifecycle fixtures.
 
 ### Completed implementation: optional feature extraction
 

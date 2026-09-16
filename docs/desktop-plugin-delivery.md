@@ -189,6 +189,75 @@ acceptance are complete. The earlier beta.43 four-state matrix remains separate
 evidence. No delayed or denied Keychain fault was deliberately induced in beta.45;
 the 12 focused recovery regressions cover those authorization/race boundaries.
 
+## Configured-package lifecycle correction: published and installed
+
+Beta.45 incorrectly blocked individual enable/disable and uninstall controls for
+configuration-managed packages. The correction permits those controls while
+preserving exact version pins. Enable/disable changes are saved natively;
+confirmed uninstall durably disables the package, removes its restore declaration,
+and removes its installed files. Settings and secrets are retained by default,
+and rollback remains unavailable while an exact pin owns the package.
+
+The operation is serialized with restoration and downloads. If cleanup fails
+after pin removal, a remaining installed record stays disabled and the UI refreshes
+its state while retaining the error. Ordinary Config, theme, and setup saves
+preserve current declarations, so an old form cannot resurrect an uninstalled
+plugin. Explicit declaration edits require a matching saved baseline. Unrelated
+workers, core configuration, and transport remain outside the operation.
+
+[PR #461](https://github.com/victron-venus/inverter-desktop/pull/461) merged on
+2026-09-16 at `17:15:37Z`, at revision
+`cda1225235a04bcc782fd4e6e71ae070fd4c23f0`. Its exact reviewed head
+`aab952c87c492271b52fdcfdf65ecd43ceacb7a3` passed 59 hosted checks with three skips,
+was approved, and had no unresolved review threads.
+
+Local validation passed 545 native tests (including six focused lifecycle
+regressions), plus two packaging CLI tests, 433 frontend tests, 18 mobile tests,
+and 29 mobile-boundary tests. The twelve external-worker fixtures remain separate from the ordinary
+native count. Desktop/mobile builds, type checking, strict Clippy, formatting,
+and error-level lint passed; lint retained 94 warnings and 70 informational
+diagnostics. Independent reviews covered native concurrency, UI behavior, and
+documentation. The local validation receipt SHA-256 is
+`8af74f06d763b4d299f04b8f466db5eee1e7954931aaf5081fffc305dfd15790`.
+
+[v2.5.42-beta.47](https://github.com/victron-venus/inverter-desktop/releases/tag/v2.5.42-beta.47)
+was published on 2026-09-16 at `18:12:26Z` from the merged revision above.
+[Release run 35127066014](https://github.com/victron-venus/inverter-desktop/actions/runs/35127066014)
+succeeded with 37 successful jobs and two skips. Independent public verification
+passed; its receipt SHA-256 is
+`4f9b58df4197c4a44f6c395fba796e2c6ad087a323535ff966bcf12e429182f1`.
+The verified staging receipt SHA-256 is
+`8eae00751183aad8402c068d7181887da5e09125e4c402d2bff8ccd777630d8e`.
+
+### Beta.47 installation and GUI acceptance
+
+The verified host was installed using backup transaction
+`desktop-plugins-beta47-20260916T181517Z`. Independent backup verification passed
+all five fingerprints and four protected security groups; the previous beta.45
+rollback bundle remains intact. The installation receipt SHA-256 is
+`56a537d0d083393656727e1b38d253b237181dde97804131d581dc8d74831c64`.
+The installed executable SHA-256 is
+`107953c5b4dab0ecf4137d54ae7d0b5918a48ff0bba68a1518d83ea201dd1a27`.
+Configuration ciphertext, all three encrypted plugin settings records, and the
+selected declarations and archive pins are unchanged.
+
+Installed GUI acceptance completed at `18:17:59Z`. HA, Frigate, and Kerberos each
+showed Ready/Running/Connected with active Disable and Uninstall buttons.
+Frigate's uninstall confirmation opened with an active confirmation button and
+the settings-deletion checkbox unchecked. Its text explained that uninstall
+removes the saved declaration and stops automatic restoration. The dialog was
+cancelled; no package was uninstalled. The main dashboard then showed Desktop
+`2.5.42-beta.47`, Control `1.23.4`, live IGW data, seven core flags, Cameras ON,
+and all 15 Home controls.
+
+The durable acceptance receipt SHA-256 is
+`dd0f31f9ea3c391fd154c434a0b8b59382004e8940d625685827a02e26a5bcf8`.
+Source, release, installation, and the installed control/confirmation inspection
+are complete. No household commands were sent, and no live uninstall was
+performed. Removal, partial failures, and concurrent restoration remain covered
+by isolated regressions; this acceptance did not exercise forced authorization
+failures or other physical platforms.
+
 ## Evidence boundaries
 
 Automated process, protocol, restore, and media fixtures do not prove a physical
