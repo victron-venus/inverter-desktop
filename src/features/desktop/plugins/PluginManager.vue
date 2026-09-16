@@ -111,7 +111,7 @@
         {{ $t('plugins.manager.empty') }}
       </p>
       <article
-        v-for="plugin in snapshot.plugins"
+        v-for="{ plugin, connection } in installedPlugins"
         :key="plugin.plugin_id"
         class="classic-card p-3 flex flex-col gap-2"
       >
@@ -120,6 +120,15 @@
           <span class="text-muted">{{ plugin.version }}</span>
         </div>
         <output class="text-[11px] text-muted">{{ stateLabel(plugin) }}</output>
+        <output
+          v-if="connection"
+          class="block min-w-0 truncate text-[11px]"
+          :class="connectionClasses[connection.tone]"
+          :title="$t('plugins.manager.connection', { status: connection.value })"
+          :data-plugin-connection="plugin.plugin_id"
+        >
+          {{ $t('plugins.manager.connection', { status: connection.value }) }}
+        </output>
         <p v-if="plugin.configuration_managed" class="text-[11px] text-muted">
           {{ $t('plugins.manager.configurationManaged') }}
         </p>
@@ -204,13 +213,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UiButton from '../../../components/UiButton.vue'
 import PluginSettingsEditor from './PluginSettingsEditor.vue'
 import RetainedPluginData from './RetainedPluginData.vue'
 import { createPluginManager } from './usePluginManager'
-import type { ManagedPlugin } from './types'
+import type { DashboardContribution, ManagedPlugin } from './types'
 
 const { t: $t } = useI18n()
 const manager = createPluginManager(() => $t('plugins.manager.operationFailed'))
@@ -227,6 +236,7 @@ const {
   loading,
   error,
   installFailed,
+  hasCurrentSnapshot,
   canManage,
   canInstall,
   retry,
@@ -244,6 +254,29 @@ const {
   settingsSaved,
   openRetainedData,
 } = manager
+const installedPlugins = computed(() =>
+  (snapshot.value?.plugins ?? []).map((plugin) => ({
+    plugin,
+    // HA and Frigate publish their connection summary with this exact ID.
+    // Other status contributions describe entities and do not belong in settings.
+    connection:
+      hasCurrentSnapshot.value &&
+      plugin.enabled &&
+      !plugin.error &&
+      plugin.runtime?.state === 'running'
+        ? plugin.runtime.contributions.find(
+            (item): item is Extract<DashboardContribution, { kind: 'status' }> =>
+              item.kind === 'status' && item.id === 'connection'
+          )
+        : undefined,
+  }))
+)
+const connectionClasses = {
+  neutral: 'text-muted',
+  success: 'text-battery',
+  warning: 'text-solar',
+  error: 'text-consumption',
+}
 const permissionKeys: Record<string, string> = {
   dashboard_contributions: 'plugins.manager.permissionDashboard',
   plugin_configuration: 'plugins.manager.permissionConfiguration',

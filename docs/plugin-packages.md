@@ -5,6 +5,13 @@ using exact version, platform, and archive SHA-256 pins. It also retains a separ
 manual signed-package review flow. **Configuration → Plugins** shows download and
 restoration results, installed workers, typed settings, and package lifecycle actions.
 
+Installing a plugin does not add a generic panel or duplicate its entity cards on
+the main dashboard. The existing home and appliance sections remain in place.
+Connection diagnostics appear in **Configuration -> Plugins**. Background
+workers, Frigate notifications and owned video windows continue without a visible
+dashboard panel. Integrating plugin data into the existing feature sections is a
+separate migration step; installing a package does not complete that migration.
+
 Configured downloads can use unsigned packages and need no publisher or app
 signing keys. The embedded publisher policy is currently empty, so manual package
 selection remains unavailable. Home Assistant and cameras still have bundled
@@ -124,7 +131,9 @@ selection behavior described above, including same-version replacement and
 intentional downgrade.
 
 Installed cards show their version and running, starting, failed, installed, or
-disabled state. Rollback names the retained version. Uninstall requires an inline
+disabled state. A running worker may also provide one compact connection summary;
+entity state cards and device actions are not repeated in this manager.
+Rollback names the retained version. Uninstall requires an inline
 confirmation identifying the plugin and version, then stops its worker and removes
 owned package files. Settings are retained by default; the confirmation offers
 explicit deletion of that plugin's settings and secrets. A configuration-capable

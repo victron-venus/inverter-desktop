@@ -622,8 +622,12 @@ call independently requires a current session.
 
 The fixed `plugin-host-update` event contains no worker data. The app coalesces
 updates to at most 20 refresh signals per second, and windows retrieve an
-authorized snapshot. The desktop dashboard renders text, metrics, status,
-preset actions and bounded numeric inputs; an empty host renders no plugin panel.
+authorized snapshot. The generic contribution renderer supports text, metrics,
+status, preset actions and bounded numeric inputs, but is not mounted on the
+main dashboard. Installing a package therefore does not duplicate the existing
+home/appliance sections. Their eventual feature integration is separate from the
+worker contract. The Plugins settings card shows only the explicit `connection`
+status contribution for a running worker, without entity cards or action controls.
 The desktop Plugins settings tab manages package lifecycle through separate
 settings-window-only IPC, including native selection and a single-use verified
 preview token. The management frontend coalesces snapshot requests and the native

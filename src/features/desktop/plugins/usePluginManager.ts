@@ -48,9 +48,10 @@ export function createPluginManager(fallbackError: () => string) {
       )
   )
   const working = computed(() => busy.value || settingsBusy.value || retainedData.busy.value)
-  const canManage = computed(
-    () => authorized.value && active && connected.value && snapshot.value?.ready && !working.value
+  const hasCurrentSnapshot = computed(
+    () => authorized.value && active && connected.value && snapshot.value?.ready === true
   )
+  const canManage = computed(() => hasCurrentSnapshot.value && !working.value)
   const canInstall = computed(() => canManage.value && snapshot.value?.installation_available)
 
   function message(value: unknown) {
@@ -363,6 +364,7 @@ export function createPluginManager(fallbackError: () => string) {
     loading,
     error,
     installFailed,
+    hasCurrentSnapshot,
     canManage,
     canInstall,
     start,

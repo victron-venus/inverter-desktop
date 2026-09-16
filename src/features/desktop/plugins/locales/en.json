@@ -42,6 +42,7 @@
   "confirm": "Uninstall plugin",
   "installed": "Installed · stopped",
   "running": "Running",
+  "connection": "Connection: {status}",
   "starting": "Starting…",
   "failed": "Failed",
   "disabled": "Disabled",
