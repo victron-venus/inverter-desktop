@@ -3,39 +3,49 @@
 The September 2026 audit fixes preserve Vue + Tauri, coalesced IPC delivery and
 hidden-window throttling. They do not require a server migration.
 
-## Authentication and camera downloads
+## Authentication and plugin media
 
-All application IPC commands pass through the Rust session guard, except the
-explicit authentication commands and closing auxiliary windows. Reading or
+General application IPC passes through the Rust session guard, except explicit
+authentication commands and closing auxiliary windows. Owned media windows have
+a separate narrow IPC allowlist tied to their active generation. Reading or
 writing configuration, exporting settings, controlling equipment and opening
 Settings from the tray require an unlocked session when authentication is enabled.
-All Vue window roots use `AuthGate`; protected components mount only after the
+Main and settings roots use `AuthGate`; protected components mount only after the
 backend reports an unlocked session. An unlock is shared by this application's
 trusted local windows and expires after 15 minutes. Changing the username,
 password, authentication flag or biometric flag revokes it. Biometrics require
 both authentication and biometric settings to be enabled. This is an application
 lock, not a replacement for the operating system's account boundary.
 
-Camera downloads send an HA bearer token only to the configured HA origin
-(scheme, host and effective port). Userinfo, lookalike domains, a hostname inside
-the path/query, different ports and HTTPS downgrades do not qualify. Redirects
-are disabled on this download client. Explicit ports, including 80/443, are
-honoured; otherwise the same configured/default 8123 port as the HA client is used.
+Camera providers run in optional desktop workers. The generic host derives media
+grants from verified package declarations and encrypted plugin settings. Downloads
+must match the configured origin and path prefix; optional bearer credentials are
+scoped to that grant. Userinfo, traversal, lookalike origins, different effective
+ports, and scheme changes are rejected. The native transfer client disables
+redirects. Provider proxy credentials do not require an installed HA worker.
+
+Mapped live previews use an exact private URL resolved by native code, an explicit
+manifest duration, and generation-owned windows. Their grants cannot authorize
+downloads. The private URL is available only to its active owned viewer, whose
+image CSP is restricted to its origin; it is absent from dashboard snapshots and
+window routes. See [plugin media grants](../src-tauri/src/plugins/protocol.rs),
+[bounded transfers](../src-tauri/src/plugins/http_video.rs), and
+[owned windows](../src-tauri/src/plugins/media_windows.rs).
 
 ## Transport ownership and displayed data
 
-Each MQTT client owns its coalesced emitter and cancellation signal. Stopping
-camera MQTT cannot stop inverter telemetry. Connection-specific keepalive tasks
-end when that connection or session ends; queued emissions cannot revive a stopped
-session. Cerbo parsing and state overlay live in a separate module from lifecycle.
+Core MQTT owns its coalesced emitter and cancellation signal. Camera workers own
+separate provider connections; stopping them cannot stop or reconnect inverter
+telemetry. Cerbo parsing and state overlay remain separate from core lifecycle.
 
-HA configuration revisions interrupt connect, live subscription and retry waits.
-An old reader is aborted when its client is dropped. Revisions are checked while
-updating entity state, so the previous server cannot repopulate a cleared map.
-Interactive HA controls receive coalesced updates at 500 ms; sensor snapshots use
-a trailing two-second window. Initial/refresh snapshots bypass that window.
-Vue subscribes before requesting a snapshot, clears all derived display arrays
-after the disconnect grace period, and disables offline controls.
+The HA worker owns REST/WS supervision, selected entity state, and household
+actions. Settings changes restart the worker under a new generation; the host
+rejects old contributions and actions after revocation. Generic Vue presentation
+uses exact current contribution references, and disconnected worker state
+withdraws action availability. Provider networking and its reconnect policy live
+in [the HA worker](../desktop-plugins/home-assistant/src/network.rs), not a bundled
+frontend or native HA session. The native
+[plugin runtime](../src-tauri/src/plugins/runtime.rs) owns generation authority.
 
 Telemetry metadata records `observed_at`, transport source, per-field reception
 times and `live`/`stale`/`unknown` quality. The UI marks data stale after 30 seconds
@@ -65,8 +75,12 @@ policy and ignore imported credentials. Existing credentials are retained only
 when the corresponding endpoint is unchanged; importing another endpoint clears
 them. Exports are portable settings, not credential recovery backups.
 
-The main ownership boundaries are `auth`, `config_store`, `config_backup`,
-`camera`, `ha_session`, `ha_api/lifecycle`, `mqtt/lifecycle` and `mqtt/cerbo`.
+Core ownership remains in `auth`, `config_store`, `config_backup`, `mqtt/lifecycle`,
+and `mqtt/cerbo`. Generic desktop services live in `plugins/application`,
+`plugins/runtime`, `plugins/settings_store`, `plugins/legacy_migration`, and
+`plugins/media`. Provider implementations live in the separate
+`desktop-plugins/home-assistant`, `frigate`, `kerberos`, and `ring` packages.
+Android/iOS exclude the plugin runtime and providers at build time.
 
 ## Build and update policy
 

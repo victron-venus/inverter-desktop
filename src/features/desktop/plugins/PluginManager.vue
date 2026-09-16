@@ -2,7 +2,7 @@
   <section class="flex flex-col gap-4" :aria-busy="busy || loading || undefined">
     <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
       <h2 class="classic-section-title">{{ $t('plugins.manager.title') }}</h2>
-      <p class="text-[11px] text-muted mt-1">{{ $t('plugins.manager.bundled') }}</p>
+      <p class="text-[11px] text-muted mt-1">{{ $t('plugins.manager.intro') }}</p>
       <p class="text-[11px] text-muted mt-1">{{ $t('plugins.manager.immediate') }}</p>
     </header>
 
@@ -284,6 +284,7 @@ const permissionKeys: Record<string, string> = {
   network_mqtt: 'plugins.manager.permissionMqtt',
   desktop_notifications: 'plugins.manager.permissionNotifications',
   http_video: 'plugins.manager.permissionVideo',
+  live_view: 'plugins.manager.permissionLiveView',
 }
 function permissionLabel(permission: string) {
   const key = permissionKeys[permission]

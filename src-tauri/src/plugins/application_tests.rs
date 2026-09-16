@@ -765,6 +765,57 @@ async fn preview_replacement_expiry_and_cancel_never_reuse_old_consent() {
 }
 
 #[tokio::test]
+async fn startup_recovery_restores_cached_worker_once_without_reusing_old_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (declaration, bytes) = declared_package(&root, "1.0.0", None);
+    let key = settings_test_key();
+    let (service, _, epoch) =
+        configured_application(&root, vec![declaration.clone()], key.clone()).await;
+    reconcile_bytes(&service, epoch, &bytes, &AtomicUsize::new(0)).await;
+    service.close().await.unwrap();
+
+    // Reopen the existing package inventory with a failed startup config read.
+    let (service, host, old_epoch) = configured_application(&root, Vec::new(), key).await;
+    service.session_configured(false, Err("Configuration is unavailable".into()));
+    let config_gate = Mutex::new(());
+    let gate = Mutex::new(());
+    let exiting = AtomicBool::new(false);
+    let epoch = super::super::bridge::recover_session(
+        &host,
+        &service,
+        &config_gate,
+        &gate,
+        &exiting,
+        || Ok((vec![declaration], ())),
+    )
+    .unwrap();
+    assert!(service.snapshot(old_epoch).await.is_err());
+    assert!(service.begin_selection("config", old_epoch).is_err());
+    service.restore(epoch).await.unwrap();
+    let generation = wait_configured_worker(&host).await;
+    assert_eq!(configured_status(&service, epoch).await["state"], "ready");
+
+    assert!(super::super::bridge::recover_session::<()>(
+        &host,
+        &service,
+        &config_gate,
+        &gate,
+        &exiting,
+        || panic!("a healthy poll must not reload or schedule another restore"),
+    )
+    .is_none());
+    assert_eq!(host.authority_epoch(), epoch);
+    assert_eq!(wait_configured_worker(&host).await, generation);
+
+    // A logout after recovery invalidates even an already queued restoration.
+    service.session_configured(false, Ok(Vec::new()));
+    assert!(service.restore(epoch).await.is_err());
+    assert!(!host.is_authorized_epoch(epoch));
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn authenticated_restart_restores_enabled_only_and_shutdown_releases_lease() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();

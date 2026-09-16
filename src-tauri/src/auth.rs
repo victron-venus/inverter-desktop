@@ -2,6 +2,8 @@
 //! command is checked centrally; an overlay alone is not an authorization boundary.
 use super::{load_config, FullConfig};
 use serde::Serialize;
+#[cfg(desktop)]
+use std::sync::MutexGuard;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -36,13 +38,38 @@ pub(super) fn public_command(command: &str) -> bool {
 
 fn unlocked() -> Result<bool, String> {
     let mut session = SESSION.lock().map_err(|e| e.to_string())?;
-    if session
-        .as_ref()
-        .is_some_and(|s| !s.valid_at(Instant::now()))
-    {
+    Ok(session_unlocked_at(&mut session, Instant::now()))
+}
+
+fn session_unlocked_at(session: &mut Option<Session>, now: Instant) -> bool {
+    if session.as_ref().is_some_and(|s| !s.valid_at(now)) {
         *session = None;
     }
-    Ok(session.is_some())
+    session.is_some()
+}
+
+/// Keep logout from changing the checked session before a synchronous resume.
+#[cfg(desktop)]
+pub(super) struct SessionAuthority<'a> {
+    _session: MutexGuard<'a, Option<Session>>,
+}
+
+#[cfg(desktop)]
+fn session_authority_at<'a>(
+    config: &FullConfig,
+    sessions: &'a Mutex<Option<Session>>,
+    now: Instant,
+) -> Result<SessionAuthority<'a>, String> {
+    let mut session = sessions.lock().map_err(|e| e.to_string())?;
+    if !session_unlocked_at(&mut session, now) && config.auth_enabled.unwrap_or(false) {
+        return Err("Authentication required".into());
+    }
+    Ok(SessionAuthority { _session: session })
+}
+
+#[cfg(desktop)]
+pub(super) fn session_authority(config: &FullConfig) -> Result<SessionAuthority<'static>, String> {
+    session_authority_at(config, &SESSION, Instant::now())
 }
 
 pub(super) fn require_session(app: &tauri::AppHandle) -> Result<(), String> {
@@ -112,10 +139,15 @@ pub(crate) struct AuthStatus {
 #[tauri::command]
 pub(crate) fn auth_status(app: tauri::AppHandle) -> Result<AuthStatus, String> {
     let enabled = load_config(&app)?.auth_enabled.unwrap_or(false);
-    Ok(AuthStatus {
+    let status = AuthStatus {
         enabled,
         unlocked: !enabled || unlocked()?,
-    })
+    };
+    #[cfg(desktop)]
+    if status.unlocked {
+        crate::plugins::bridge::recover_session_if_needed(&app);
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -253,6 +285,34 @@ mod tests {
         };
         assert!(session.valid_at(now + SESSION_TTL - Duration::from_secs(1)));
         assert!(!session.valid_at(now + SESSION_TTL));
+    }
+    #[cfg(desktop)]
+    #[test]
+    fn recovery_authority_requires_current_policy_and_unexpired_session() {
+        let now = Instant::now();
+        let sessions = Mutex::new(None);
+        let mut config = FullConfig::default();
+        // Disabled authentication permits startup recovery without a login.
+        let authority = session_authority_at(&config, &sessions, now).unwrap();
+        assert!(sessions.try_lock().is_err());
+        drop(authority);
+        config.auth_enabled = Some(true);
+        assert!(session_authority_at(&config, &sessions, now).is_err());
+        *sessions.lock().unwrap() = Some(Session {
+            token: "local-session".into(),
+            created: now,
+        });
+        let authority = session_authority_at(
+            &config,
+            &sessions,
+            now + SESSION_TTL - Duration::from_secs(1),
+        )
+        .unwrap();
+        // Logout cannot replace the checked session until resume releases it.
+        assert!(sessions.try_lock().is_err());
+        drop(authority);
+        assert!(session_authority_at(&config, &sessions, now + SESSION_TTL).is_err());
+        assert!(sessions.lock().unwrap().is_none());
     }
     #[test]
     fn policy_changes_revoke_but_display_changes_do_not() {

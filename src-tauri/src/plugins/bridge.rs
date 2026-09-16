@@ -810,6 +810,65 @@ fn watch_session_expiry(app: tauri::AppHandle) {
     });
 }
 
+/// Successful auth polling can recover a startup configuration-access failure.
+/// Healthy sessions retain their epoch and running workers unchanged.
+pub(crate) fn recover_session_if_needed(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<DesktopPlugins>() else {
+        return;
+    };
+    let epoch = recover_session(
+        &state.host,
+        &state.packages,
+        &crate::CONFIG_UPDATE_GATE,
+        &state.session_gate,
+        &state.exit.started,
+        || {
+            let config = crate::load_config(app)?;
+            let authority = auth::session_authority(&config)?;
+            Ok((config.desktop_plugins, authority))
+        },
+    );
+    restore_session(&state.packages, epoch);
+}
+
+pub(super) fn recover_session<A>(
+    host: &PluginHost,
+    packages: &PackageApplication,
+    config_gate: &Mutex<()>,
+    session_gate: &Mutex<()>,
+    exiting: &AtomicBool,
+    configuration: impl FnOnce() -> Result<(Vec<crate::plugin_config::DesktopPluginConfig>, A), String>,
+) -> Option<u64> {
+    // Match config saves' lock order. A concurrent policy write must finish
+    // before recovery samples it, or wait until this resume has completed.
+    let _configuration = config_gate.lock().ok()?;
+    let _transition = session_gate
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if exiting.load(Ordering::Acquire) || host.is_authorized_epoch(host.authority_epoch()) {
+        return None;
+    }
+    // Read the current policy and declarations only after acquiring the gate.
+    // The authority guard stays held through resume; no earlier UI result is
+    // authority to unlock, and a failed read leaves the host revoked.
+    let (declarations, _authority) = configuration().ok()?;
+    if exiting.load(Ordering::Acquire) {
+        return None;
+    }
+    packages.session_configured(true, Ok(declarations))
+}
+
+fn restore_session(packages: &PackageApplication, epoch: Option<u64>) {
+    if let Some(epoch) = epoch {
+        let packages = packages.clone();
+        tauri::async_runtime::spawn(async move {
+            // Errors remain visible in the manager snapshot. A revoked
+            // restoration is expected when logout or quit wins the race.
+            let _ = packages.restore(epoch).await;
+        });
+    }
+}
+
 pub(crate) fn authentication_changed(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<DesktopPlugins>() {
         // Sample the live policy/session under the same gate as the transition.
@@ -829,14 +888,7 @@ pub(crate) fn authentication_changed(app: &tauri::AppHandle) {
                 .map(|config| config.desktop_plugins)
                 .map_err(|_| "Plugin declarations could not be loaded".into()),
         );
-        if let Some(epoch) = epoch {
-            let packages = state.packages.clone();
-            tauri::async_runtime::spawn(async move {
-                // Errors remain visible in the manager snapshot. A revoked
-                // restoration is expected when logout or quit wins the race.
-                let _ = packages.restore(epoch).await;
-            });
-        }
+        restore_session(&state.packages, epoch);
     }
 }
 
@@ -883,6 +935,10 @@ pub(crate) fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
         state.packages.begin_shutdown();
     }
 }
+
+#[cfg(test)]
+#[path = "session_recovery_tests.rs"]
+mod recovery_tests;
 
 #[cfg(test)]
 mod tests {

@@ -48,7 +48,7 @@ Its executable SHA-256 is
 `77ac475c89625b27ca0a5e5a66d1d0649309636c377a1e6ecee346a4b4e1aa49`.
 Every verified worker requires host API `^1.8`.
 
-The prepared macOS selection takes three exact archive pins from the
+The installed macOS selection uses three exact archive pins from the
 [published ARM configuration fragment](https://github.com/victron-venus/inverter-desktop/releases/download/v2.5.42-beta.43/desktop-plugins-aarch64-apple-darwin.json):
 
 - `inverter-desktop.home-assistant` version `0.13.0`, SHA-256
@@ -78,15 +78,55 @@ Strict validation of live data, the staged app, and application bundles remained
 unchanged.
 
 The pin-only update applied the three declarations above and preserved every
-non-plugin configuration field. The first native launch at `09:00:07Z` is waiting
-for access to the existing Keychain encryption key. The protected macOS prompt
-requires user interaction. Migration has not started; plugin health and live
-acceptance remain pending.
+non-plugin configuration field. The first native launch at `09:00:07Z` stalled
+while obtaining access to the existing Keychain encryption key. That access was
+resolved without bypassing the protected prompt, and a normal restart restored
+beta.43's plugins. This initial stall is resolved; it is not a current Keychain
+failure.
 
-The installed acceptance must verify package health and restoration, retained
-credentials and mappings, the compact dashboard, and core telemetry while
-optional packages are disabled and re-enabled. Household actions are outside
-this read-only acceptance and must not be used as test traffic.
+Read-only installed acceptance passed all four states: HA and cameras enabled,
+HA only, core only, and cameras only. The compact dashboard and core telemetry
+remained available as appropriate in each state. Both groups were restored at
+the end: HA, Frigate, and Kerberos reported Running/Connected, all three selected
+declarations were enabled, and the final inspection confirmed unchanged
+non-plugin configuration. No household commands were sent as test traffic.
+
+Native encrypted HA and Kerberos settings reached migration version 1. Existing
+authoritative Frigate settings retained marker 0 without requiring migration.
+The HA selection retained all 18 previous reads within 45 selected reads,
+including all 20 configured clamps, and preserved credentials. All 15 Home
+controls retained their targets, labels, and order. There were no saved HA header
+controls: DRY/External and the seven inverter flags belong to core.
+
+A natural Kerberos event opened an automatic preview, and the owned window
+expired. This verifies the installed event/window lifecycle; it does not claim
+decoded physical camera frames. Short native host/worker CPU, RSS, and connection
+samples were also collected across the four states. They exclude WebKit and are
+observations, not benchmarks, cold-start measurements, or proof of total resource
+savings.
+
+## Startup recovery follow-up: source only
+
+The initial credential-access delay exposed a recovery gap: after configuration
+became readable, beta.43 needed a normal restart to restore a revoked plugin host.
+The follow-up implementation retries authorization on a later successful unlocked
+`auth_status` read. It samples fresh configuration while holding the configuration
+and session-transition locks, retains the session guard through authorization,
+and releases these guards before scheduling package restoration. Healthy polls
+do not restart workers; logout, policy changes, exit, and stale epochs retain
+their existing checks.
+
+Local validation passed 12 focused recovery regressions, the full 535-test native
+suite plus two packaging CLI tests, 432 frontend tests, 18 mobile tests, and 29
+native mobile-boundary checks. Strict all-target Clippy, type checking,
+desktop/mobile builds, and formatting passed. Frontend lint passed its error gate
+with existing warnings and informational diagnostics. The twelve external-worker
+fixtures are a separate gate, not graphical tests included in the native count.
+
+Exact-head hosted checks, review/merge, release verification, and installed
+acceptance for this follow-up remain pending. The installed beta.43 binary above
+does not contain this fix; its completed acceptance must not be presented as
+proof of the new automatic recovery path.
 
 ## Evidence boundaries
 
