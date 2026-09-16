@@ -144,7 +144,7 @@ All five post-merge source workflows also passed for `192b014`:
 and [Cargo Security Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/35040112679).
 
 [Release `v2.5.42-beta.38`](https://github.com/victron-venus/inverter-desktop/releases/tag/v2.5.42-beta.38)
-was published from the same source after all 28 executed
+was published from the same source. All 28 executed
 [release pipeline jobs](https://github.com/victron-venus/inverter-desktop/actions/runs/35040113067)
 passed. Independent HTTPS readback verified all 20 plugin assets: four target
 configuration fragments, eight actual worker archives and eight SHA-256 sidecars.
