@@ -39,6 +39,8 @@ Structured layout and camera mappings use ordinary fields and repeatable rows;
 entity choices come from a running worker. Secrets remain write-only. Saving
 settings restarts an enabled worker, disabling stops its work, and uninstalling
 removes its package while retaining settings unless deletion is selected. The
+same controls work for configured packages: enable/disable saves their desired
+state, and uninstall removes their declaration to stop automatic restoration. The
 camera toolbar enables or disables the installed camera group through native
 package authority, including configuration-managed packages. These operations do
 not reconnect core MQTT/IGW.

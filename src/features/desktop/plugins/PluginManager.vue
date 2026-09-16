@@ -143,10 +143,7 @@
           >
             {{ $t('plugins.manager.settings') }}
           </UiButton>
-          <UiButton
-            :disabled="!canManage || plugin.configuration_managed"
-            @click="setEnabled(plugin.plugin_id, !plugin.enabled)"
-          >
+          <UiButton :disabled="!canManage" @click="setEnabled(plugin.plugin_id, !plugin.enabled)">
             {{ $t(plugin.enabled ? 'plugins.manager.disable' : 'plugins.manager.enable') }}
           </UiButton>
           <UiButton
@@ -156,10 +153,7 @@
           >
             {{ $t('plugins.manager.rollback', { version: plugin.rollback_version }) }}
           </UiButton>
-          <UiButton
-            :disabled="!canManage || plugin.configuration_managed"
-            @click="requestRemoval(plugin.plugin_id)"
-          >
+          <UiButton :disabled="!canManage" @click="requestRemoval(plugin.plugin_id)">
             {{ $t('plugins.manager.remove') }}
           </UiButton>
         </div>
@@ -179,10 +173,12 @@
         >
           <p class="text-[12px] break-words">
             {{
-              $t('plugins.manager.confirmRemove', {
-                plugin: plugin.plugin_id,
-                version: plugin.version,
-              })
+              $t(
+                plugin.configuration_managed
+                  ? 'plugins.manager.confirmRemoveConfigured'
+                  : 'plugins.manager.confirmRemove',
+                { plugin: plugin.plugin_id, version: plugin.version }
+              )
             }}
           </p>
           <label class="flex items-center gap-2 text-[12px]">

@@ -489,7 +489,7 @@ describe('desktop plugin manager', () => {
   })
 
   it.each([true, false])(
-    'keeps configured lifecycle controls locked while settings stay usable (enabled=%s)',
+    'allows configured enable and confirmed uninstall while keeping rollback pinned (enabled=%s)',
     async (enabled) => {
       snapshot.plugins = [
         {
@@ -504,12 +504,17 @@ describe('desktop plugin manager', () => {
         settings: settingsView(),
         restart_error: null,
       }))
+      handlers.set('set_plugin_enabled', () => {
+        snapshot.plugins[0].enabled = !enabled
+      })
+      handlers.set('uninstall_plugin_package', () => {
+        snapshot.plugins = []
+      })
       await openManager()
-      expect(wrapper?.text()).toContain('Version and enabled state are managed in desktop_plugins.')
-      for (const label of [enabled ? 'Disable' : 'Enable', 'Roll back to 1.0.0', 'Uninstall…']) {
-        expect(button(label).attributes('disabled')).toBeDefined()
-        await button(label).trigger('click')
-      }
+      expect(button('Roll back to 1.0.0').attributes('disabled')).toBeDefined()
+      await button('Roll back to 1.0.0').trigger('click')
+      expect(button(enabled ? 'Disable' : 'Enable').attributes('disabled')).toBeUndefined()
+      expect(button('Uninstall…').attributes('disabled')).toBeUndefined()
       expect(button('Settings').attributes('disabled')).toBeUndefined()
       await button('Settings').trigger('click')
       await flushPromises()
@@ -520,25 +525,41 @@ describe('desktop plugin manager', () => {
       await managerWrapper().find('form').trigger('submit')
       await flushPromises()
       expect(calls('save_plugin_settings')).toHaveLength(1)
-      for (const command of [
-        'set_plugin_enabled',
-        'rollback_plugin_package',
-        'uninstall_plugin_package',
-      ])
-        expect(calls(command)).toHaveLength(0)
+      await button(enabled ? 'Disable' : 'Enable').trigger('click')
+      await flushPromises()
+      expect(native.invoke).toHaveBeenCalledWith('set_plugin_enabled', {
+        pluginId: installed.plugin_id,
+        enabled: !enabled,
+      })
+      expect(button(enabled ? 'Enable' : 'Disable').attributes('disabled')).toBeUndefined()
+      expect(calls('rollback_plugin_package')).toHaveLength(0)
+      await button('Uninstall…').trigger('click')
+      expect(wrapper?.text()).toContain('Uninstall example.monitor version 2.0.0?')
+      expect(wrapper?.text()).toContain('saved declaration will be removed')
+      expect(wrapper?.text()).toContain('automatic restoration will stop')
+      expect(calls('uninstall_plugin_package')).toHaveLength(0)
+      await button('Cancel').trigger('click')
+      expect(calls('uninstall_plugin_package')).toHaveLength(0)
+      await button('Uninstall…').trigger('click')
+      await button('Uninstall plugin').trigger('click')
+      await flushPromises()
+      expect(native.invoke).toHaveBeenCalledWith('uninstall_plugin_package', {
+        pluginId: installed.plugin_id,
+        deleteSettings: false,
+      })
+      expect(wrapper?.text()).toContain('No plugins installed.')
       expect(calls('save_config')).toHaveLength(0)
     }
   )
 
-  it('guards configured lifecycle controller calls and releases ownership without deleting the plugin', async () => {
+  it('requires installed identity and removal consent while enforcing the configured rollback pin', async () => {
     snapshot.plugins = [{ ...structuredClone(installed), configuration_managed: true }]
     const value = controller()
     await value.start()
-    await value.setEnabled(installed.plugin_id, false)
+    await value.setEnabled('missing.plugin', false)
     await value.rollback(installed.plugin_id)
-    value.requestRemoval(installed.plugin_id)
+    value.requestRemoval('missing.plugin')
     expect(value.confirmRemoval.value).toBeNull()
-    value.confirmRemoval.value = installed.plugin_id
     await value.uninstall(installed.plugin_id)
     for (const command of [
       'set_plugin_enabled',
@@ -547,20 +568,47 @@ describe('desktop plugin manager', () => {
     ])
       expect(calls(command)).toHaveLength(0)
 
-    snapshot.plugins[0].configuration_managed = false
-    await value.refresh()
-    expect(value.snapshot.value?.plugins).toHaveLength(1)
-    expect(calls('uninstall_plugin_package')).toHaveLength(0)
     await value.setEnabled(installed.plugin_id, false)
     expect(native.invoke).toHaveBeenCalledWith('set_plugin_enabled', {
       pluginId: installed.plugin_id,
       enabled: false,
     })
     await value.rollback(installed.plugin_id)
-    expect(calls('rollback_plugin_package')).toHaveLength(1)
+    expect(calls('rollback_plugin_package')).toHaveLength(0)
     value.requestRemoval(installed.plugin_id)
     expect(value.confirmRemoval.value).toBe(installed.plugin_id)
     expect(calls('uninstall_plugin_package')).toHaveLength(0)
+    await value.uninstall('missing.plugin')
+    expect(calls('uninstall_plugin_package')).toHaveLength(0)
+
+    snapshot.plugins[0].configuration_managed = false
+    await value.refresh()
+    expect(value.snapshot.value?.plugins).toHaveLength(1)
+    await value.rollback(installed.plugin_id)
+    expect(calls('rollback_plugin_package')).toHaveLength(1)
+    expect(calls('uninstall_plugin_package')).toHaveLength(0)
+  })
+
+  it('refreshes persisted ownership after partial uninstall failure and retains its error', async () => {
+    snapshot.plugins = [{ ...structuredClone(installed), configuration_managed: true }]
+    handlers.set('uninstall_plugin_package', () => {
+      snapshot.plugins[0].configuration_managed = false
+      snapshot.plugins[0].enabled = false
+      snapshot.plugins[0].runtime = null
+      throw new Error('Package cleanup failed')
+    })
+    await openManager()
+    await button('Uninstall…').trigger('click')
+    await button('Uninstall plugin').trigger('click')
+    await flushPromises()
+    expect(wrapper?.text()).toContain('Package cleanup failed')
+    expect(wrapper?.text()).toContain('Disabled')
+    expect(wrapper?.text()).not.toContain('version pinned in configuration')
+    expect(button('Roll back to 1.0.0').attributes('disabled')).toBeUndefined()
+    expect(button('Uninstall…').attributes('disabled')).toBeUndefined()
+    expect(button('Enable').attributes('disabled')).toBeUndefined()
+    expect(calls('uninstall_plugin_package')).toHaveLength(1)
+    expect(calls('get_plugin_manager_snapshot')).toHaveLength(2)
   })
 
   it('retries configured restoration through native authority once and refreshes progress', async () => {

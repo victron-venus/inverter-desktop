@@ -7,6 +7,9 @@ use super::runtime::{PluginHost, PluginSnapshot};
 #[path = "groups.rs"]
 mod groups;
 pub(crate) use groups::PluginGroupSnapshot;
+#[path = "management.rs"]
+mod management;
+pub(crate) use management::PluginDesiredChange;
 #[path = "reconciliation.rs"]
 mod reconciliation;
 use super::settings::{PluginSettingsView, SettingsSchema};
@@ -815,24 +818,15 @@ impl PackageApplication {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn set_enabled(
         &self,
         id: &str,
         enabled: bool,
         epoch: u64,
     ) -> Result<(), String> {
-        let activity = self.begin_activity();
-        self.require_unmanaged(id)?;
-        self.prepare_mutation(id, epoch)?;
-        let manager = self.manager()?;
-        let id = id.to_owned();
-        self.run_operation(id.clone(), epoch, activity, async move {
-            if enabled {
-                manager.enable_in_epoch(&id, epoch).await
-            } else {
-                manager.disable_in_epoch(&id, epoch).await
-            }
-            .map(|_| ())
+        self.set_enabled_with_config(id, enabled, epoch, |id, _, service| {
+            service.require_unmanaged(id)
         })
         .await
     }
@@ -854,29 +848,15 @@ impl PackageApplication {
         self.uninstall_with_settings(id, false, epoch).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn uninstall_with_settings(
         &self,
         id: &str,
         delete_settings: bool,
         epoch: u64,
     ) -> Result<(), String> {
-        let activity = self.begin_activity();
-        self.require_unmanaged(id)?;
-        self.prepare_mutation(id, epoch)?;
-        let manager = self.manager()?;
-        let store = self.settings_store()?;
-        let id = id.to_owned();
-        self.run_operation(id.clone(), epoch, activity, async move {
-            let cleanup = if delete_settings {
-                let settings_id = id.clone();
-                Some(Box::new(move || store.remove(&settings_id))
-                    as Box<dyn FnOnce() -> Result<(), String> + Send>)
-            } else {
-                None
-            };
-            manager
-                .remove_with_settings_in_epoch(&id, epoch, cleanup)
-                .await
+        self.uninstall_with_config(id, delete_settings, epoch, |id, _, service| {
+            service.require_unmanaged(id)
         })
         .await
     }
@@ -898,6 +878,9 @@ impl PackageApplication {
     {
         let service = self.clone();
         run_owned(activity, async move {
+            let _operation = service.0.reconciliation.operation.lock().await;
+            service.check_epoch(epoch)?;
+            service.require_unmanaged(&id)?;
             let result = operation.await;
             service.record_result(&id, epoch, &result);
             result

@@ -161,8 +161,7 @@ async fn configured_reinstall_downloads_unsigned_package_once_and_reopens_offlin
     reconcile_bytes(&service, epoch, b"this must never be downloaded", &requests).await;
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     assert_eq!(wait_configured_worker(&host).await, generation);
-    // A configured package cannot be removed or have desired state overridden
-    // through the separate manual manager controls.
+    // Helpers without a config persistence callback cannot override a pin.
     assert!(service.set_enabled(PLUGIN, false, epoch).await.is_err());
     assert!(service.rollback(PLUGIN, epoch).await.is_err());
     assert!(service.uninstall(PLUGIN, epoch).await.is_err());
@@ -1721,3 +1720,6 @@ async fn group_owned_toggle_survives_caller_cancellation_and_revoked_waiter_cann
 
 #[path = "application_migration_tests.rs"]
 mod migration_tests;
+
+#[path = "application_management_tests.rs"]
+mod management_tests;

@@ -83,13 +83,20 @@ the application does not silently select a newer release or rebuild. Change the
 declaration's URL/hash and, when needed, version to select different content.
 
 Declared plugins take their package version and enabled state from configuration.
-The native API and manager prevent manual replacement, individual enable/disable,
-rollback, or uninstall while a declaration owns that ID. Settings remain editable.
-The generic camera group command is an explicit native exception: it changes both
-the desired enabled declarations and installed lifecycle state under the operation
-lock, then notifies configuration windows without overwriting dirty core fields. Remove
-the declaration to release management; doing so retains installed state and data.
-Uninstall afterward if the package should also be removed.
+The Plugins tab can enable, disable, or uninstall these packages directly. Native
+enable/disable saves the desired preference before changing installed lifecycle
+state; a lifecycle failure is reported with that saved intent retained.
+Confirmed uninstall also removes the declaration so startup or retry cannot
+download the removed package again. Settings are retained by default. Manual
+archive replacement and rollback remain unavailable while an exact declaration
+owns the version. Settings remain editable.
+
+Individual and camera-group changes share the restoration operation lock and
+notify configuration windows without overwriting dirty core fields. Ordinary
+core settings saves preserve the current saved declarations, even when submitted
+from an older draft. Removing only a declaration through an explicit configuration
+edit releases version management and retains the installed package and its data.
+Use Uninstall when the package should also be removed.
 
 An app upgrade or reinstall that preserves app data preserves declarations and
 encrypted plugin settings. If app data was deleted, import a saved application
@@ -99,8 +106,8 @@ secrets. A newly downloaded package needing credentials remains installed and st
 activation is retried if enabled in the declaration. Missing local data cannot be
 recovered without a backup. A missing package can be downloaded again, but damaged
 installed content is not automatically overwritten or erased. To reinstall a
-damaged package that remains manageable, remove its declaration, uninstall the
-package while retaining settings, then restore the declaration and retry. An
+damaged package that remains manageable, uninstall it while retaining settings,
+then restore the declaration and retry. An
 unreadable or corrupt store inventory is reported without deleting it; this flow
 does not bypass an inventory error or silently reset the store. Only an explicitly
 installed/declared matching built-in package can receive a native legacy
@@ -350,7 +357,8 @@ The management IPC surface is:
 - `set_plugin_enabled({ pluginId, enabled })`,
   `rollback_plugin_package({ pluginId })`, and
   `uninstall_plugin_package({ pluginId, deleteSettings? })`: manage an installed
-  identity. Omitted `deleteSettings` retains data.
+  identity. Enable/disable and uninstall also update configured declarations;
+  rollback requires an unmanaged identity. Omitted `deleteSettings` retains data.
 - `get_plugin_settings({ pluginId })`: verified schema, ordinary values, opaque
   revision, and secret-presence flags.
 - `save_plugin_settings({ pluginId, revision, values, secretChanges })`: validate
@@ -360,6 +368,21 @@ The management IPC surface is:
   owner associations, and storage quotas; no stored values or key access.
 - `delete_retained_plugin_data({ recordId, revision })`: remove one unchanged
   canonical record only when the native installed inventory has no owner for it.
+
+Ordinary `save_config({ config })` calls preserve the latest saved declarations.
+An intentional declaration edit can pass `desktopPluginsExpected`, containing
+the complete previously read declaration array (including `[]` for an empty
+baseline). The native config-update lock compares it before any write and rejects
+a stale baseline. Existing authenticated configuration-window authority and
+declaration validation still apply. Portable backup import is a separate explicit
+declaration-restoration path.
+
+Configured uninstall first saves disabled intent, durably disables the installed
+record, then removes the declaration and package. These writes are not one
+filesystem transaction. A later failure is reported with the remaining state
+visible and retryable; an already disabled package stays stopped rather than
+becoming an enabled unmanaged package on restart. Requested settings cleanup
+retains its existing separate-write failure semantics.
 
 The application uses `PackageManager::open_with_configuration` with its private
 settings loader; `PackageManager::open(root, target, trust, host)` remains available

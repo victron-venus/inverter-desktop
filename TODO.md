@@ -97,6 +97,40 @@ normal-start acceptance; delayed/denied Keychain recovery remains fixture eviden
 not a forced live fault. See the
 [delivery record](docs/desktop-plugin-delivery.md).
 
+### Follow-up: manage configured plugins from the Plugins tab
+
+Beta.45 incorrectly disabled individual enable/disable and uninstall buttons for
+every configuration-managed package. Configuration ownership must preserve exact
+package pins without preventing users from removing an optional feature.
+
+- [x] Identify the disabled-button guards in both the component and controller.
+- [x] Enable configured-package enable/disable and confirmed uninstall in the UI;
+      explain that uninstall removes automatic restoration, retain settings by
+      default, and keep rollback unavailable while an exact pin owns the package.
+- [x] Refresh native ownership and enabled state after a partially failed
+      operation without hiding its original error. Pass 47 focused frontend tests,
+      typecheck, scoped lint, formatting, and whitespace checks.
+- [x] Persist desired enabled state and uninstall decisions natively under the
+      reconciliation/configuration/authorization gates. Serialize against active
+      restoration and preserve all unrelated configuration and plugin records.
+- [x] Ensure uninstall failures after durable disable leave a stopped, visibly
+      manageable package. Report earlier failures without removing its pin. Keep
+      settings unless their deletion is explicitly selected.
+- [x] Preserve authoritative package declarations during ordinary core saves,
+      including old Config, theme, and setup payloads. Require a matching baseline
+      for explicit declaration edits, including an explicit empty baseline.
+- [x] Cover stale saves, restore races, authorization changes, cancelled requests,
+      persistence and cleanup failures, settings retention, and retry behavior.
+- [x] Update the configuration, lifecycle, and settings documentation in English.
+      Pass 545 native tests, two package CLI tests, 433 frontend tests, 18 mobile
+      tests, 29 mobile boundary tests, desktop/mobile builds, typecheck, strict
+      Clippy, formatting, and lint. Existing lint warnings remain unchanged.
+      Independent native/concurrency, UI, and documentation reviews are clear.
+- [ ] Push a PR, address review comments, and merge the exact checked head.
+- [ ] Verify the resulting published application, install it with a matched
+      backup, and inspect enabled removal controls and their confirmation in the
+      installed GUI. Keep household commands out of acceptance traffic.
+
 ### Completed implementation: optional feature extraction
 
 The core installation contains generic plugin infrastructure but no HA/camera

@@ -43,6 +43,11 @@ read back. `PluginGroupActions.vue` uses native group enablement, so a stopped
 camera worker can be re-enabled without dispatching an action to that process.
 Native configuration-change events update only `desktop_plugins` in an open
 settings draft, preserving dirty core edits.
+The Plugins tab also persists individual enable/disable and removes a configured
+package's declaration on confirmed uninstall. Ordinary core saves preserve the
+latest declarations under the native configuration lock, so an old form or theme
+save cannot reinstall a removed plugin. Explicit declaration edits require a
+matching `desktopPluginsExpected` baseline; package authority remains native.
 
 `PluginMedia.vue` accepts only an opaque native-owned media route. Snapshots close
 after twelve seconds; video, drag, close, and lifecycle revocation remain native

@@ -119,6 +119,22 @@ impl PackageApplication {
         }
     }
 
+    /// Called with persisted configuration under the host's current epoch.
+    pub(crate) fn plugin_desired_changed(&self, id: &str, change: super::PluginDesiredChange) {
+        if let super::PluginDesiredChange::Enabled(enabled) = change {
+            self.group_desired_changed(&[id.to_owned()], enabled);
+            return;
+        }
+        let mut desired = self
+            .0
+            .reconciliation
+            .desired
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        change.apply(&mut desired.declarations, id);
+        desired.statuses.remove(id);
+    }
+
     pub(super) fn require_unmanaged(&self, id: &str) -> Result<(), String> {
         if self.0.reconciliation.contains(id) {
             Err("This plugin is managed by desktop_plugins in the application configuration".into())

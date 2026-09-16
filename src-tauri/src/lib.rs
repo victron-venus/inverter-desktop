@@ -675,11 +675,17 @@ async fn save_config(
     app: tauri::AppHandle,
     #[allow(unused_variables)] window: tauri::WebviewWindow,
     mut config: FullConfig,
+    desktop_plugins_expected: Option<Vec<plugin_config::DesktopPluginConfig>>,
 ) -> Result<(), String> {
     let _update = CONFIG_UPDATE_GATE
         .lock()
         .map_err(|_| "Config update lock failed")?;
     let previous = load_config(&app)?;
+    plugin_config::reconcile_for_save(
+        &mut config.desktop_plugins,
+        &previous.desktop_plugins,
+        desktop_plugins_expected.as_deref(),
+    )?;
     preserve_private_camera_config(&mut config, &previous)?;
     config.modules = module_config::merge_for_save(config.modules, &previous.modules)?;
     auth::validate_policy(&config)?;
