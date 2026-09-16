@@ -9,7 +9,6 @@
     @media-control="(entity, mp_action) => $emit('send', 'media_player', { entity, mp_action })"
     @scene-activate="(entity) => $emit('send', 'scene_activate', { entity })"
   />
-  <PluginPanels />
 </template>
 <script setup lang="ts">
 import { computed, inject, reactive } from 'vue'
@@ -17,7 +16,6 @@ import type { useHA } from '../../composables/useHA'
 import { useDashboardControls } from '../../composables/useDashboardControls'
 import { appConfig } from '../../composables/useInverterState'
 import HomePanels from './HomePanels.vue'
-import PluginPanels from './plugins/PluginPanels.vue'
 const home = inject<ReturnType<typeof useHA>>('desktop-home')!
 const { homeButtons } = useDashboardControls(home.getHaControlState)
 const panels = reactive({

@@ -72,6 +72,32 @@ manual signed-file selection flow is unavailable. Existing HA/camera implementat
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
+### Completed implementation: compact plugin presentation
+
+Start from verified main `0f34d51`. Installing HA and Frigate must not append
+generic worker panels or duplicate existing home/appliance cards on the main
+dashboard. Keep the familiar sections and put compact connection diagnostics in
+Configuration -> Plugins. Native package restoration, workers, notifications and
+owned video windows remain independent of dashboard rendering.
+
+- [x] Remove the unconditional generic plugin panel from the desktop dashboard.
+- [x] Show each running worker's explicit connection status in its existing
+      Plugins settings card without copying entity cards or household actions.
+- [x] Preserve the existing home sections, core controls, package settings and
+      background camera behavior; retain the Android/iOS build boundary.
+- [x] Check the focused frontend behavior, formatting, lint, type checking and
+      desktop/mobile production builds, with independent lifecycle review.
+- [x] Update the user/developer documentation to distinguish current product UI
+      from the retained declarative contribution contract.
+
+Local validation passed 425 frontend tests, 17 mobile tests, five build-profile
+tests, formatting, lint, type checking and desktop/mobile production builds.
+Independent review confirmed that removing the generic renderer cannot stop
+native workers, notifications or video windows. The manager hides retained
+connection health after a snapshot failure and restores it only after a current
+authorized response. Hosted PR checks and installed-app acceptance remain
+separate delivery evidence, recorded against their exact source build.
+
 ### Completed checkpoint: configuration-driven desktop plugin restoration
 
 Start from verified main `46abfd3`. A portable `desktop_plugins` declaration

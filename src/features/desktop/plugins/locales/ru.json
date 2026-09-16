@@ -42,6 +42,7 @@
   "confirm": "Удалить плагин",
   "installed": "Установлен · остановлен",
   "running": "Работает",
+  "connection": "Соединение: {status}",
   "starting": "Запускается…",
   "failed": "Ошибка",
   "disabled": "Отключён",

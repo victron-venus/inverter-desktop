@@ -23,7 +23,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: native.listen, emit: native.emit }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ close: vi.fn() }) }))
 
-const installed: ManagedPlugin = {
+const installed: ManagedPlugin & { runtime: NonNullable<ManagedPlugin['runtime']> } = {
   plugin_id: 'example.monitor',
   version: '2.0.0',
   rollback_version: '1.0.0',
@@ -168,6 +168,185 @@ afterEach(() => {
 })
 
 describe('desktop plugin manager', () => {
+  it('shows only one connection summary per plugin without copying entity cards or controls', async () => {
+    const plugin = structuredClone(installed)
+    plugin.runtime.contributions = [
+      ...Array.from({ length: 26 }, (_, index) => ({
+        kind: 'status' as const,
+        id: `entity-${index}`,
+        title: `HA entity ${index}`,
+        value: `Entity state ${index}`,
+        tone: 'neutral' as const,
+      })),
+      {
+        kind: 'status',
+        id: 'connection',
+        title: 'Home Assistant',
+        value: 'Connected',
+        tone: 'success',
+      },
+      { kind: 'metric', id: 'temperature', title: 'Temperature', value: 23, unit: '°C' },
+      {
+        kind: 'action',
+        id: 'light',
+        title: 'Light',
+        action_id: 'toggle',
+        label: 'Turn on',
+        params: {},
+      },
+    ]
+    const camera = structuredClone(installed)
+    camera.plugin_id = 'example.camera'
+    camera.runtime.plugin_id = camera.plugin_id
+    camera.runtime.contributions = [
+      {
+        kind: 'status',
+        id: 'connection',
+        title: 'Frigate MQTT',
+        value: 'Disconnected',
+        tone: 'warning',
+      },
+    ]
+    snapshot.plugins = [plugin, camera]
+    await openManager()
+
+    const summaries = managerWrapper().findAll('[data-plugin-connection]')
+    expect(summaries.map((summary) => summary.text())).toEqual([
+      'Connection: Connected',
+      'Connection: Disconnected',
+    ])
+    expect(summaries[0].classes()).toContain('text-battery')
+    expect(summaries[1].classes()).toContain('text-solar')
+    expect(managerWrapper().text()).not.toMatch(/HA entity|Entity state|Temperature|Turn on/)
+    expect(calls('get_plugin_snapshot')).toHaveLength(0)
+    expect(calls('plugin_action')).toHaveLength(0)
+  })
+
+  it('refreshes the compact summary from manager snapshots and preserves full warning text', async () => {
+    const plugin = structuredClone(installed)
+    plugin.runtime.contributions = [
+      {
+        kind: 'status',
+        id: 'connection',
+        title: 'Home Assistant',
+        value: 'Connected',
+        tone: 'success',
+      },
+    ]
+    snapshot.plugins = [plugin]
+    await openManager('ru')
+    const warning = 'Connected; discovery returned more entities than can be shown <img src=x>'
+    plugin.runtime.contributions = [
+      {
+        kind: 'status',
+        id: 'connection',
+        title: 'Home Assistant',
+        value: warning,
+        tone: 'warning',
+      },
+    ]
+    event('plugin-host-update')
+    await flushPromises()
+
+    const summary = managerWrapper().find('[data-plugin-connection]')
+    expect(summary.text()).toBe(`Соединение: ${warning}`)
+    expect(summary.attributes('title')).toBe(`Соединение: ${warning}`)
+    expect(summary.classes()).toContain('truncate')
+    expect(summary.classes()).toContain('text-solar')
+    expect(summary.find('img').exists()).toBe(false)
+  })
+
+  it('does not reuse stale connection summaries or guess health from unrelated contributions', async () => {
+    const withConnection = structuredClone(installed)
+    withConnection.runtime.contributions = [
+      {
+        kind: 'status',
+        id: 'connection',
+        title: 'Connection',
+        value: 'Connected',
+        tone: 'success',
+      },
+    ]
+    const stopped = (state: NonNullable<ManagedPlugin['runtime']>['state']) => ({
+      ...structuredClone(withConnection),
+      plugin_id: `example.${state}`,
+      runtime: { ...structuredClone(withConnection.runtime), state },
+    })
+    snapshot.plugins = [
+      { ...structuredClone(withConnection), plugin_id: 'example.disabled', enabled: false },
+      { ...structuredClone(withConnection), plugin_id: 'example.error', error: 'Worker failed' },
+      stopped('starting'),
+      stopped('restarting'),
+      stopped('stopped'),
+      stopped('failed'),
+      { ...structuredClone(withConnection), plugin_id: 'example.missing', runtime: null },
+      {
+        ...installed,
+        runtime: {
+          ...installed.runtime,
+          contributions: [
+            {
+              kind: 'status',
+              id: 'entity-connection',
+              title: 'Connection',
+              value: 'Connected',
+              tone: 'success',
+            },
+            {
+              kind: 'text',
+              id: 'connection',
+              title: 'Connection',
+              text: 'Not a connection status',
+            },
+          ],
+        },
+      },
+    ]
+    await openManager()
+    expect(managerWrapper().findAll('[data-plugin-connection]')).toHaveLength(0)
+    expect(managerWrapper().text()).not.toContain('Connection:')
+  })
+
+  it('hides the retained connection summary after a failed refresh and restores it on recovery', async () => {
+    const plugin = structuredClone(installed)
+    plugin.runtime.contributions = [
+      {
+        kind: 'status',
+        id: 'connection',
+        title: 'Home Assistant',
+        value: 'Connected',
+        tone: 'success',
+      },
+    ]
+    snapshot.plugins = [plugin]
+    await openManager()
+    expect(managerWrapper().find('[data-plugin-connection]').text()).toBe('Connection: Connected')
+
+    handlers.set('get_plugin_manager_snapshot', () => {
+      throw new Error('Snapshot unavailable')
+    })
+    event('plugin-host-update')
+    await flushPromises()
+    expect(managerWrapper().text()).toContain(plugin.plugin_id)
+    expect(managerWrapper().find('[data-plugin-connection]').exists()).toBe(false)
+
+    handlers.delete('get_plugin_manager_snapshot')
+    plugin.runtime.contributions = [
+      {
+        kind: 'status',
+        id: 'connection',
+        title: 'Home Assistant',
+        value: 'Disconnected',
+        tone: 'warning',
+      },
+    ]
+    event('plugin-host-update')
+    await flushPromises()
+    expect(managerWrapper().find('[data-plugin-connection]').text()).toBe(
+      'Connection: Disconnected'
+    )
+  })
+
   it.each([
     ['en', 'Desktop notifications'],
     ['ru', 'Уведомления на компьютере'],
