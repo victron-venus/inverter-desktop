@@ -105,7 +105,7 @@ samples were also collected across the four states. They exclude WebKit and are
 observations, not benchmarks, cold-start measurements, or proof of total resource
 savings.
 
-## Startup recovery follow-up: source only
+## Startup recovery follow-up: published, installation pending
 
 The initial credential-access delay exposed a recovery gap: after configuration
 became readable, beta.43 needed a normal restart to restore a revoked plugin host.
@@ -123,10 +123,39 @@ desktop/mobile builds, and formatting passed. Frontend lint passed its error gat
 with existing warnings and informational diagnostics. The twelve external-worker
 fixtures are a separate gate, not graphical tests included in the native count.
 
-Exact-head hosted checks, review/merge, release verification, and installed
-acceptance for this follow-up remain pending. The installed beta.43 binary above
-does not contain this fix; its completed acceptance must not be presented as
-proof of the new automatic recovery path.
+[PR #458](https://github.com/victron-venus/inverter-desktop/pull/458) merged on
+2026-09-16 at `13:06Z`, at revision
+`74d7311d132f9262feac65e94086138a173aca25`. Its exact reviewed head
+`4151436a1a5bcca73ed987317f36c6faff485834` passed 59 hosted checks with three skips,
+was approved, and had no unresolved review threads.
+
+[v2.5.42-beta.45](https://github.com/victron-venus/inverter-desktop/releases/tag/v2.5.42-beta.45)
+was published on 2026-09-16 at `14:02:44Z` from the merged revision above.
+[Release run 35099769637](https://github.com/victron-venus/inverter-desktop/actions/runs/35099769637),
+attempt 1, passed 37 jobs with two intended skips and published 55 assets. The
+frozen build number is `2005088`.
+
+Independent public-byte verification passed at `14:09:30Z` for the macOS ARM app
+and all four worker packages. The tag, source revision, frozen plan, build
+receipts, and downloaded payloads agree. The app reports native bundle version
+`201.50.87`; its executable SHA-256 is
+`5f173dd6737cfff902872b924e2a2b6cad7df6fa40192ed1cc3dd175aea2ef24`.
+The verification receipt SHA-256 is
+`8eb061172ccc90f136b9b1794fc8514114c8a02f4269b963fe0a8562fa18062b`.
+This independent payload verification covers macOS ARM; other platform evidence
+remains the release pipeline's artifact checks.
+
+The verified candidate was staged without execution or installation. Its stage
+receipt SHA-256 is
+`409e1054e5d06709ac9f394cf6ee08540365b0511331a1b3326699f145942a8c`.
+The selected HA, Frigate, and Kerberos package hashes are identical to beta.43's
+recorded pins, so the existing declarations and pins are retained.
+
+Only the new host's installation and installed acceptance remain pending in this
+delivery, awaiting macOS unlock. Beta.43 and its three workers are left running
+without alteration. This is an operating-system access gate, not a new Keychain
+failure or missing implementation. Beta.43 does not contain the recovery fix; its
+completed acceptance is not proof of the new automatic recovery path.
 
 ## Evidence boundaries
 

@@ -83,9 +83,16 @@ source tag, frozen plan, and inventory were independently verified. Installed
 beta.43 passed read-only acceptance with both plugin groups, HA only, core only,
 and cameras only; both groups are restored and all three selected workers are
 Running/Connected. The initial Keychain access stall was resolved, followed by a
-normal restart. A source fix for automatic recovery after a delayed unlock is
-implemented and locally checked, but is not part of installed beta.43. Track its
-remaining release/install gates in the [delivery record](docs/desktop-plugin-delivery.md).
+normal restart. The automatic recovery fix was reviewed and merged through
+[PR #458](https://github.com/victron-venus/inverter-desktop/pull/458) at `74d7311`
+on 2026-09-16 at `13:06Z`: exact head `4151436` passed 59 checks with three skips,
+was approved, and had no unresolved review threads. Release `v2.5.42-beta.45`
+is published; run `35099769637` passed 37 jobs with two skips. Independent public
+macOS ARM app/four-worker verification passed, and the candidate was staged
+without execution. The three selected package hashes match beta.43, so existing
+pins are retained. Beta.43 and its three workers remain running; installing the
+new host and recording its acceptance await macOS unlock. Track that gate in the
+[delivery record](docs/desktop-plugin-delivery.md).
 
 ### Completed implementation: optional feature extraction
 
@@ -267,10 +274,22 @@ replacing the installed application.
       passes 18; type checking, desktop/mobile builds, formatting, error-level
       lint, and strict all-target Clippy pass. Frontend lint retains existing
       warnings and informational diagnostics.
-- [ ] Complete exact-head hosted checks, review/merge, release verification, and
-      installed acceptance for this recovery follow-up. Beta.43's successful
-      normal restart and four-state acceptance do not prove the new automatic
-      recovery path in a released application.
+- [x] Complete exact-head hosted checks and review/merge for PR #458: 59 checks
+      succeeded and three were skipped for head `4151436`; that head was approved
+      with no unresolved review threads and merged as `74d7311` on 2026-09-16
+      at `13:06Z`.
+- [x] Verify beta.45's tag and public macOS ARM app/four-worker bytes against the
+      merged source, frozen plan, and build receipts at `14:09:30Z` on 2026-09-16.
+      Release run `35099769637`, attempt 1, passed 37 jobs with two skips and
+      published 55 assets at `14:02:44Z`. Build number: `2005088`.
+- [x] Stage the verified beta.45 candidate without executing or installing it.
+      The selected HA/Frigate/Kerberos archive hashes match beta.43, so the
+      existing declarations and pins are retained.
+- [ ] Install the verified recovery release and record its acceptance. Installed
+      beta.43's successful normal restart and four-state acceptance do not prove
+      the new automatic recovery path in a released application. This step awaits
+      macOS unlock; beta.43 and its three workers are left running. No new
+      Keychain failure is claimed.
 
 The following completed checkpoints are chronological evidence. Statements such
 as "later work" or "not added" describe their original scope, not current missing
@@ -1859,8 +1878,9 @@ or removing a package changes available features without reinstalling the app.
 Native lifecycle and desktop application/UI integration are implemented. Full
 worker extraction, settings handover, and exact-head integration checks are also
 complete. Release beta.43 publication, public asset readback, and the installed
-macOS four-state matrix are verified. The automatic startup-recovery follow-up
-has a separate release/install gate.
+macOS four-state matrix are verified. The automatic startup-recovery follow-up is
+published and independently verified in beta.45; installation and its acceptance
+await macOS unlock.
 
 Optional future distribution policy: if manual signed-file installation is
 offered, add reviewed publisher keys/provenance to that path. This is not a
@@ -1947,8 +1967,10 @@ never become shipped trust, and no application-signing requirement is introduced
       current unfinished implementation.
 - [x] Complete the beta.43 release and installed acceptance record with observed
       versions, asset identities, backup/rollback scope, and remaining device limits.
-- [ ] Add exact release and installed evidence for the startup-recovery follow-up
-      after its separate reviewed delivery.
+- [x] Record the startup-recovery follow-up's reviewed PR #458, published beta.45,
+      independent public-byte verification, and unexecuted staged candidate.
+- [ ] Add beta.45 installed evidence after macOS unlock permits the host upgrade;
+      keep beta.43's completed acceptance separate from this pending step.
 - [x] Deliver reviewed PR #456 and merge at `32a079c` after exact-head checks pass:
       60 succeeded, six skipped, approved head `2ebba507`, no unresolved threads.
 
