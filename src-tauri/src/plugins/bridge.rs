@@ -1,7 +1,8 @@
 //! App session and window authority around the desktop worker host.
 
 use super::application::{
-    ManagerSnapshot, PackageApplication, PackagePreview, RetainedPluginData, SettingsSaveResult,
+    ManagerSnapshot, PackageApplication, PackagePreview, PluginDesiredChange, RetainedPluginData,
+    SettingsSaveResult,
 };
 use super::media::MediaService;
 use super::publishers::embedded_trust;
@@ -284,11 +285,47 @@ pub(crate) async fn set_plugin_enabled(
     state: State<'_, DesktopPlugins>,
 ) -> Result<(), String> {
     let epoch = management_epoch(&app, &window, &state)?;
+    let persist_app = app.clone();
+    let persist_window = window.clone();
     state
         .packages
-        .set_enabled(&plugin_id, enabled, epoch)
+        .set_enabled_with_config(&plugin_id, enabled, epoch, move |id, change, packages| {
+            persist_plugin_change(&persist_app, &persist_window, id, change, packages, epoch)
+        })
         .await?;
     finish_management(&app, &window, &state, epoch)
+}
+
+fn persist_plugin_change(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    id: &str,
+    change: PluginDesiredChange,
+    packages: &PackageApplication,
+    epoch: u64,
+) -> Result<(), String> {
+    // Match core saves' lock order and reload their latest unrelated fields.
+    // The application retains its reconciliation gate; never await here.
+    let _save = crate::CONFIG_UPDATE_GATE
+        .lock()
+        .map_err(|_| "Config update lock failed")?;
+    let state = app.state::<DesktopPlugins>();
+    finish_management(app, window, &state, epoch)?;
+    let mut config = crate::load_config(app)?;
+    let changed = change.apply(&mut config.desktop_plugins, id);
+    state.host.commit_in_epoch(epoch, || {
+        if changed {
+            crate::save_config_encrypted(app, &config)?;
+        }
+        packages.plugin_desired_changed(id, change);
+        if changed {
+            let _ = app.emit(
+                "plugin-configuration-changed",
+                serde_json::json!({"desktop_plugins": config.desktop_plugins}),
+            );
+        }
+        Ok(())
+    })
 }
 
 /// Group controls are dashboard operations and are also available in settings.
@@ -385,9 +422,18 @@ pub(crate) async fn uninstall_plugin_package(
     state: State<'_, DesktopPlugins>,
 ) -> Result<(), String> {
     let epoch = management_epoch(&app, &window, &state)?;
+    let persist_app = app.clone();
+    let persist_window = window.clone();
     state
         .packages
-        .uninstall_with_settings(&plugin_id, delete_settings.unwrap_or(false), epoch)
+        .uninstall_with_config(
+            &plugin_id,
+            delete_settings.unwrap_or(false),
+            epoch,
+            move |id, change, packages| {
+                persist_plugin_change(&persist_app, &persist_window, id, change, packages, epoch)
+            },
+        )
         .await?;
     finish_management(&app, &window, &state, epoch)
 }

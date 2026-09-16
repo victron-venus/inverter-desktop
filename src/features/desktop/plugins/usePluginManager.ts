@@ -263,8 +263,13 @@ export function createPluginManager(fallbackError: () => string) {
       if (current(session)) await refresh()
     } catch (error_) {
       if (current(session)) {
-        error.value = message(error_)
-        installFailed.value = installing
+        // Native may have persisted a lifecycle change before cleanup failed.
+        // Refresh ownership while retaining the original operation error.
+        await refresh()
+        if (current(session)) {
+          error.value = message(error_)
+          installFailed.value = installing
+        }
       }
     } finally {
       if (current(session)) {
@@ -288,9 +293,7 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   async function setEnabled(pluginId: string, enabled: boolean) {
-    const plugin = findPlugin(pluginId)
-    if (plugin && !plugin.configuration_managed)
-      await mutate('set_plugin_enabled', { pluginId, enabled })
+    if (findPlugin(pluginId)) await mutate('set_plugin_enabled', { pluginId, enabled })
   }
 
   async function rollback(pluginId: string) {
@@ -299,8 +302,7 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   function requestRemoval(pluginId: string) {
-    if (!canManage.value || !findPlugin(pluginId) || findPlugin(pluginId)?.configuration_managed)
-      return
+    if (!canManage.value || !findPlugin(pluginId)) return
     clearSettings()
     retainedData.cancelDeletion()
     confirmRemoval.value = pluginId
@@ -308,11 +310,7 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   async function uninstall(pluginId: string) {
-    if (
-      confirmRemoval.value === pluginId &&
-      findPlugin(pluginId) &&
-      !findPlugin(pluginId)?.configuration_managed
-    ) {
+    if (confirmRemoval.value === pluginId && findPlugin(pluginId)) {
       await mutate('uninstall_plugin_package', { pluginId, deleteSettings: deleteSettings.value })
     }
   }

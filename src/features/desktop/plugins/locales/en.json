@@ -40,6 +40,7 @@
   "rollback": "Roll back to {version}",
   "remove": "Uninstall…",
   "confirmRemove": "Uninstall {plugin} version {version}? Its worker will stop and its installed package files will be removed.",
+  "confirmRemoveConfigured": "Uninstall {plugin} version {version}? Its worker will stop, its installed package files and saved declaration will be removed, and automatic restoration will stop.",
   "confirm": "Uninstall plugin",
   "installed": "Installed · stopped",
   "running": "Running",
@@ -80,7 +81,7 @@
   "closeStoredData": "Close stored data",
   "configuredTitle": "Configured plugins",
   "configuredHelp": "These packages are restored automatically from the saved application configuration.",
-  "configurationManaged": "Version and enabled state are managed in desktop_plugins. Remove its declaration before managing this package manually.",
+  "configurationManaged": "This plugin has a version pinned in configuration. Enable, disable, and uninstall changes are saved immediately; rollback is unavailable while the version is pinned.",
   "retryConfigured": "Retry restoration",
   "restoreState": {
     "pending": "Waiting to restore",

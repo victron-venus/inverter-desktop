@@ -41,10 +41,14 @@ stopped and visible in the manager. Saving valid settings retries activation whe
 the declaration requests `enabled: true`. A declaration with `enabled: false`
 keeps the package stopped after settings changes.
 
-Removing a declaration releases configuration management and retains the current
-installed package and its settings. Uninstall remains an explicit separate action.
-To reinstall a damaged but manageable package, remove the declaration, uninstall
-with settings retained, then restore the declaration and retry. Corrupt store
+The Plugins tab enables, disables, and uninstalls configured packages directly.
+Enable/disable persists the desired state. Confirmed uninstall removes the saved
+declaration as well as the package, preventing automatic restoration; settings
+are retained unless deletion is selected. Removing only a declaration through an
+explicit configuration edit releases version management and retains the current
+installed package and its settings.
+To reinstall a damaged but manageable package, uninstall with settings retained,
+then restore the declaration and retry. Corrupt store
 inventory is reported and never automatically erased to force restoration.
 Ordinary credential-free backup/import policy is unchanged: exported declarations
 are portable, while passwords, tokens, and local authentication policy are not
@@ -235,7 +239,12 @@ deletion happens after worker cleanup, within the authorized uninstall operation
 a deletion failure leaves the installed record available for retry. Deletion and
 package inventory updates are separate filesystem changes: a later inventory
 write failure can leave a stopped installed record with settings already cleared.
-Core configuration and other plugin records are never part of this deletion.
+Other plugin records and unrelated core configuration are never part of this
+deletion. For a configured package, uninstall also removes its declaration after
+persisting a disabled installed state. A later cleanup failure leaves a stopped,
+manageable package and a visible error. Deleting isolated plugin settings does
+not erase preserved legacy configuration or portable module data; a later
+explicit reinstall can seed settings from that retained migration source.
 
 ## Retained data inventory and cleanup
 
