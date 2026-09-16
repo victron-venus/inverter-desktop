@@ -1,5 +1,11 @@
 # Implementation Plan: WebKit High CPU Optimization on macOS M1
 
+> Historical proposal for the former bundled HA implementation. The measurements,
+> line numbers, and proposed edits below describe that earlier baseline; they are
+> not current profiling results or an active implementation checklist. The HA
+> composable has since been removed. See the [current desktop/plugin boundaries](docs/desktop-features-and-mobile-core.md)
+> and [delivery evidence](docs/desktop-plugin-delivery.md) before planning further work.
+
 ## Problem Description
 
 On macOS Apple Silicon (M1), `WebKit.WebContent` (the Tauri webview process) consumes up to **80% CPU**. This occurs even when the app is idling or minimized to the menu bar tray.
