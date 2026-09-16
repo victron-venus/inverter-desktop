@@ -63,7 +63,7 @@ platform fragments and the complete published inventory were checked; independen
 public-byte verification of worker payloads covered macOS ARM only. Configured
 downloads require no publisher key or application signing.
 
-## Installation acceptance
+## Beta.43 installation acceptance
 
 The verified beta.43 app was installed on 2026-09-16 at `08:59:45Z`, with the
 exact executable SHA-256 recorded above. A matched backup retains the previous
@@ -105,7 +105,7 @@ samples were also collected across the four states. They exclude WebKit and are
 observations, not benchmarks, cold-start measurements, or proof of total resource
 savings.
 
-## Startup recovery follow-up: published, installation pending
+## Startup recovery follow-up: published and installed
 
 The initial credential-access delay exposed a recovery gap: after configuration
 became readable, beta.43 needed a normal restart to restore a revoked plugin host.
@@ -151,11 +151,43 @@ receipt SHA-256 is
 The selected HA, Frigate, and Kerberos package hashes are identical to beta.43's
 recorded pins, so the existing declarations and pins are retained.
 
-Only the new host's installation and installed acceptance remain pending in this
-delivery, awaiting macOS unlock. Beta.43 and its three workers are left running
-without alteration. This is an operating-system access gate, not a new Keychain
-failure or missing implementation. Beta.43 does not contain the recovery fix; its
-completed acceptance is not proof of the new automatic recovery path.
+### Beta.45 installation and normal-start acceptance
+
+macOS became accessible on 2026-09-16 at `14:36Z`, resolving the temporary
+installation gate. The unchanged reviewed installer then installed the verified
+beta.45 host using a fresh stopped-app backup transaction,
+`desktop-plugins-beta45-20260916T143800Z`, with zero app/worker processes present.
+The installation receipt SHA-256 is
+`bb4df8668be1e2d53c37a4da39e384afc5115044024ada6db4dcfa98797629b3`.
+Independent validation passed all five backup fingerprints, four protected-data
+security groups, and stage/source identity. The same previously reviewed,
+path-specific OS tracking differences were recorded privately; strict bundle and
+live-source checks were retained. No exact OS tracking restoration is claimed.
+
+The installed executable matches beta.45's `5f173dd6…` SHA-256 recorded above and
+source `74d7311d132f9262feac65e94086138a173aca25`. Its first launch automatically
+restored the Frigate, HA, and Kerberos worker processes. At `14:38:48Z`, the GUI
+showed Desktop `2.5.42-beta.45`, Control `1.23.4`, IGW Live data, the seven core
+flags and DRY/ESS controls, EV/water/battery/solar, Cameras ON, and all 15 Home
+controls. No household commands were sent as test traffic.
+
+Independent inspection confirmed all three declarations enabled with the same
+selected pins, unchanged non-plugin configuration, and three encrypted plugin
+settings byte-identical to the fresh backup. Configuration ciphertext was also
+unchanged, with SHA-256
+`675953f720d78ff230af19ef76ca8cd1ffebb78a3ff49b411cbcb57415ed0bf8`.
+
+A natural Kerberos preview window opened after startup; its pixels were not
+inspected. Subsequent GUI inspection timed out for both the app and SystemUIServer.
+Native inspection still showed stable worker processes and the main thread in
+its normal event loop, without Keychain blocking. No fresh Plugin Manager
+Connected labels or visible confirmation of the new introduction text are claimed.
+Source tests and verified artifact identity cover that copy change.
+
+Implementation, release verification, host installation, and normal first-start
+acceptance are complete. The earlier beta.43 four-state matrix remains separate
+evidence. No delayed or denied Keychain fault was deliberately induced in beta.45;
+the 12 focused recovery regressions cover those authorization/race boundaries.
 
 ## Evidence boundaries
 
