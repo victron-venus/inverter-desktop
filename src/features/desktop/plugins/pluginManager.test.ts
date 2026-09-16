@@ -40,6 +40,14 @@ const installed: ManagedPlugin & { runtime: NonNullable<ManagedPlugin['runtime']
     last_error: null,
   },
 }
+const configured: NonNullable<PluginManagerSnapshot['configured']>[number] = {
+  plugin_id: 'example.pending',
+  version: '3.0.0',
+  declaration_revision: 'a'.repeat(64),
+  enabled: true,
+  state: 'failed',
+  error: 'Package download failed',
+}
 const selected: PluginPackagePreview = {
   token: 'native-preview-token',
   plugin_id: 'example.monitor',
@@ -611,11 +619,198 @@ describe('desktop plugin manager', () => {
     expect(calls('get_plugin_manager_snapshot')).toHaveLength(2)
   })
 
+  it.each([
+    ['en', 'Remove from configuration…', 'Remove from configuration', 'Cancel'],
+    ['ru', 'Убрать из конфигурации…', 'Убрать из конфигурации', 'Отмена'],
+  ])(
+    'confirms removal of an uninstalled declaration while retaining all data in %s',
+    async (locale, request, confirm, cancel) => {
+      const installedDeclaration = {
+        ...configured,
+        plugin_id: installed.plugin_id,
+        version: installed.version,
+      }
+      snapshot.configured = [structuredClone(configured), installedDeclaration]
+      snapshot.plugins = [{ ...structuredClone(installed), configuration_managed: true }]
+      handlers.set('remove_configured_plugin', () => {
+        snapshot.configured = [installedDeclaration]
+      })
+      await openManager(locale)
+      expect(wrapper?.findAll('button').filter((value) => value.text() === request)).toHaveLength(1)
+      await button(request).trigger('click')
+      const messages = (locale === 'ru' ? ru : en).plugins.manager
+      expect(wrapper?.text()).toContain(
+        messages.confirmRemoveConfiguration
+          .replace('{plugin}', configured.plugin_id)
+          .replace('{version}', configured.version)
+      )
+      expect(wrapper?.find('input[name="delete-plugin-settings"]').exists()).toBe(false)
+      expect(calls('remove_configured_plugin')).toHaveLength(0)
+      await button(cancel).trigger('click')
+      expect(calls('remove_configured_plugin')).toHaveLength(0)
+      await button(request).trigger('click')
+      await button(confirm).trigger('click')
+      await flushPromises()
+      expect(native.invoke).toHaveBeenCalledWith('remove_configured_plugin', {
+        pluginId: configured.plugin_id,
+        expectedDeclarationRevision: configured.declaration_revision,
+      })
+      expect(wrapper?.text()).not.toContain(configured.plugin_id)
+      expect(wrapper?.text()).toContain(installed.plugin_id)
+      for (const command of [
+        'save_config',
+        'uninstall_plugin_package',
+        'delete_retained_plugin_data',
+      ])
+        expect(calls(command)).toHaveLength(0)
+    }
+  )
+
+  it.each(['revision', 'removed', 'installed', 'not ready'] as const)(
+    'invalidates declaration removal consent when the snapshot becomes %s',
+    async (change) => {
+      snapshot.configured = [structuredClone(configured)]
+      const value = controller()
+      await value.start()
+      value.requestConfiguredRemoval(configured.plugin_id)
+      expect(value.confirmConfiguredRemoval.value).toEqual({
+        plugin_id: configured.plugin_id,
+        declaration_revision: configured.declaration_revision,
+      })
+      switch (change) {
+        case 'revision':
+          // A same-version pin/metadata edit still requires fresh consent.
+          snapshot.configured[0].declaration_revision = 'b'.repeat(64)
+          break
+        case 'removed':
+          snapshot.configured = []
+          break
+        case 'installed':
+          snapshot.plugins = [{ ...structuredClone(installed), plugin_id: configured.plugin_id }]
+          break
+        case 'not ready':
+          snapshot.ready = false
+          break
+      }
+      await value.refresh()
+      expect(value.confirmConfiguredRemoval.value).toBeNull()
+      await value.removeConfigured(configured.plugin_id)
+      expect(calls('remove_configured_plugin')).toHaveLength(0)
+    }
+  )
+
+  it('drops declaration consent on a failed snapshot and requires new consent after recovery', async () => {
+    snapshot.configured = [structuredClone(configured)]
+    const value = controller()
+    await value.start()
+    value.requestConfiguredRemoval(configured.plugin_id)
+    handlers.set('get_plugin_manager_snapshot', () => {
+      throw new Error('Snapshot unavailable')
+    })
+    await value.refresh()
+    expect(value.confirmConfiguredRemoval.value).toBeNull()
+    expect(value.canManage.value).toBe(false)
+    await value.removeConfigured(configured.plugin_id)
+    handlers.delete('get_plugin_manager_snapshot')
+    await value.refresh()
+    expect(value.canManage.value).toBe(true)
+    await value.removeConfigured(configured.plugin_id)
+    expect(calls('remove_configured_plugin')).toHaveLength(0)
+    value.requestConfiguredRemoval(configured.plugin_id)
+    snapshot.configured[0].state = 'pending'
+    snapshot.configured[0].error = null
+    await value.refresh()
+    expect(value.confirmConfiguredRemoval.value?.declaration_revision).toBe(
+      configured.declaration_revision
+    )
+    await value.removeConfigured(configured.plugin_id)
+    expect(calls('remove_configured_plugin')).toHaveLength(1)
+  })
+
+  it('guards declaration removal identity, consent, duplicate calls, and revoked sessions', async () => {
+    snapshot.configured = [structuredClone(configured)]
+    const value = controller()
+    await value.start()
+    value.requestConfiguredRemoval('missing.plugin')
+    expect(value.confirmConfiguredRemoval.value).toBeNull()
+    await value.removeConfigured(configured.plugin_id)
+    expect(calls('remove_configured_plugin')).toHaveLength(0)
+    snapshot.plugins = [{ ...structuredClone(installed), plugin_id: configured.plugin_id }]
+    await value.refresh()
+    value.requestConfiguredRemoval(configured.plugin_id)
+    expect(value.confirmConfiguredRemoval.value).toBeNull()
+    snapshot.plugins = []
+    await value.refresh()
+    value.requestConfiguredRemoval(configured.plugin_id)
+    await value.removeConfigured('missing.plugin')
+    expect(calls('remove_configured_plugin')).toHaveLength(0)
+    unlocked = false
+    event('auth-state-changed')
+    await flushPromises()
+    expect(value.confirmConfiguredRemoval.value).toBeNull()
+    await value.removeConfigured(configured.plugin_id)
+    expect(calls('remove_configured_plugin')).toHaveLength(0)
+    unlocked = true
+    event('auth-state-changed')
+    await flushPromises()
+    value.requestConfiguredRemoval(configured.plugin_id)
+    const pending = deferred<void>()
+    handlers.set('remove_configured_plugin', () => pending.promise)
+    const removing = value.removeConfigured(configured.plugin_id)
+    value.requestConfiguredRemoval(configured.plugin_id)
+    await value.removeConfigured(configured.plugin_id)
+    expect(value.busy.value).toBe(true)
+    expect(value.confirmConfiguredRemoval.value).toBeNull()
+    expect(calls('remove_configured_plugin')).toHaveLength(1)
+    unlocked = false
+    event('auth-state-changed')
+    await flushPromises()
+    pending.reject(new Error('Outdated removal error'))
+    await removing
+    expect(value.snapshot.value).toBeNull()
+    expect(value.error.value).toBeNull()
+  })
+
+  it('refreshes an installation race into the installed uninstall path without removing the declaration', async () => {
+    snapshot.configured = [structuredClone(configured)]
+    const pending = deferred<void>()
+    handlers.set('remove_configured_plugin', () => pending.promise)
+    await openManager()
+    await button('Remove from configuration…').trigger('click')
+    await button('Remove from configuration').trigger('click')
+    expect(button('Remove from configuration…').attributes('disabled')).toBeDefined()
+    expect(button('Retry restoration').attributes('disabled')).toBeDefined()
+    await button('Remove from configuration…').trigger('click')
+    expect(calls('remove_configured_plugin')).toHaveLength(1)
+    snapshot.plugins = [
+      {
+        ...structuredClone(installed),
+        plugin_id: configured.plugin_id,
+        version: configured.version,
+        configuration_managed: true,
+      },
+    ]
+    pending.reject(new Error('Plugin is installed; refresh and use Uninstall'))
+    await flushPromises()
+    expect(wrapper?.text()).toContain('Plugin is installed; refresh and use Uninstall')
+    expect(
+      wrapper
+        ?.findAll('button')
+        .some((value) => value.text().startsWith('Remove from configuration'))
+    ).toBe(false)
+    expect(button('Uninstall…').attributes('disabled')).toBeUndefined()
+    expect(wrapper?.text()).toContain('Configured plugins')
+    expect(calls('remove_configured_plugin')).toHaveLength(1)
+    expect(calls('uninstall_plugin_package')).toHaveLength(0)
+    expect(calls('save_config')).toHaveLength(0)
+  })
+
   it('retries configured restoration through native authority once and refreshes progress', async () => {
     snapshot.configured = [
       {
         plugin_id: installed.plugin_id,
         version: installed.version,
+        declaration_revision: 'a'.repeat(64),
         enabled: true,
         state: 'failed',
         error: 'Package download failed',
@@ -653,6 +848,7 @@ describe('desktop plugin manager', () => {
         {
           plugin_id: 'example.downloading',
           version: '3.0.0',
+          declaration_revision: 'a'.repeat(64),
           enabled: true,
           state: 'downloading',
           error: null,
@@ -660,6 +856,7 @@ describe('desktop plugin manager', () => {
         {
           plugin_id: 'example.installing',
           version: '4.0.0',
+          declaration_revision: 'b'.repeat(64),
           enabled: true,
           state: 'installing',
           error: null,
@@ -667,6 +864,7 @@ describe('desktop plugin manager', () => {
         {
           plugin_id: 'example.disabled',
           version: '5.0.0',
+          declaration_revision: 'c'.repeat(64),
           enabled: false,
           state: 'disabled',
           error: null,
@@ -674,6 +872,7 @@ describe('desktop plugin manager', () => {
         {
           plugin_id: '<img src=x onerror=alert(1)>',
           version: '6.0.0',
+          declaration_revision: 'd'.repeat(64),
           enabled: true,
           state: 'failed',
           error: '<b>Archive verification failed</b>',

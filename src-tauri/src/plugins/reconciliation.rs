@@ -3,6 +3,7 @@
 use super::super::download::{download_archive, validate_declarations};
 use super::super::package::verify_pinned_archive_bytes;
 use super::super::runtime::WorkerState;
+use super::management::declaration_revision;
 use super::{PackageApplication, PackageManager};
 use crate::plugin_config::DesktopPluginConfig;
 use serde::Serialize;
@@ -16,6 +17,7 @@ pub(crate) struct ConfiguredStatus {
     plugin_id: String,
     version: String,
     enabled: bool,
+    declaration_revision: String,
     state: String,
     error: Option<String>,
 }
@@ -79,6 +81,7 @@ impl PackageApplication {
                             plugin_id: declaration.plugin_id.clone(),
                             version: declaration.version.clone(),
                             enabled: declaration.enabled,
+                            declaration_revision: declaration_revision(declaration),
                             state: "pending".into(),
                             error: None,
                         },
@@ -105,16 +108,20 @@ impl PackageApplication {
             .desired
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        for declaration in &mut desired.declarations {
+        let Desired {
+            declarations,
+            statuses,
+            ..
+        } = &mut *desired;
+        for declaration in declarations {
             if members.contains(&declaration.plugin_id) {
                 declaration.enabled = enabled;
-            }
-        }
-        for (id, status) in &mut desired.statuses {
-            if members.contains(id) {
-                status.enabled = enabled;
-                status.state = "pending".into();
-                status.error = None;
+                if let Some(status) = statuses.get_mut(&declaration.plugin_id) {
+                    status.enabled = enabled;
+                    status.declaration_revision = declaration_revision(declaration);
+                    status.state = "pending".into();
+                    status.error = None;
+                }
             }
         }
     }

@@ -8,7 +8,9 @@
     :aria-pressed="toggle ? active : undefined"
     :title="unavailable ? 'Unavailable' : undefined"
   >
-    <Loader2 v-if="loading" :size="iconSize" class="animate-spin shrink-0" />
+    <slot v-if="loading" name="loading">
+      <Loader2 :size="iconSize" class="animate-spin shrink-0" />
+    </slot>
     <slot />
   </button>
 </template>

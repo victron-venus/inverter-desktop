@@ -88,7 +88,7 @@ impl PackageApplication {
                     &id,
                     epoch,
                     if result.is_err() {
-                        "error"
+                        "failed"
                     } else if enabled {
                         "ready"
                     } else {

@@ -146,6 +146,7 @@ export interface PluginManagerSnapshot {
   configured?: Array<{
     plugin_id: string
     version: string
+    declaration_revision: string
     enabled: boolean
     state: 'pending' | 'downloading' | 'installing' | 'ready' | 'disabled' | 'failed'
     error: string | null

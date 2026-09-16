@@ -1,8 +1,8 @@
 //! App session and window authority around the desktop worker host.
 
 use super::application::{
-    ManagerSnapshot, PackageApplication, PackagePreview, PluginDesiredChange, RetainedPluginData,
-    SettingsSaveResult,
+    remove_configured_declaration, ManagerSnapshot, PackageApplication, PackagePreview,
+    PluginDesiredChange, RetainedPluginData, SettingsSaveResult,
 };
 use super::media::MediaService;
 use super::publishers::embedded_trust;
@@ -410,6 +410,48 @@ pub(crate) async fn rollback_plugin_package(
 ) -> Result<(), String> {
     let epoch = management_epoch(&app, &window, &state)?;
     state.packages.rollback(&plugin_id, epoch).await?;
+    finish_management(&app, &window, &state, epoch)
+}
+
+#[tauri::command]
+pub(crate) async fn remove_configured_plugin(
+    plugin_id: String,
+    expected_declaration_revision: String,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    let persist_app = app.clone();
+    let persist_window = window.clone();
+    state
+        .packages
+        .remove_configured_with_config(
+            &plugin_id,
+            &expected_declaration_revision,
+            epoch,
+            move |id, expected_revision, packages| {
+                // Keep the same operation -> config -> authority order as
+                // managed uninstall. No asynchronous work holds the save gate.
+                let _save = crate::CONFIG_UPDATE_GATE
+                    .lock()
+                    .map_err(|_| "Config update lock failed")?;
+                let state = persist_app.state::<DesktopPlugins>();
+                finish_management(&persist_app, &persist_window, &state, epoch)?;
+                let mut config = crate::load_config(&persist_app)?;
+                remove_configured_declaration(&mut config.desktop_plugins, id, expected_revision)?;
+                state.host.commit_in_epoch(epoch, || {
+                    crate::save_config_encrypted(&persist_app, &config)?;
+                    packages.plugin_desired_changed(id, PluginDesiredChange::Removed);
+                    let _ = persist_app.emit(
+                        "plugin-configuration-changed",
+                        serde_json::json!({"desktop_plugins": config.desktop_plugins}),
+                    );
+                    Ok(())
+                })
+            },
+        )
+        .await?;
     finish_management(&app, &window, &state, epoch)
 }
 

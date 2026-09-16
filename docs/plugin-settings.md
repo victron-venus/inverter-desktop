@@ -50,6 +50,14 @@ installed package and its settings.
 To reinstall a damaged but manageable package, uninstall with settings retained,
 then restore the declaration and retry. Corrupt store
 inventory is reported and never automatically erased to force restoration.
+
+When a configured package has not been installed, **Remove from configuration**
+removes its automatic-restoration declaration after confirmation. Existing
+settings, secrets, and stored data remain available for a later explicit install.
+A changed declaration requires fresh confirmation. If an in-flight restoration
+installs the package before removal can run, the operation reports that change;
+use the refreshed installed card's **Uninstall** action to remove its package.
+
 Ordinary credential-free backup/import policy is unchanged: exported declarations
 are portable, while passwords, tokens, and local authentication policy are not
 exported. Unknown declaration metadata survives mobile save/export roundtrips;

@@ -18,6 +18,10 @@ export function createPluginManager(fallbackError: () => string) {
   const preview = ref<PluginPackagePreview | null>(null)
   const enableAfterInstall = ref(true)
   const confirmRemoval = ref<string | null>(null)
+  const confirmConfiguredRemoval = ref<{
+    plugin_id: string
+    declaration_revision: string
+  } | null>(null)
   const deleteSettings = ref(false)
   const settingsEditor = ref<{ plugin_id: string; version: string; key: number } | null>(null)
   const settingsBusy = ref(false)
@@ -78,6 +82,7 @@ export function createPluginManager(fallbackError: () => string) {
     retainedData.close()
     snapshot.value = null
     confirmRemoval.value = null
+    confirmConfiguredRemoval.value = null
     deleteSettings.value = false
     authorized.value = false
     connected.value = false
@@ -99,6 +104,15 @@ export function createPluginManager(fallbackError: () => string) {
       const previous = snapshot.value
       snapshot.value = value
       connected.value = true
+      const configuredRemoval = confirmConfiguredRemoval.value
+      if (
+        configuredRemoval &&
+        (!value.ready ||
+          !isUninstalledConfigured(configuredRemoval.plugin_id) ||
+          findConfigured(configuredRemoval.plugin_id)?.declaration_revision !==
+            configuredRemoval.declaration_revision)
+      )
+        confirmConfiguredRemoval.value = null
       if (!value.plugins.some((plugin) => plugin.plugin_id === confirmRemoval.value)) {
         confirmRemoval.value = null
         deleteSettings.value = false
@@ -125,6 +139,7 @@ export function createPluginManager(fallbackError: () => string) {
     } catch (error_) {
       if (!current(session)) return
       connected.value = false
+      confirmConfiguredRemoval.value = null
       clearSettings()
       retainedData.close()
       error.value = message(error_)
@@ -228,6 +243,7 @@ export function createPluginManager(fallbackError: () => string) {
     error.value = null
     installFailed.value = false
     confirmRemoval.value = null
+    confirmConfiguredRemoval.value = null
     const previous = preview.value
     preview.value = null
     try {
@@ -256,6 +272,7 @@ export function createPluginManager(fallbackError: () => string) {
     error.value = null
     installFailed.value = false
     confirmRemoval.value = null
+    confirmConfiguredRemoval.value = null
     deleteSettings.value = false
     if (!installing) clearPreview()
     try {
@@ -292,6 +309,44 @@ export function createPluginManager(fallbackError: () => string) {
     return snapshot.value?.plugins.find((plugin) => plugin.plugin_id === pluginId)
   }
 
+  function findConfigured(pluginId: string) {
+    return snapshot.value?.configured?.find((plugin) => plugin.plugin_id === pluginId)
+  }
+
+  function isUninstalledConfigured(pluginId: string) {
+    return !!findConfigured(pluginId)?.declaration_revision && !findPlugin(pluginId)
+  }
+
+  function requestConfiguredRemoval(pluginId: string) {
+    const plugin = findConfigured(pluginId)
+    if (!canManage.value || !plugin || !isUninstalledConfigured(pluginId)) return
+    clearSettings()
+    clearPreview()
+    retainedData.cancelDeletion()
+    confirmRemoval.value = null
+    deleteSettings.value = false
+    confirmConfiguredRemoval.value = {
+      plugin_id: pluginId,
+      declaration_revision: plugin.declaration_revision,
+    }
+  }
+
+  async function removeConfigured(pluginId: string) {
+    const confirmation = confirmConfiguredRemoval.value
+    if (!canManage.value || confirmation?.plugin_id !== pluginId) return
+    if (
+      !isUninstalledConfigured(pluginId) ||
+      findConfigured(pluginId)?.declaration_revision !== confirmation.declaration_revision
+    ) {
+      confirmConfiguredRemoval.value = null
+      return
+    }
+    await mutate('remove_configured_plugin', {
+      pluginId,
+      expectedDeclarationRevision: confirmation.declaration_revision,
+    })
+  }
+
   async function setEnabled(pluginId: string, enabled: boolean) {
     if (findPlugin(pluginId)) await mutate('set_plugin_enabled', { pluginId, enabled })
   }
@@ -305,6 +360,7 @@ export function createPluginManager(fallbackError: () => string) {
     if (!canManage.value || !findPlugin(pluginId)) return
     clearSettings()
     retainedData.cancelDeletion()
+    confirmConfiguredRemoval.value = null
     confirmRemoval.value = pluginId
     deleteSettings.value = false
   }
@@ -321,6 +377,7 @@ export function createPluginManager(fallbackError: () => string) {
     retainedData.close()
     clearPreview()
     confirmRemoval.value = null
+    confirmConfiguredRemoval.value = null
     settingsEditor.value = { plugin_id: pluginId, version: plugin.version, key: ++editorKey }
     settingsBusy.value = true
   }
@@ -345,6 +402,7 @@ export function createPluginManager(fallbackError: () => string) {
     clearSettings()
     clearPreview()
     confirmRemoval.value = null
+    confirmConfiguredRemoval.value = null
     await retainedData.open()
   }
 
@@ -353,6 +411,7 @@ export function createPluginManager(fallbackError: () => string) {
     preview,
     enableAfterInstall,
     confirmRemoval,
+    confirmConfiguredRemoval,
     deleteSettings,
     settingsEditor,
     retainedData,
@@ -377,6 +436,9 @@ export function createPluginManager(fallbackError: () => string) {
     rollback,
     requestRemoval,
     uninstall,
+    isUninstalledConfigured,
+    requestConfiguredRemoval,
+    removeConfigured,
     openSettings,
     setSettingsBusy,
     closeSettings,

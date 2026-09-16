@@ -9,7 +9,7 @@ mod groups;
 pub(crate) use groups::PluginGroupSnapshot;
 #[path = "management.rs"]
 mod management;
-pub(crate) use management::PluginDesiredChange;
+pub(crate) use management::{remove_configured_declaration, PluginDesiredChange};
 #[path = "reconciliation.rs"]
 mod reconciliation;
 use super::settings::{PluginSettingsView, SettingsSchema};
