@@ -34,6 +34,8 @@ fn declared_package_revision(
     let entrypoint = format!("{mode}{}", std::env::consts::EXE_SUFFIX);
     fs::copy(fixture(), source.join(&entrypoint)).unwrap();
     let mut manifest = PluginManifest {
+        group: None,
+        live_view: None,
         schema_version: 1,
         plugin_id: PLUGIN.into(),
         version: version.into(),
@@ -559,6 +561,8 @@ fn configured_archive(
     let entrypoint = format!("{mode}{}", std::env::consts::EXE_SUFFIX);
     fs::copy(fixture(), source.join(&entrypoint)).unwrap();
     let metadata = PluginManifest {
+        group: None,
+        live_view: None,
         http_video: None,
         schema_version: 1,
         plugin_id: PLUGIN.into(),
@@ -1427,3 +1431,242 @@ async fn cancelled_retained_deletion_keeps_expiry_active_and_cannot_commit_after
     assert_eq!(service.retained_data(next).await.unwrap().records.len(), 1);
     service.close().await.unwrap();
 }
+
+fn grouped_declaration(
+    directory: &Path,
+    id: &str,
+    grouped: bool,
+) -> (DesktopPluginConfig, Vec<u8>) {
+    let source = directory.join(format!("group-payload-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&source).unwrap();
+    let entrypoint = format!("worker{}", std::env::consts::EXE_SUFFIX);
+    fs::copy(fixture(), source.join(&entrypoint)).unwrap();
+    let bytes = build_pinned_package(
+        PluginManifest {
+            schema_version: 1,
+            plugin_id: id.into(),
+            version: "1.0.0".into(),
+            host_api: "^1.8".into(),
+            target: env!("INVERTER_DESKTOP_TARGET").into(),
+            entrypoint,
+            permissions: vec![PluginPermission::DashboardContributions],
+            config_schema: json!({"type":"object"}),
+            group: grouped.then(|| crate::plugins::protocol::PluginGroup {
+                id: "cameras".into(),
+                title: "Cameras".into(),
+                icon: "camera".into(),
+            }),
+            live_view: None,
+            http_video: None,
+            inventory: Vec::new(),
+            signature: None,
+        },
+        &source,
+    )
+    .unwrap();
+    let declaration = DesktopPluginConfig {
+        plugin_id: id.into(),
+        version: "1.0.0".into(),
+        enabled: true,
+        artifacts: BTreeMap::from([(
+            env!("INVERTER_DESKTOP_TARGET").into(),
+            DesktopPluginArtifact {
+                url: format!("https://plugins.example.invalid/{id}.idplugin"),
+                sha256: sha256_hex(&bytes),
+                extra: BTreeMap::new(),
+            },
+        )]),
+        extra: BTreeMap::new(),
+    };
+    (declaration, bytes)
+}
+
+async fn install_group_fixture(
+    service: &PackageApplication,
+    epoch: u64,
+    declaration: &DesktopPluginConfig,
+    bytes: &[u8],
+) {
+    let package = crate::plugins::package::verify_pinned_archive_bytes(
+        bytes.to_vec(),
+        &declaration.plugin_id,
+        &declaration.version,
+        env!("INVERTER_DESKTOP_TARGET"),
+        &sha256_hex(bytes),
+    )
+    .unwrap();
+    service
+        .manager()
+        .unwrap()
+        .install_verified_in_epoch(package, true, epoch)
+        .await
+        .unwrap();
+    service.0.metadata_revision.fetch_add(1, Ordering::AcqRel);
+}
+
+#[tokio::test]
+async fn group_toggle_persists_pinned_intent_and_keeps_unrelated_worker_instance() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let first = grouped_declaration(&root, "test.camera-one", true);
+    let second = grouped_declaration(&root, "test.camera-two", true);
+    let unrelated = grouped_declaration(&root, "test.other", false);
+    let declarations = vec![first.0.clone(), second.0.clone(), unrelated.0.clone()];
+    let (service, host, epoch) =
+        configured_application(&root, declarations.clone(), settings_test_key()).await;
+    for (declaration, bytes) in [&first, &second, &unrelated] {
+        install_group_fixture(&service, epoch, declaration, bytes).await;
+    }
+    let original = host
+        .snapshots()
+        .into_iter()
+        .find(|worker| worker.plugin_id == unrelated.0.plugin_id)
+        .unwrap()
+        .instance_id;
+    let groups = service.groups(epoch).await.unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(
+        groups[0].plugin_ids,
+        [first.0.plugin_id.clone(), second.0.plugin_id.clone()]
+    );
+    assert!(groups[0].enabled);
+    let persisted = Arc::new(Mutex::new(declarations));
+    for enabled in [false, true] {
+        let saved = persisted.clone();
+        let authority = host.clone();
+        service
+            .set_group_enabled(
+                "cameras".into(),
+                enabled,
+                epoch,
+                move |members, packages| {
+                    authority.commit_in_epoch(epoch, || {
+                        for declaration in saved.lock().unwrap().iter_mut() {
+                            if members.contains(&declaration.plugin_id) {
+                                declaration.enabled = enabled;
+                            }
+                        }
+                        packages.group_desired_changed(members, enabled);
+                        Ok(())
+                    })
+                },
+            )
+            .await
+            .unwrap();
+        // Startup reconciliation must use the new desired state without a download.
+        service
+            .reconcile_with(service.manager().unwrap(), epoch, |_| async {
+                panic!("cached group toggle must not download")
+            })
+            .await
+            .unwrap();
+        assert_eq!(service.groups(epoch).await.unwrap()[0].enabled, enabled);
+        assert_eq!(host.authority_epoch(), epoch);
+        assert_eq!(
+            host.snapshots()
+                .into_iter()
+                .find(|worker| worker.plugin_id == unrelated.0.plugin_id)
+                .unwrap()
+                .instance_id,
+            original
+        );
+        for record in service.manager().unwrap().list().await.unwrap() {
+            assert_eq!(
+                record.enabled,
+                if record.plugin_id == unrelated.0.plugin_id {
+                    true
+                } else {
+                    enabled
+                }
+            );
+        }
+        assert!(persisted
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|entry| entry.enabled == (enabled || entry.plugin_id == unrelated.0.plugin_id)));
+    }
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn group_failed_persistence_and_unknown_group_never_change_inventory() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let package = grouped_declaration(&root, "test.camera", true);
+    let (service, host, epoch) =
+        configured_application(&root, vec![package.0.clone()], settings_test_key()).await;
+    install_group_fixture(&service, epoch, &package.0, &package.1).await;
+    let original = host.snapshots()[0].instance_id.clone();
+    assert!(service
+        .set_group_enabled("missing".into(), false, epoch, |_, _| panic!(
+            "unverified group must not persist"
+        ))
+        .await
+        .is_err());
+    assert_eq!(
+        service
+            .set_group_enabled("cameras".into(), false, epoch, |_, _| Err(
+                "save failed".into()
+            ))
+            .await
+            .unwrap_err(),
+        "save failed"
+    );
+    assert!(service.manager().unwrap().list().await.unwrap()[0].enabled);
+    assert_eq!(host.snapshots()[0].instance_id, original);
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn group_owned_toggle_survives_caller_cancellation_and_revoked_waiter_cannot_persist() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let package = grouped_declaration(&root, "test.camera", true);
+    let (service, host, epoch) =
+        configured_application(&root, vec![package.0.clone()], settings_test_key()).await;
+    install_group_fixture(&service, epoch, &package.0, &package.1).await;
+    for revoke in [false, true] {
+        let gate = service.0.reconciliation.operation.lock().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let operation = service.clone();
+        let authority = host.clone();
+        let task = tokio::spawn(async move {
+            operation
+                .set_group_enabled("cameras".into(), false, epoch, move |members, packages| {
+                    authority.commit_in_epoch(epoch, || {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        packages.group_desired_changed(members, false);
+                        Ok(())
+                    })
+                })
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !service.has_session_work() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if revoke {
+            service.session_configured(false, Ok(vec![package.0.clone()]));
+        }
+        task.abort();
+        drop(gate);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while service.has_session_work() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), usize::from(!revoke));
+        assert!(!service.manager().unwrap().list().await.unwrap()[0].enabled);
+    }
+    service.close().await.unwrap();
+}
+
+#[path = "application_migration_tests.rs"]
+mod migration_tests;

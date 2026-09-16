@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "plugin_id": "inverter-desktop.kerberos",
+  "version": "0.1.0",
+  "host_api": "^1.8",
+  "target": "TARGET",
+  "entrypoint": "bin/inverter-kerberos-worker",
+  "permissions": [
+    "dashboard_contributions",
+    "plugin_configuration",
+    "network_mqtt",
+    "desktop_notifications",
+    "live_view"
+  ],
+  "config_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["mqtt_host"],
+    "properties": {
+      "mqtt_host": {
+        "type": "string",
+        "title": "MQTT broker host",
+        "description": "Hostname or IP address of the broker used by Kerberos.",
+        "minLength": 1,
+        "maxLength": 253
+      },
+      "mqtt_port": {
+        "type": "integer",
+        "title": "MQTT broker port",
+        "minimum": 1,
+        "maximum": 65535,
+        "default": 1883
+      },
+      "mqtt_tls": {
+        "type": "boolean",
+        "title": "Use TLS",
+        "description": "Require a server certificate trusted by the worker's TLS roots.",
+        "default": false
+      },
+      "mqtt_username": {
+        "type": "string",
+        "title": "MQTT username",
+        "writeOnly": true,
+        "maxLength": 1024
+      },
+      "mqtt_password": {
+        "type": "string",
+        "title": "MQTT password",
+        "writeOnly": true,
+        "maxLength": 1024
+      },
+      "mqtt_topics": {
+        "type": "string",
+        "title": "MQTT topic filters",
+        "description": "Up to 16 provider-specific filters separated by semicolons. Only complete identity segments may use +; global # filters are rejected.",
+        "minLength": 1,
+        "maxLength": 4096,
+        "default": "kerberos/agent/+;kerberos/hub/+"
+      },
+      "camera_labels": {
+        "type": "string",
+        "title": "Camera names",
+        "description": "Optional camera names keyed by exact camera ID.",
+        "maxLength": 8192,
+        "x-editor": {
+          "kind": "json",
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "title": "Camera name",
+              "minLength": 1,
+              "maxLength": 96
+            },
+            "maxProperties": 32
+          }
+        }
+      },
+      "camera_live_urls": {
+        "type": "string",
+        "title": "Private live camera addresses",
+        "description": "Optional HTTP(S) destinations keyed by exact camera ID. Motion opens an isolated live preview automatically for 15 seconds. Replacing this private mapping replaces all its entries.",
+        "writeOnly": true,
+        "maxLength": 16384,
+        "x-editor": {
+          "kind": "json",
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "title": "Live URL",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "maxProperties": 32
+          }
+        }
+      }
+    }
+  },
+  "inventory": [],
+  "signature": null,
+  "group": {
+    "id": "cameras",
+    "title": "Cameras",
+    "icon": "camera"
+  },
+  "live_view": {
+    "urls_setting": "camera_live_urls",
+    "preview_duration_seconds": 15
+  }
+}

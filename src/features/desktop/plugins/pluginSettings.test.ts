@@ -140,9 +140,9 @@ describe('desktop plugin settings', () => {
     const mounted = await open()
     const host = mounted.find<HTMLInputElement>('input[name="host"]')
     const token = mounted.find<HTMLInputElement>('input[name="token"]')
-    expect(host.element.maxLength).toBe(16_384)
-    expect(token.element.maxLength).toBe(16_384)
-    expect(mounted.find<HTMLInputElement>('input[name="password"]').element.maxLength).toBe(16_384)
+    expect(host.element.maxLength).toBe(16_510)
+    expect(token.element.maxLength).toBe(16_510)
+    expect(mounted.find<HTMLInputElement>('input[name="password"]').element.maxLength).toBe(24_576)
     expect(mounted.find('input[name="port"]').attributes('maxlength')).toBeUndefined()
     await host.setValue(entities)
     await token.setValue('x'.repeat(8255))
@@ -378,4 +378,164 @@ describe('desktop plugin settings', () => {
       expect(mounted.find('[role="alert"]').text()).toBe('Check the value for port.')
     }
   )
+})
+
+describe('declarative structured settings', () => {
+  it('edits nested layout fields and exact discovered targets without exposing raw JSON', async () => {
+    view.fields = [
+      field('layout', {
+        editor: {
+          kind: 'json',
+          schema: {
+            type: 'object',
+            properties: {
+              version: { type: 'integer', const: 1 },
+              controls: {
+                type: 'array',
+                title: 'Controls',
+                maxItems: 64,
+                items: {
+                  type: 'object',
+                  required: ['label', 'entity'],
+                  properties: {
+                    label: { type: 'string', title: 'Label' },
+                    entity: {
+                      type: 'string',
+                      title: 'Target',
+                      'x-options-source': 'entities',
+                      'x-options-prefixes': ['light.'],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]
+    view.values = {
+      layout: JSON.stringify({
+        version: 1,
+        controls: [{ label: 'Porch', entity: 'light.porch' }],
+        future: { retained: true },
+      }),
+    }
+    native.invoke.mockImplementation(async (command: string, args) => {
+      if (command === 'get_plugin_settings') return structuredClone(view)
+      if (command === 'get_plugin_settings_choices')
+        return {
+          revision: 'worker:catalog',
+          sources: {
+            entities: [
+              { value: 'light.porch', label: 'Porch' },
+              { value: 'sensor.temp', label: 'Temperature' },
+            ],
+          },
+        }
+      if (command === 'save_plugin_settings')
+        return { settings: { ...view, values: args.values }, restart_error: null }
+    })
+    const mounted = await open()
+    expect(native.invoke).toHaveBeenCalledWith('get_plugin_settings_choices', {
+      pluginId: view.plugin_id,
+    })
+    expect(mounted.find('textarea').exists()).toBe(false)
+    expect(mounted.findAll('datalist option').map((option) => option.attributes('value'))).toEqual([
+      'light.porch',
+    ])
+    await mounted.get('input[aria-label="Label"]').setValue('Front porch')
+    await mounted.find('form').trigger('submit')
+    await flushPromises()
+    expect(JSON.parse(saves()[0][1].values.layout)).toEqual({
+      version: 1,
+      controls: [{ label: 'Front porch', entity: 'light.porch' }],
+      future: { retained: true },
+    })
+  })
+  it('keeps stored secret maps opaque and requires explicit replacement before editing entries', async () => {
+    view.fields = [
+      field('live_urls', {
+        secret: true,
+        editor: {
+          kind: 'json',
+          schema: {
+            type: 'object',
+            maxProperties: 32,
+            additionalProperties: { type: 'string', title: 'Live URL', maxLength: 2048 },
+          },
+        },
+      }),
+    ]
+    view.secret_present = { live_urls: true }
+    view.values = { live_urls: 'unexpected-native-secret' }
+    const mounted = await open()
+    expect(mounted.html()).not.toContain('unexpected-native-secret')
+    expect(mounted.find('input[type="password"]').exists()).toBe(false)
+    await button('Replace stored value').trigger('click')
+    await button('Add entry').trigger('click')
+    await mounted.get('input[type="password"]').setValue('https://private.invalid/live')
+    await mounted.find('form').trigger('submit')
+    await flushPromises()
+    expect(saves()[0][1].secretChanges).toEqual({
+      live_urls: '{"new":"https://private.invalid/live"}',
+    })
+    expect(mounted.html()).not.toContain('private.invalid')
+    expect(mounted.find('input[type="password"]').exists()).toBe(false)
+    expect(saves()[0][1].values).toEqual({})
+  })
+  it('does not erase an unparsable stored value and discards catalog replies after editor teardown', async () => {
+    view.fields = [
+      field('layout', {
+        editor: {
+          kind: 'json',
+          schema: {
+            type: 'object',
+            properties: { target: { type: 'string', 'x-options-source': 'entities' } },
+          },
+        },
+      }),
+    ]
+    view.values = { layout: 'future-not-json' }
+    const result = deferred<{
+      revision: string
+      sources: Record<string, Array<{ value: string; label: string }>>
+    }>()
+    native.invoke.mockImplementation(async (command: string) =>
+      command === 'get_plugin_settings' ? structuredClone(view) : result.promise
+    )
+    const value = controller()
+    await value.load()
+    value.stop()
+    result.resolve({
+      revision: 'late',
+      sources: { entities: [{ value: 'light.late', label: 'Late' }] },
+    })
+    await flushPromises()
+    expect(value.choices.value.sources).toEqual({})
+    native.invoke.mockImplementation(async (command: string, args) =>
+      command === 'get_plugin_settings'
+        ? structuredClone(view)
+        : command === 'get_plugin_settings_choices'
+          ? { revision: null, sources: {} }
+          : { settings: { ...view, values: args.values }, restart_error: null }
+    )
+    const mounted = await open()
+    expect(mounted.text()).toContain('It has been preserved.')
+    await mounted.find('form').trigger('submit')
+    await flushPromises()
+    expect(saves()[0][1].values.layout).toBe('future-not-json')
+  })
+})
+
+it('redacts individual values from a newly entered structured secret on native failure', async () => {
+  view.fields = [field('private_map', { secret: true })]
+  view.values = {}
+  view.secret_present = { private_map: true }
+  const value = controller()
+  await value.load()
+  value.setSecret('private_map', '{"front":"https://private.invalid/live"}')
+  native.invoke.mockRejectedValueOnce(new Error('Could not load https://private.invalid/live'))
+  expect(await value.save()).toBe(false)
+  expect(value.error.value).toBe('Could not load ••••')
+  expect(value.secretChanges.value).toEqual({})
 })

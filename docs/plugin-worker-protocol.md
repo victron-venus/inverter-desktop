@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.7.0**, independently of the application version. The
+The current host API is **1.8.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -64,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.7.0",
+  "host_api_version": "1.8.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -76,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.7.0",
+  "host_api_version": "1.8.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -118,7 +118,7 @@ startup deadline covers both steps. Early contributions, missing/mismatched or
 duplicate acknowledgments fail that generation. Packages without configuration
 permission receive no configuration frame and complete startup after `ready`.
 Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
-are incompatible with a 1.7 host. The wire protocol and manifest remain version 1.
+are incompatible with a 1.8 host. The wire protocol and manifest remain version 1.
 A configured worker should declare an API requirement such as `^1.1`.
 
 The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
@@ -175,7 +175,7 @@ the projection does not change action references or authority. HA 0.11 adds
 optional washer/dryer remaining-time profiles in existing text/status slots,
 retaining `^1.6` and the same authority, wire schema and contribution kinds.
 Existing workers with compatible
-`^1.3`, `^1.4`, `^1.5` or `^1.6` ranges still negotiate the selected 1.7 version; Frigate
+`^1.3`, `^1.4`, `^1.5` or `^1.6` ranges still negotiate the selected 1.8 version; Frigate
 retains its existing API range and flat contributions.
 
 ## Larger selected installations (host API 1.7)
@@ -187,6 +187,62 @@ One connection status plus 64 entity states plus 63 controls fills the snapshot.
 Counts do not override the serialized byte limit: the worker bounds its display
 strings, including JSON escaping, before publishing a complete replacement.
 This capacity does not itself migrate legacy settings or activate a second UI.
+
+## Compact presentation and settings choices (host API 1.8)
+
+A Contributions frame may include `presentation`, an optional array of at most
+96 host-owned descriptors. The host validates items and presentation together
+before replacing either snapshot; the complete frame remains limited to 64 KiB.
+Omitting the array supplies no compact views. This is declarative data, never
+frontend source or arbitrary component loading.
+
+- `control`: `id`, `surface` (`header` or `home`), `order`, `title`, `icon`,
+  `state` (`on`, `off`, `unavailable`), and optional `action` contribution ID.
+  The state controls appearance; only a valid current action reference enables
+  interaction. This preserves actionable unknown button/scene states. Workers
+  withdraw the reference when disconnected or when the operation is unavailable.
+- `group`: `id`, `surface: "sidebar"`, `order`, `title`, `icon`, `collapsed`,
+  and up to 64 `rows`. Each row supplies `id`, `title`, a read-only contribution
+  reference in `value`, up to four `{id, label}` action references, and optional
+  `input` referencing a numeric contribution.
+- `summary`: sidebar identity/order/title/icon, `visible`, `active`, `text`, and
+  up to four action references. Workers compute appliance visibility and status.
+- `weather`: sidebar identity/order/title, `condition`, string `temperature`,
+  `unit`, and up to five forecast entries with `datetime`, `condition`, string
+  `temperature`, and optional string `templow`.
+- `connection`: `id`, `title`, and explicit boolean `connected`.
+
+Descriptor and row IDs are unique within their scope, bounded to 64 bytes with
+letters, digits, periods, underscores, and hyphens. Icons are `home`, `plug`,
+`light`, `washer`, `dryer`, `dishwasher`, `thermometer`, `gauge`, `blinds`, `play`,
+or `cloud`. All references must resolve to the expected contribution kind in the
+same atomic frame. Repeating one authorized action under distinct labels is
+allowed; a presentation reference is not a native `action_id` and grants nothing.
+Dashboard order mixes core controls and explicit plugin positions without
+removing hidden legacy records. The generic host renders these views in existing
+compact sections, never an appended flat diagnostic panel.
+
+Workers may publish a read-only `event` named `settings_choices` with data:
+
+```json
+{
+  "source": "entities",
+  "revision": "catalog-1",
+  "offset": 0,
+  "complete": true,
+  "options": [{ "value": "light.kitchen", "label": "Kitchen" }]
+}
+```
+
+Each page contains at most 64 choices; up to eight sources and 4,096 unique values
+per source are retained. Values and labels occupy at most 128 bytes. Sequential
+pages must retain the revision and exact offset. Publication replaces a source
+only on its complete page; partial pages are not exposed. Worker/session removal
+revokes the catalog. The authenticated settings window reads it through
+`get_plugin_settings_choices({pluginId})`, receiving `{revision, sources}`.
+Catalog entries are suggestions, never observed state, permission, or action
+advertisements. Manifest editor metadata and bounded structured JSON strings are
+described in [plugin settings](plugin-settings.md).
 
 ## Dashboard contributions
 
@@ -253,7 +309,7 @@ ownership. Plain text, metric and status updates can replace the anchor's kind
 without changing its identity. Unreferenced controls retain their flat layout.
 
 References are presentation only. Each control stays in the flat snapshot and
-consumes its existing contribution slot; the 64-item and 64-KiB limits still apply.
+consumes its existing contribution slot; the 128-item and 64-KiB limits still apply.
 There are no nested groups, executable views or additional permissions. Referencing
 a read-only card never grants that card an action, and selecting or discovering
 a state never creates controls. Actions retain exact parameters and instance
@@ -333,9 +389,11 @@ only after its startup handshake and required configuration acknowledgment:
 The ID follows the existing 128-byte identifier grammar. Title and body must be
 nonblank plain text without control characters, bounded to 128 and 1,024 UTF-8
 bytes respectively. Unknown fields, malformed content, missing permission, and
-messages before readiness fail that worker generation. There are no URLs,
-actions, images, sounds, Tauri commands, or arbitrary notification options.
-Packages using this capability must declare a compatible range such as `^1.2`.
+messages before readiness fail that worker generation. Host API 1.8 optionally
+accepts `live_view_id`, an exact key in a startup-derived private destination map.
+It is not a URL, Tauri command, or arbitrary notification option.
+Ordinary notification packages require at least host API 1.2; packages using
+`live_view_id` require host API 1.8.
 
 Delivery is best effort. Each registered worker has at most 16 queued notifications,
 30 accepted notifications per minute, and 512 recent IDs remembered for ten minutes.
@@ -347,8 +405,10 @@ automatic worker restarts; process/session replacement cannot revive a queued it
 
 The native dispatcher checks the original session epoch, running process generation,
 stop signal, reaped state, and delivery age while holding the authority guard. The
-application keeps one dedicated dispatcher and one pending signal, so slow OS
-calls do not hold up the UI change-signal loop or create overlapping delivery tasks. Each started
+application keeps one dedicated dispatcher and one pending signal, preventing
+overlapping delivery tasks. Media admission precedes notification dispatch, and
+the dispatcher yields between submissions whenever media is pending. An already
+started native submission still holds authority until it returns. Each started
 dispatch checks live authentication before entering the authority guard. Actual
 native submission happens inside the guard; the callback never defers unchecked
 delivery to another application task. Linux notification-service waits are bounded
@@ -394,8 +454,13 @@ IDs follow the bounded token grammar, titles use the notification plain-text
 128-byte limit, and URLs are bounded to 2,048 bytes. The request must remain in
 the configured origin and base path. The worker supplies no filesystem path,
 window route, request headers, cookies, HA token, or core settings reference.
-Downloads do not follow redirects or inherit the core HA credential lookup.
-HTTP credentials and custom headers are outside this direct-URL contract.
+Downloads do not follow redirects or inherit core HA credentials. Host API 1.8
+permits a manifest's `bearer_token_setting` to name a dedicated secret setting;
+the host attaches that startup-bound token only within the granted origin/path.
+Workers cannot supply headers or select a different credential per request.
+Optional `allow_query` permits request query strings only when the manifest grants
+it, and `cooldown_seconds` scopes the configured media policy. Request
+`cooldown_id` separates equal camera titles without enlarging global limits.
 
 Host API 1.7 also accepts `"media_kind": "jpeg"`, `"png"`, or `"webp"` on
 this frame. The historical `http_video` message and permission names remain for
@@ -407,8 +472,38 @@ and rejects mismatches. SVG, HTML, and arbitrary content types are not supported
 Snapshots have an 8 MiB limit. The owned player closes a successfully displayed
 image after 12 seconds, with the same generation revocation as video.
 
+Host API 1.8 also supports automatic motion previews through `http_live`.
+The verified `http_video` declaration must include
+`live_preview: {query: "fps=2&height=360", max_duration_seconds: 15}`.
+This grant cannot carry a bearer credential. A preview URL must stay within the
+granted origin/path and match its exact query. The native adapter opens the local
+compact viewer in an incognito `plugin-preview-<UUID>` window. Only that owning
+viewer can obtain its active private image URL, close itself, or drag its window.
+The image policy allows the configured camera origin; remote document navigation,
+new windows, and general application IPC are denied. The native host closes the
+window at the grant's lifetime or generation removal.
+
+Mapped cameras instead emit `live_view` with `id`, `title`, and `live_view_id`,
+without a URL. The verified `live_view` declaration must explicitly include
+`preview_duration_seconds` (1–30; Kerberos uses 15). Native code resolves only the
+exact camera ID from the generation's encrypted `urls_setting` map. Unmapped IDs
+are omitted; declarations without a duration retain notification-click capability
+without gaining automatic preview authority. The derived preview grant permits
+only that exact configured URL and cannot authorize a download. Admission is
+independent of desktop notification permission, uses a 15-second per-camera
+cooldown, and retains the common queue, rate, episode-ID, and generation limits.
+Kerberos emits its ordinary motion notification separately from its preview.
+
+Previews share the eight-window limit but reserve no download transfer or disk
+bytes. Waiting for capacity expires after three seconds, preventing delayed motion
+replay. Timed expiry revokes display authority before requesting close, and the
+window slot remains owned until native destruction is acknowledged. Downloaded
+clips and twelve-second snapshots keep their existing behavior. Frigate 0.3 emits
+fresh motion previews instead of delayed end-event clips; earlier clip workers
+remain compatible with the host download path.
+
 Each worker has four pending requests, thirty admissions per minute, a ten-minute
-512-ID history, and a 45-second title cooldown. Pending requests expire after
+512-ID history, and a default 45-second title cooldown (mapped previews use the camera policy above). Pending requests expire after
 thirty seconds. The service independently bounds its queue to eight, transfers
 to two, and active/download-reserved windows to eight. It reserves up to 256 MiB
 per transfer within a 512 MiB media budget; completed smaller files release the
@@ -644,40 +739,36 @@ call independently requires a current session.
 
 The fixed `plugin-host-update` event contains no worker data. The app coalesces
 updates to at most 20 refresh signals per second, and windows retrieve an
-authorized snapshot. The generic contribution renderer supports text, metrics,
-status, preset actions and bounded numeric inputs, but is not mounted on the
-main dashboard. Installing a package therefore does not duplicate the existing
-home/appliance sections. Their eventual feature integration is separate from the
-worker contract. The Plugins settings card shows only the explicit `connection`
-status contribution for a running worker, without entity cards or action controls.
-The desktop Plugins settings tab manages package lifecycle through separate
-settings-window-only IPC, including native selection and a single-use verified
-preview token. The management frontend coalesces snapshot requests and the native
-service caches inventory metadata by revision. Configuration-capable packages also
-use a native-validated declarative settings editor with isolated encrypted storage
-and startup configuration delivery. Worker-driven settings contributions, request-time
-secret access and general network/media host services remain future work. Scoped
-HTTP video uses the owned transfer and window contract above. Native
-desktop notifications use the permission and delivery contract above. The first
-[Frigate worker](../desktop-plugins/frigate/README.md) owns its MQTT connection;
-`network_mqtt` is a declaration, not an OS firewall or a core MQTT host service.
-The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md)
-owns its authenticated REST/WebSocket connection and emits declarative
-connection/entity cards and explicitly selected fixed or numeric controls.
-Its optional sensor-prefix discovery fills unused state slots after all explicit
-targets; discoveries have no action or numeric-input authority. It reuses the
-existing text, metric and status contributions and reports discovery warnings
-inside the connection card, preserving the 64-item limit. Those warnings do not
-change the connected session or revoke explicit controls. Malformed/oversized
-discovery snapshots or an overflowed bootstrap buffer disable discovery for that
-connection; authentication rejection still revokes the session normally.
-The worker's [read-scope contract](../desktop-plugins/home-assistant/README.md#read-only-sensor-discovery)
-bounds the optional all-entity collection and locally filters the shared state
-stream. There is no periodic refresh, retained overflow catalog or new entity-picker
-UI. Its `network_http` declaration similarly grants no
-generic host proxy and provides no OS sandbox. Both workers reuse a small bounded
-stdio library, while identity negotiation, configuration and network behavior
-stay feature-owned. Their crates, binaries and manifests are excluded from mobile.
+authorized snapshot. Compact presentation descriptors render in the existing
+header/Home/sidebar sections. The old generic flat contribution renderer is not mounted. The Plugins
+settings card shows only explicit connection health for a fresh running worker,
+without duplicating entities or household controls. Stale snapshots revoke UI
+authority and pending gestures remain bound to their original worker instance.
+
+The desktop settings tab manages packages through authenticated IPC, including
+native selection, single-use verified previews, revision-bound settings, and
+read-only worker choices. Generic camera group commands read and change native
+package state, including declared enabled preferences. A
+`plugin-configuration-changed` event refreshes only those declarations in an open
+core settings draft. Group operations do not dispatch to a stopped worker or
+reconnect the core transport.
+
+Using notification live actions requires `live_view`, `plugin_configuration`,
+`desktop_notifications`, and a manifest `live_view: {urls_setting: "camera_live_urls"}`. The named field
+must be secret: it holds a JSON map of at most 32 exact IDs to HTTP(S) destinations,
+bounded to 16 KiB total and 2,048 bytes per URL. Credentials in URL userinfo are
+rejected; query/fragment data remains private. Only a notification interaction
+can open a resolved destination in a generation-owned isolated window. The page
+has no core/plugin management IPC authority. Revocation closes owned windows and
+invalidates pending actions. The current native action backend is macOS; other
+platforms retain ordinary notifications, with graphical action parity tracked in
+TODO. This is separate from opaque host-downloaded media playback.
+
+Standalone HA, Frigate, Kerberos, and Ring workers own their network connections.
+Network permission metadata is neither an OS firewall nor a generic core network
+proxy. Discovery, settings catalogs, and compact household semantics remain
+worker-owned; the host validates their bounded contracts. All worker crates,
+binaries, and manifests are excluded from core frontend and mobile artifacts.
 
 Normal application exit waits for package initialization and transactions, stops
 and reaps workers, drains owned media/windows, and releases the package-store lease

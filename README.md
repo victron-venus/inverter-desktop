@@ -17,69 +17,64 @@ are desktop-only. Implementation progress is tracked in [TODO.md](TODO.md), with
 the build boundary documented in
 [desktop features and mobile core](docs/desktop-features-and-mobile-core.md).
 
-Desktop plugins can be declared in the application's `desktop_plugins` settings
-with an exact version, enabled state, and per-platform HTTPS URL plus SHA-256.
-On startup, configuration import/save, or explicit retry, the app downloads missing
-packages and applies those exact pins. An upgrade that preserves app data retains
-the declarations; after a clean reinstall, restore them from your config backup.
-Healthy matching installations are reused. Android and iOS only preserve these
-settings as dormant data and never download or run plugins.
-Pins change only when edited or imported; an explicit change can select rebuilt
-bytes at the same worker version or intentionally restore an older version.
-See the [configuration and restoration contract](docs/plugin-packages.md#declaring-plugins-in-application-configuration).
+Home Assistant and camera integrations are optional desktop packages. The core
+contains a generic plugin host and compact renderer; it does not contain their
+provider clients, feature settings, or camera event parsers. With no package
+installed, the dashboard retains core inverter, EV, and water controls and starts
+no HA or camera connection. Installed packages contribute to the familiar header,
+Home controls, appliance rows, and sidebar sections without adding duplicate
+entity panels.
 
-The **Plugins** tab shows restoration results and installed packages. Configured
-plugins take their version and enabled state from the declaration; remove the
-declaration before manually updating, disabling, rolling back, or uninstalling one.
-Manual file selection remains a separate signed-package review flow. Enabled
-workers resume after authentication and stop on logout. Configuration-capable
-packages have a [typed settings editor](docs/plugin-settings.md) with isolated
-encrypted records and write-only secrets. Saving restarts enabled workers with
-acknowledged configuration; uninstall retains settings unless deletion is selected.
-An on-demand stored-data view shows usage and allows confirmed cleanup of records
-with no installed owner, including corrupt records or unavailable credentials.
-Data belonging to installed packages stays protected from this cleanup.
+Declare only the packages you want in `desktop_plugins`, with an exact version,
+enabled state, and per-platform HTTPS URL plus SHA-256. After authentication,
+startup, configuration import/save, or explicit retry restores missing packages
+and applies those exact pins. Healthy matching installations are reused. Upgrades
+retain pins; a clean reinstall can restore declarations and public plugin settings
+from a portable backup. Credentials are excluded and must be entered again on a
+new installation. See the [configuration and restoration contract](docs/plugin-packages.md#declaring-plugins-in-application-configuration).
+
+The **Plugins** settings tab shows installed packages, compact connection health,
+restoration results, and [manifest-driven settings](docs/plugin-settings.md).
+Structured layout and camera mappings use ordinary fields and repeatable rows;
+entity choices come from a running worker. Secrets remain write-only. Saving
+settings restarts an enabled worker, disabling stops its work, and uninstalling
+removes its package while retaining settings unless deletion is selected. The
+camera toolbar enables or disables the installed camera group through native
+package authority, including configuration-managed packages. These operations do
+not reconnect core MQTT/IGW.
+
+Legacy HA/camera settings remain preserved for migration. Only an explicitly
+installed or declared matching built-in package can receive a native migration
+seed; merely opening old settings never installs a package. Established encrypted
+plugin settings remain authoritative. The migration retains labels, ordering,
+selected entities, appliance mappings, and private camera live destinations.
+Android and iOS preserve compatible configuration as dormant data and include no
+plugin host, package downloader, settings editor, or provider code.
+
+Available source packages are [Home Assistant](desktop-plugins/home-assistant/README.md),
+[Frigate](desktop-plugins/frigate/README.md),
+[Kerberos](desktop-plugins/kerberos/README.md), and
+[Ring](desktop-plugins/ring/README.md). Camera workers use independent MQTT
+connections, bounded notifications, and host-owned snapshots/clips. Optional proxy
+credentials and live-view destinations belong to the requesting plugin. HA owns
+its REST/WebSocket connection, selected controls, discovery, compact weather and
+appliance presentation. Core inverter buttons remain independent MQTT controls.
 
 Configured downloads use exact archive pins and need no publisher or app signing
-keys. The current publisher policy is empty, so manual signed-file selection is
-unavailable. Hosted desktop releases build unsigned `.idplugin` assets, checksums,
-and platform config fragments; their URLs work after that release is published.
-Backups preserve declarations but omit credentials. On a fresh installation,
-configure the plugin's required settings and secrets before it can start.
-Home Assistant and cameras still have bundled desktop implementations alongside
-the optional workers; migration and bundled removal remain unfinished.
-A separately built [Frigate worker](desktop-plugins/frigate/README.md)
-starts their extraction with an independent MQTT connection, native motion
-notifications, and direct completed-clip requests handled by owned native media
-services. Clip/window acceptance is tracked separately from source implementation.
-Snapshots, optional HA proxy support, other camera adapters, and migration remain.
-A separately built [Home Assistant worker](desktop-plugins/home-assistant/README.md)
-adds authenticated connection status and state cards for a configured entity
-list. Optional sensor prefixes discover read-only cards in remaining slots;
-explicit targets retain priority. Read-only operation is the default; explicit action lists enable fixed
-HA button presses, scene activation, media-player Play/Pause/Stop, explicit
-switch/helper/light on/off commands, supported cover Open/Close/Stop, bounded
-numbers and cover positions through instance-bound plugin controls. Numeric
-changes require explicit Apply within the advertised bounds and step; position
-writes require a separate selection. Cover capabilities update the available actions.
-Each entity's state and explicitly selected controls appear together in a card;
-equal friendly names do not merge entities, and discovery remains read-only.
-Explicitly watched weather entities show their condition and reported temperature
-with its supplied unit. Up to five legacy forecast entries can be shown when
-already present in the state; separate modern forecast retrieval remains pending.
-An explicitly configured read-only dishwasher profile combines its running state
-and reported runtime since midnight in the existing state card. It does not infer
-roles, add controls or calculate remaining time.
-Optional washer and dryer profiles show explicitly selected remaining-time readings
-as reported, including zero, without inferring activity or running a local
-countdown. Appliance actions require separate explicit button selection.
-Displayed state follows Home Assistant updates rather than assuming a service
-call changed the device.
-The worker owns its REST/WebSocket connection and isolated token. Other HA
-services, legacy UI parity, and migration remain tracked work; core inverter
-buttons continue to use MQTT independently.
-See the [worker protocol](docs/plugin-worker-protocol.md) and
-TODO for the remaining work and validation boundaries.
+keys. The embedded publisher policy is empty, so manual signed-file selection is
+unavailable. Hosted desktop releases generate unsigned `.idplugin` assets,
+checksums, and platform configuration fragments; URLs become usable only after
+publication. Source implementation, local acceptance, exact-head hosted checks,
+and installed-device verification are tracked separately in [TODO.md](TODO.md).
+See the [worker protocol](docs/plugin-worker-protocol.md) for the generic host
+contract and its authority limits.
+
+The extraction build requires compatible package pins for the familiar feature
+views: Home Assistant **0.13 or later**, Frigate **0.3 or later** for the Cameras
+group, and Kerberos/Ring **0.1 or later**. Existing pins remain authoritative and
+are not automatically upgraded with the app. Publish and select the matching
+archive URL/checksum for each installed desktop target before recording upgrade
+acceptance; older workers do not gain compact presentation from an app update.
 
 | Surface                     | Recommended project                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -123,7 +118,7 @@ the core-only mobile feature boundary described above.
 - Live power charts with ECharts
 - EV charging status
 - Water system monitoring (dbus-pump via Cerbo MQTT)
-- Home automation controls and cameras on desktop
+- Optional Home Assistant and camera packages on desktop
 - Native application for all major platforms
 
 ## Supported Platforms
@@ -382,7 +377,7 @@ adb install inverter-dashboard-android.apk
 
 ## Configuration
 
-To disconnect inverter telemetry, clear the MQTT host and disable IGW (or remove its required connection settings), then save. This stops both inverter transports, clears their displayed telemetry, and cancels pending reconnect attempts. On desktop, the separate camera MQTT connection remains controlled by its own settings. Reconfigure either inverter transport to reconnect.
+To disconnect inverter telemetry, clear the MQTT host and disable IGW (or remove its required connection settings), then save. This stops both inverter transports, clears their displayed telemetry, and cancels pending reconnect attempts. On desktop, installed camera workers remain controlled by their package settings and the Cameras group. Reconfigure either inverter transport to reconnect.
 
 Edit `src-tauri/capabilities/default.json` and `src/config.ts` for MQTT settings:
 

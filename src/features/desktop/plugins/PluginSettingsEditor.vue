@@ -32,8 +32,22 @@
         >
           {{ field.description }}
         </p>
+        <PluginJsonEditor
+          v-if="field.editor"
+          :schema="field.editor.schema"
+          :model-value="
+            String(field.secret ? (secretChanges[field.key] ?? '') : (values[field.key] ?? ''))
+          "
+          :choices="choices"
+          :secret="field.secret"
+          :disabled="busy || secretChanges[field.key] === null"
+          @update:model-value="
+            field.secret ? setSecret(field.key, $event) : (values[field.key] = $event)
+          "
+        />
         <template v-if="field.secret">
           <input
+            v-if="!field.editor"
             :id="fieldId(field.key)"
             :name="field.key"
             type="password"
@@ -71,7 +85,7 @@
           </label>
         </template>
         <select
-          v-else-if="field.enum"
+          v-else-if="!field.editor && field.enum"
           :id="fieldId(field.key)"
           v-model="values[field.key]"
           :name="field.key"
@@ -84,7 +98,7 @@
           <option v-for="option in field.enum" :key="option" :value="option">{{ option }}</option>
         </select>
         <input
-          v-else-if="field.type === 'boolean'"
+          v-else-if="!field.editor && field.type === 'boolean'"
           :id="fieldId(field.key)"
           :name="field.key"
           type="checkbox"
@@ -94,8 +108,18 @@
           :aria-describedby="descriptionId(field)"
           @change="values[field.key] = ($event.target as HTMLInputElement).checked"
         />
+        <PluginChoiceInput
+          v-else-if="!field.editor && field.options_source"
+          :id="fieldId(field.key)"
+          :model-value="String(values[field.key] ?? '')"
+          :options="fieldChoices(field.options_source, field.options_prefixes, choices)"
+          :multiple="field.options_multiple"
+          :disabled="busy"
+          :max-length="inputMaxLength(field)"
+          @update:model-value="values[field.key] = $event"
+        />
         <input
-          v-else
+          v-else-if="!field.editor"
           :id="fieldId(field.key)"
           :value="values[field.key] ?? ''"
           :name="field.key"
@@ -113,6 +137,12 @@
       </div>
     </template>
 
+    <div v-if="hasChoices" class="flex items-center gap-2 text-[11px]">
+      <UiButton :disabled="busy || choicesLoading" @click="loadChoices">{{
+        $t('plugins.manager.refreshChoices')
+      }}</UiButton>
+      <span v-if="choicesError" role="status">{{ $t('plugins.manager.choicesUnavailable') }}</span>
+    </div>
     <div class="flex flex-wrap gap-2">
       <UiButton
         type="submit"
@@ -131,6 +161,9 @@
 import { onMounted, onUnmounted, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UiButton from '../../../components/UiButton.vue'
+import PluginJsonEditor from './PluginJsonEditor.vue'
+import PluginChoiceInput from './PluginChoiceInput.vue'
+import { fieldChoices } from './jsonEditor'
 import type { PluginSettingsField } from './types'
 import { createPluginSettings } from './usePluginSettings'
 
@@ -151,6 +184,11 @@ const editor = createPluginSettings(
 )
 const {
   settings,
+  choices,
+  hasChoices,
+  choicesLoading,
+  choicesError,
+  loadChoices,
   values,
   secretChanges,
   busy,
@@ -164,8 +202,8 @@ const {
 function inputMaxLength(field: PluginSettingsField) {
   if (field.type !== 'string') return undefined
   // HTML counts UTF-16 units; native schema bounds count Unicode scalars and
-  // independently cap UTF-8 at 16 KiB. Allow pairs without rejecting valid input.
-  return Math.min(16_384, (field.max_length ?? 16_384) * 2)
+  // independently cap UTF-8 at 24 KiB. Allow pairs without rejecting valid input.
+  return Math.min(24_576, (field.max_length ?? 24_576) * 2)
 }
 function fieldId(key: string) {
   return `${prefix}-${key}`

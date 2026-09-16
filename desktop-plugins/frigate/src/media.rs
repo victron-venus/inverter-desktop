@@ -71,9 +71,54 @@ pub fn clip_url(base: &Url, event_id: &str) -> Option<String> {
     (url.as_str().len() <= MAX_URL_BYTES).then(|| url.into())
 }
 
+/// Low-rate MJPEG uses Frigate's already decoded frames on demand. Camera
+/// identity stays in one encoded path segment; MQTT never supplies an origin.
+pub fn live_url(base: &Url, camera: &str) -> Option<String> {
+    if camera.is_empty()
+        || camera.len() > 128
+        || matches!(camera, "." | "..")
+        || camera
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | '%'))
+    {
+        return None;
+    }
+    let mut url = base.clone();
+    url.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .extend(["api", camera]);
+    url.query_pairs_mut()
+        .append_pair("fps", "2")
+        .append_pair("height", "360");
+    (url.as_str().len() <= MAX_URL_BYTES).then(|| url.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_camera_identity_cannot_change_origin_path_or_fixed_query() {
+        let base = base_url(Some("http://frigate.local:5000/prefix/"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            live_url(&base, "porch").unwrap(),
+            "http://frigate.local:5000/prefix/api/porch?fps=2&height=360"
+        );
+        assert_eq!(
+            live_url(&base, "é space?#").unwrap(),
+            "http://frigate.local:5000/prefix/api/%C3%A9%20space%3F%23?fps=2&height=360"
+        );
+        for camera in ["", ".", "..", "a/b", "a\\b", "a%2fb", "a\n"] {
+            assert!(live_url(&base, camera).is_none());
+        }
+        let long = base_url(Some(&format!("https://frigate.local/{}", "a".repeat(2000))))
+            .unwrap()
+            .unwrap();
+        assert!(live_url(&long, &"x".repeat(128)).is_none());
+    }
 
     #[test]
     fn absent_base_disables_clips_and_explicit_prefixes_and_ports_are_preserved() {

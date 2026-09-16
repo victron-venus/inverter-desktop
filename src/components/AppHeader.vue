@@ -61,11 +61,19 @@
         :key="toggle.id"
         class="mobile-header-touch mobile-header-control"
         toggle
-        :active="controlStates?.[toggle.id] === 'on'"
-        :unavailable="isToggleUnavailable(controlStates?.[toggle.id])"
-        @click="$emit('send', 'toggle', { entity: toggle.entity })"
+        :active="(toggle.state ?? controlStates?.[toggle.id]) === 'on'"
+        :unavailable="isToggleUnavailable(toggle.state ?? controlStates?.[toggle.id])"
+        :disabled="toggle.disabled"
+        :loading="toggle.pending"
+        @click="activate(toggle)"
       >
-        <span class="mobile-header-label">{{ toggle.label }}</span>
+        <span class="mobile-header-label">{{ toggle.label }}</span
+        ><span
+          v-if="toggle.failed"
+          role="alert"
+          title="Action unconfirmed; check the current state before retrying."
+          >!</span
+        >
       </UiButton>
     </fieldset>
     <slot name="actions" />
@@ -101,11 +109,19 @@
           class="min-w-[55px]"
           size="sm"
           toggle
-          :active="controlStates?.[toggle.id] === 'on'"
-          :unavailable="isToggleUnavailable(controlStates?.[toggle.id])"
-          @click="$emit('send', 'toggle', { entity: toggle.entity })"
+          :active="(toggle.state ?? controlStates?.[toggle.id]) === 'on'"
+          :unavailable="isToggleUnavailable(toggle.state ?? controlStates?.[toggle.id])"
+          :disabled="toggle.disabled"
+          :loading="toggle.pending"
+          @click="activate(toggle)"
         >
-          {{ toggle.label }}
+          {{ toggle.label
+          }}<span
+            v-if="toggle.failed"
+            role="alert"
+            title="Action unconfirmed; check the current state before retrying."
+            >!</span
+          >
         </UiButton>
       </template>
     </div>
@@ -149,23 +165,29 @@ import {
 import { isMobileApp } from '@features'
 import { ref, useId } from 'vue'
 import UiButton from './UiButton.vue'
-import type { DashboardControl } from '../inverterControl'
+import type { DashboardControlView } from '../dashboardControlView'
 
 defineProps<{
   dryRun: boolean
   essClass: string
   essText: string
-  headerControls: DashboardControl[]
+  headerControls: DashboardControlView[]
   controlStates: Record<string, string> | undefined
   isDark: boolean
   showHeaderToggles?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   send: [action: string, payload?: Record<string, unknown>]
   'toggle-theme': []
   'open-config': []
 }>()
+
+function activate(control: DashboardControlView) {
+  if (control.disabled || control.pending) return
+  if (control.activate) control.activate()
+  else emit('send', 'toggle', { entity: control.entity })
+}
 
 const controlsExpanded = ref(false)
 const controlsId = `header-controls-${useId()}`

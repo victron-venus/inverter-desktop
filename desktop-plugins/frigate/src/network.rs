@@ -97,6 +97,7 @@ pub async fn run(
     config: Configuration,
     output: &Output,
     supports_http_video: bool,
+    supports_http_live: bool,
 ) -> Result<(), &'static str> {
     let base = if supports_http_video {
         crate::media::base_url(config.values.frigate_base_url.as_deref())?
@@ -171,9 +172,22 @@ pub async fn run(
                     let frame = if let Some(motion) =
                         events.parse(&message.payload, message.retain, now, unix_seconds)
                     {
-                        Some(
-                            json!({"type":"notification","id":motion.id,"title":motion.title,"body":"Motion started"}),
-                        )
+                        let live = base
+                            .as_ref()
+                            .filter(|_| supports_http_live)
+                            .and_then(|base| crate::media::live_url(base, &motion.camera));
+                        Some(match live {
+                            Some(url) => {
+                                json!({"type":"http_live","id":motion.id,"url":url,"title":motion.title})
+                            }
+                            None => {
+                                json!({"type":"notification","id":motion.id,"title":motion.title,"body":"Motion started"})
+                            }
+                        })
+                    } else if supports_http_live {
+                        // A live host shows the scene immediately. Do not open
+                        // another delayed window when that recording ends.
+                        None
                     } else {
                         clips.parse(&message.payload, message.retain, now, base.as_ref())
                             .map(|clip| json!({"type":"http_video","id":clip.id,"url":clip.url,"title":clip.title}))

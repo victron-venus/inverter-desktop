@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import {
+  assertCoreModuleGraph,
   assertMobileModuleGraph,
   frontendProfileAudit,
   resolveFrontendProfile,
@@ -139,6 +140,59 @@ test('real bundler graph rejects a desktop import even behind an unused runtime 
     const receipt = result.output.find((item) => item.fileName === 'build-profile.json')
     assert.equal(JSON.parse(receipt.source).profile, 'mobile')
     assert.deepEqual(JSON.parse(receipt.source).modules, ['src/main.ts'])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('desktop core accepts generic host UI and rejects bundled providers', () => {
+  assert.doesNotThrow(() =>
+    assertCoreModuleGraph([
+      'src/main.ts',
+      'src/features/desktop.ts',
+      'src/features/desktop/plugins/PluginCompactPanels.vue',
+      'src/features/desktop/plugins/PluginMedia.vue',
+    ])
+  )
+  for (const id of [
+    'src/composables/useHA.ts',
+    'src/types/ha.ts',
+    'src/CameraVideo.vue',
+    'src/features/desktop/HomePanels.vue',
+    'src/features/desktop/CameraAction.vue',
+    'src/features/desktop/cameraConnection.ts',
+    'src/features/desktop/ha/client.ts',
+    'desktop-plugins/kerberos/src/main.rs',
+    'desktop-plugins/ring/src/main.rs',
+    'scripts/plugins/ring-manifest.json',
+  ]) {
+    assert.throws(() => assertCoreModuleGraph(['src/main.ts', id]), /Bundled provider modules/)
+  }
+})
+
+test('real desktop graph rejects provider code even when its import is tree-shaken', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'inverter-desktop-core-graph-'))
+  try {
+    await mkdir(path.join(root, 'src/composables'), { recursive: true })
+    await writeFile(
+      path.join(root, 'index.html'),
+      '<script type="module" src="/src/main.ts"></script>'
+    )
+    await writeFile(path.join(root, 'src/composables/useHA.ts'), 'export const provider = "ha"')
+    await writeFile(
+      path.join(root, 'src/main.ts'),
+      'import { provider } from "./composables/useHA"; if (false) console.log(provider)'
+    )
+    await assert.rejects(
+      build({
+        root,
+        configFile: false,
+        logLevel: 'silent',
+        plugins: [frontendProfileAudit(root, 'desktop')],
+        build: { write: false },
+      }),
+      /Bundled provider modules/
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }

@@ -73,9 +73,12 @@ class FrigatePackageTests(unittest.TestCase):
         metadata = json.loads((self.output / "manifest.json").read_text())
         self.assertEqual(metadata["target"], "aarch64-apple-darwin")
         self.assertEqual(metadata["plugin_id"], "inverter-desktop.frigate")
-        self.assertEqual(metadata["version"], "0.2.0")
-        self.assertEqual(metadata["host_api"], "^1.3")
-        self.assertEqual(metadata["http_video"], {"base_url_setting": "frigate_base_url"})
+        self.assertEqual(metadata["version"], "0.3.0")
+        self.assertEqual(metadata["host_api"], "^1.8")
+        self.assertEqual(metadata["http_video"], {
+            "base_url_setting": "frigate_base_url",
+            "live_preview": {"query": "fps=2&height=360", "max_duration_seconds": 15},
+        })
         self.assertIn("http_video", metadata["permissions"])
         self.assertIsNone(metadata["signature"])
         self.assertEqual(metadata["inventory"], [])

@@ -149,6 +149,26 @@ pub(crate) fn summary(condition: &str, attributes: &Value) -> Option<String> {
     Some(text)
 }
 
+pub(crate) fn structured(condition: &str, attributes: &Value) -> Option<Value> {
+    let condition = plain(condition, MAX_CONDITION_BYTES)?;
+    let unit =
+        field(&attributes["temperature_unit"], MAX_UNIT_BYTES).unwrap_or_else(|| "°C".into());
+    let current =
+        temperature(&attributes["temperature"], Some(&unit)).map_or("", |(value, _)| value);
+    let forecast = attributes["forecast"].as_array().into_iter().flatten().take(MAX_FORECAST_ENTRIES)
+        .filter_map(|entry| {
+            let date = datetime(&entry["datetime"])?;
+            let mut item = serde_json::json!({"datetime":date,
+                "condition":field(&entry["condition"], MAX_CONDITION_BYTES).unwrap_or_default(),
+                "temperature":temperature(&entry["temperature"], Some(&unit)).map_or("", |(value, _)| value)});
+            if let Some((low, _)) = temperature(&entry["templow"], Some(&unit)) { item["templow"] = serde_json::json!(low); }
+            Some(item)
+        }).collect::<Vec<_>>();
+    Some(
+        serde_json::json!({"condition":condition,"temperature":current,"unit":unit,"forecast":forecast}),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

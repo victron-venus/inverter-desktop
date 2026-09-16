@@ -101,18 +101,27 @@
             variant="tile"
             class="home-btn-tile"
             toggle
-            :active="buttonStates[btn.id] === 'on'"
-            :unavailable="buttonStates[btn.id] === 'unavailable'"
-            :disabled="controlsConnected === false && !isInverterControlFlag(btn.entity)"
-            @click="$emit('send', 'toggle', { entity: btn.entity })"
+            :active="(btn.state ?? buttonStates[btn.id]) === 'on'"
+            :unavailable="(btn.state ?? buttonStates[btn.id]) === 'unavailable'"
+            :disabled="
+              btn.disabled || (controlsConnected === false && !isInverterControlFlag(btn.entity))
+            "
+            :loading="btn.pending"
+            @click="activate(btn)"
           >
             <component
-              :is="getControlIcon(btn.entity, btn.label)"
-              v-if="getControlIcon?.(btn.entity, btn.label)"
+              :is="btn.icon ?? getControlIcon?.(btn.entity, btn.label)"
+              v-if="btn.icon || getControlIcon?.(btn.entity, btn.label)"
               :size="12"
               class="home-tile-icon opacity-70 shrink-0"
             />
-            <span class="home-tile-label">{{ getControlLabel?.(btn.label) ?? btn.label }}</span>
+            <span class="home-tile-label">{{ getControlLabel?.(btn.label) ?? btn.label }}</span
+            ><span
+              v-if="btn.failed"
+              role="alert"
+              title="Action unconfirmed; check the current state before retrying."
+              >!</span
+            >
           </UiButton>
         </div>
       </div>
@@ -123,6 +132,7 @@
 </template>
 <script setup lang="ts">
 import type { Component } from 'vue'
+import type { DashboardControlView } from '../dashboardControlView'
 import { Car, Droplets, Home as HomeIcon } from '@lucide/vue'
 import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
@@ -141,13 +151,18 @@ const props = defineProps<{
   waterLevel?: number | null
   getControlLabel?: (label: string) => string
   getControlIcon?: (entity: string, label: string) => Component | null
-  homeButtons: Array<{ id: string; label: string; entity: string }>
+  homeButtons: DashboardControlView[]
   buttonStates: Record<string, string>
   showHomeSection?: boolean
   controlsConnected?: boolean
 }>()
 const emit = defineEmits<{ send: [action: string, payload?: Record<string, unknown>] }>()
 const { t: $t } = useI18n()
+function activate(control: DashboardControlView) {
+  if (control.disabled || control.pending) return
+  if (control.activate) control.activate()
+  else emit('send', 'toggle', { entity: control.entity })
+}
 function onValveClick() {
   if (props.waterValve === false && !window.confirm('Open city water valve?')) return
   emit('send', 'water_mode', { which: 'valve', mode: props.waterValve ? 2 : 1 })

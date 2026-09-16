@@ -1,33 +1,23 @@
 mod app_visibility;
 mod auth;
-#[cfg(desktop)]
-mod camera;
 mod config_backup;
 mod config_file_io;
 mod config_store;
-#[cfg(desktop)]
-mod ha_session;
+mod gateway;
+mod gateway_actions;
+mod inverter_control;
 #[cfg(test)]
 #[path = "../mobile_build.rs"]
 mod mobile_build;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_credentials;
 mod module_config;
-mod release_info;
-mod tls;
-#[cfg(desktop)]
-use camera::download_camera_clip;
-#[cfg(desktop)]
-use camera::{is_camera_video_label, remove_camera_clip_file};
-mod gateway;
-mod gateway_actions;
-#[cfg(desktop)]
-mod ha_api;
-mod inverter_control;
 pub(crate) mod mqtt;
 mod plugin_config;
 #[cfg(desktop)]
 pub mod plugins;
+mod release_info;
+mod tls;
 
 #[cfg(all(desktop, feature = "native-media-smoke"))]
 pub use plugins::native_media_smoke::run as run_native_media_smoke;
@@ -74,10 +64,6 @@ const CAMERA_VIDEO_WINDOW_H: f64 = 186.0;
 /// Logical-pixel gap between stacked camera clip windows (0 = flush/seam). Also used as edge inset.
 #[cfg(desktop)]
 const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 0.0;
-/// Window label prefix for ephemeral camera clip WebviewWindows (`camera-video-<uuid>`).
-#[cfg(desktop)]
-const CAMERA_VIDEO_LABEL_PREFIX: &str = "camera-video-";
-
 #[cfg(desktop)]
 use tauri::WindowEvent;
 use tauri::{Emitter, Manager, State};
@@ -86,24 +72,11 @@ use tauri_plugin_store::StoreExt;
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
-#[cfg(desktop)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct DiscoveredEntity {
-    entity_id: String,
-    friendly_name: String,
-    domain: String,
-    state: String,
-}
-
 // Global state for the MQTT clients
 struct MqttState(Arc<Mutex<Option<MqttClient>>>);
 struct GatewayState(Arc<Mutex<Option<GatewayClient>>>);
 #[derive(Default)]
 struct InverterLifecycle(Mutex<()>);
-#[cfg(desktop)]
-struct HaMqttState(Arc<Mutex<Option<MqttClient>>>);
-#[cfg(desktop)]
-pub(crate) struct HaEntityStates(pub(crate) Arc<Mutex<HashMap<String, ha_api::HaEntityEntry>>>);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HomeButtonConfig {
@@ -176,6 +149,9 @@ struct FullConfig {
     /// Example: `http://ha:8123/api/camera_proxy/camera.front_door_snapshot`
     #[serde(default)]
     ring_snapshot_url_template: Option<String>,
+    /// Retained legacy live-view mappings; interpreted only by installed-package migration.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    camera_live_urls: std::collections::BTreeMap<String, String>,
     camera_enabled: bool,
     show_advanced_settings: Option<bool>,
     show_batteries: Option<bool>,
@@ -272,6 +248,7 @@ impl Default for FullConfig {
             camera_topic: Some("kerberos/desktop/events".to_string()),
             frigate_base_url: None,
             ring_snapshot_url_template: None,
+            camera_live_urls: Default::default(),
             camera_enabled: true,
             show_advanced_settings: Some(false),
             show_batteries: Some(true),
@@ -307,7 +284,7 @@ impl Default for FullConfig {
     }
 }
 
-// Clear both owned inverter slots. The HA camera client has an independent lifetime.
+// Clear both owned inverter slots. Optional plugin workers have independent lifetimes.
 fn stop_inverter_clients(
     mqtt: &MqttState,
     gateway: &GatewayState,
@@ -469,125 +446,18 @@ async fn perform_action(
         };
     }
 
-    #[cfg(mobile)]
-    if payload
-        .get("entity")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|entity| !inverter_control::is_flag(entity))
-    {
-        return Err("This control is unavailable in the mobile core".into());
-    }
-
-    #[cfg(desktop)]
-    {
-        let config = load_config(&app)?;
-
-        let entity_id = payload.get("entity").and_then(|v| v.as_str());
-
-        // HA REST is for home devices (garage, recliner, laundry, EV, covers, …).
-        // Inverter-control flags use the active MQTT or IGW transport. The
-        // optional HA adapter does not own these seven daemon flags.
-        let ha_direct = config.ha_use_direct_api
-            && config.ha_url.is_some()
-            && config.ha_longlived_token.is_some();
-        if ha_api::should_use_rest(entity_id, ha_direct) {
-            if let Some(entity) = entity_id {
-                let domain = entity.split('.').next().unwrap_or("");
-                // For switch/input_boolean/light entities, always prefer HA API
-                let client = ha_api::HaApiClient::new(
-                    config.ha_url.as_deref().unwrap_or(""),
-                    config.ha_port,
-                    config.ha_longlived_token.as_deref().unwrap_or(""),
-                )
-                .await?;
-
-                match domain {
-                    "cover" => {
-                        let position = payload
-                            .get("position")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u8;
-                        client.set_cover_position(entity, position).await?;
-                    }
-                    "media_player" => {
-                        let mp_action = payload
-                            .get("mp_action")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("toggle");
-                        match mp_action {
-                            "play" => client.media_player_play(entity).await?,
-                            "pause" => client.media_player_pause(entity).await?,
-                            "stop" => client.media_player_stop(entity).await?,
-                            _ => {
-                                // toggle: on/off
-                                let states = client.get_states().await?;
-                                let state = states.iter().find(|s| s.entity_id == entity);
-                                if let Some(s) = state {
-                                    if s.state == "on" {
-                                        client.turn_off(entity).await?
-                                    } else {
-                                        client.turn_on(entity).await?
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    "number" => {
-                        let value = payload.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        client
-                            .call_service(
-                                entity,
-                                "number",
-                                "set_value",
-                                serde_json::json!({ "value": value }),
-                            )
-                            .await?;
-                    }
-                    "scene" => {
-                        client.scene_activate(entity).await?;
-                    }
-                    "button" => {
-                        client
-                            .call_service(entity, "button", "press", serde_json::json!({}))
-                            .await?;
-                    }
-                    _ => {
-                        let states = client.get_states().await?;
-                        let state = states.iter().find(|s| s.entity_id == entity);
-                        match state {
-                            Some(s) => {
-                                if s.state == "on" {
-                                    client.turn_off(entity).await?
-                                } else {
-                                    client.turn_on(entity).await?
-                                }
-                            }
-                            None => {
-                                // Entity not found in HA, fallback to MQTT
-                                log::warn!(
-                                    "Entity {} not found in HA, falling back to MQTT",
-                                    entity
-                                );
-                                let mqtt_client = mqtt_client
-                                    .0
-                                    .lock()
-                                    .map_err(|e| format!("Lock error: {}", e))?;
-                                let c = mqtt_client
-                                    .as_ref()
-                                    .ok_or_else(|| "MQTT client not connected".to_string())?;
-                                c.publish_command(&action, payload.clone())
-                                    .map_err(|e| format!("MQTT error: {}", e))?;
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-                return Ok(());
-            }
-        }
-    }
+    validate_core_action_target(&payload)?;
 
     perform_inverter_action(&action, payload, &mqtt_client, &gateway_client).await
+}
+
+fn validate_core_action_target(payload: &serde_json::Value) -> Result<(), String> {
+    if let Some(entity) = payload.get("entity") {
+        if !entity.as_str().is_some_and(inverter_control::is_flag) {
+            return Err("This device control requires an installed plugin".into());
+        }
+    }
+    Ok(())
 }
 
 fn active_gateway_auth(client: &GatewayState) -> Result<Option<gateway::GatewayHttpAuth>, String> {
@@ -626,43 +496,6 @@ async fn perform_inverter_action(
     client
         .publish_command(action, payload)
         .map_err(|e| e.to_string())
-}
-
-/// Build HA WebSocket URL from config, handling host:port format properly.
-#[cfg(desktop)]
-fn build_ws_url(ha_url: &str, ha_port: Option<u16>) -> String {
-    let url = ha_url.trim();
-
-    // Determine ws:// or wss:// prefix
-    let (prefix, rest) = if let Some(stripped) = url.strip_prefix("https://") {
-        ("wss://", stripped)
-    } else if let Some(stripped) = url.strip_prefix("http://") {
-        ("ws://", stripped)
-    } else {
-        ("ws://", url)
-    };
-
-    // rest may be "host:port", "host", "[ipv6]:port", "[ipv6]", or "host/path"
-    let host_part = rest.split('/').next().unwrap_or(rest);
-    let port = if host_part.starts_with('[') {
-        // IPv6: [::1]:port or [::1]
-        let bracket_end = host_part.find(']');
-        let has_port = bracket_end.is_some_and(|i| {
-            host_part.len() > i + 1 && host_part.as_bytes().get(i + 1) == Some(&b':')
-        });
-        if has_port {
-            String::new()
-        } else {
-            format!(":{}", ha_port.unwrap_or(8123))
-        }
-    } else if host_part.contains(':') {
-        // IPv4 with port
-        String::new()
-    } else {
-        format!(":{}", ha_port.unwrap_or(8123))
-    };
-
-    format!("{}{}{}/api/websocket", prefix, host_part, port)
 }
 
 /// True when an existing install looks already configured (migrate setup_completed).
@@ -776,7 +609,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
         }
 
         if config.ha_url.is_some() && config.ha_longlived_token.is_some() {
-            info!("Config: Auto-enabling direct HA API");
+            info!("Config: Retaining legacy direct HA preference for optional migration");
             config.ha_use_direct_api = true;
         }
     }
@@ -814,9 +647,27 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
         save_config_encrypted(&app, &config)?;
     }
 
-    // Core/mobile carry passive public data; credentials remain in native storage.
+    Ok(public_core_config(config))
+}
+
+/// Core editors never receive retained module credentials or private live-view URLs.
+fn public_core_config(mut config: FullConfig) -> FullConfig {
     config.modules = module_config::portable(&config.modules);
-    Ok(config)
+    config.camera_live_urls.clear();
+    config
+}
+
+fn preserve_private_camera_config(
+    config: &mut FullConfig,
+    previous: &FullConfig,
+) -> Result<(), String> {
+    // Omission (including a core reset) keeps local mappings. This core IPC cannot
+    // create, retarget or remove private mappings owned by package migration.
+    if !config.camera_live_urls.is_empty() && config.camera_live_urls != previous.camera_live_urls {
+        return Err("Private camera mappings cannot be changed through core settings".into());
+    }
+    config.camera_live_urls = previous.camera_live_urls.clone();
+    Ok(())
 }
 
 #[tauri::command]
@@ -829,6 +680,7 @@ async fn save_config(
         .lock()
         .map_err(|_| "Config update lock failed")?;
     let previous = load_config(&app)?;
+    preserve_private_camera_config(&mut config, &previous)?;
     config.modules = module_config::merge_for_save(config.modules, &previous.modules)?;
     auth::validate_policy(&config)?;
     // Any explicit save (wizard or Config UI) completes first-run setup.
@@ -837,11 +689,6 @@ async fn save_config(
     plugins::bridge::save_configuration(&app, &window, &previous, &config)?;
     #[cfg(mobile)]
     save_config_encrypted(&app, &config)?;
-    // Fixed / newly configured entity IDs should be polled again without app restart.
-    #[cfg(desktop)]
-    ha_api::clear_entity_skip_list();
-    #[cfg(desktop)]
-    ha_api::notify_config_changed();
     auth::revoke_if_policy_changed(&app, &previous, &config)?;
     #[cfg(desktop)]
     if previous.desktop_plugins != config.desktop_plugins {
@@ -866,7 +713,12 @@ async fn backup_config(app: tauri::AppHandle) -> Result<bool, String> {
         None => return Ok(false),
     };
 
-    let config = config_backup::redacted(&load_config(&app)?)?;
+    let mut source = load_config(&app)?;
+    #[cfg(desktop)]
+    source
+        .modules
+        .extend(plugins::bridge::portable_modules(&app).await?);
+    let config = config_backup::redacted(&source)?;
     let json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     config_file_io::write(&app, file, &json)?;
@@ -893,22 +745,16 @@ async fn restore_config(
     };
 
     let content = config_file_io::read(&app, file)?;
-    let _update = CONFIG_UPDATE_GATE
-        .lock()
-        .map_err(|_| "Config update lock failed")?;
-    let previous = load_config(&app)?;
-    let config = config_backup::restore(&content, &previous)?;
     #[cfg(desktop)]
-    plugins::bridge::save_configuration(&app, &window, &previous, &config)?;
+    plugins::bridge::restore_configuration(&app, &window, content).await?;
     #[cfg(mobile)]
-    save_config_encrypted(&app, &config)?;
-    #[cfg(desktop)]
-    ha_api::clear_entity_skip_list();
-    #[cfg(desktop)]
-    ha_api::notify_config_changed();
-    #[cfg(desktop)]
-    if previous.desktop_plugins != config.desktop_plugins {
-        plugins::bridge::configuration_changed(&app);
+    {
+        let _update = CONFIG_UPDATE_GATE
+            .lock()
+            .map_err(|_| "Config update lock failed")?;
+        let previous = load_config(&app)?;
+        let config = config_backup::restore(&content, &previous)?;
+        save_config_encrypted(&app, &config)?;
     }
     info!("Config backup restored");
     Ok(true)
@@ -970,51 +816,6 @@ async fn acknowledge_victron_banner(
     gateway::acknowledge_all_notifications_http(&auth).await
 }
 
-// Tauri decodes IPC arguments before Rust applies cfg to parameters. Separate
-// platform wrappers keep camera arguments out of mobile's actual command API.
-#[cfg(desktop)]
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-async fn connect_mqtt(
-    host: String,
-    port: u16,
-    tls: Option<bool>,
-    username: Option<String>,
-    password: Option<String>,
-    portal_id: Option<String>,
-    water_tank_instance: Option<u32>,
-    water_pump_instance: Option<u32>,
-    water_valve_instance: Option<u32>,
-    evcharger_instance: Option<u32>,
-    ev_instance: Option<u32>,
-    camera_topic: Option<String>,
-    app: tauri::AppHandle,
-    mqtt_client: State<'_, MqttState>,
-    gateway_client: State<'_, GatewayState>,
-    lifecycle: State<'_, InverterLifecycle>,
-) -> Result<(), String> {
-    connect_mqtt_impl(
-        host,
-        port,
-        tls.unwrap_or(false),
-        username,
-        password,
-        portal_id,
-        water_tank_instance,
-        water_pump_instance,
-        water_valve_instance,
-        evcharger_instance,
-        ev_instance,
-        camera_topic,
-        app,
-        mqtt_client,
-        gateway_client,
-        lifecycle,
-    )
-    .await
-}
-
-#[cfg(mobile)]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn connect_mqtt(
@@ -1067,7 +868,6 @@ async fn connect_mqtt_impl(
     water_valve_instance: Option<u32>,
     evcharger_instance: Option<u32>,
     ev_instance: Option<u32>,
-    #[cfg(desktop)] camera_topic: Option<String>,
     app: tauri::AppHandle,
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
@@ -1109,8 +909,6 @@ async fn connect_mqtt_impl(
     // it so controls cannot target an old broker under the new endpoint's UI.
     let _ = app.emit("setpoint-override-update", serde_json::Value::Null);
     client.configure_transport(tls)?;
-    #[cfg(desktop)]
-    client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
     client.set_app_handle(app);
     client.set_portal_id(portal_id);
     client.set_water_instances(Some((
@@ -1119,8 +917,6 @@ async fn connect_mqtt_impl(
         water_valve_instance,
     )));
     client.set_ev_instances(Some((ev_instance, evcharger_instance)));
-    #[cfg(desktop)]
-    client.set_camera_topic(camera_topic);
     client.connect().map_err(|e| e.to_string())?;
     let mut client_guard = mqtt_client
         .0
@@ -1225,13 +1021,6 @@ async fn test_mqtt_connection(
     .map_err(|e| format!("MQTT probe join error: {e}"))?
 }
 
-#[cfg(desktop)]
-#[tauri::command]
-async fn test_ha_connection(url: String, port: Option<u16>, token: String) -> Result<(), String> {
-    let client = ha_api::HaApiClient::new(&url, port, &token).await?;
-    client.test_connection().await
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct GatewayHealthResult {
     status: String,
@@ -1282,100 +1071,6 @@ async fn test_gateway_connection(
             .to_string(),
         mqtt_connected: parsed.get("mqtt_connected").and_then(|v| v.as_bool()),
     })
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-async fn get_ha_appliance_states(
-    url: String,
-    port: Option<u16>,
-    token: String,
-) -> Result<Vec<ha_api::HaState>, String> {
-    let client = ha_api::HaApiClient::new(&url, port, &token).await?;
-    // Legacy fallback list for installs without section entity config.
-    // Prefer get_ha_entity_states with configured IDs. Missing entities (404/410)
-    // are killswitched in HaApiClient::get_entities so they are not polled forever.
-    let entity_ids = [
-        // Dishwasher
-        "binary_sensor.dishwasher_running",
-        "sensor.dishwasher_status",
-        "switch.dishwasher",
-        // Appliance states from individual sensors
-        "sensor.dishwasher_duration",
-        "sensor.washer_remaining_time",
-        "sensor.dryer_remaining_time",
-        "sensor.washer_power_estimate",
-        "sensor.dryer_power_estimate",
-        // Washer
-        "binary_sensor.washer_running",
-        "switch.washer",
-        // Dryer
-        "binary_sensor.dryer_running",
-        "switch.dryer",
-    ];
-    client.get_entities(&entity_ids).await
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-async fn get_ha_entity_states(
-    url: String,
-    port: Option<u16>,
-    token: String,
-    entity_ids: Vec<String>,
-) -> Result<Vec<ha_api::HaState>, String> {
-    let client = ha_api::HaApiClient::new(&url, port, &token).await?;
-    let ids: Vec<&str> = entity_ids.iter().map(|s| s.as_str()).collect();
-    client.get_entities(&ids).await
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-async fn discover_ha_entities(
-    url: String,
-    port: Option<u16>,
-    token: String,
-) -> Result<Vec<DiscoveredEntity>, String> {
-    let client = ha_api::HaApiClient::new(&url, port, &token).await?;
-    let states = client.get_states().await?;
-    let mut result = Vec::new();
-    for ha_state in states {
-        let entity_id = ha_state.entity_id.clone();
-        let domain = entity_id.split('.').next().map(String::from);
-        let friendly_name = if let Some(attrs) = &ha_state.attributes {
-            attrs
-                .get("friendly_name")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .unwrap_or_else(|| entity_id.clone())
-        } else {
-            entity_id.clone()
-        };
-        if let Some(domain_str) = domain {
-            if ha_api::is_entity(&entity_id) {
-                result.push(DiscoveredEntity {
-                    entity_id,
-                    friendly_name,
-                    domain: domain_str,
-                    state: ha_state.state.clone(),
-                });
-            }
-        }
-    }
-    Ok(result)
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-async fn set_cover_position(
-    url: String,
-    port: Option<u16>,
-    token: String,
-    entity_id: String,
-    position: u8,
-) -> Result<(), String> {
-    let client = ha_api::HaApiClient::new(&url, port, &token).await?;
-    client.set_cover_position(&entity_id, position).await
 }
 
 #[tauri::command]
@@ -1433,10 +1128,11 @@ fn percent_encode_query(input: &str) -> String {
 
 #[cfg(desktop)]
 fn is_video_window_label(label: &str) -> bool {
-    is_camera_video_label(label) || plugins::media_windows::is_plugin_video_label(label)
+    plugins::media_windows::is_plugin_video_label(label)
+        || plugins::media_windows::is_plugin_preview_label(label)
 }
 
-/// Force camera-video to the default size, then stack top-right (see
+/// Force an owned plugin media window to the default size, then stack top-right (see
 /// [`position_camera_video_stacked`]). Call after create so window-state cannot stick.
 #[cfg(desktop)]
 fn apply_camera_video_window_defaults(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
@@ -1452,7 +1148,7 @@ fn apply_camera_video_window_defaults(app: &tauri::AppHandle, window: &tauri::We
 /// Layout (physical pixels, same margin as edge inset = `CAMERA_VIDEO_WINDOW_MARGIN`):
 /// Column-major from the top-right of the current (else primary) monitor's work area:
 /// right column top→bottom, then the next column to the left, and so on.
-/// Only **visible** peer `camera-video*` windows count as occupied — closed or
+/// Only **visible** peer plugin media windows count as occupied — closed or
 /// closing windows that linger in `webview_windows()` are ignored so stacking
 /// resets to `(right_x, top_y)` when none remain, and a gap left by a closed
 /// middle clip can be filled by the next open.
@@ -1634,106 +1330,6 @@ fn reflow_camera_video_windows(app: &tauri::AppHandle) {
     }
 }
 
-#[cfg(desktop)]
-#[tauri::command]
-async fn open_camera_video_window(
-    app: tauri::AppHandle,
-    video_url: String,
-    agent_name: Option<String>,
-) -> Result<(), String> {
-    if video_url.trim().is_empty() {
-        return Err("video_url is empty".into());
-    }
-    let name = agent_name
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Camera".to_string());
-    let title = format!("{name} — Camera");
-
-    // Always open a new window — never reuse/swap an already-playing clip.
-    let (route, clip_path) = match download_camera_clip(&app, &video_url).await {
-        Ok(local_path) => {
-            let local = local_path.to_string_lossy().to_string();
-            let is_image = local_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| {
-                    matches!(
-                        e.to_ascii_lowercase().as_str(),
-                        "jpg" | "jpeg" | "png" | "webp" | "img"
-                    )
-                })
-                .unwrap_or(false);
-            let media = if is_image { "image" } else { "video" };
-            let route = format!(
-                "camera-video?localPath={}&name={}&media={}",
-                percent_encode_query(&local),
-                percent_encode_query(&name),
-                media
-            );
-            (route, Some(local_path))
-        }
-        Err(err) => {
-            warn!("Camera clip download failed: {err}");
-            let route = format!(
-                "camera-video?error={}&name={}",
-                percent_encode_query(&err),
-                percent_encode_query(&name)
-            );
-            (route, None)
-        }
-    };
-
-    let label = format!("{CAMERA_VIDEO_LABEL_PREFIX}{}", uuid::Uuid::new_v4());
-
-    #[allow(unused_mut)]
-    let mut builder =
-        tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(route.into()))
-            .title(title)
-            .inner_size(CAMERA_VIDEO_WINDOW_W, CAMERA_VIDEO_WINDOW_H)
-            .resizable(true);
-    // Vue overlay provides the close control; hide the native title bar.
-    // decorations()/focused() are desktop-only (missing on iOS/Android builders).
-    #[cfg(desktop)]
-    let builder = builder.decorations(false).focused(false);
-    // macOS wry defaults to TitleBarStyle::Visible which sets FullSizeContentView;
-    // that can leave traffic lights even with Borderless. Prefer Transparent
-    // (no full-size content view) + hidden title, then re-assert after build.
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .hidden_title(true)
-        .title_bar_style(tauri::TitleBarStyle::Transparent);
-    let window = builder.build().map_err(|e| e.to_string())?;
-
-    #[cfg(desktop)]
-    {
-        // Re-assert after create: clears any FullSizeContentView left from defaults.
-        let _ = window.set_decorations(false);
-        #[cfg(target_os = "macos")]
-        {
-            let _ = window.set_title_bar_style(tauri::TitleBarStyle::Transparent);
-        }
-        apply_camera_video_window_defaults(&app, &window);
-        let app_for_reflow = app.clone();
-        window.on_window_event(move |event| {
-            if let WindowEvent::Destroyed = event {
-                if let Some(ref path) = clip_path {
-                    remove_camera_clip_file(path);
-                }
-                reflow_camera_video_windows(&app_for_reflow);
-            }
-        });
-    }
-
-    Ok(())
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-async fn close_camera_video_window(window: tauri::Window) -> Result<(), String> {
-    window.close().map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 async fn close_config_window(window: tauri::Window) -> Result<(), String> {
     #[cfg(mobile)]
@@ -1797,9 +1393,6 @@ async fn get_auto_start() -> Result<bool, String> {
     Ok(false)
 }
 
-#[cfg(desktop)]
-use std::collections::HashMap;
-
 #[tauri::command]
 async fn send_notification(
     app: tauri::AppHandle,
@@ -1817,9 +1410,7 @@ async fn send_notification(
 }
 
 #[tauri::command]
-fn set_window_hidden(hidden: bool, app: tauri::AppHandle, mqtt_client: State<'_, MqttState>) {
-    #[cfg(mobile)]
-    let _ = app;
+fn set_window_hidden(hidden: bool, mqtt_client: State<'_, MqttState>) {
     app_visibility::WINDOW_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
     if !hidden {
         if let Ok(guard) = mqtt_client.0.lock() {
@@ -1827,111 +1418,22 @@ fn set_window_hidden(hidden: bool, app: tauri::AppHandle, mqtt_client: State<'_,
                 client.emit_current_state(true);
             }
         }
-        // Sensors are omitted from live ha-filtered ticks; force a full snapshot
-        // (incl. sensors) whenever the window is shown again.
-        #[cfg(desktop)]
-        ha_api::force_emit_ha_filtered(&app, &app.state::<HaEntityStates>().0);
     }
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-fn get_ha_filtered_data(entity_states: tauri::State<'_, HaEntityStates>) -> ha_api::HaFilteredData {
-    let guard = match entity_states.0.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    ha_api::compute_filtered_data(&guard)
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-fn get_ha_connection_status() -> bool {
-    ha_api::connection_status()
 }
 
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
-#[cfg(desktop)]
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-async fn connect_ha_mqtt(
-    host: String,
-    port: u16,
-    username: Option<String>,
-    password: Option<String>,
-    camera_topic: Option<String>,
-    frigate_base_url: Option<String>,
-    ring_snapshot_url_template: Option<String>,
-    app: tauri::AppHandle,
-    mqtt_client: State<'_, HaMqttState>,
-) -> Result<(), String> {
-    // Drop old client first (stops its background loop)
-    {
-        let mut client_guard = mqtt_client
-            .0
-            .lock()
-            .map_err(|e| format!("Internal error: {}", e))?;
-        if let Some(old) = client_guard.take() {
-            old.stop();
-        }
-    }
-    let mut client = MqttClient::new(
-        host,
-        port,
-        username,
-        password,
-        "inverter-dashboard-desktop-ha".to_string(),
-    );
-    #[cfg(desktop)]
-    client.set_ha_entity_states(app.state::<HaEntityStates>().0.clone());
-    client.set_app_handle(app.clone());
-    #[cfg(desktop)]
-    client.set_camera_topic(camera_topic);
-    client.set_frigate_base_url(frigate_base_url);
-    client.set_ring_snapshot_url_template(ring_snapshot_url_template);
-    client.set_status_event("ha-mqtt-connection-status".to_string());
-    client.connect().map_err(|e| e.to_string())?;
-    let mut client_guard = mqtt_client
-        .0
-        .lock()
-        .map_err(|e| format!("Internal error: {}", e))?;
-    *client_guard = Some(client);
-    Ok(())
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-async fn disconnect_ha_mqtt(mqtt_client: State<'_, HaMqttState>) -> Result<(), String> {
-    let mut client_guard = mqtt_client
-        .0
-        .lock()
-        .map_err(|e| format!("Internal error: {}", e))?;
-    if let Some(old) = client_guard.take() {
-        old.stop();
-    }
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mqtt_state = MqttState(Arc::new(Mutex::new(None)));
-    #[cfg(desktop)]
-    let ha_mqtt_state = HaMqttState(Arc::new(Mutex::new(None)));
     let gateway_state = GatewayState(Arc::new(Mutex::new(None)));
-
-    #[cfg(desktop)]
-    let ha_entity_states = HaEntityStates(Arc::new(Mutex::new(HashMap::new())));
 
     let builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
-                // Default TRACE from dependencies (tungstenite) floods the log
-                // file with every HA WS frame and starves the UI thread/disk.
+                // Keep frequent transport diagnostics from saturating the UI and disk.
                 .level(log::LevelFilter::Info)
-                .level_for("tungstenite", log::LevelFilter::Warn)
-                .level_for("tokio_tungstenite", log::LevelFilter::Warn)
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
@@ -1941,9 +1443,6 @@ pub fn run() {
         .manage(mqtt_state)
         .manage(gateway_state)
         .manage(InverterLifecycle::default());
-
-    #[cfg(desktop)]
-    let builder = builder.manage(ha_mqtt_state).manage(ha_entity_states);
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.plugin(mobile_credentials::init());
@@ -1956,7 +1455,9 @@ pub fn run() {
     // persist/restore them or a prior huge size from .window-state.json will stick.
     let builder = builder.plugin(
         tauri_plugin_window_state::Builder::new()
-            .with_filter(|label| !is_video_window_label(label))
+            .with_filter(|label| {
+                !is_video_window_label(label) && !plugins::live_view::is_live_window(label)
+            })
             .build(),
     );
 
@@ -1967,6 +1468,23 @@ pub fn run() {
         .invoke_handler(|invoke| {
             tauri::async_runtime::spawn_blocking(move || {
                 let app = invoke.message.webview().app_handle().clone();
+                #[cfg(desktop)]
+                if plugins::live_view::is_live_window(invoke.message.webview().label()) {
+                    invoke
+                        .resolver
+                        .reject("Remote plugin pages cannot invoke application commands");
+                    return true;
+                }
+                #[cfg(desktop)]
+                if plugins::media_windows::media_id_for_label(invoke.message.webview().label())
+                    .is_some()
+                    && !plugins::media_windows::preview_command_allowed(invoke.message.command())
+                {
+                    invoke
+                        .resolver
+                        .reject("Media windows can only access their own media controls");
+                    return true;
+                }
                 if !auth::public_command(invoke.message.command()) {
                     if let Err(error) = auth::require_session(&app) {
                         let _ = app.emit("auth-state-changed", ());
@@ -1979,11 +1497,13 @@ pub fn run() {
                     release_info::get_release_info,
                     plugins::bridge::get_plugin_snapshot,
                     plugins::bridge::plugin_action,
+                    plugins::bridge::get_live_preview_url,
                     plugins::bridge::close_plugin_video_window,
                     plugins::bridge::drag_plugin_video_window,
                     plugins::bridge::get_plugin_manager_snapshot,
                     plugins::bridge::retry_configured_plugins,
                     plugins::bridge::get_plugin_settings,
+                    plugins::bridge::get_plugin_settings_choices,
                     plugins::bridge::save_plugin_settings,
                     plugins::bridge::get_retained_plugin_data,
                     plugins::bridge::delete_retained_plugin_data,
@@ -1991,6 +1511,8 @@ pub fn run() {
                     plugins::bridge::install_plugin_package,
                     plugins::bridge::discard_plugin_package,
                     plugins::bridge::set_plugin_enabled,
+                    plugins::bridge::get_plugin_groups,
+                    plugins::bridge::set_plugin_group_enabled,
                     plugins::bridge::rollback_plugin_package,
                     plugins::bridge::uninstall_plugin_package,
                     get_state,
@@ -2001,22 +1523,13 @@ pub fn run() {
                     connect_mqtt,
                     connect_gateway,
                     acknowledge_victron_banner,
-                    connect_ha_mqtt,
-                    disconnect_ha_mqtt,
                     get_config,
                     save_config,
                     backup_config,
                     restore_config,
-                    test_ha_connection,
                     test_mqtt_connection,
                     test_gateway_connection,
-                    get_ha_appliance_states,
-                    get_ha_entity_states,
-                    discover_ha_entities,
-                    set_cover_position,
                     open_config_window,
-                    open_camera_video_window,
-                    close_camera_video_window,
                     close_config_window,
                     set_auto_start,
                     get_auto_start,
@@ -2028,8 +1541,6 @@ pub fn run() {
                     auth::auth_biometric,
                     send_notification,
                     set_window_hidden,
-                    get_ha_filtered_data,
-                    get_ha_connection_status
                 ];
                 #[cfg(mobile)]
                 let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
@@ -2073,9 +1584,6 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             plugins::bridge::install(app.handle());
-            // Start background HA polling
-            #[cfg(desktop)]
-            ha_session::start(app.handle().clone());
 
             #[cfg(desktop)]
             {
@@ -2426,6 +1934,68 @@ mod dashboard_control_config_tests {
         );
         assert_eq!(saved["ha_entities"], config["ha_entities"]);
         saved
+    }
+
+    #[test]
+    fn core_actions_reject_external_targets_without_echoing_them() {
+        for key in inverter_control::FLAG_KEYS {
+            assert!(validate_core_action_target(&serde_json::json!({"entity":key})).is_ok());
+            assert!(validate_core_action_target(
+                &serde_json::json!({"entity":format!("input_boolean.{key}")})
+            )
+            .is_ok());
+        }
+        for entity in [
+            serde_json::json!("light.private_room"),
+            serde_json::json!("switch.only_charging"),
+            serde_json::Value::Null,
+            serde_json::json!(["only_charging"]),
+        ] {
+            let error =
+                validate_core_action_target(&serde_json::json!({"entity":entity})).unwrap_err();
+            assert_eq!(error, "This device control requires an installed plugin");
+        }
+        assert!(validate_core_action_target(&serde_json::json!({"value":true})).is_ok());
+    }
+
+    #[test]
+    fn legacy_camera_live_mappings_survive_core_configuration_roundtrip() {
+        let mut value = serde_json::to_value(FullConfig::default()).unwrap();
+        value["camera_live_urls"] = serde_json::json!({"front":"https://private.invalid/live"});
+        let config: FullConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(config).unwrap()["camera_live_urls"],
+            value["camera_live_urls"]
+        );
+    }
+
+    #[test]
+    fn core_reads_and_resets_retain_private_camera_maps_without_exposing_or_retargeting_them() {
+        let mut stored = FullConfig::default();
+        stored.camera_live_urls.insert(
+            "front".into(),
+            "https://private.invalid/live?token=private-value".into(),
+        );
+        let mut public = public_core_config(stored.clone());
+        let encoded = serde_json::to_string(&public).unwrap();
+        assert!(!encoded.contains("private-value"));
+        assert!(!encoded.contains("camera_live_urls"));
+        public.mqtt_host = "edited-core-host".into();
+        preserve_private_camera_config(&mut public, &stored).unwrap();
+        assert_eq!(public.camera_live_urls, stored.camera_live_urls);
+        let mut reset = FullConfig::default();
+        preserve_private_camera_config(&mut reset, &stored).unwrap();
+        assert_eq!(reset.camera_live_urls, stored.camera_live_urls);
+        let mut forged = public_core_config(stored.clone());
+        forged
+            .camera_live_urls
+            .insert("front".into(), "https://different.invalid".into());
+        let error = preserve_private_camera_config(&mut forged, &stored).unwrap_err();
+        assert_eq!(
+            error,
+            "Private camera mappings cannot be changed through core settings"
+        );
+        assert!(stored.camera_live_urls["front"].contains("private-value"));
     }
 
     #[test]

@@ -1,132 +1,114 @@
-# Desktop features and the mobile core
+# Desktop plugins and the mobile core
 
-Android and iOS ship the inverter core only. Home Assistant integration, cameras,
-and package management are exclusive to desktop. The core retains
-Victron/Cerbo telemetry, MQTT/IGW selection, MQTT inverter-control flags, battery/
-solar/grid statistics, EV and water/pump controls, authentication, notifications,
+Android and iOS ship the inverter core only. Desktop adds a generic package host;
+Home Assistant, Frigate, Kerberos, and Ring are separately built and installed
+workers. The core retains Victron/Cerbo telemetry, MQTT/IGW selection, inverter
+MQTT flags, battery/solar/grid statistics, grid submeter and daemon setpoint
+override, EV and water/pump controls, authentication, core notifications,
 configuration, and app updates.
-Grid submeter telemetry and daemon setpoint override also remain core features;
-the packaged native check requires the override commands on both mobile platforms.
 
-The desktop worker host and package pipeline connect to application
-authentication, startup, settings, and shutdown. Explicit `desktop_plugins`
-declarations restore missing packages from HTTPS sources with exact archive
-SHA-256 pins. Android/iOS preserve these declarations as passive settings only;
-they include no downloader, package store, manager, or worker runtime. The
-**Plugins** settings tab shows restoration results and manages installed workers.
-Its separate manual signed-file flow needs approved publishers and remains
-unavailable with the empty embedded policy. Existing
-HA/camera implementations remain bundled; the manager does not move, disable, or
-uninstall those legacy features. HA/camera extraction and the
-remaining contribution services stay in [TODO](../TODO.md).
-
-See the [worker protocol](plugin-worker-protocol.md) for process communication and
-[plugin packages](plugin-packages.md) for the review, installation, and session
-lifecycle contracts.
+A desktop installation without optional packages starts no HA/camera connection
+and shows no feature settings or contribution panels. Explicit `desktop_plugins`
+declarations restore exact HTTPS archive/SHA-256 pins after authentication. The
+Plugins tab manages installed packages and their encrypted settings. The manual
+signed-file flow requires approved publishers and is unavailable with the empty
+embedded policy. Old HA/camera configuration alone never authorizes installation.
 
 ## Frontend composition
 
-`App.vue`, `Config.vue`, and the core components remain shared. The build resolves
-`@features` to `src/features/desktop.ts` or `src/features/mobile.ts`, and
-`@feature-messages` to the corresponding translation composition. The desktop port
-supplies feature panels, settings, setup, status, camera routes, and lifecycle.
-The fixed mobile composition supplies empty contributions without importing those
-implementations. `FeaturePluginManager` resolves to the desktop manager component
-only on desktop; mobile resolves it to an empty component, has no manager tab ID
-or label, and imports no manager controller, translations, or package loader.
+`App.vue`, `Config.vue`, and core components remain shared. Build aliases resolve
+`@features` to `src/features/desktop.ts` or `src/features/mobile.ts`, and translations
+and data-only defaults use corresponding platform entries. Configuration does
+not import a UI feature entry point. Mobile supplies empty feature slots without
+importing plugin code, translations, metadata, or loaders.
 
-`@feature-defaults` resolves directly to the platform's data-only defaults module.
-Core configuration must not import the UI contribution entry point: that would
-create an initialization cycle through the settings components and lose defaults.
+Desktop imports generic components under `src/features/desktop/plugins/`.
+`presentation.ts` projects host-validated descriptors into the existing header,
+Home controls, and sidebar. Explicit control positions preserve mixed core/plugin
+ordering, labels, unavailable states, and existing core flags. Compact groups,
+appliance summaries, and weather use host-owned views; no generic flat entity
+panel is mounted. Missing packages contribute nothing. Stale snapshots disable
+actions and connection indicators rather than claiming current authority.
 
-HA/camera presentation and connection code lives under `src/features/desktop/`.
-The legacy `useHA`, camera-view, and entity-discovery entry points are reachable
-only through the desktop composition. Core MQTT/IGW source selection and inverter
-actions remain in core composables. Camera MQTT has its own connection lifecycle.
+Every action resolves an exact contribution reference and goes through the
+existing instance-bound native action route. Presentation never supplies a Tauri
+command, arbitrary service, component, or script. Numeric gestures capture the
+advertised revision and constraints; changed authority rejects the submission.
+Core controls retain their direct MQTT/IGW path.
 
-Core settings expose Cerbo device selectors separately from desktop integration
-settings. On mobile, stored HA controls are unavailable in the UI but remain in
-saved configuration. Editing core controls preserves hidden definitions and their
-order/metadata, so returning to desktop does not destroy the user's configuration.
-Legacy field names are passive compatibility data, not a mobile integration.
+`PluginSettingsEditor.vue` renders manifest scalar fields and bounded structured
+JSON-string fields as normal forms. Worker-published choice catalogs provide
+optional entity suggestions; they grant no action authority. Secrets are never
+read back. `PluginGroupActions.vue` uses native group enablement, so a stopped
+camera worker can be re-enabled without dispatching an action to that process.
+Native configuration-change events update only `desktop_plugins` in an open
+settings draft, preserving dirty core edits.
 
-## Native composition
+`PluginMedia.vue` accepts only an opaque native-owned media route. Snapshots close
+after twelve seconds; video, drag, close, and lifecycle revocation remain native
+owned. The former bundled `useHA`, entity discovery/settings, camera connection,
+provider panels, and arbitrary local-file camera player have been removed.
 
-Rust compiles HA sessions, REST/WS clients, camera adapters/downloads/windows,
-managed feature state, command registrations, and authorization entries only
-under `cfg(desktop)`. Camera MQTT parsing is separated into
-`src-tauri/src/mqtt/camera_events.rs`. WebSocket and package verification/storage
-dependencies are target-scoped. The embedded publisher policy and all package
-source files are excluded from mobile compilation. `application.rs` and the native
-manager commands are also desktop-only; mobile never opens a package store or
-restores package workers.
-Shared HTTP, MQTT, authentication, and notification dependencies remain in core.
-The standalone Frigate and Home Assistant workers and their shared stdio library
-have independent Cargo workspaces with desktop-only dependencies and explicit
-mobile build rejection. Their crates and fixed package manifests are also
-forbidden in mobile dependency graphs and packaged assets.
+## Native and persistence boundaries
 
-Owned plugin video also stays behind that desktop boundary: generation leases,
-HTTP downloads, private media files, the `plugin-media` scheme, and
-`close_plugin_video_window`/`drag_plugin_video_window` commands are not registered
-on mobile. The reused `CameraVideo.vue` player and its route helper remain in the
-desktop frontend graph. Both mobile configuration overlays replace the desktop
-media CSP with only `'self'` and `blob:` and keep the asset scope empty. The
-`plugin-video-windows` capability explicitly targets Linux, macOS, and Windows.
+The desktop-only `src-tauri/src/plugins/` host validates packages, settings,
+presentation, choices, notifications, media, and group operations. HA REST/WS and
+camera event parsing live only in their separate `desktop-plugins/` workspaces.
+The bundled `ha_api.rs`, `ha_session.rs`, `camera.rs`, and
+`mqtt/camera_events.rs` are removed. Core MQTT contains no camera subscription
+lifecycle or HA command fallback. Unsupported non-core `perform_action` targets
+are rejected on every platform; the seven daemon flags and historical
+`input_boolean.<flag>` aliases retain their normalization.
 
-Mobile registers the core commands and rejects non-core control targets. The
-seven daemon flag keys and legacy `input_boolean.<flag>` aliases retain the MQTT
-normalization path. No mobile feature startup task or placeholder HA/camera command
-is registered. Camera windows have desktop-only capabilities; mobile configuration
-has no camera asset scope. Management commands are absent from mobile handlers,
-not registered as no-ops. The artifact verifier rejects their command markers as
-well as package source, dependencies, and publisher policy.
+All legacy configuration fields remain passive migration inputs. Native migration
+can seed only an explicitly installed/declared matching built-in package. Exact
+plugin IDs identify schema-version-1 module namespaces; encrypted plugin records
+are authoritative after handover. Core reads omit module credentials and private
+camera live URLs, while saves/resets preserve them locally. Portable exports
+include public plugin values and declarations, never plugin secrets. See
+[module configuration](module-configuration.md) and [plugin settings](plugin-settings.md).
 
-## Build and verification commands
+Android/iOS compile no host, package store, publisher policy, verifier, worker,
+choice/group IPC, or plugin media service. Worker crates have independent desktop
+workspaces and reject mobile builds. Target-scoped dependencies, command handler
+selection, and frontend aliases enforce this at build time. Mobile media CSP and
+asset scope do not expose desktop media. Desktop workers cannot access the core
+MQTT client through the plugin protocol.
+
+## Build and verification
 
 ```bash
-pnpm build                    # Default desktop, or the target selected by Tauri
-pnpm build:mobile             # Explicit standalone mobile frontend
-pnpm test:build-profiles      # Target selection + actual bundler negative test
-pnpm test:mobile              # Shared UI/actions/persistence with mobile aliases
-pnpm test                     # Desktop/core regression suite
+pnpm build
+pnpm build:mobile
+pnpm test:build-profiles
+pnpm test:mobile
+pnpm test
 ```
 
-`scripts/frontend-profile.mjs` follows Tauri's platform/target hints, including
-`androideabi`, rather than the build machine's OS. `INVERTER_BUILD_PROFILE` accepts
-`desktop` or `mobile`; conflicting native target hints are rejected. The iOS
-direct-cargo helper explicitly builds the mobile frontend. Mobile CI, release, and
-Play jobs also select the mobile profile.
+`scripts/frontend-profile.mjs` resolves native target hints rather than the build
+machine's OS. Conflicting explicit profiles fail. Vite checks all loaded modules,
+even imports removed later by tree shaking, and emits `dist/build-profile.json`.
+Both profiles reject bundled provider entry points and worker/package source.
+Mobile additionally rejects all generic desktop host modules. Native mobile
+release builds require a valid mobile graph receipt, so stale desktop assets
+cannot be embedded by running Cargo directly.
 
-Vite examines its actual source module graph and emits `dist/build-profile.json`.
-The mobile build fails if a desktop implementation enters that graph, including a
-static import hidden behind an unused runtime branch. The audit includes worker
-modules and package metadata under `desktop-plugins/` and `scripts/plugins/`, so
-moving an accidental import outside `src` cannot bypass it. A native mobile release
-also requires a valid mobile graph receipt, preventing a raw Cargo build from
-embedding stale desktop assets.
-
-The native boundary verifier examines final native payloads, rustc dependency
-files, and the resolved Cargo normal-dependency tree. Mobile/release/Play workflows
-run it on every produced app artifact before upload:
+The native boundary verifier inspects final executables, rustc source dependency
+files, resolved normal Cargo dependencies, and archive payload names:
 
 ```bash
 python3 scripts/check-mobile-native-boundary.py --platform ios --artifact app.ipa
 python3 scripts/check-mobile-native-boundary.py --platform android --artifact app.aab app.apk
 ```
 
-The native verifier rejects the media commands, scheme/window/cache markers,
-worker payloads, and any compiled `plugins/` source. Its independent fixture
-tests put the new markers into APK, AAB, and IPA executables, independently of the
-verifier's own marker lists. Hosted mobile build and release jobs run the same
-verifier against their actual artifacts.
+It rejects every plugin manager/settings/choice/group/media command, host protocol
+markers, all four worker identities, their binaries/manifests, and any compiled
+host or provider source. Independent negative fixtures contaminate APK/AAB/IPA
+payloads and real Vite graphs. Hosted mobile/release/Play jobs apply the same gates
+to produced artifacts. For a locally built mobile library, use `--native-library`
+and a matching `--target`, optionally `--target-dir` and `--profile`.
 
-For a locally built mobile library, use `--native-library PATH --target TRIPLE`
-with the appropriate `--target-dir` and `--profile` if they differ from Cargo's
-defaults. The verifier never executes or installs the inspected artifact.
-
-Frontend graph checks, native compilation/payload checks, and device behavior are
-separate evidence. Local tests and CI do not verify the user's HA installation,
-issue physical inverter commands, or prove usability on every mobile device.
-Desktop package tests additionally run on Windows in the reusable Rust CI workflow,
-covering file replacement, leases, and actual worker cleanup on that platform.
+Graph checks, local fixtures, hosted artifacts, and installed device behavior are
+separate evidence. They do not operate the user's household, provision publisher
+trust, or prove native graphical behavior on every platform. Current results and
+remaining delivery checks belong in [TODO](../TODO.md).

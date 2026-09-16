@@ -44,13 +44,17 @@ FORBIDDEN_COMMANDS = (
     "set_cover_position",
     "open_camera_video_window",
     "close_camera_video_window",
+    "get_live_preview_url",
     "close_plugin_video_window",
     "drag_plugin_video_window",
     "get_plugin_snapshot",
     "plugin_action",
     "get_plugin_manager_snapshot",
     "retry_configured_plugins",
+    "get_plugin_settings_choices",
     "get_plugin_settings",
+    "get_plugin_groups",
+    "set_plugin_group_enabled",
     "save_plugin_settings",
     "get_retained_plugin_data",
     "delete_retained_plugin_data",
@@ -66,15 +70,26 @@ FORBIDDEN_PROTOCOLS = (
     "inverter-desktop.frigate", "inverter-frigate-worker",
     "inverter-desktop.home-assistant", "inverter-home-assistant-worker",
     "inverter-worker-protocol", "inverter_worker_protocol",
-    "plugin-media", "plugin-video-", "desktop-plugin-media",
+    "inverter-desktop.kerberos", "inverter-kerberos-worker",
+    "inverter-desktop.ring", "inverter-ring-worker",
+    "inverter-camera-common", "inverter_camera_common",
+    "plugin-media", "plugin-video-", "desktop-plugin-media", "plugin-live", "plugin-preview-",
+    "plugin-configuration-changed",
 )
 FORBIDDEN_CRATES = {
     "tokio-tungstenite", "tungstenite", "ed25519-dalek", "curve25519-dalek", "zip",
     "inverter-frigate-worker", "notify-rust", "mac-notification-sys",
     "inverter-home-assistant-worker", "inverter-worker-protocol",
+    "inverter-kerberos-worker", "inverter-ring-worker", "inverter-camera-common",
 }
-WORKER_BINARIES = {"inverter-frigate-worker", "inverter-home-assistant-worker"}
-WORKER_MANIFESTS = {"frigate-manifest.json", "home-assistant-manifest.json"}
+WORKER_BINARIES = {
+    "inverter-frigate-worker", "inverter-home-assistant-worker",
+    "inverter-kerberos-worker", "inverter-ring-worker",
+}
+WORKER_MANIFESTS = {
+    "frigate-manifest.json", "home-assistant-manifest.json",
+    "kerberos-manifest.json", "ring-manifest.json",
+}
 REQUIRED_CORE_COMMANDS = (
     "perform_action",
     "connect_mqtt",

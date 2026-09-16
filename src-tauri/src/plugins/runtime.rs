@@ -48,10 +48,10 @@ const NOTIFICATION_DEDUP_TTL: Duration = Duration::from_secs(10 * 60);
 const NOTIFICATION_DELIVERY_TTL: Duration = Duration::from_secs(30);
 
 const HTTP_VIDEO_QUEUE_CAPACITY: usize = 4;
-const HTTP_VIDEO_COOLDOWN: Duration = Duration::from_secs(45);
 
 /// Native ownership only: URLs/titles never enter public worker snapshots.
 pub(crate) struct QueuedHttpVideo {
+    pub live_preview: bool,
     pub lease: GenerationLease,
     pub grant: HttpVideoGrant,
     pub id: String,
@@ -68,6 +68,12 @@ struct HttpVideoState {
     rate: NotificationRate,
 }
 
+struct MediaAdmission {
+    kind: HttpMediaKind,
+    cooldown_id: Option<String>,
+    live_preview: bool,
+}
+
 type ChangeCallback = Arc<dyn Fn() + Send + Sync>;
 type ActionReply = oneshot::Sender<Result<Value, PluginError>>;
 
@@ -77,6 +83,14 @@ pub(crate) struct DesktopNotification {
     pub id: String,
     pub title: String,
     pub body: String,
+    pub live_view: Option<LiveViewRequest>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LiveViewRequest {
+    pub lease: GenerationLease,
+    pub id: String,
+    pub url: reqwest::Url,
 }
 
 struct QueuedNotification {
@@ -134,6 +148,7 @@ pub struct PluginSnapshot {
     pub instance_id: Option<String>,
     pub restart_count: u32,
     pub contributions: Vec<DashboardContribution>,
+    pub presentation: Vec<super::presentation::Presentation>,
     /// Host-owned diagnostic codes only. Worker stderr and response text never enter this field.
     pub last_error: Option<String>,
 }
@@ -171,6 +186,7 @@ pub struct WorkerSpec {
     /// Granted only from the installed package's freshly verified manifest.
     pub desktop_notifications: bool,
     pub http_video: Option<HttpVideoGrant>,
+    pub live_view: Option<super::protocol::LiveViewGrant>,
 }
 
 struct WorkerEntry {
@@ -188,10 +204,15 @@ struct WorkerEntry {
     notification_rate: Arc<Mutex<NotificationRate>>,
     generation_lease: Mutex<Option<GenerationLease>>,
     http_videos: Mutex<HttpVideoState>,
+    settings_choices: Mutex<super::settings_choices::Catalog>,
 }
 
 impl WorkerEntry {
     fn revoke_generation(&self) {
+        *self
+            .settings_choices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = super::settings_choices::Catalog::default();
         for (_, lease) in self
             .numeric
             .lock()
@@ -226,7 +247,7 @@ impl WorkerEntry {
         id: String,
         url: String,
         title: String,
-        media_kind: HttpMediaKind,
+        admission: MediaAdmission,
     ) -> bool {
         let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         if snapshot.state != WorkerState::Running
@@ -253,27 +274,29 @@ impl WorkerEntry {
             .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DEDUP_TTL);
         state
             .titles
-            .retain(|(_, created)| now.duration_since(*created) < HTTP_VIDEO_COOLDOWN);
+            .retain(|(_, created)| now.duration_since(*created) < grant.cooldown());
+        let cooldown_id = admission.cooldown_id.unwrap_or_else(|| title.clone());
         state.rate.refresh();
         if state.pending.len() >= HTTP_VIDEO_QUEUE_CAPACITY
             || state.seen.len() >= NOTIFICATION_SEEN_CAPACITY
             || state.seen.iter().any(|(seen, _)| seen == &id)
-            || state.titles.iter().any(|(seen, _)| seen == &title)
+            || state.titles.iter().any(|(seen, _)| seen == &cooldown_id)
             || state.rate.count >= NOTIFICATIONS_PER_WORKER_PER_MINUTE
         {
             return false;
         }
         state.rate.count += 1;
         let request = QueuedHttpVideo {
+            live_preview: admission.live_preview,
             lease,
             grant: grant.clone(),
             id,
             url,
             title,
-            media_kind,
+            media_kind: admission.kind,
         };
         state.seen.push_back((request.id.clone(), now));
-        state.titles.push_back((request.title.clone(), now));
+        state.titles.push_back((cooldown_id, now));
         state.pending.push_back((request, now));
         true
     }
@@ -291,7 +314,11 @@ impl WorkerEntry {
     }
 
     /// Called under authority, like snapshot replacement and action admission.
-    fn replace_contributions(&self, items: Vec<DashboardContribution>) {
+    fn replace_contributions(
+        &self,
+        items: Vec<DashboardContribution>,
+        presentation: Vec<super::presentation::Presentation>,
+    ) {
         let mut registry = self.numeric.lock().unwrap_or_else(|e| e.into_inner());
         let mut next = HashMap::new();
         for grant in items
@@ -317,10 +344,9 @@ impl WorkerEntry {
             previous.revoked.send_replace(true);
         }
         *registry = next;
-        self.snapshot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contributions = items;
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        snapshot.contributions = items;
+        snapshot.presentation = presentation;
     }
 
     fn update(&self, update: impl FnOnce(&mut PluginSnapshot)) {
@@ -499,9 +525,36 @@ impl PluginHost {
             })
     }
 
+    pub(crate) fn settings_choices(
+        &self,
+        plugin_id: &str,
+    ) -> Result<super::settings_choices::Snapshot, PluginError> {
+        let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+        if !authority.enabled || self.0.stopped.load(Ordering::Acquire) {
+            return Err(PluginError::HostStopped);
+        }
+        let entries = self.0.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = entries.get(plugin_id).ok_or(PluginError::UnknownPlugin)?;
+        let snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if entry.epoch != authority.epoch
+            || snapshot.state != WorkerState::Running
+            || *entry.stop.borrow()
+        {
+            return Err(PluginError::Unavailable);
+        }
+        let snapshot = entry
+            .settings_choices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot();
+        Ok(snapshot)
+    }
+
     /// Deliver at most sixteen queued notifications per registered worker (128
-    /// globally). The callback runs synchronously under authority and worker
-    /// state guards: it must not reenter this host/auth or defer delivery.
+    /// globally), yielding to pending media before every submission. The callback
+    /// runs synchronously under authority and worker state guards: it must not
+    /// reenter this host/auth or defer delivery. An OS submission already entered
+    /// keeps its existing authorization and cannot be preempted here.
     pub(crate) fn dispatch_notifications(
         &self,
         mut deliver: impl FnMut(&DesktopNotification),
@@ -520,6 +573,11 @@ impl PluginHost {
                 // Release authority between submissions so a slow native
                 // notification service does not turn a batch into one lock hold.
                 let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+                // Check before taking an entry snapshot: media inspection takes
+                // the entries lock, which precedes snapshots in host lock order.
+                if self.has_pending_http_videos() {
+                    return delivered;
+                }
                 let snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(queued) = entry
                     .notifications
@@ -654,6 +712,7 @@ impl PluginHost {
                 instance_id: None,
                 restart_count: 0,
                 contributions: Vec::new(),
+                presentation: Vec::new(),
                 last_error: None,
             }),
             commands,
@@ -667,6 +726,7 @@ impl PluginHost {
             notifications: Mutex::new(NotificationState::default()),
             generation_lease: Mutex::new(None),
             http_videos: Mutex::new(HttpVideoState::default()),
+            settings_choices: Mutex::new(super::settings_choices::Catalog::default()),
             notification_rate: self.0.notification_rate.clone(),
         });
         {
@@ -888,6 +948,7 @@ impl PluginHost {
             let mut snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             snapshot.state = WorkerState::Stopped;
             snapshot.contributions.clear();
+            snapshot.presentation.clear();
             entry
                 .notifications
                 .lock()
@@ -1354,6 +1415,7 @@ fn spawn_generation(
         snapshot.instance_id = None;
         snapshot.restart_count = restart_count;
         snapshot.contributions.clear();
+        snapshot.presentation.clear();
     }
     let child = Command::new(&spec.executable)
         .args(&spec.args)
@@ -1426,6 +1488,7 @@ async fn supervise(
         // Remove stale contributions before awaiting grace, cancellation, or restart backoff.
         entry.update(|snapshot| {
             snapshot.contributions.clear();
+            snapshot.presentation.clear();
             snapshot.state = if matches!(outcome, Outcome::Stopped) {
                 WorkerState::Stopped
             } else {
@@ -1467,6 +1530,7 @@ async fn supervise(
     entry.update(|snapshot| {
         snapshot.state = WorkerState::Stopped;
         snapshot.contributions.clear();
+        snapshot.presentation.clear();
         snapshot.last_error = None;
     });
     while let Ok(control) = commands.try_recv() {
@@ -1494,6 +1558,7 @@ fn fail_entry(entry: &WorkerEntry, code: &str) {
         snapshot.state = WorkerState::Failed;
         snapshot.last_error = Some(code.to_owned());
         snapshot.contributions.clear();
+        snapshot.presentation.clear();
     });
 }
 
@@ -1640,6 +1705,7 @@ fn handle_frame(
             url,
             title,
             media_kind,
+            cooldown_id,
         } => {
             let grant = spec
                 .http_video
@@ -1648,7 +1714,17 @@ fn handle_frame(
             grant
                 .validate_url(&url)
                 .map_err(|_| Outcome::Failed("worker_http_video_url_invalid"))?;
-            notify = entry.queue_http_video(grant, id.clone(), url, title.clone(), media_kind);
+            notify = entry.queue_http_video(
+                grant,
+                id.clone(),
+                url,
+                title.clone(),
+                MediaAdmission {
+                    kind: media_kind,
+                    cooldown_id,
+                    live_preview: false,
+                },
+            );
             if notify && spec.desktop_notifications {
                 entry.queue_notification(DesktopNotification {
                     plugin_id: spec.plugin_id.clone(),
@@ -1660,22 +1736,104 @@ fn handle_frame(
                         "Camera snapshot available"
                     }
                     .into(),
+                    live_view: None,
                 });
             }
         }
-        WorkerMessage::Notification { id, title, body } => {
+        WorkerMessage::HttpLive { id, url, title } => {
+            let grant = spec
+                .http_video
+                .as_ref()
+                .ok_or(Outcome::Failed("worker_http_video_unauthorized"))?;
+            grant
+                .validate_preview_url(&url)
+                .map_err(|_| Outcome::Failed("worker_http_live_url_invalid"))?;
+            notify = entry.queue_http_video(
+                grant,
+                id.clone(),
+                url,
+                title.clone(),
+                MediaAdmission {
+                    kind: HttpMediaKind::Video,
+                    cooldown_id: None,
+                    live_preview: true,
+                },
+            );
+            if notify && spec.desktop_notifications {
+                entry.queue_notification(DesktopNotification {
+                    plugin_id: spec.plugin_id.clone(),
+                    id,
+                    title,
+                    body: "Motion started".into(),
+                    live_view: None,
+                });
+            }
+        }
+        WorkerMessage::LiveView {
+            id,
+            title,
+            live_view_id,
+        } => {
+            let mapping = spec
+                .live_view
+                .as_ref()
+                .ok_or(Outcome::Failed("worker_live_view_unauthorized"))?;
+            let preview = mapping
+                .preview(&live_view_id)
+                .map_err(|_| Outcome::Failed("worker_live_view_preview_unauthorized"))?;
+            if let Some((url, grant)) = preview {
+                notify = entry.queue_http_video(
+                    &grant,
+                    id,
+                    url.into(),
+                    title,
+                    MediaAdmission {
+                        kind: HttpMediaKind::Video,
+                        cooldown_id: Some(live_view_id),
+                        live_preview: true,
+                    },
+                );
+            }
+        }
+        WorkerMessage::Notification {
+            id,
+            title,
+            body,
+            live_view_id,
+        } => {
             if !spec.desktop_notifications {
                 return Err(Outcome::Failed("worker_notification_unauthorized"));
             }
+            let live_view = if let Some(id) = live_view_id {
+                let grant = spec
+                    .live_view
+                    .as_ref()
+                    .ok_or(Outcome::Failed("worker_live_view_unauthorized"))?;
+                let lease = entry
+                    .generation_lease
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+                    .ok_or(Outcome::Stopped)?;
+                grant
+                    .resolve(&id)
+                    .map(|url| LiveViewRequest { lease, id, url })
+            } else {
+                None
+            };
             notify = entry.queue_notification(DesktopNotification {
                 plugin_id: spec.plugin_id.clone(),
                 id,
                 title,
                 body,
+                live_view,
             });
         }
-        WorkerMessage::Contributions { items } => {
-            entry.replace_contributions(items);
+        WorkerMessage::Contributions {
+            items,
+            presentation,
+        } => {
+            entry.replace_contributions(items, presentation);
             notify = true;
         }
         WorkerMessage::ActionResult { request_id, value } => {
@@ -1693,7 +1851,15 @@ fn handle_frame(
                 let _ = request.reply.send(Err(PluginError::WorkerError));
             }
         }
-        WorkerMessage::Event { .. } => { /* Reserved worker-scoped data; no arbitrary app event forwarding. */
+        WorkerMessage::Event { name, data } => {
+            if name == "settings_choices" {
+                entry
+                    .settings_choices
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .accept(data)
+                    .map_err(|_| Outcome::Failed("worker_settings_choices_invalid"))?;
+            }
         }
         WorkerMessage::Ready { .. } | WorkerMessage::ConfigurationReady { .. } => {
             return Err(Outcome::Failed("worker_duplicate_handshake"));

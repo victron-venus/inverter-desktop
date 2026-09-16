@@ -1,0 +1,19 @@
+# Kerberos desktop worker
+
+`inverter-desktop.kerberos` version 0.1.0 requires desktop host API 1.8. It is independently installable and does not require Frigate or Home Assistant. Android and iOS builds reject this package at build time.
+
+The worker subscribes to native Agent motion topics. The default filters are `kerberos/agent/+;kerberos/hub/+`; custom filters may replace the final identity with an exact ID. The broker host, port, TLS setting and write-only username/password belong to this plugin. No core MQTT or HA credentials are inherited.
+
+Standalone Agent messages must contain `motion`. Hub messages must contain an unencrypted, non-hidden `payload.action=motion`, an exact device identity, and a positive timestamp within 60 seconds behind or 10 seconds ahead of the current clock. Conflicting outer device IDs, retained messages, oversized payloads and legacy clip URLs are ignored.
+
+Agent and Hub messages share a 15-second silence boundary per camera. Repeated movement extends the same episode. A fresh episode receives a distinct notification ID; MQTT reconnects keep the current process's episode history.
+
+`camera_labels` is an optional JSON object mapping exact camera identities to names. `camera_live_urls` is a private JSON object mapping those identities to HTTP(S) image or MJPEG stream URLs. The editor replaces the complete private mapping without revealing saved URLs. Queries and fragments are allowed; embedded URL credentials are rejected. Both maps hold at most 32 cameras, with identities up to 128 UTF-8 bytes. Labels are limited to 96 bytes, live URLs to 2,048 bytes, the public map to 8,192 bytes, and the private map to 16,384 bytes. The complete configuration must fit in 32 KiB.
+
+Motion produces an ordinary native notification. If the exact camera identity has a private live destination, the worker first requests an automatic 15-second preview with the same episode ID. No notification click is required, and an unmapped camera produces only its notification. The host resolves the configured URL, owns the isolated preview window, and closes it when its time expires, the plugin stops, settings change, or authentication expires. The private URL is never part of MQTT, dashboard snapshots, or emitted worker frames.
+
+The manifest explicitly declares `live_view.preview_duration_seconds: 15`. Automatic previews share the host's camera window slots, admission expiry and global media budget. Their per-camera cooldown uses the exact camera identity rather than its display label and preserves the 15-second silence boundary. They do not download or cache a clip before opening, steal focus, or require notification permission. An ordinary notification and preview share an ID so one event cannot create duplicate native notices.
+
+Transport limits are 16 provider-specific filters, a 4,096-byte filter list, 16 KiB incoming payloads, 512 recent camera identities and 30 outgoing notifications per minute. Unsupported global wildcard filters are rejected before any connection. Slow host output cannot delay shutdown or block MQTT polling. Network errors expose only generic connection status.
+
+Run `cargo test --locked --manifest-path desktop-plugins/kerberos/Cargo.toml` and `cargo clippy --locked --manifest-path desktop-plugins/kerberos/Cargo.toml --all-targets -- -D warnings`. Unit tests cover silence/timestamp boundaries, exact identity mapping, equal display labels and bounded parsing; subprocess tests verify paired notification/preview frames, private URL exclusion, retained-event suppression and reconnect deduplication using local fixture brokers. The installed-package fixture `plugins::camera_integration_tests::signed_kerberos_package_real_mqtt_lifecycle` additionally checks native preview admission, private URL ownership and closure on disable, logout and uninstall. No fixture contacts real cameras or sends an OS notification.

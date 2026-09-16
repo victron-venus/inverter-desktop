@@ -100,6 +100,73 @@ pub(crate) async fn get_plugin_manager_snapshot(
     Ok(snapshot)
 }
 
+pub(crate) async fn portable_modules(
+    app: &tauri::AppHandle,
+) -> Result<crate::module_config::ModuleNamespaces, String> {
+    auth::require_session(app)?;
+    let state = app.state::<DesktopPlugins>();
+    let epoch = state.host.authority_epoch();
+    let modules = state.packages.export_modules(epoch).await?;
+    auth::require_session(app)?;
+    if !state.host.is_authorized_epoch(epoch) {
+        return Err("Plugin session changed".into());
+    }
+    Ok(modules)
+}
+
+/// Restore against one verified, immutable SettingsStore snapshot. Core config
+/// locking happens only inside the synchronous package-operation callback.
+pub(crate) async fn restore_configuration(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    content: String,
+) -> Result<(), String> {
+    let state = app.state::<DesktopPlugins>();
+    let epoch = management_epoch(app, window, &state)?;
+    let packages = state.packages.clone();
+    let owned_app = app.clone();
+    let owned_window = window.clone();
+    let changed =
+        packages
+            .with_portable_modules(epoch, move |installed| {
+                let _update = crate::CONFIG_UPDATE_GATE
+                    .lock()
+                    .map_err(|_| "Config update lock failed")?;
+                let state = owned_app.state::<DesktopPlugins>();
+                finish_management(&owned_app, &owned_window, &state, epoch)?;
+                let previous = crate::load_config(&owned_app)?;
+                let next =
+                    crate::module_config::restore_with_installed(&content, &previous, &installed)?;
+                super::download::validate_declarations(&next.desktop_plugins)?;
+                state
+                    .host
+                    .commit_in_epoch(epoch, || crate::save_config_encrypted(&owned_app, &next))?;
+                Ok(previous.desktop_plugins != next.desktop_plugins
+                    || previous.modules != next.modules)
+            })
+            .await?;
+    if changed {
+        configuration_changed(app);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn get_plugin_settings_choices(
+    plugin_id: String,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<super::settings_choices::Snapshot, String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    let result = state
+        .host
+        .settings_choices(&plugin_id)
+        .map_err(|error| error.to_string())?;
+    finish_management(&app, &window, &state, epoch)?;
+    Ok(result)
+}
+
 #[tauri::command]
 pub(crate) async fn retry_configured_plugins(
     app: tauri::AppHandle,
@@ -222,6 +289,79 @@ pub(crate) async fn set_plugin_enabled(
         .set_enabled(&plugin_id, enabled, epoch)
         .await?;
     finish_management(&app, &window, &state, epoch)
+}
+
+/// Group controls are dashboard operations and are also available in settings.
+fn group_epoch(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    state: &DesktopPlugins,
+) -> Result<u64, String> {
+    let epoch = state.host.authority_epoch();
+    require_access(app, window, state)?;
+    if !state.host.is_authorized_epoch(epoch) {
+        return Err("Plugin session changed".into());
+    }
+    Ok(epoch)
+}
+
+#[tauri::command]
+pub(crate) async fn get_plugin_groups(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<Vec<super::application::PluginGroupSnapshot>, String> {
+    let epoch = group_epoch(&app, &window, &state)?;
+    let groups = state.packages.groups(epoch).await?;
+    if group_epoch(&app, &window, &state)? != epoch {
+        return Err("Plugin session changed".into());
+    }
+    Ok(groups)
+}
+
+#[tauri::command]
+pub(crate) async fn set_plugin_group_enabled(
+    group_id: String,
+    enabled: bool,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = group_epoch(&app, &window, &state)?;
+    let persist_app = app.clone();
+    let persist_window = window.clone();
+    state
+        .packages
+        .set_group_enabled(group_id, enabled, epoch, move |members, packages| {
+            // Match save_config's lock ordering; never await with this native guard.
+            let _save = crate::CONFIG_UPDATE_GATE
+                .lock()
+                .map_err(|_| "Config update lock failed")?;
+            let state = persist_app.state::<DesktopPlugins>();
+            if group_epoch(&persist_app, &persist_window, &state)? != epoch {
+                return Err("Plugin session changed".into());
+            }
+            let mut config = crate::load_config(&persist_app)?;
+            for declaration in &mut config.desktop_plugins {
+                if members.contains(&declaration.plugin_id) {
+                    declaration.enabled = enabled;
+                }
+            }
+            state.host.commit_in_epoch(epoch, || {
+                crate::save_config_encrypted(&persist_app, &config)?;
+                packages.group_desired_changed(members, enabled);
+                let _ = persist_app.emit(
+                    "plugin-configuration-changed",
+                    serde_json::json!({"desktop_plugins":config.desktop_plugins}),
+                );
+                Ok(())
+            })
+        })
+        .await?;
+    if group_epoch(&app, &window, &state)? != epoch {
+        return Err("Plugin session changed".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -389,12 +529,14 @@ pub(crate) fn install(app: &tauri::AppHandle) {
     });
     super::media_windows::forward_events(app.clone(), media, media_events);
     let key_app = app.clone();
+    let seed = super::migration::provider(app.clone());
     tauri::async_runtime::spawn(async move {
         packages
-            .initialize_with_key(
+            .initialize_with_seed(
                 root,
                 trust,
                 Arc::new(move || crate::config_store::plugin_settings_key(&key_app)),
+                Some(seed),
             )
             .await;
     });
@@ -491,6 +633,9 @@ fn forward_changes(app: tauri::AppHandle, changes: Arc<tokio::sync::Notify>) {
             {
                 break;
             }
+            // Admit automatic previews before waking the OS notification
+            // dispatcher. It also yields between submissions to later media.
+            forward_http_videos(&app);
             if app
                 .state::<DesktopPlugins>()
                 .host
@@ -500,7 +645,6 @@ fn forward_changes(app: tauri::AppHandle, changes: Arc<tokio::sync::Notify>) {
                 // dispatcher waits for the OS; UI refreshes never await it.
                 let _ = notifications.try_send(());
             }
-            forward_http_videos(&app);
             // The fixed event carries no worker data; each window rechecks its session.
             let _ = app.emit("plugin-host-update", ());
         }
@@ -537,6 +681,20 @@ fn forward_http_videos(app: &tauri::AppHandle) {
         // Admission is bounded and never waits for HTTP, disk, or native windows.
         let _ = media.try_submit(request);
     }
+}
+
+#[tauri::command]
+pub(crate) fn get_live_preview_url(window: tauri::WebviewWindow) -> Result<String, String> {
+    let label = window.label();
+    if !super::media_windows::is_plugin_preview_label(label) {
+        return Err("Only an owned preview can request its stream".into());
+    }
+    let id = super::media_windows::media_id_for_label(label)
+        .ok_or("Only an owned preview can request its stream")?;
+    media_access(window.app_handle())
+        .and_then(|media| media.live_preview_url(&id, label))
+        .map(|url| url.to_string())
+        .ok_or_else(|| "Live preview is no longer active".into())
 }
 
 #[tauri::command]
@@ -625,6 +783,17 @@ fn watch_session_expiry(app: tauri::AppHandle) {
                 break;
             }
             state.packages.expire_preview();
+            if super::migration::daemon_ready(&app)
+                && state.host.is_authorized_epoch(state.host.authority_epoch())
+                && auth::require_session(&app).is_ok()
+                && state.packages.take_waiting_migration()
+            {
+                let epoch = state.host.authority_epoch();
+                let packages = state.packages.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = packages.restore(epoch).await;
+                });
+            }
             let active = state.host.snapshots().iter().any(|worker| {
                 matches!(
                     worker.state,

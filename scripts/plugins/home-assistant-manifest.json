@@ -1,11 +1,16 @@
 {
   "schema_version": 1,
   "plugin_id": "inverter-desktop.home-assistant",
-  "version": "0.12.0",
-  "host_api": "^1.7",
+  "version": "0.13.0",
+  "host_api": "^1.8",
   "target": "TARGET",
   "entrypoint": "bin/inverter-home-assistant-worker",
-  "permissions": ["dashboard_contributions", "plugin_configuration", "network_http"],
+  "permissions": [
+    "dashboard_contributions",
+    "plugin_configuration",
+    "network_http",
+    "desktop_notifications"
+  ],
   "config_schema": {
     "type": "object",
     "additionalProperties": false,
@@ -23,7 +28,10 @@
         "title": "Entities to watch",
         "description": "Entity IDs separated by commas or newlines. The ordered union with all control targets and appliance roles is limited to 64 entities. All control lists together allow 63 controls: one per button/scene, three per media player, two per on/off target, three per cover and one per numeric input. Read selection alone never enables writes.",
         "maxLength": 8255,
-        "default": ""
+        "default": "",
+        "x-options-source": "entities",
+        "x-options-prefixes": [],
+        "x-options-multiple": true
       },
       "discovery_prefixes": {
         "type": "string",
@@ -39,7 +47,8 @@
         "description": "Optional single entity ID for a read-only dishwasher state card. Adds this exact entity to watched reads. Matches on/running and off/idle; other states remain literal. No actions are enabled. Leave blank to disable the profile.",
         "maxLength": 128,
         "default": "",
-        "omitEmpty": true
+        "omitEmpty": true,
+        "x-options-source": "entities"
       },
       "dishwasher_duration_entity": {
         "type": "string",
@@ -47,23 +56,26 @@
         "description": "Optional single entity ID reporting runtime since midnight, shown in the running entity card as received without inferred units or a countdown. Requires a different dishwasher running entity. Adds this exact entity to watched reads and never enables actions.",
         "maxLength": 128,
         "default": "",
-        "omitEmpty": true
+        "omitEmpty": true,
+        "x-options-source": "entities"
       },
       "washer_remaining_entity": {
         "type": "string",
         "title": "Washer remaining-time entity",
-        "description": "Optional single entity ID reporting washer remaining time. Uses its existing read-only card and shows the complete value as received, including zero, without inferred activity, units or a local countdown. Must differ from the other remaining-time role and the dishwasher running role. No actions are enabled. Leave blank to disable this profile.",
+        "description": "Optional exact entity reporting washer remaining time, kept as received without units or countdown. The compact summary is visible while the value contains a nonzero digit and the Washer section is enabled. Must differ from the dryer remaining-time and dishwasher running roles.",
         "maxLength": 128,
         "default": "",
-        "omitEmpty": true
+        "omitEmpty": true,
+        "x-options-source": "entities"
       },
       "dryer_remaining_entity": {
         "type": "string",
         "title": "Dryer remaining-time entity",
-        "description": "Optional single entity ID reporting dryer remaining time. Uses its existing read-only card and shows the complete value as received, including zero, without inferred activity, units or a local countdown. Must differ from the other remaining-time role and the dishwasher running role. No actions are enabled. Leave blank to disable this profile.",
+        "description": "Optional exact entity reporting dryer remaining time, kept as received without units or countdown. The compact summary is visible while the value contains a nonzero digit and the Dryer section is enabled. Must differ from the washer remaining-time and dishwasher running roles.",
         "maxLength": 128,
         "default": "",
-        "omitEmpty": true
+        "omitEmpty": true,
+        "x-options-source": "entities"
       },
       "ha_token": {
         "type": "string",
@@ -76,46 +88,327 @@
       "action_entities": {
         "type": "string",
         "title": "Buttons and scenes to control",
-        "description": "Optional explicit button.* and scene.* IDs, up to 16, separated by commas or newlines. Targets are also watched. Leave blank to disable button and scene actions. These actions can control household devices.",
-        "maxLength": 4096,
-        "default": ""
+        "description": "Optional explicit button.* and scene.* IDs, up to 63, separated by commas or newlines. Targets are also watched. Leave blank to disable button and scene actions. These actions can control household devices. The shared limit is 63 controls and 64 unique watched entities, including dashboard and appliance controls.",
+        "maxLength": 8255,
+        "default": "",
+        "x-options-source": "entities",
+        "x-options-prefixes": ["button.", "scene."],
+        "x-options-multiple": true
       },
       "media_player_entities": {
         "type": "string",
         "title": "Media players to control",
-        "description": "Optional explicit media_player.* IDs, up to four, separated by commas or newlines. Targets are also watched. Offers Play, Pause and Stop. Leave blank to disable media actions.",
-        "maxLength": 4096,
-        "default": ""
+        "description": "Optional explicit media_player.* IDs, up to 21, separated by commas or newlines. Targets are also watched. Offers Play, Pause and Stop. Leave blank to disable media actions. The shared limit is 63 controls and 64 unique watched entities, including dashboard and appliance controls.",
+        "maxLength": 8255,
+        "default": "",
+        "x-options-source": "entities",
+        "x-options-prefixes": ["media_player."],
+        "x-options-multiple": true
       },
       "binary_entities": {
         "type": "string",
         "title": "Switches, helpers and lights to control",
-        "description": "Optional explicit switch.*, input_boolean.* and light.* IDs, up to sixteen, separated by commas or newlines. Targets are also watched. Offers Turn on and Turn off while Home Assistant reports on or off. Leave blank to disable these actions.",
-        "maxLength": 4096,
-        "default": ""
+        "description": "Optional explicit switch.*, input_boolean.* light.* and fan.* IDs, up to 31, separated by commas or newlines. Targets are also watched. Offers Turn on and Turn off while Home Assistant reports on or off. Leave blank to disable these actions. The shared limit is 63 controls and 64 unique watched entities, including dashboard and appliance controls.",
+        "maxLength": 8255,
+        "default": "",
+        "x-options-source": "entities",
+        "x-options-prefixes": ["switch.", "input_boolean.", "light.", "fan."],
+        "x-options-multiple": true
       },
       "cover_entities": {
         "type": "string",
         "title": "Covers to control",
-        "description": "Optional explicit cover.* IDs, up to four, separated by commas or newlines. Targets are also watched. Offers supported Open, Close and Stop actions while Home Assistant reports a known state. Leave blank to disable cover actions.",
-        "maxLength": 4096,
-        "default": ""
+        "description": "Optional explicit cover.* IDs, up to 21, separated by commas or newlines. Targets are also watched. Offers supported Open, Close and Stop actions while Home Assistant reports a known state. Leave blank to disable cover actions. The shared limit is 63 controls and 64 unique watched entities, including dashboard and appliance controls.",
+        "maxLength": 8255,
+        "default": "",
+        "x-options-source": "entities",
+        "x-options-prefixes": ["cover."],
+        "x-options-multiple": true
       },
       "number_entities": {
         "type": "string",
         "title": "Numbers to control",
-        "description": "Optional explicit number.* IDs, up to four, separated by commas or newlines. Offers a value field and Apply when Home Assistant reports valid numeric bounds and step. Targets are also watched. Leave blank to disable number inputs.",
-        "maxLength": 4096,
+        "description": "Optional explicit number.* IDs, up to 63, separated by commas or newlines. Offers a value field and Apply when Home Assistant reports valid numeric bounds and step. Targets are also watched. Leave blank to disable number inputs. The shared limit is 63 controls and 64 unique watched entities, including dashboard and appliance controls.",
+        "maxLength": 8255,
         "default": "",
-        "omitEmpty": true
+        "omitEmpty": true,
+        "x-options-source": "entities",
+        "x-options-prefixes": ["number."],
+        "x-options-multiple": true
       },
       "cover_position_entities": {
         "type": "string",
         "title": "Cover positions to control",
-        "description": "Optional explicit cover.* IDs, up to four, separated by commas or newlines. Offers a position field and Apply when the cover reports a valid position and supports setting it. Targets are also watched. Leave blank to disable position inputs.",
-        "maxLength": 4096,
+        "description": "Optional explicit cover.* IDs, up to 63, separated by commas or newlines. Offers a position field and Apply when the cover reports a valid position and supports setting it. Targets are also watched. Leave blank to disable position inputs. The shared limit is 63 controls and 64 unique watched entities, including dashboard and appliance controls.",
+        "maxLength": 8255,
         "default": "",
-        "omitEmpty": true
+        "omitEmpty": true,
+        "x-options-source": "entities",
+        "x-options-prefixes": ["cover."],
+        "x-options-multiple": true
+      },
+      "dashboard_layout": {
+        "type": "string",
+        "title": "Dashboard layout",
+        "description": "Compact controls, sections and appliance actions. Every target is explicit; read-only discovery never enables writes.",
+        "maxLength": 24576,
+        "default": "{\"version\":1,\"controls\":[],\"sections\":{},\"appliances\":{}}",
+        "x-editor": {
+          "kind": "json",
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version"],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "const": 1,
+                "default": 1
+              },
+              "controls": {
+                "type": "array",
+                "title": "Header and Home controls",
+                "maxItems": 64,
+                "default": [],
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id", "surface", "order", "label", "entity"],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "title": "Stable control ID",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "surface": {
+                      "type": "string",
+                      "title": "Location",
+                      "enum": ["header", "home"],
+                      "default": "home"
+                    },
+                    "order": {
+                      "type": "integer",
+                      "title": "Position",
+                      "minimum": 0,
+                      "maximum": 65535,
+                      "default": 0
+                    },
+                    "label": {
+                      "type": "string",
+                      "title": "Label",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "entity": {
+                      "type": "string",
+                      "maxLength": 128,
+                      "x-options-source": "entities",
+                      "x-options-prefixes": [
+                        "switch.",
+                        "input_boolean.",
+                        "light.",
+                        "fan.",
+                        "media_player.",
+                        "button.",
+                        "scene.",
+                        "cover.",
+                        "number.",
+                        "lock.",
+                        "script.",
+                        "climate.",
+                        "sensor.",
+                        "binary_sensor."
+                      ],
+                      "title": "Home Assistant entity"
+                    },
+                    "icon": {
+                      "type": "string",
+                      "title": "Icon",
+                      "enum": [
+                        "home",
+                        "plug",
+                        "light",
+                        "washer",
+                        "dryer",
+                        "dishwasher",
+                        "thermometer",
+                        "gauge",
+                        "blinds",
+                        "play",
+                        "cloud"
+                      ],
+                      "default": "plug"
+                    }
+                  }
+                }
+              },
+              "sections": {
+                "type": "object",
+                "title": "Visible sections",
+                "additionalProperties": false,
+                "properties": {
+                  "sensors": {
+                    "type": "boolean",
+                    "title": "Sensors",
+                    "default": true
+                  },
+                  "numbers": {
+                    "type": "boolean",
+                    "title": "Numbers",
+                    "default": true
+                  },
+                  "covers": {
+                    "type": "boolean",
+                    "title": "Covers",
+                    "default": true
+                  },
+                  "media": {
+                    "type": "boolean",
+                    "title": "Media",
+                    "default": true
+                  },
+                  "scenes": {
+                    "type": "boolean",
+                    "title": "Scenes",
+                    "default": true
+                  },
+                  "weather": {
+                    "type": "boolean",
+                    "title": "Weather",
+                    "default": true
+                  },
+                  "washer": {
+                    "type": "boolean",
+                    "title": "Washer",
+                    "default": true
+                  },
+                  "dryer": {
+                    "type": "boolean",
+                    "title": "Dryer",
+                    "default": true
+                  },
+                  "dishwasher": {
+                    "type": "boolean",
+                    "title": "Dishwasher",
+                    "default": true
+                  }
+                }
+              },
+              "appliances": {
+                "type": "object",
+                "title": "Appliance controls",
+                "additionalProperties": false,
+                "properties": {
+                  "washer_start": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "x-options-source": "entities",
+                    "x-options-prefixes": [
+                      "switch.",
+                      "input_boolean.",
+                      "light.",
+                      "fan.",
+                      "media_player.",
+                      "button.",
+                      "scene.",
+                      "cover.",
+                      "number.",
+                      "lock.",
+                      "script.",
+                      "climate.",
+                      "sensor.",
+                      "binary_sensor."
+                    ],
+                    "title": "Washer start"
+                  },
+                  "washer_pause": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "x-options-source": "entities",
+                    "x-options-prefixes": [
+                      "switch.",
+                      "input_boolean.",
+                      "light.",
+                      "fan.",
+                      "media_player.",
+                      "button.",
+                      "scene.",
+                      "cover.",
+                      "number.",
+                      "lock.",
+                      "script.",
+                      "climate.",
+                      "sensor.",
+                      "binary_sensor."
+                    ],
+                    "title": "Washer pause"
+                  },
+                  "dryer_start": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "x-options-source": "entities",
+                    "x-options-prefixes": [
+                      "switch.",
+                      "input_boolean.",
+                      "light.",
+                      "fan.",
+                      "media_player.",
+                      "button.",
+                      "scene.",
+                      "cover.",
+                      "number.",
+                      "lock.",
+                      "script.",
+                      "climate.",
+                      "sensor.",
+                      "binary_sensor."
+                    ],
+                    "title": "Dryer start"
+                  },
+                  "dryer_pause": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "x-options-source": "entities",
+                    "x-options-prefixes": [
+                      "switch.",
+                      "input_boolean.",
+                      "light.",
+                      "fan.",
+                      "media_player.",
+                      "button.",
+                      "scene.",
+                      "cover.",
+                      "number.",
+                      "lock.",
+                      "script.",
+                      "climate.",
+                      "sensor.",
+                      "binary_sensor."
+                    ],
+                    "title": "Dryer pause"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "omitDefault": true
+      },
+      "discovery_domains": {
+        "type": "string",
+        "title": "Domains to display",
+        "description": "Optional read-only domain discovery, separated by commas. Fills the remaining 64 entity slots without enabling actions.",
+        "maxLength": 256,
+        "default": "",
+        "omitDefault": true
+      },
+      "notify_home": {
+        "type": "boolean",
+        "title": "Home state notifications",
+        "description": "Notify about changes to selected switches, helpers, lights and fans, and binary sensors becoming on. Initial states are silent; each entity has a 60-second cooldown.",
+        "default": false,
+        "omitDefault": true
       }
     }
   },

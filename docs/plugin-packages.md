@@ -5,24 +5,31 @@ using exact version, platform, and archive SHA-256 pins. It also retains a separ
 manual signed-package review flow. **Configuration → Plugins** shows download and
 restoration results, installed workers, typed settings, and package lifecycle actions.
 
-Installing a plugin does not add a generic panel or duplicate its entity cards on
-the main dashboard. The existing home and appliance sections remain in place.
-Connection diagnostics appear in **Configuration -> Plugins**. Background
-workers, Frigate notifications and owned video windows continue without a visible
-dashboard panel. Integrating plugin data into the existing feature sections is a
-separate migration step; installing a package does not complete that migration.
+Installed plugins may contribute compact header/Home controls, accordion groups,
+appliance summaries, weather, and connection indicators through a validated
+presentation contract. They do not append generic flat entity panels. Background
+workers, camera notifications, and owned media remain independent of dashboard
+rendering. An absent package contributes no provider UI or connection.
 
 Configured downloads can use unsigned packages and need no publisher or app
 signing keys. The embedded publisher policy is currently empty, so manual package
-selection remains unavailable. Home Assistant and cameras still have bundled
-desktop implementations alongside the separately packaged workers; full migration
-and bundled-feature removal remain unfinished.
+selection remains unavailable. HA and camera provider implementations are separate
+worker packages; their former bundled frontend/native clients have been removed.
+Local tests, hosted artifact checks, publication, and installed-household acceptance
+remain distinct checkpoints in [TODO](../TODO.md).
 
 Android and iOS compile neither the manager UI nor its native commands, package
 store startup, publisher policy, cryptographic verifier, ZIP handling, or packaging
 implementation. Mobile preserves declarations as dormant configuration data;
 it does not interpret, fetch or execute them. Mobile artifact gates reject the
 desktop implementations.
+
+The extraction build requires compatible package pins for the familiar feature
+views: Home Assistant **0.13 or later**, Frigate **0.3 or later** for the Cameras
+group, and Kerberos/Ring **0.1 or later**. Existing pins remain authoritative and
+are not automatically upgraded with the app. Publish and select the matching
+archive URL/checksum for each installed desktop target before recording upgrade
+acceptance; older workers do not gain compact presentation from an app update.
 
 ## Declaring plugins in application configuration
 
@@ -76,24 +83,29 @@ the application does not silently select a newer release or rebuild. Change the
 declaration's URL/hash and, when needed, version to select different content.
 
 Declared plugins take their package version and enabled state from configuration.
-The native API and manager prevent manual replacement, enable/disable, rollback,
-or uninstall while a declaration owns that ID. Settings remain editable. Remove
+The native API and manager prevent manual replacement, individual enable/disable,
+rollback, or uninstall while a declaration owns that ID. Settings remain editable.
+The generic camera group command is an explicit native exception: it changes both
+the desired enabled declarations and installed lifecycle state under the operation
+lock, then notifies configuration windows without overwriting dirty core fields. Remove
 the declaration to release management; doing so retains installed state and data.
 Uninstall afterward if the package should also be removed.
 
 An app upgrade or reinstall that preserves app data preserves declarations and
 encrypted plugin settings. If app data was deleted, import a saved application
 backup to restore the declarations and fetch missing packages. The portable backup
-does not include plugin settings or secrets. A newly downloaded package needing
-credentials remains installed and stopped until valid settings are saved, then
+includes current public plugin settings in versioned module namespaces, but no
+secrets. A newly downloaded package needing credentials remains installed and stopped until valid settings are saved, then
 activation is retried if enabled in the declaration. Missing local data cannot be
 recovered without a backup. A missing package can be downloaded again, but damaged
 installed content is not automatically overwritten or erased. To reinstall a
 damaged package that remains manageable, remove its declaration, uninstall the
 package while retaining settings, then restore the declaration and retry. An
 unreadable or corrupt store inventory is reported without deleting it; this flow
-does not bypass an inventory error or silently reset the store. Source declarations
-do not migrate bundled HA/camera settings or change the core inverter MQTT connection.
+does not bypass an inventory error or silently reset the store. Only an explicitly
+installed/declared matching built-in package can receive a native legacy
+configuration seed. Existing plugin settings remain authoritative;
+legacy fields alone never download anything. Core MQTT/IGW is unchanged.
 
 Hosted desktop releases generate `.idplugin` assets, `.sha256` files, and
 `desktop-plugins-<target>.json` fragments. Their pinned URLs refer to that frozen
@@ -190,119 +202,57 @@ files, missing files, or incorrect lengths/digests is rejected.
 
 ## Frigate worker package
 
-The first real feature payload is the separately built
-[Frigate worker](../desktop-plugins/frigate/README.md). Version 0.2.0 declares
-configuration, dashboard status, MQTT networking, native desktop notifications,
-and scoped HTTP video under host API 1.3. A nonempty direct Frigate base URL enables
-completed-clip requests; the host owns their download, private files, and windows.
-The staging helper verifies a target-specific native executable header and copies
-only that worker into the payload. It does not execute the binary, generate keys,
-install anything, or modify publisher policy. Compiler provenance and runtime
-library compatibility still require target builds and execution checks.
+The separately built [Frigate worker](../desktop-plugins/frigate/README.md)
+uses an independent MQTT connection, native motion notifications, and automatic
+fifteen-second previews for fresh motion events. Older clip workers remain
+supported by the native download path. [Kerberos](../desktop-plugins/kerberos/README.md) and
+[Ring](../desktop-plugins/ring/README.md) have separate package identities,
+configuration, topic filters, cooldowns, and lifecycle. All camera packages join
+the generic Cameras group. Optional proxy authentication and live destinations
+are explicitly scoped to each plugin; no worker borrows the core HA token or
+MQTT client. `camera_live_urls` migrate into a secret map and never reach core IPC
+or portable backups.
 
-Two dedicated acceptance tests package the actual executable with a disposable
-fixture key and exercise it through the application service against a private
-Mosquitto broker. The clip fixture adds a private HTTP origin, owned range reads,
-and lifecycle cleanup through a simulated native window adapter. HTTP transfer
-failures and resource limits have separate service tests; neither test suite
-proves native decoding or window behavior. The opt-in
-[native media smoke harness](native-plugin-media-smoke.md) covers that separate
-boundary; local macOS playback/window acceptance passed, while Linux and Windows
-graphical acceptance remains pending. This does not provision production trust
-or replace the bundled camera feature; current acceptance results stay in TODO.md. Frigate snapshots,
-optional HA proxy access, other camera adapters, and legacy configuration
-migration remain unfinished.
+The native host owns bounded media downloads, private files, opaque media routes,
+window lifecycle, and optional notification live actions. Disable, restart,
+logout, and uninstall revoke generation-bound media authority. See the
+[worker protocol](plugin-worker-protocol.md) and
+[native media smoke harness](native-plugin-media-smoke.md). Local broker/HTTP
+fixtures do not establish real camera reachability or OS graphical behavior.
 
 ## Home Assistant worker package
 
 The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md)
-uses the same package/configuration lifecycle with a bounded explicit entity list,
-an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
-contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.12 requires host API
-`^1.7` to group each selected entity's state and explicitly authorized controls
-through validated `state_id` references. Existing IDs, parameters and numeric
-revisions retain their authority; equal friendly names do not merge entities.
-Explicitly watched weather entities project condition and a finite temperature
-with its supplied unit into one bounded text card. At most five existing legacy
-forecast entries are included when supplied by the state. This adds no requests,
-service authority, configuration fields, contribution kinds or state slots;
-modern forecast subscriptions remain separate work.
-Optional `dishwasher_running_entity` and `dishwasher_duration_entity` settings
-assign two distinct literal entities to a read-only profile. The duration role
-requires the running role; both are watched within the 64-state union.
-The running entity's existing card combines its state and literal runtime since
-midnight, with no inferred unit, conversion or countdown. The duration card remains independently visible and may have its own
-explicitly configured remaining-time profile. Either role's updates refresh the summary, while unknown or
-unavailable running state uses the existing status card. The two settings default
-to empty and use `omitEmpty` to preserve prior startup envelopes. This adds no
-service authority, contribution kind, host API or automatic settings migration.
-Optional `washer_remaining_entity` and `dryer_remaining_entity` each assign one
-literal remaining-time source to its existing card. The roles append to the same
-read union, retain complete bounded literals including zero, and use neutral
-idle/unknown/unavailable statuses. They do not infer activity, units or a local
-countdown, and grant no controls. Each primary profile needs a distinct entity;
-sharing a dishwasher duration source is allowed and explicitly projects that
-independently visible duration card too. Both projections update together after
-the same source-ordering guard. Empty defaults use `omitEmpty` and preserve the
-prior 32-KiB configuration/storage boundary; selected values count normally.
-Existing appliance start/pause buttons require separate `action_entities`
-selection. Legacy settings migration and complete bundled UI removal remain open.
+owns its REST/WebSocket connection and isolated token. Host API `^1.8` supports its
+compact header/Home controls, grouped sensors/numbers/covers/media/scenes, weather
+forecast strip, appliance summaries, household notifications, and read-only
+entity-choice catalog. A bounded structured layout preserves legacy labels,
+icons, order, section visibility, and explicitly mapped appliance controls.
+The host renders generic views and dispatches only exact advertised references;
+it does not infer entities or services from labels.
 
-The worker keeps service actions disabled unless `action_entities` explicitly
-selects literal `button.*` or `scene.*` targets, `media_player_entities` selects
-literal media players, `binary_entities` selects literal switches, input booleans
-or lights, `cover_entities` selects literal covers, `number_entities` selects
-literal numbers, or `cover_position_entities` selects literal covers for position writes.
-Fixed button presses, scene
-activation, media-player Play/Pause/Stop, explicit Turn on/Turn off and cover
-Open/Close/Stop are supported. On/off actions require exact observed
-`on` or `off` state, and service responses do not synthesize a state change.
-Cover operations require a known cover state and the corresponding reported
-capability; capability-only updates withdraw or restore controls. Cancellation
-never sends a cover Stop command. Numeric inputs use exact bounded decimal grids
-and explicit Apply; changed constraints or eligibility revoke stale submissions.
-Position writes require their own selection and reported set-position support.
-Tilt and other parameterized services remain pending.
-HA 0.12 requires host API `^1.7`. The combined selection permits 64 watched
-entities, up to 16 binary targets, and 63 controls, bounded to 128 contributions
-and the unchanged 64 KiB complete-frame limit. Earlier HA packages retain their
-original limits. There is no generic service proxy, core MQTT
-access, camera authority, or inverter flag alias lookup. Explicit targets use
-individual initial REST reads. Optional `discovery_prefixes` adds read-only
-`sensor.*` and `binary_sensor.*` cards in unused slots after all explicit targets,
-preserving their IDs and control authority. Prefixes are literal, with at most
-eight unique entries and no wildcards or other domains; the field is empty by
-default and uses `omitEmpty` to preserve existing startup envelopes.
+Explicit entity selections authorize fixed button/scene actions, media commands,
+binary controls, covers, and bounded numeric writes. Compact toggles use a fresh
+read before selecting an absolute service operation. State comes from subsequent
+HA updates, never an optimistic service response. The 64-read/63-control capacity,
+128-contribution count, and 64 KiB complete frame remain independently enforced.
+Choice catalogs grant no service authority, and discovery does not silently add
+write access. Missing credentials or an unsupported migration remain visible
+setup errors instead of reviving the removed bundled client.
 
-Only enabled discovery with free slots requests the all-entity `/api/states`
-collection once per connection, bounded to 1 MiB, 4,096 source items and 15 seconds.
-The worker subscribes first and retains at most 128 projected live updates or
-deletions during bootstrap so a late snapshot cannot resurrect older state.
-Initial matches are selected lexically; later matches use free slots. Excess
-matches are discarded with a visible limit indication, with no hidden catalog
-or periodic collection refresh. A collection failure or buffer overflow disables
-discovery for that connection while explicit reads and controls continue;
-authentication rejection still stops the whole session. Reconnect resamples.
-Both the collection and broader `state_changed` stream are filtered locally,
-not by a restricted HA token or server-side prefix subscription. Network
-permissions describe trusted worker behavior and do not sandbox its operating-system access.
+The native migration planner runs only for explicitly selected package IDs. It
+preserves complete mappings or rejects the seed; it never silently trims a
+legacy installation to worker capacity. Existing encrypted worker records remain
+authoritative. Public portable settings can seed a clean reinstall, with
+credentials entered separately. See [module configuration](module-configuration.md).
 
-`prepare-plugin-package.py --plugin home-assistant` stages this worker using
-fixed built-in metadata and the same native header/path checks as Frigate. The
-old Frigate staging command remains supported. The small shared
-`desktop-plugins/worker-protocol` library owns bounded stdio framing, JSON
-number-object rejection and flushed output; it has no feature configuration or network clients. Neither worker
-is linked into the main executable or mobile build.
-
-The explicit installed-package acceptance uses the actual release worker,
-disposable package trust, a temporary HA HTTP/WebSocket fixture and an independent
-core MQTT connection. Separate read-only and action fixtures cover settings
-restart, disable, logout/uninstall, exact service POSTs and stale action rejection.
-Current demonstrated results and pending checks are recorded in TODO.md. A production HA installation, service/UI
-parity, entity-picker UI, full appliance presentation, modern forecast retrieval and legacy migration
-remain separate work. The release trust policy stays
-empty and this slice does not create signing keys.
+`prepare-plugin-package.py --plugin home-assistant`, `frigate`, `kerberos`, or
+`ring` stages fixed built-in metadata and checks the target's executable header.
+The shared stdio library and camera transport crate are independent worker-only
+workspaces. Neither providers nor their manifests are linked into core frontend
+or mobile artifacts. Package, broker, HTTP/WebSocket, action, and lifecycle
+fixtures cover local acceptance; exact-head CI and installed-app verification
+remain recorded separately in [TODO](../TODO.md).
 
 ## Producing an archive
 
@@ -469,8 +419,9 @@ changes invalidate that cache, and launch verification always reads and verifies
 the archive and payload again. Package operations do not reload core configuration
 or reconnect MQTT/IGW.
 
-Plugin settings and secrets are not migrated by this package layer, and uninstall
-must leave unrelated data intact.
+Native migration seeds are bound to the verified installed package and its
+settings schema. They do not grant installation authority. Uninstall must leave
+unrelated core/plugin data intact.
 
 Ordinary caller cancellation does not abandon an in-progress transaction: an
 owned task finishes or restores its state while holding the store lease. Process
@@ -499,14 +450,15 @@ mocked native IPC and does not establish native file-dialog GUI behavior.
 A verified package establishes exact pinned content or approved publisher scope. Its worker still
 runs with the user's OS privileges; this is not an OS sandbox. Permission
 metadata alone does not grant host services. This checkpoint implements scoped
-native settings and startup configuration for `plugin_configuration`, plus bounded
-notifications for `desktop_notifications` and owned direct clips for `http_video`.
-General network host services and request-time secret access remain unfinished.
+native settings and startup configuration for `plugin_configuration`, bounded
+notifications for `desktop_notifications`, scoped clips/snapshots for `http_video`,
+and configured live-view actions. General arbitrary network requests and
+request-time secret access are not exposed.
 Frigate opens its own MQTT connection and has no access to the core MQTT client
 through this protocol.
-The remaining contribution services and HA/camera parity work stay in
+Current source, fixture, hosted, and installed-app acceptance stays in
 [TODO.md](../TODO.md).
 
 This checkpoint does not establish production publisher provisioning, platform
-code signing, complete HA/camera parity, physical inverter
-commands, or mobile device usability.
+code signing, production household behavior, physical inverter commands,
+or mobile device usability.

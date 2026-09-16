@@ -15,42 +15,37 @@ Do **not** invent these — confirm from ring-mqtt logs or MQTT:
 
 Chimes (Hallway) are not cameras: `c4f312386268`, `9c7613dca55f`.
 
-## App behavior
+## Optional package behavior
 
-1. Subscribe via existing HA MQTT `camera_topic` (semicolon list), e.g.
+Ring runs in the separate [Ring worker](../desktop-plugins/ring/README.md), not in
+the core MQTT client. Install/declare that package explicitly and configure its
+MQTT endpoint, motion/ding filters, labels, and optional snapshot settings through
+**Configuration → Plugins → Settings**. The generic Cameras toolbar starts/stops
+installed camera packages without changing core telemetry.
 
-   `kerberos/desktop/events;frigate/events;ring/+/camera/+/motion/state;ring/+/camera/+/ding/state`
+An `ON` event produces a bounded notification. A configured HTTP(S) snapshot is
+requested through the native media service and shown in an owned image window.
+Optional proxy bearer authentication is a dedicated plugin secret scoped to the
+configured base origin/path. There is no implicit lookup of the core HA token.
+Native migration can seed legacy values only for an explicitly selected matching
+package; old `camera_topic` and `ring_snapshot_url_template` fields remain passive
+compatibility data and no longer start a bundled camera connection.
 
-2. On Ring `ON`: OS notification; if `ring_snapshot_url_template` is set, open the camera window with that HTTP(S) URL (snapshot).
+Kerberos and Frigate use their own packages and parsers. Their topic filters and
+settings are isolated from Ring. Snapshot/video authority is revoked on worker
+restart, disable, logout, or uninstall. Portable backups omit secrets, including
+credential-bearing live destinations.
 
-3. Kerberos JSON and Frigate `frigate/events` parsers are unchanged.
+## Transport boundary
 
-## RTSP from the Mac
+The owned media service downloads HTTP(S) snapshots or completed video. RTSP is
+not supported by the webview player. A private cluster RTSP address therefore is
+not a desktop playback URL; expose a suitable authenticated HTTP(S) endpoint if
+needed and configure it explicitly in the package. Native live-view notification
+actions are a separate scoped destination feature and currently have a macOS
+backend.
 
-`open_camera_video_window` downloads **HTTP/HTTPS** media and plays local mp4 **or** still images (jpeg/png). **RTSP is not supported** in the Webview `<video>` path.
-
-As of 2026-09-11 from the Mac LAN:
-
-- `ring-mqtt` Service is **ClusterIP** `10.43.0.193:8554` — not reachable
-- Pod IP `10.42.2.114:8554` (node `h5` / `10.0.0.17`) — not reachable on `:8554`
-- HA `http://ha:8123/api/camera_proxy/camera.front_door_snapshot` **is** reachable (use with HA long-lived token)
-
-### Recommended LAN expose (for ha/k3s)
-
-Minimal options (pick one), mirroring how the Mosquitto broker is published at VIP `10.10.10.10:1883`:
-
-1. **LoadBalancer / externalIPs** on Service `ring-mqtt` port `8554` (e.g. VIP `10.10.10.11:8554`)
-2. **NodePort** on a stable node (less ideal than VIP)
-3. **Ingress TCP** (Traefik TCPEntryPoint) if you already terminate non-HTTP that way
-4. Keep ClusterIP and point desktop at **HA camera_proxy / HLS** instead of RTSP
-
-After RTSP is on the LAN, still prefer an **HTTP** snapshot or HLS URL for the desktop app unless/until an ffmpeg-based player is added.
-
-### Suggested desktop config
-
-```text
-camera_topic: kerberos/desktop/events;frigate/events;ring/+/camera/+/motion/state;ring/+/camera/+/ding/state
-ring_snapshot_url_template: http://ha:8123/api/camera_proxy/camera.front_door_snapshot
-```
-
-HA long-lived token (already in app config) is attached automatically when the snapshot URL host matches `ha_url`.
+The device IDs above are historical environment notes, not discovery defaults or
+proof of current network reachability. Confirm current IDs and endpoints before
+configuring a production package. Local fixtures and source extraction do not
+verify that live Ring, HA proxy, or cluster endpoints are reachable.

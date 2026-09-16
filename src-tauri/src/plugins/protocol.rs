@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.7.0";
+pub const HOST_API_VERSION: &str = "1.8.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -75,6 +75,8 @@ pub enum WorkerMessage {
     /// Replaces this worker's entire contribution snapshot.
     Contributions {
         items: Vec<DashboardContribution>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        presentation: Vec<super::presentation::Presentation>,
     },
     HttpVideo {
         id: String,
@@ -82,11 +84,26 @@ pub enum WorkerMessage {
         title: String,
         #[serde(default, skip_serializing_if = "HttpMediaKind::is_video")]
         media_kind: HttpMediaKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cooldown_id: Option<String>,
+    },
+    HttpLive {
+        id: String,
+        url: String,
+        title: String,
+    },
+    /// Automatic preview of an exact, privately configured destination.
+    LiveView {
+        id: String,
+        title: String,
+        live_view_id: String,
     },
     Notification {
         id: String,
         title: String,
         body: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        live_view_id: Option<String>,
     },
     ActionResult {
         request_id: String,
@@ -286,6 +303,10 @@ pub struct PluginManifest {
     pub permissions: Vec<PluginPermission>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_video: Option<HttpVideoDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_view: Option<LiveViewDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<PluginGroup>,
     pub inventory: Vec<InventoryEntry>,
     /// Optional for local development. Presence does not establish authenticity.
     pub signature: Option<SignatureMetadata>,
@@ -298,6 +319,7 @@ pub enum PluginPermission {
     PluginConfiguration,
     DesktopNotifications,
     HttpVideo,
+    LiveView,
     NetworkHttp,
     NetworkMqtt,
 }
@@ -306,12 +328,164 @@ pub enum PluginPermission {
 #[serde(deny_unknown_fields)]
 pub struct HttpVideoDeclaration {
     pub base_url_setting: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_preview: Option<LivePreviewDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer_token_setting: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_seconds: Option<u16>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_query: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LivePreviewDeclaration {
+    pub query: String,
+    pub max_duration_seconds: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LiveViewDeclaration {
+    pub urls_setting: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_duration_seconds: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginGroup {
+    pub id: String,
+    pub title: String,
+    pub icon: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Clone, Default)]
+pub struct LiveViewGrant {
+    urls: BTreeMap<String, reqwest::Url>,
+    preview_duration_seconds: Option<u16>,
+}
+
+impl std::fmt::Debug for LiveViewGrant {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("LiveViewGrant { destinations: [redacted] }")
+    }
+}
+
+pub(crate) fn validate_live_id(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.trim() != value
+        || value
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '+' | '#'))
+    {
+        return Err("Invalid live view identity".into());
+    }
+    Ok(())
+}
+
+impl LiveViewGrant {
+    pub(crate) fn from_manifest_configuration(
+        manifest: &PluginManifest,
+        configuration: Option<&WorkerConfiguration>,
+    ) -> Result<Option<Self>, String> {
+        manifest.validate_http_video()?;
+        let Some(declaration) = &manifest.live_view else {
+            return Ok(None);
+        };
+        let configuration = configuration.ok_or("Live view startup configuration missing")?;
+        let Some(value) = configuration
+            .secrets
+            .get(&declaration.urls_setting)
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(Some(Self {
+                preview_duration_seconds: declaration.preview_duration_seconds,
+                ..Self::default()
+            }));
+        };
+        if value.len() > 16 * 1024 {
+            return Err("Live view configuration exceeds byte limit".into());
+        }
+        let values: BTreeMap<String, String> =
+            serde_json::from_str(value).map_err(|_| "Invalid live view configuration")?;
+        if values.len() > 32 {
+            return Err("Too many live view destinations".into());
+        }
+        let mut urls = BTreeMap::new();
+        for (id, value) in values {
+            validate_live_id(&id)?;
+            if value.len() > 2048
+                || value.trim() != value
+                || value.chars().any(char::is_control)
+                || value.contains('\\')
+            {
+                return Err("Invalid live view destination".into());
+            }
+            let authority = value
+                .split_once("://")
+                .map(|(_, tail)| tail.split(['/', '?', '#']).next().unwrap_or_default())
+                .ok_or("Invalid live view destination")?;
+            if authority.contains('@') {
+                return Err("Invalid live view destination".into());
+            }
+            let url = reqwest::Url::parse(&value).map_err(|_| "Invalid live view destination")?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                return Err("Invalid live view destination".into());
+            }
+            urls.insert(id, url);
+        }
+        Ok(Some(Self {
+            urls,
+            preview_duration_seconds: declaration.preview_duration_seconds,
+        }))
+    }
+
+    pub(crate) fn resolve(&self, id: &str) -> Option<reqwest::Url> {
+        self.urls.get(id).cloned()
+    }
+
+    pub(crate) fn preview(
+        &self,
+        id: &str,
+    ) -> Result<Option<(reqwest::Url, HttpVideoGrant)>, String> {
+        let duration = self
+            .preview_duration_seconds
+            .ok_or("Automatic live view is not authorized")?;
+        Ok(self.resolve(id).map(|url| {
+            let grant = HttpVideoGrant {
+                base: url.clone(),
+                live_preview: None,
+                exact_preview: Some((url.clone(), duration)),
+                bearer_token: None,
+                cooldown_seconds: 15,
+                allow_query: false,
+            };
+            (url, grant)
+        }))
+    }
 }
 
 /// Only native installation may derive a grant from verified startup settings.
 #[derive(Clone)]
 pub struct HttpVideoGrant {
     base: reqwest::Url,
+    live_preview: Option<LivePreviewDeclaration>,
+    /// Derived only from the private native map; never grants downloads or a prefix.
+    exact_preview: Option<(reqwest::Url, u16)>,
+    bearer_token: Option<String>,
+    cooldown_seconds: u16,
+    allow_query: bool,
 }
 impl std::fmt::Debug for HttpVideoGrant {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -320,6 +494,10 @@ impl std::fmt::Debug for HttpVideoGrant {
 }
 
 fn validated_video_url(value: &str) -> Result<reqwest::Url, String> {
+    validated_media_url(value, false)
+}
+
+fn validated_media_url(value: &str, allow_query: bool) -> Result<reqwest::Url, String> {
     if value.is_empty()
         || value.len() > 2048
         || value.trim() != value
@@ -336,7 +514,7 @@ fn validated_video_url(value: &str) -> Result<reqwest::Url, String> {
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
-        || url.query().is_some()
+        || (!allow_query && url.query().is_some())
         || url.fragment().is_some()
     {
         return Err("Invalid HTTP video URL".into());
@@ -346,6 +524,9 @@ fn validated_video_url(value: &str) -> Result<reqwest::Url, String> {
     let raw_path = value
         .split_once("://")
         .and_then(|(_, tail)| tail.find('/').map(|i| &tail[i..]))
+        .unwrap_or("")
+        .split(['?', '#'])
+        .next()
         .unwrap_or("");
     for segment in raw_path.split('/') {
         let lower = segment.to_ascii_lowercase();
@@ -405,18 +586,78 @@ impl HttpVideoGrant {
         if base.trim().is_empty() {
             return Ok(None);
         }
+        let bearer_token = declaration
+            .bearer_token_setting
+            .as_ref()
+            .and_then(|key| configuration.secrets.get(key))
+            .filter(|value| !value.is_empty())
+            .cloned();
+        if bearer_token.as_ref().is_some_and(|value| {
+            value.len() > 4096
+                || reqwest::header::HeaderValue::from_str(&format!("Bearer {value}")).is_err()
+        }) {
+            return Err("Invalid media credential".into());
+        }
         Ok(Some(Self {
             base: validated_video_url(base)?,
+            live_preview: declaration.live_preview.clone(),
+            exact_preview: None,
+            bearer_token,
+            cooldown_seconds: declaration.cooldown_seconds.unwrap_or(45),
+            allow_query: declaration.allow_query,
         }))
     }
 
     pub fn validate_url(&self, value: &str) -> Result<reqwest::Url, String> {
-        let url = validated_video_url(value)?;
+        if self.exact_preview.is_some() {
+            return Err("Mapped live view does not authorize downloads".into());
+        }
+        let url = validated_media_url(value, self.allow_query)?;
         let prefix = self.base.path().trim_end_matches('/');
         if url.origin() != self.base.origin() || !url.path().starts_with(&format!("{prefix}/")) {
             return Err("HTTP video URL is outside its configured scope".into());
         }
         Ok(url)
+    }
+
+    pub(crate) fn preview_duration(&self) -> Option<std::time::Duration> {
+        if let Some((_, seconds)) = &self.exact_preview {
+            return Some(std::time::Duration::from_secs((*seconds).into()));
+        }
+        self.live_preview
+            .as_ref()
+            .map(|policy| std::time::Duration::from_secs(policy.max_duration_seconds.into()))
+    }
+
+    pub(crate) fn validate_preview_url(&self, value: &str) -> Result<reqwest::Url, String> {
+        if let Some((url, _)) = &self.exact_preview {
+            return if value == url.as_str() {
+                Ok(url.clone())
+            } else {
+                Err("Live preview URL is outside its configured scope".into())
+            };
+        }
+        let policy = self
+            .live_preview
+            .as_ref()
+            .ok_or("Live preview is not authorized")?;
+        let url = validated_media_url(value, true)?;
+        let prefix = self.base.path().trim_end_matches('/');
+        if self.bearer_token.is_some()
+            || url.origin() != self.base.origin()
+            || !url.path().starts_with(&format!("{prefix}/"))
+            || url.query() != Some(policy.query.as_str())
+        {
+            return Err("Live preview URL is outside its configured scope".into());
+        }
+        Ok(url)
+    }
+
+    pub(crate) fn bearer_token(&self) -> Option<&str> {
+        self.bearer_token.as_deref()
+    }
+    pub(crate) fn cooldown(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.cooldown_seconds.into())
     }
 }
 
@@ -486,15 +727,20 @@ fn text(value: &str, name: &str, limit: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn visit_json(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), String> {
+fn visit_json(
+    value: &Value,
+    depth: usize,
+    nodes: &mut usize,
+    maximum_depth: usize,
+) -> Result<(), String> {
     *nodes += 1;
-    if depth > MAX_JSON_DEPTH || *nodes > MAX_JSON_NODES {
+    if depth > maximum_depth || *nodes > MAX_JSON_NODES {
         return Err("JSON value exceeds depth or node limit".into());
     }
     match value {
         Value::Array(values) => {
             for child in values {
-                visit_json(child, depth + 1, nodes)?;
+                visit_json(child, depth + 1, nodes, maximum_depth)?;
             }
         }
         Value::Object(values) => {
@@ -502,7 +748,7 @@ fn visit_json(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), Stri
                 if key.len() > 128 || key.chars().any(char::is_control) {
                     return Err("invalid JSON object key".into());
                 }
-                visit_json(child, depth + 1, nodes)?;
+                visit_json(child, depth + 1, nodes, maximum_depth)?;
             }
         }
         _ => {}
@@ -511,7 +757,11 @@ fn visit_json(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), Stri
 }
 
 fn bounded_json(value: &Value, limit: usize) -> Result<(), String> {
-    visit_json(value, 0, &mut 0)?;
+    bounded_json_depth(value, limit, MAX_JSON_DEPTH)
+}
+
+fn bounded_json_depth(value: &Value, limit: usize, maximum_depth: usize) -> Result<(), String> {
+    visit_json(value, 0, &mut 0, maximum_depth)?;
     let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
     if bytes.len() > limit {
         return Err("JSON value exceeds byte limit".into());
@@ -760,16 +1010,53 @@ pub fn validate_worker_message(message: &WorkerMessage) -> Result<(), String> {
         WorkerMessage::ConfigurationReady { revision } => {
             token(revision, "configuration revision")?
         }
-        WorkerMessage::Contributions { items } => validate_contributions(items)?,
-        WorkerMessage::HttpVideo { id, url, title, .. } => {
-            token(id, "HTTP video id")?;
-            label(title, "HTTP video title", 128)?;
-            validated_video_url(url)?;
+        WorkerMessage::Contributions {
+            items,
+            presentation,
+        } => {
+            validate_contributions(items)?;
+            super::presentation::validate(presentation, items)?;
         }
-        WorkerMessage::Notification { id, title, body } => {
+        WorkerMessage::HttpVideo {
+            id,
+            url,
+            title,
+            cooldown_id,
+            ..
+        } => {
+            token(id, "HTTP video id")?;
+            if let Some(id) = cooldown_id {
+                token(id, "HTTP media cooldown id")?;
+            }
+            label(title, "HTTP video title", 128)?;
+            validated_media_url(url, true)?;
+        }
+        WorkerMessage::HttpLive { id, url, title } => {
+            token(id, "live preview id")?;
+            label(title, "live preview title", 128)?;
+            validated_media_url(url, true)?;
+        }
+        WorkerMessage::LiveView {
+            id,
+            title,
+            live_view_id,
+        } => {
+            token(id, "live preview id")?;
+            label(title, "live preview title", 128)?;
+            validate_live_id(live_view_id)?;
+        }
+        WorkerMessage::Notification {
+            id,
+            title,
+            body,
+            live_view_id,
+        } => {
             token(id, "notification id")?;
             label(title, "notification title", MAX_NOTIFICATION_TITLE_BYTES)?;
             label(body, "notification body", MAX_NOTIFICATION_BODY_BYTES)?;
+            if let Some(id) = live_view_id {
+                validate_live_id(id)?;
+            }
         }
         WorkerMessage::ActionResult { request_id, value } => {
             token(request_id, "request_id")?;
@@ -918,7 +1205,9 @@ impl PluginManifest {
             return Err("plugin target must be a supported desktop target".into());
         }
         validate_package_path(&self.entrypoint)?;
-        bounded_json(&self.config_schema, MAX_ACTION_RESULT_BYTES)?;
+        // Editor schema nesting includes its metadata envelope. Runtime action
+        // and event JSON retains the independent eight-level bound.
+        bounded_json_depth(&self.config_schema, MAX_ACTION_RESULT_BYTES, 16)?;
         if !self.config_schema.is_object()
             || self.config_schema.get("type").and_then(Value::as_str) != Some("object")
         {
@@ -948,11 +1237,54 @@ impl PluginManifest {
     }
 
     fn validate_http_video(&self) -> Result<(), String> {
+        let live_permitted = self.permissions.contains(&PluginPermission::LiveView);
+        if live_permitted != self.live_view.is_some() {
+            return Err("Live view permission requires its scoped declaration".into());
+        }
+        if let Some(declaration) = &self.live_view {
+            self.validate_secret_setting(&declaration.urls_setting)?;
+            if declaration
+                .preview_duration_seconds
+                .is_some_and(|seconds| !(1..=30).contains(&seconds))
+            {
+                return Err("Invalid mapped live preview duration".into());
+            }
+        }
+        if let Some(group) = &self.group {
+            token(&group.id, "plugin group")?;
+            label(&group.title, "plugin group title", 64)?;
+            if !matches!(group.icon.as_str(), "camera" | "home" | "plug") {
+                return Err("Invalid plugin group icon".into());
+            }
+        }
         let permitted = self.permissions.contains(&PluginPermission::HttpVideo);
         if permitted != self.http_video.is_some() {
             return Err("HTTP video permission requires its scoped declaration".into());
         }
         if let Some(declaration) = &self.http_video {
+            if let Some(policy) = &declaration.live_preview {
+                let parsed =
+                    reqwest::Url::parse(&format!("https://preview.invalid/?{}", policy.query))
+                        .map_err(|_| "Invalid live preview query")?;
+                if policy.query.is_empty()
+                    || policy.query.len() > 128
+                    || parsed.query() != Some(policy.query.as_str())
+                    || parsed.fragment().is_some()
+                    || !(1..=30).contains(&policy.max_duration_seconds)
+                    || declaration.bearer_token_setting.is_some()
+                {
+                    return Err("Invalid live preview policy".into());
+                }
+            }
+            if declaration
+                .cooldown_seconds
+                .is_some_and(|value| !(20..=300).contains(&value))
+            {
+                return Err("Invalid media cooldown".into());
+            }
+            if let Some(key) = &declaration.bearer_token_setting {
+                self.validate_secret_setting(key)?;
+            }
             token(&declaration.base_url_setting, "HTTP video setting")?;
             let field = self
                 .config_schema
@@ -973,6 +1305,29 @@ impl PluginManifest {
                     "HTTP video base must name a nonsecret string configuration setting".into(),
                 );
             }
+        }
+        Ok(())
+    }
+
+    fn validate_secret_setting(&self, key: &str) -> Result<(), String> {
+        token(key, "scoped secret setting")?;
+        let field = self
+            .config_schema
+            .get("properties")
+            .and_then(|fields| fields.get(key));
+        if !self
+            .permissions
+            .contains(&PluginPermission::PluginConfiguration)
+            || field
+                .and_then(|field| field.get("type"))
+                .and_then(Value::as_str)
+                != Some("string")
+            || field
+                .and_then(|field| field.get("writeOnly"))
+                .and_then(Value::as_bool)
+                != Some(true)
+        {
+            return Err("Scoped credentials must name a secret string setting".into());
         }
         Ok(())
     }
@@ -1036,6 +1391,10 @@ mod tests {
             PluginPermission::HttpVideo,
         ]);
         value.http_video = Some(HttpVideoDeclaration {
+            live_preview: None,
+            allow_query: false,
+            bearer_token_setting: None,
+            cooldown_seconds: None,
             base_url_setting: "base".into(),
         });
         value.config_schema =
@@ -1101,8 +1460,74 @@ mod tests {
     }
 
     #[test]
+    fn live_preview_requires_explicit_bounded_policy_and_exact_scoped_query() {
+        let mut manifest = video_manifest();
+        let configuration = WorkerConfiguration {
+            revision: "test".into(),
+            values: json!({"base":"https://camera.test:9443/frigate/"}),
+            secrets: BTreeMap::new(),
+        };
+        let target = "https://camera.test:9443/frigate/api/front?fps=2&height=360";
+        let grant = HttpVideoGrant::from_manifest_configuration(&manifest, Some(&configuration))
+            .unwrap()
+            .unwrap();
+        assert!(grant.validate_preview_url(target).is_err());
+        assert!(grant.preview_duration().is_none());
+        manifest.http_video.as_mut().unwrap().live_preview = Some(LivePreviewDeclaration {
+            query: "fps=2&height=360".into(),
+            max_duration_seconds: 15,
+        });
+        manifest.validate().unwrap();
+        let grant = HttpVideoGrant::from_manifest_configuration(&manifest, Some(&configuration))
+            .unwrap()
+            .unwrap();
+        assert!(grant.validate_preview_url(target).is_ok());
+        assert_eq!(
+            grant.preview_duration(),
+            Some(std::time::Duration::from_secs(15))
+        );
+        assert!(grant.validate_url(target).is_err());
+        for url in [
+            "https://other.test:9443/frigate/api/front?fps=2&height=360",
+            "https://camera.test:9443/frigate-other/api/front?fps=2&height=360",
+            "https://camera.test:9443/frigate/api/front?height=360&fps=2",
+            "https://camera.test:9443/frigate/api/front?fps=2&height=360&token=private",
+            "https://camera.test:9443/frigate/api/front?fps=2&height=360#fragment",
+            "https://camera.test:9443/frigate/api/front",
+            "https://u:p@camera.test:9443/frigate/api/front?fps=2&height=360",
+            "https://camera.test:9443/frigate/%2e%2e/api/front?fps=2&height=360",
+        ] {
+            assert!(grant.validate_preview_url(url).is_err(), "{url}");
+        }
+        for (query, duration) in [
+            ("", 15),
+            ("fps=2#fragment", 15),
+            ("fps=2\n", 15),
+            ("fps=2", 0),
+            ("fps=2", 31),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid.http_video.as_mut().unwrap().live_preview = Some(LivePreviewDeclaration {
+                query: query.into(),
+                max_duration_seconds: duration,
+            });
+            assert!(invalid.validate().is_err());
+        }
+        manifest.http_video.as_mut().unwrap().bearer_token_setting = Some("token".into());
+        assert!(manifest.validate().is_err());
+        let wire = WorkerMessage::HttpLive {
+            id: "motion-1".into(),
+            url: target.into(),
+            title: "Front".into(),
+        };
+        validate_worker_message(&wire).unwrap();
+        assert!(!format!("{wire:?}").contains("camera.test"));
+    }
+
+    #[test]
     fn http_video_wire_fields_are_bounded_plain_data_and_debug_is_redacted() {
         let valid = WorkerMessage::HttpVideo {
+            cooldown_id: None,
             id: "clip-1".into(),
             url: "https://private-camera.test/base/clip.mp4".into(),
             title: "Private camera".into(),
@@ -1129,6 +1554,7 @@ mod tests {
             ),
         ] {
             assert!(validate_worker_message(&WorkerMessage::HttpVideo {
+                cooldown_id: None,
                 id,
                 url,
                 title,
@@ -1172,6 +1598,8 @@ mod tests {
 
     fn manifest() -> PluginManifest {
         PluginManifest {
+            group: None,
+            live_view: None,
             schema_version: MANIFEST_SCHEMA_VERSION,
             plugin_id: "org.example.demo".into(),
             version: "0.1.0".into(),
@@ -1223,7 +1651,10 @@ mod tests {
         assert!(validate_worker_message(&wrong_api).is_err());
         assert!(validate_handshake(
             "org.example.demo",
-            &WorkerMessage::Contributions { items: Vec::new() }
+            &WorkerMessage::Contributions {
+                items: Vec::new(),
+                presentation: Vec::new()
+            }
         )
         .is_err());
     }
@@ -1320,7 +1751,11 @@ mod tests {
                 text: "x".repeat(4096),
             })
             .collect();
-        assert!(validate_worker_message(&WorkerMessage::Contributions { items }).is_err());
+        assert!(validate_worker_message(&WorkerMessage::Contributions {
+            items,
+            presentation: Vec::new()
+        })
+        .is_err());
     }
 
     fn numeric_card() -> DashboardContribution {
@@ -1375,6 +1810,7 @@ mod tests {
             for anchor in &anchors {
                 // References can precede their anchor on the wire.
                 let frame = WorkerMessage::Contributions {
+                    presentation: Vec::new(),
                     items: vec![grouped.clone(), anchor.clone()],
                 };
                 let bytes = serde_json::to_vec(&frame).unwrap();
@@ -1431,6 +1867,7 @@ mod tests {
             items.push(serde_json::from_value(value).unwrap());
         }
         validate_worker_message(&WorkerMessage::Contributions {
+            presentation: Vec::new(),
             items: items.clone(),
         })
         .unwrap();
@@ -1443,7 +1880,11 @@ mod tests {
             }
         }
         validate_contributions(&items).unwrap();
-        assert!(validate_worker_message(&WorkerMessage::Contributions { items }).is_err());
+        assert!(validate_worker_message(&WorkerMessage::Contributions {
+            items,
+            presentation: Vec::new()
+        })
+        .is_err());
     }
 
     #[test]
@@ -1451,6 +1892,7 @@ mod tests {
         let card = numeric_card();
         card.validate().unwrap();
         let message = WorkerMessage::Contributions {
+            presentation: Vec::new(),
             items: vec![card.clone()],
         };
         let encoded = serde_json::to_vec(&message).unwrap();
@@ -1557,16 +1999,43 @@ mod tests {
     }
 
     #[test]
-    fn host_api_17_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
-        assert_eq!(HOST_API_VERSION, "1.7.0");
-        for requirement in ["^1.0", "^1.3", "^1.4", "^1.5", "^1.6", "^1.7"] {
+    fn host_api_18_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
+        assert_eq!(HOST_API_VERSION, "1.8.0");
+        for requirement in ["^1.0", "^1.3", "^1.4", "^1.5", "^1.6", "^1.7", "^1.8"] {
             let mut manifest = manifest();
             manifest.host_api = requirement.into();
             manifest.validate().unwrap();
         }
-        assert!(validate_versions(1, "1.7.0").is_ok());
-        assert!(validate_versions(1, "1.6.0").is_err());
-        assert!(validate_versions(2, "1.7.0").is_err());
+        assert!(validate_versions(1, "1.8.0").is_ok());
+        assert!(validate_versions(1, "1.7.0").is_err());
+        assert!(validate_versions(2, "1.8.0").is_err());
+    }
+
+    #[test]
+    fn packaged_editor_schemas_fit_manifest_bounds_without_relaxing_runtime_json() {
+        for template in [
+            include_str!("../../../scripts/plugins/home-assistant-manifest.json"),
+            include_str!("../../../scripts/plugins/frigate-manifest.json"),
+            include_str!("../../../scripts/plugins/kerberos-manifest.json"),
+            include_str!("../../../scripts/plugins/ring-manifest.json"),
+        ] {
+            let mut value: Value = serde_json::from_str(template).unwrap();
+            value["target"] = json!("aarch64-apple-darwin");
+            value["inventory"] =
+                json!([{"path":value["entrypoint"],"sha256":"0".repeat(64),"size":1}]);
+            let manifest: PluginManifest = serde_json::from_value(value).unwrap();
+            manifest.validate().unwrap();
+        }
+        let mut nested = json!(true);
+        for _ in 0..10 {
+            nested = json!({"child":nested});
+        }
+        assert!(bounded_json(&nested, MAX_ACTION_RESULT_BYTES).is_err());
+        assert!(bounded_json_depth(&nested, MAX_ACTION_RESULT_BYTES, 16).is_ok());
+        for _ in 0..7 {
+            nested = json!({"child":nested});
+        }
+        assert!(bounded_json_depth(&nested, MAX_ACTION_RESULT_BYTES, 16).is_err());
     }
 
     #[test]

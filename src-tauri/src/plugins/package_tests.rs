@@ -52,6 +52,8 @@ fn trust() -> TrustStore {
 
 fn unsigned_manifest() -> PluginManifest {
     PluginManifest {
+        group: None,
+        live_view: None,
         schema_version: 1,
         plugin_id: PLUGIN_ID.into(),
         version: "1.0.0".into(),

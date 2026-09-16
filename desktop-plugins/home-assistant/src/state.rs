@@ -1,9 +1,10 @@
 use crate::appliances::Appliances;
-use crate::config::{ApplianceProfiles, ConfiguredAction};
+use crate::config::{ApplianceProfiles, ConfiguredAction, Validated};
 use crate::discovery::Discovery;
 use crate::numeric::{self, Observation};
 use inverter_worker_protocol::Output;
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -35,6 +36,11 @@ pub struct Book {
     advertised: Vec<bool>,
     inputs: Vec<Input>,
     link: watch::Sender<Connection>,
+    layout: Option<crate::presentation::Layout>,
+    profiles: ApplianceProfiles,
+    notifications: crate::notifications::Notifications,
+    catalog: VecDeque<Value>,
+    catalog_revision: u64,
 }
 
 struct Input {
@@ -82,6 +88,7 @@ struct Entity {
     binary_known: bool,
     cover_features: u64,
     title: String,
+    observation: Option<crate::presentation::Observation>,
 }
 
 pub(crate) fn bounded(value: &str, limit: usize) -> String {
@@ -148,6 +155,22 @@ pub(crate) fn readonly_contribution(entity: &str, state: &Value) -> Value {
 }
 
 impl Book {
+    pub fn configured(configuration: &Validated) -> Shared {
+        let shared = Self::with_appliances(
+            &configuration.entities,
+            &configuration.actions(),
+            &configuration.inputs(),
+            &configuration.discovery_prefixes,
+            &configuration.appliances,
+        );
+        {
+            let mut book = shared.lock().unwrap_or_else(|error| error.into_inner());
+            book.layout = configuration.layout.clone();
+            book.notifications.enabled = configuration.notify_home;
+        }
+        shared
+    }
+
     #[cfg(test)]
     pub fn new(
         entities: &[String],
@@ -194,6 +217,7 @@ impl Book {
                     binary_known: false,
                     cover_features: 0,
                     title: bounded(name, MAX_TITLE_BYTES),
+                    observation: None,
                 })
                 .collect(),
             discovery: Discovery::new(entities, discovery_prefixes),
@@ -215,6 +239,11 @@ impl Book {
                 })
                 .collect(),
             link,
+            layout: None,
+            profiles: profiles.clone(),
+            notifications: crate::notifications::Notifications::default(),
+            catalog: VecDeque::new(),
+            catalog_revision: 0,
         }))
     }
 
@@ -241,6 +270,8 @@ impl Book {
     pub fn begin_session(&mut self) {
         self.discovery.begin_session();
         self.appliances.clear();
+        self.notifications.clear();
+        self.catalog.clear();
         for input in &mut self.inputs {
             input.update(None);
         }
@@ -250,6 +281,7 @@ impl Book {
             entity.actionable = false;
             entity.binary_known = false;
             entity.cover_features = 0;
+            entity.observation = None;
         }
         self.connection("Connecting", "neutral");
     }
@@ -261,6 +293,8 @@ impl Book {
     fn clear(&mut self) {
         self.discovery.clear();
         self.appliances.clear();
+        self.notifications.clear();
+        self.catalog.clear();
         for input in &mut self.inputs {
             input.update(None);
         }
@@ -269,6 +303,7 @@ impl Book {
             entity.actionable = false;
             entity.binary_known = false;
             entity.cover_features = 0;
+            entity.observation = None;
         }
     }
 
@@ -291,8 +326,63 @@ impl Book {
     }
 
     pub fn discovery_snapshot(&mut self, states: &[Value]) {
+        if self.layout.is_some() {
+            self.catalog_snapshot(states);
+        }
         if self.discovery.snapshot(states) {
             self.revision = self.revision.wrapping_add(1);
+        }
+        for row in self.discovery.rows() {
+            self.notifications.observe(
+                row.entity,
+                row.observation
+                    .map(|value| value.notification_title.as_str())
+                    .unwrap_or(row.entity),
+                row.observation.map(|value| value.state.as_str()),
+                false,
+            );
+        }
+    }
+
+    fn catalog_snapshot(&mut self, states: &[Value]) {
+        self.catalog.clear();
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        let revision = format!("ha-catalog-{}", self.catalog_revision);
+        if states.len() > 4096 {
+            return;
+        }
+        let mut options = BTreeMap::new();
+        for state in states {
+            let Some(entity) = state["entity_id"]
+                .as_str()
+                .filter(|entity| crate::config::literal_entity(entity))
+            else {
+                continue;
+            };
+            if !entity
+                .split_once('.')
+                .is_some_and(|(domain, _)| crate::presentation::DISPLAY_DOMAINS.contains(&domain))
+            {
+                continue;
+            }
+            let label = state["attributes"]["friendly_name"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(entity);
+            if options
+                .insert(entity, json!({"value":entity,"label":bounded(label,128)}))
+                .is_some()
+            {
+                return;
+            }
+        }
+        let options: Vec<_> = options.into_values().collect();
+        if options.is_empty() {
+            self.catalog.push_back(json!({"type":"event","name":"settings_choices","data":{"source":"entities","revision":revision,"offset":0,"complete":true,"options":[]}}));
+        }
+        for (page, values) in options.chunks(16).enumerate() {
+            self.catalog.push_back(json!({"type":"event","name":"settings_choices","data":{"source":"entities","revision":revision,
+                "offset":page*16,"complete":(page+1)*16>=options.len(),"options":values}}));
         }
     }
 
@@ -311,6 +401,19 @@ impl Book {
         else {
             if live && self.discovery.live(name, state) {
                 self.revision = self.revision.wrapping_add(1);
+                let row = self.discovery.rows().find(|row| row.entity == name);
+                self.notifications.observe(
+                    name,
+                    row.as_ref()
+                        .and_then(|row| {
+                            row.observation
+                                .map(|value| value.notification_title.as_str())
+                        })
+                        .unwrap_or(name),
+                    row.and_then(|row| row.observation)
+                        .map(|value| value.state.as_str()),
+                    true,
+                );
             }
             return;
         };
@@ -318,6 +421,11 @@ impl Book {
             return;
         }
         entity.live_seen |= live;
+        let observation = crate::presentation::Observation::from_state(name, state);
+        if entity.observation != observation {
+            entity.observation = observation;
+            self.revision = self.revision.wrapping_add(1);
+        }
         if self.appliances.update(
             index,
             state.filter(|state| state["entity_id"].as_str() == Some(name)),
@@ -356,6 +464,19 @@ impl Book {
             .and_then(|state| state["attributes"]["supported_features"].as_u64())
             .unwrap_or(0);
         entity.title = item["title"].as_str().unwrap_or(name).to_owned();
+        self.notifications.observe(
+            name,
+            entity
+                .observation
+                .as_ref()
+                .map(|value| value.notification_title.as_str())
+                .unwrap_or(name),
+            entity
+                .observation
+                .as_ref()
+                .map(|value| value.state.as_str()),
+            live,
+        );
         if entity.item != item
             || entity.actionable != actionable
             || entity.unknown != unknown
@@ -451,7 +572,7 @@ impl Book {
         }
     }
 
-    fn frame(&self) -> Value {
+    pub(crate) fn frame(&self) -> Value {
         let (connection, tone) = self.discovery.notice().map_or_else(
             || (self.connection.to_owned(), self.tone),
             |notice| (format!("{}; {notice}", self.connection), "warning"),
@@ -505,9 +626,71 @@ impl Book {
                     "decimal_places":constraints.decimal_places}));
             }
         }
-        json!({"type":"contributions","items":items})
+        if let Some(layout) = &self.layout {
+            let rows: Vec<_> = self
+                .entities
+                .iter()
+                .map(|entity| crate::presentation::Row {
+                    entity: &entity.name,
+                    item: &entity.item,
+                    observation: entity.observation.as_ref(),
+                })
+                .chain(self.discovery.rows())
+                .collect();
+            let presentation = crate::presentation::project(
+                layout,
+                &rows,
+                &items,
+                &self.actions,
+                &self.profiles,
+                self.link.borrow().connected,
+            );
+            // Compact projections carry the full row/control labels. Repeating
+            // them on hidden authority records consumes the same bounded frame.
+            for item in &mut items {
+                if item["id"] == "connection" {
+                    continue;
+                }
+                item["title"] = json!(if matches!(
+                    item["kind"].as_str(),
+                    Some("action" | "number_input")
+                ) {
+                    "Control"
+                } else {
+                    "State"
+                });
+                if item["kind"] == "metric" {
+                    if let Some(observation) = rows
+                        .iter()
+                        .find(|row| row.item["id"] == item["id"])
+                        .and_then(|row| row.observation)
+                    {
+                        let text = format!(
+                            "{}{}{}",
+                            bounded(&observation.state, 128),
+                            if observation.unit.is_empty() { "" } else { " " },
+                            observation.unit
+                        );
+                        *item = json!({"kind":"text","id":item["id"],"title":"State","text":text});
+                    }
+                }
+                if let Some(text) = item["text"].as_str() {
+                    item["text"] = json!(bounded(text, 128));
+                }
+                if item["kind"] == "action" || item["kind"] == "number_input" {
+                    item["label"] = json!("Apply");
+                }
+            }
+            json!({"type":"contributions","items":items,"presentation":presentation})
+        } else {
+            json!({"type":"contributions","items":items})
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "presentation_tests.rs"]
+mod presentation_tests;
 
 pub async fn publish(shared: Shared, output: Output) -> Result<(), &'static str> {
     let mut interval = tokio::time::interval(Duration::from_millis(250));
@@ -515,6 +698,16 @@ pub async fn publish(shared: Shared, output: Output) -> Result<(), &'static str>
     loop {
         interval.tick().await;
         let mut book = shared.lock().map_err(|_| "state unavailable")?;
+        if let Some(notification) = book.notifications.next() {
+            if output.try_send(notification.clone())? {
+                book.notifications.sent();
+            }
+        }
+        if let Some(page) = book.catalog.front() {
+            if output.try_send(page.clone())? {
+                book.catalog.pop_front();
+            }
+        }
         if book.published == Some(book.revision) {
             continue;
         }

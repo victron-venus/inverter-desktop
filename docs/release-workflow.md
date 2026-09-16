@@ -71,20 +71,26 @@ SHA-256. The manifest is also saved in immutable Actions evidence for 90 days.
 
 ## Desktop plugin release assets
 
-The desktop matrix also builds the independent Home Assistant and Frigate workers
-for macOS ARM, macOS Intel, Linux x86-64, and Windows x86-64. After collecting the
+The desktop matrix builds the independent Home Assistant, Frigate, Kerberos, and
+Ring workers for macOS ARM, macOS Intel, Linux x86-64, and Windows x86-64. After collecting the
 installers, `scripts/build-release-plugins.py` builds the packaging example for the
 runner's Rust host and the workers for the selected desktop target. In particular,
 the macOS Intel job uses a host-native packager even when the runner is ARM.
 Workers are staged and packaged without being executed, and no signing keys are
 read or generated. Android and iOS jobs do not build or include these assets.
 
-Each desktop target adds five flat files to `release-output/desktop`:
+Each desktop target adds nine flat files to `release-output/desktop`:
 
 - One `.idplugin` archive for each worker, named by plugin ID, worker version, and target.
 - One `.idplugin.sha256` checksum file for each archive.
-- `desktop-plugins-<target>.json`, containing both declarations with exact versions,
+- `desktop-plugins-<target>.json`, containing all four declarations with exact versions,
   `enabled: true`, and matching target download URLs and archive SHA-256 digests.
+
+The extraction-compatible versions are HA 0.13, Frigate 0.3, Kerberos 0.1,
+and Ring 0.1, requiring host API `^1.8`. Staging validates six supported archive
+targets; this release matrix publishes the four target platforms listed above.
+Existing installed configuration pins are never automatically bumped by an app
+upgrade. Selecting the matching release fragment is an explicit pin change.
 
 The worker Cargo versions must match their package manifest templates. URLs use
 the validated frozen release plan's tag and the GitHub repository, so they do not
@@ -97,7 +103,7 @@ older pin is also supported; saved pins never change merely because another
 release was published or the application was upgraded.
 
 The existing desktop version receipt runs after plugin packaging and hashes all
-five files alongside the installers. Artifact collection and publication retain
+nine files alongside the installers. Artifact collection and publication retain
 them as target-unique regular files; every file must match its receipt before
 publication. Producing an Actions artifact does not make its download URL public.
 Configured downloads work once that exact GitHub release is published under the

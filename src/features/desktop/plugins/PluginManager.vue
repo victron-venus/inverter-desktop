@@ -257,7 +257,7 @@ const {
 const installedPlugins = computed(() =>
   (snapshot.value?.plugins ?? []).map((plugin) => ({
     plugin,
-    // HA and Frigate publish their connection summary with this exact ID.
+    // The reserved connection status ID is the only legacy summary shown here.
     // Other status contributions describe entities and do not belong in settings.
     connection:
       hasCurrentSnapshot.value &&

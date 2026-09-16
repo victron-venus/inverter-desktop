@@ -1,23 +1,17 @@
 # Frigate worker
 
-`inverter-frigate-worker` is a standalone Rust executable for the desktop plugin
-`inverter-desktop.frigate`, version 0.2.0. It opens its own MQTT connection, emits a
-Frigate connection-status card, and sends native motion-start notifications through
-host API 1.2. With a configured direct Frigate HTTP address and host API 1.3, it also
-requests playback of completed clips. It contains no Tauri, core MQTT client, HA client, inverter controls,
-frontend code, or dependency on the running core telemetry connection.
+`inverter-frigate-worker` is the optional desktop package
+`inverter-desktop.frigate`, version 0.3.0, requiring host API `^1.8`. It opens its
+own MQTT connection, emits connection status, sends motion-start notifications,
+and requests a 15-second live preview when a direct Frigate HTTP address is
+configured. It belongs to the generic **Cameras** plugin group, so the dashboard
+group control changes only installed camera packages and their saved desired state.
 
-The package requires host API `^1.3`. The executable still negotiates compatible
-1.2 sessions as motion-only and never sends a newer media frame to an older host.
-Pre-release, incompatible major, and malformed host versions are rejected.
-
-This is part of camera extraction. It does not provide snapshots,
-Kerberos/Ring, HA proxy access, or legacy settings
-migration. Bundled desktop cameras remain available while those parts are built.
-The shipped publisher policy is still empty: production installation is disabled.
-Tests use disposable package keys, and no production publisher keys are generated.
-Package archive authentication is separate from application signing; desktop app
-or executable signing/notarization is not a prerequisite added by this worker.
+It contains no Tauri, core MQTT client, HA client, inverter controls or frontend
+code. Kerberos and Ring use separate optional packages. Configured archives use
+exact saved SHA-256 pins; manual signed packages retain publisher policy.
+Application/executable signing or notarization is not required by either path.
+Android and iOS exclude these packages and the desktop plugin runtime.
 
 ## Configuration
 
@@ -68,22 +62,25 @@ than one minute in the future are ignored. Legacy publishers without timestamps
 remain supported. Reconnect preserves the in-memory motion history; a fresh worker
 process starts with a new history.
 
-For clips, only `type: end` with the boolean `after.has_clip: true` qualifies.
-Clip history is independent: it has its own ten-minute event-ID deduplication,
-45-second camera cooldown, and bounded maps. A motion-start notification cannot
-suppress the same event's completed clip. The start timestamp is not an age limit
-for completed recordings, which can legitimately be long. Retained deliveries,
-updates, missing/false/nonboolean clip flags, and malformed events are ignored.
+With a configured base, a fresh motion start emits one `http_live` frame for
+`/api/<camera>?fps=2&height=360` beneath its path prefix. The camera occupies one
+encoded URL segment: spaces, Unicode, and query/fragment characters cannot change
+the origin or URL structure. Percent signs, separators, controls, and exact
+`.`/`..` identities cannot request a preview; motion notification remains available.
+The package's explicit `http_video.live_preview` grant fixes this query and a
+15-second maximum duration. Worker frames cannot override either value.
 
-The worker appends `/api/events/<event-id>/clip.mp4` beneath the configured path
-prefix, encoding the ID as one URL segment. Spaces, Unicode, and query/fragment
-characters are encoded without changing the origin or URL structure. IDs containing
-percent signs, separators, controls, or an exact `.`/`..` segment are not accepted
-for clips. Motion IDs retain their existing behavior. The completed event emits
-one `http_video` frame, with a separate `frigate-clip-<SHA256>` ID; it does not emit
-an additional worker notification. The native host owns permission checks, the
-clip-available notification, HTTP download, cancellation, and local video windows.
-The worker itself never performs HTTP requests or supplies executable frontend code.
+The native host owns the preview and its motion notification. It opens the
+low-rate MJPEG stream in a separate incognito window, permits navigation only to
+the exact scoped URL, denies application IPC and new windows, and closes it after
+15 seconds or earlier on worker revocation. Preview admission expires after three
+seconds if shared media-window capacity remains full. Previews use no clip cache
+or download slot. These pages cannot receive bearer credentials or inherited HA
+tokens. The worker itself never performs HTTP requests or supplies frontend code.
+
+Completed `end` events do not open another delayed recording after a live preview.
+Older installed Frigate 0.2 packages can continue requesting completed clips from
+the host until their saved package pins are explicitly replaced.
 
 The worker limits combined motion/media event output to 30 per minute before the host applies
 its independent permission, rate, queue, and generation checks. The existing
@@ -133,8 +130,10 @@ detect replacement and observable modification; they are not a filesystem
 transaction. Source validation finishes before the output directory is created.
 
 Staging produces `manifest.json` and `payload/`. Pass them to the existing
-[native package encoder](../../docs/plugin-packages.md#producing-an-archive) with an
-externally supplied publisher key. The helper itself neither signs nor installs.
+[native package encoder](../../docs/plugin-packages.md#producing-an-archive):
+configured downloads use its unsigned mode and an exact archive SHA-256 pin;
+manual signed-file installation uses an externally supplied publisher key.
+The staging helper itself neither signs nor installs.
 No worker binary or `.idplugin` archive belongs in an Android/iOS application.
 
 ## Validation
@@ -154,7 +153,7 @@ Parser tests cover malformed data, bounded state, timestamp/retained suppression
 independent start/clip deduplication, cooldown expiry, URL authority, version
 negotiation, and output budgets. Subprocess tests drive real
 stdio and TCP connections, including explicit topic/credentials, reconnect,
-shutdown, completed-event media frames, motion-only compatibility, absence of
+shutdown, live-start frames and end-event suppression, motion-only operation, absence of
 worker HTTP requests, and TLS ClientHello/no-plaintext-fallback behavior. The latter does not
 establish a complete certificate-trust/hostname handshake fixture.
 
@@ -171,12 +170,13 @@ CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --li
 ```
 
 Run the same command with the exact test name
-`plugins::frigate_integration_tests::signed_frigate_package_real_mqtt_clip_lifecycle`
-for completed clips. That test also supplies a private HTTP fixture and simulated
-native windows. It covers start/end separation, duplicate clips, URL prefixes,
-range reads, settings restart, disable during a stalled transfer, uninstall, and
-an independent core MQTT probe. HTTP failure/limit scenarios have separate service
-tests; they are not all broker acceptance scenarios.
+`plugins::frigate_integration_tests::signed_frigate_package_real_mqtt_live_lifecycle`
+for live previews. That test uses simulated native windows and an inaccessible
+loopback HTTP address, proving preview admission does not download a clip first.
+It covers start/end separation, URL prefixes, settings restart, disable, logout,
+uninstall, and an independent core MQTT probe. Duration, queue limits, and
+download failure scenarios have separate service tests; they are not all broker
+acceptance scenarios.
 
 Ordinary host unit tests do not build another crate or start an external broker.
 Both ignored acceptance tests are explicitly required by CI; missing fixture paths,
@@ -186,8 +186,8 @@ The original motion test submits notifications to a test collector, so it does n
 notification presentation. Current results and remaining feature/device boundaries
 are tracked in [TODO.md](../../TODO.md).
 
-The completed-clip worker tests exercise real process/TCP request production.
-Native playback and desktop window behavior use the separate, opt-in
+The live-preview worker tests exercise real process/MQTT request production.
+Native MJPEG display and desktop window behavior use the separate, opt-in
 [native media smoke harness](../../docs/native-plugin-media-smoke.md). A successful
 worker or broker test alone does not establish decoding, native focus/stacking,
 or physical-device proof. Record each result separately in TODO.

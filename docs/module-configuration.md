@@ -1,4 +1,4 @@
-# Passive module configuration
+# Module configuration and portable settings
 
 The shared application configuration can retain versioned module namespaces without
 loading or enabling a module. Desktop and mobile use the same persistence format:
@@ -31,8 +31,37 @@ field counts, never payload values or credentials.
 Module authors must put every credential and credential-bearing URL in `secrets`.
 `values` is explicitly portable, non-secret data; core cannot infer credentials
 from arbitrary future field names. Both maps remain inside the existing encrypted
-local configuration. This namespace is not the installable plugin's settings
-store and is not automatically copied into a worker.
+local configuration. A namespace is not executable code and does not authorize
+installation or activation.
+
+## Desktop handover
+
+Built-in workers use their exact package IDs as namespace keys, with
+`schema_version: 1`. The native desktop migration planner recognizes only those
+IDs and runs for explicitly installed or declared packages. It retains legacy
+HA/camera fields as inputs, plans the complete selection/layout before writing,
+and rejects unsupported or oversized mappings instead of silently dropping them.
+Core/mobile load and save remain passive.
+
+Configuration pins remain authoritative. An app-only upgrade keeps an older HA
+package's existing settings intact when its schema cannot express the compact
+layout; the handover marker stays unset until a compatible package is selected.
+An explicit restore into an incompatible installed schema is rejected. Updating
+the app never silently replaces the package pin or truncates the planned layout.
+
+The encrypted `SettingsStore` record becomes authoritative after handover. A
+module namespace can seed an absent record during restoration; it does not
+continually overwrite edited worker settings. Before a desktop portable export,
+the native host snapshots current installed-plugin public values into their
+namespaces. Credentials stay in dedicated secret storage and are omitted from
+that snapshot. A clean restore therefore restores selections and layout but
+requires credentials before startup. An import changing an installed record's public settings is rejected before
+configuration persistence. Snapshot validation and the synchronous restore commit
+share one package operation lock, excluding concurrent settings changes or removal.
+The merge normalizes installed namespace shadows to that authoritative public
+snapshot; old shadow credentials cannot make a new backup conflict with itself.
+Unknown noninstalled namespaces retain their local credential binding rules below.
+Integrated acceptance remains tracked in [TODO](../TODO.md).
 
 ## Save, reset, and portable backups
 
@@ -44,7 +73,7 @@ store and is not automatically copied into a worker.
   and public values are unchanged. Changing that binding without explicitly
   providing every locally stored credential rejects the save before any write.
 - Resetting core defaults retains module values and secrets. Explicit removal of
-  module namespaces is not exposed in this prerequisite.
+  module namespaces is not exposed by the core editor.
 - Export keeps module IDs, versions, and `values`, and omits every `secrets` map.
   Existing core credential and authentication redaction remains unchanged.
 - Import preserves local namespaces absent from the backup. Secret-free incoming
@@ -58,6 +87,8 @@ store and is not automatically copied into a worker.
   determine whether an unknown value changes a server or credential scope, so it
   must not pair retained credentials with new imported values.
 
-This foundation does not migrate legacy HA/camera settings, install packages,
-activate modules, transfer credentials to workers, or expose module-specific UI.
-Those steps require module-owned migration and retention behavior separately.
+Core never activates a namespace. Desktop package installation, revision-bound
+settings changes, and authorized worker startup remain separate native operations.
+Legacy `camera_live_urls` may contain credentials in URL queries: core IPC omits
+the map, ordinary save/reset preserves it locally, and portable backups exclude
+it. Its migration target is the camera plugin's dedicated secret mapping.

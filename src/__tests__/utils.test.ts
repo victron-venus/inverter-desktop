@@ -6,8 +6,6 @@ import {
   formatDuration,
   formatInverterState,
   formatTimestamp,
-  isHaUnavailableState,
-  normalizeHaToggleState,
 } from '../utils'
 
 describe('formatPower', () => {
@@ -81,25 +79,6 @@ describe('formatDuration', () => {
 
   it('formats hours', () => {
     expect(formatDuration(7200)).toBe('2:00:00')
-  })
-})
-
-describe('isHaUnavailableState / normalizeHaToggleState', () => {
-  it('detects unavailable and unknown', () => {
-    expect(isHaUnavailableState('unavailable')).toBe(true)
-    expect(isHaUnavailableState('unknown')).toBe(true)
-    expect(isHaUnavailableState('')).toBe(true)
-    expect(isHaUnavailableState('on')).toBe(false)
-    expect(isHaUnavailableState(undefined)).toBe(false)
-  })
-
-  it('normalizes on/off/open/unavailable', () => {
-    expect(normalizeHaToggleState('on')).toBe('on')
-    expect(normalizeHaToggleState('open')).toBe('on')
-    expect(normalizeHaToggleState('off')).toBe('off')
-    expect(normalizeHaToggleState('closed')).toBe('off')
-    expect(normalizeHaToggleState('unavailable')).toBe('unavailable')
-    expect(normalizeHaToggleState('unknown')).toBe('unavailable')
   })
 })
 

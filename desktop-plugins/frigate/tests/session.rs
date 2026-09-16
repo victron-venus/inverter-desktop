@@ -49,7 +49,7 @@ impl Worker {
     }
 
     fn hello(&mut self) {
-        self.hello_with_api("1.2.0");
+        self.hello_with_api("1.8.0");
     }
 
     fn hello_with_api(&mut self, api: &str) {
@@ -230,11 +230,11 @@ fn publish_event(stream: &mut TcpStream, event: Value, retain: bool) {
 }
 
 #[test]
-fn completed_event_requests_host_video_without_worker_http_or_a_duplicate_notification() {
+fn live_start_requests_one_scoped_host_preview_and_end_never_opens_a_clip() {
     let broker = listener();
     let http = listener();
     let mut worker = Worker::start();
-    worker.hello_with_api("1.3.0");
+    worker.hello_with_api("1.8.0");
     let mut frame = configuration(broker.local_addr().unwrap().port());
     let base = format!(
         "http://127.0.0.1:{}/prefix",
@@ -244,28 +244,23 @@ fn completed_event_requests_host_video_without_worker_http_or_a_duplicate_notifi
     worker.configure_frame(frame);
     let mut stream = subscribe(&broker);
     worker.status("Connected");
-    publish(&mut stream, "event ?#é", "front", false);
-    let motion = worker.frame();
-    assert_eq!(motion["type"], "notification");
+    publish(&mut stream, "event ?#é", "é space?#", true);
+    publish(&mut stream, "event ?#é", "é space?#", false);
+    let live = worker.frame();
+    assert_eq!(live["type"], "http_live");
+    assert_eq!(live["title"], "Frigate É space?# camera motion detected");
+    assert_eq!(
+        live["url"],
+        format!("{base}/api/%C3%A9%20space%3F%23?fps=2&height=360")
+    );
+    assert!(live.get("body").is_none() && live.get("duration_seconds").is_none());
     publish_event(&mut stream, completed("event ?#é", "front"), true);
     publish_event(&mut stream, completed("event ?#é", "front"), false);
-    let clip = worker.frame();
-    assert_eq!(clip["type"], "http_video");
-    assert_eq!(clip["title"], motion["title"]);
-    assert!(clip["id"].as_str().unwrap().starts_with("frigate-clip-"));
-    assert_ne!(clip["id"], motion["id"]);
-    assert_eq!(
-        clip["url"],
-        format!("{base}/api/events/event%20%3F%23%C3%A9/clip.mp4")
-    );
-    assert!(clip.get("body").is_none());
+    publish(&mut stream, "event ?#é", "other", false);
+    publish(&mut stream, "sibling", "é space?#", false);
     publish_event(&mut stream, completed("event ?#é", "other"), false);
     publish_event(&mut stream, completed("sibling", "front"), false);
     publish_event(&mut stream, completed("different", "back"), false);
-    assert_eq!(
-        worker.frame()["title"],
-        "Frigate Back camera motion detected"
-    );
     assert!(worker
         .frames
         .recv_timeout(Duration::from_millis(100))
@@ -275,12 +270,8 @@ fn completed_event_requests_host_video_without_worker_http_or_a_duplicate_notifi
 }
 
 #[test]
-fn missing_base_or_host_api_12_keeps_the_session_motion_only() {
-    for (api, base) in [
-        ("1.3.0", None),
-        ("1.3.0", Some("")),
-        ("1.2.0", Some("http://frigate.local:5000")),
-    ] {
+fn missing_base_keeps_the_session_motion_only() {
+    for (api, base) in [("1.8.0", None), ("1.8.0", Some(""))] {
         let broker = listener();
         let mut worker = Worker::start();
         worker.hello_with_api(api);
@@ -303,27 +294,29 @@ fn missing_base_or_host_api_12_keeps_the_session_motion_only() {
 }
 
 #[test]
-fn completed_clip_history_survives_broker_reconnect() {
+fn live_motion_history_survives_broker_reconnect() {
     let broker = listener();
     let mut worker = Worker::start();
-    worker.hello_with_api("1.3.0");
+    worker.hello_with_api("1.8.0");
     let mut frame = configuration(broker.local_addr().unwrap().port());
     frame["configuration"]["values"]["frigate_base_url"] = json!("http://frigate.local");
     worker.configure_frame(frame);
     let mut first = subscribe(&broker);
     worker.status("Connected");
-    publish_event(&mut first, completed("original", "front"), false);
-    assert_eq!(worker.frame()["type"], "http_video");
+    publish(&mut first, "original", "front", false);
+    assert_eq!(worker.frame()["type"], "http_live");
     drop(first);
     worker.status("Disconnected");
     worker.status("Connecting");
     let mut second = subscribe(&broker);
     worker.status("Connected");
-    publish_event(&mut second, completed("original", "other"), false);
-    publish_event(&mut second, completed("new", "back"), false);
-    let clip = worker.frame();
-    assert_eq!(clip["type"], "http_video");
-    assert_eq!(clip["title"], "Frigate Back camera motion detected");
+    publish(&mut second, "original", "other", false);
+    publish(&mut second, "sibling", "front", false);
+    publish_event(&mut second, completed("original", "front"), false);
+    publish(&mut second, "new", "back", false);
+    let live = worker.frame();
+    assert_eq!(live["type"], "http_live");
+    assert_eq!(live["title"], "Frigate Back camera motion detected");
     assert!(worker
         .frames
         .recv_timeout(Duration::from_millis(100))
@@ -341,7 +334,7 @@ fn invalid_media_configuration_fails_before_network_and_never_echoes_url_credent
     ] {
         let broker = listener();
         let mut worker = Worker::start();
-        worker.hello_with_api("1.3.0");
+        worker.hello_with_api("1.8.0");
         let mut frame = configuration(broker.local_addr().unwrap().port());
         frame["configuration"]["values"]["frigate_base_url"] = json!(base);
         worker.send(frame);
@@ -498,9 +491,9 @@ fn blocked_output_session(eof: bool) {
     // A valid large semantic-version build identifier produces a full-size
     // Ready frame. Retain the read handle without draining it, then queue the
     // configuration: its acknowledgement cannot fit in the occupied pipe.
-    let mut hello = json!({"type":"hello","protocol_version":1,"host_api_version":"1.2.0+","plugin_id":"inverter-desktop.frigate"});
+    let mut hello = json!({"type":"hello","protocol_version":1,"host_api_version":"1.8.0+","plugin_id":"inverter-desktop.frigate"});
     let padding = 65536 - serde_json::to_vec(&hello).unwrap().len() - 1;
-    hello["host_api_version"] = json!(format!("1.2.0+{}", "a".repeat(padding)));
+    hello["host_api_version"] = json!(format!("1.8.0+{}", "a".repeat(padding)));
     let input = worker.0.stdin.as_mut().unwrap();
     writeln!(input, "{hello}").unwrap();
     writeln!(

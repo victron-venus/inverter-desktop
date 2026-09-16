@@ -29,6 +29,7 @@ fn fixture() -> (tempfile::TempDir, SettingsStore) {
 
 fn data() -> SettingsData {
     SettingsData {
+        legacy_migration_version: 0,
         revision: uuid::Uuid::new_v4().to_string(),
         values: BTreeMap::from([
             ("host".into(), json!("broker.example")),

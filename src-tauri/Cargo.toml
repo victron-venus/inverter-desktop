@@ -73,7 +73,6 @@ tauri-plugin-fs = "2"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tokio = { version = "1", features = ["process", "io-util"] }
 semver = "1"
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 zip = { version = "8.6", default-features = false }
 ed25519-dalek = "3"
 sha2 = "0.11.0"
@@ -89,6 +88,7 @@ auto-launch = "0.6"
 [target.'cfg(target_os = "macos")'.dependencies]
 ab_glyph = "0.2"
 mac-notification-sys = "0.6.15"
+mac-usernotifications = { version = "0.3.1", path = "vendor/mac-usernotifications", default-features = false }
 
 [target.'cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))'.dependencies]
 libc = "0.2"
@@ -96,3 +96,6 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 # winreg removed - using autolaunch crate for cross-platform auto-start
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }

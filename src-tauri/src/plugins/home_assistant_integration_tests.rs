@@ -2,7 +2,7 @@
 //! The HA server and broker are disposable loopback fixtures. No core configuration,
 //! production HA account, native keychain, or OS notification adapter is accessed.
 
-use super::application::PackageApplication;
+use super::application::{PackageApplication, SettingsSeedProvider};
 use super::frigate_integration_tests::{required_file, Broker};
 use super::package::{PublisherTrust, TrustStore};
 use super::packaging::{build_package, write_package_atomic};
@@ -111,6 +111,7 @@ struct ServiceControl {
     cover_enabled: bool,
     numeric_enabled: bool,
     discovery: Option<DiscoveryControl>,
+    mapped_states: Option<Arc<Mutex<BTreeMap<String, Value>>>>,
     stall_next: Arc<AtomicBool>,
     pending: Arc<AtomicUsize>,
     release: broadcast::Sender<()>,
@@ -124,6 +125,7 @@ impl ServiceControl {
             cover_enabled: false,
             numeric_enabled: false,
             discovery: None,
+            mapped_states: None,
             stall_next: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicUsize::new(0)),
             release: broadcast::channel(4).0,
@@ -160,6 +162,17 @@ impl ServiceControl {
 }
 
 fn fixture_services(target: &str, control: &ServiceControl) -> &'static [&'static str] {
+    if control
+        .mapped_states
+        .as_ref()
+        .is_some_and(|states| states.lock().unwrap().contains_key(target))
+    {
+        return match target.split_once('.').map(|(domain, _)| domain) {
+            Some("switch") => &["switch/turn_on", "switch/turn_off"],
+            Some("button") => &["button/press"],
+            _ => &[],
+        };
+    }
     match target {
         "button.do_not_supply_charger" => &["button/press"],
         "scene.evening" | "scene.next" => &["scene/turn_on"],
@@ -220,6 +233,7 @@ impl Drop for ActiveSocket {
 
 struct HomeAssistant {
     address: String,
+    first_prefix: &'static str,
     first_token: String,
     second_token: String,
     observed: Arc<Mutex<Observations>>,
@@ -235,12 +249,16 @@ impl HomeAssistant {
     }
 
     async fn with_services(services: Option<ServiceControl>) -> Self {
+        Self::with_prefix(services, FIRST_PREFIX).await
+    }
+
+    async fn with_prefix(services: Option<ServiceControl>, prefix: &'static str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
         let first_token = format!("disposable-{}", uuid::Uuid::new_v4());
         let second_token = format!("rotated-{}", uuid::Uuid::new_v4());
         let credentials = Arc::new(BTreeMap::from([
-            (FIRST_PREFIX.to_owned(), first_token.clone()),
+            (prefix.to_owned(), first_token.clone()),
             (SECOND_PREFIX.to_owned(), second_token.clone()),
         ]));
         let observed = Arc::new(Mutex::new(Observations::default()));
@@ -277,6 +295,7 @@ impl HomeAssistant {
         });
         Self {
             address,
+            first_prefix: prefix,
             first_token,
             second_token,
             observed,
@@ -317,7 +336,8 @@ impl HomeAssistant {
         assert!(observed.violations.is_empty(), "{:?}", observed.violations);
         for request in &observed.requests {
             assert!(
-                request.path.starts_with(FIRST_PREFIX) || request.path.starts_with(SECOND_PREFIX)
+                request.path.starts_with(self.first_prefix)
+                    || request.path.starts_with(SECOND_PREFIX)
             );
             if request.operation == "discovery" {
                 assert!(self
@@ -325,7 +345,7 @@ impl HomeAssistant {
                     .as_ref()
                     .is_some_and(|control| control.discovery.is_some()));
                 assert!(
-                    request.path == format!("{FIRST_PREFIX}api/states")
+                    request.path == format!("{}api/states", self.first_prefix)
                         || request.path == format!("{SECOND_PREFIX}api/states")
                 );
             }
@@ -385,8 +405,20 @@ impl HomeAssistant {
                         .iter()
                         .chain(&POSITION_TARGETS)
                         .any(|entity| request.path.ends_with(&format!("api/states/{entity}")));
+                let mapped_target = self
+                    .services
+                    .as_ref()
+                    .and_then(|control| control.mapped_states.as_ref())
+                    .is_some_and(|states| {
+                        states.lock().unwrap().keys().any(|entity| {
+                            [self.first_prefix, SECOND_PREFIX].iter().any(|prefix| {
+                                request.path == format!("{prefix}api/states/{entity}")
+                            })
+                        })
+                    });
                 assert!(
-                    readonly
+                    mapped_target
+                        || readonly
                         || action_target
                         || media_target
                         || binary_target
@@ -580,121 +612,135 @@ async fn serve_connection(
     let entity = path
         .strip_prefix(&format!("{prefix}api/states/"))
         .ok_or(())?;
-    let (status, value) = match entity {
-        "sensor.temperature" => ("200 OK", entity_state(entity, "21.5", "Temperature")),
-        "input_boolean.do_not_supply_charger" => {
-            ("200 OK", entity_state(entity, "on", "Do not charge EV"))
-        }
-        "sensor.missing" => ("404 Not Found", json!({"message":"Entity not found"})),
-        "sensor.next" => ("200 OK", entity_state(entity, "7", "Next sensor")),
-        "binary_sensor.dishwasher_running" => ("200 OK", entity_state(entity, "on", "Dishwasher")),
-        "sensor.dishwasher_duration" => (
-            "200 OK",
-            entity_state(entity, "01:23:45", "Dishwasher runtime"),
-        ),
-        "binary_sensor.dishwasher_next_running" => {
-            ("200 OK", entity_state(entity, "off", "Next dishwasher"))
-        }
-        "sensor.dishwasher_next_duration" => (
-            "200 OK",
-            entity_state(entity, "02:00:00", "Next dishwasher runtime"),
-        ),
-        "sensor.washer_remaining" => ("200 OK", entity_state(entity, "00:25:00", "Washer")),
-        "sensor.dryer_remaining" => ("200 OK", entity_state(entity, "00:40:00", "Dryer")),
-        "sensor.washer_next_remaining" => {
-            ("200 OK", entity_state(entity, "00:10:00", "Next washer"))
-        }
-        "sensor.dryer_next_remaining" => ("200 OK", entity_state(entity, "00:20:00", "Next dryer")),
-        "weather.home" => ("200 OK", weather_state(entity, "sunny")),
-        "weather.next" => {
-            let mut value = weather_state(entity, "rainy");
-            value["attributes"]["temperature"] = json!(7);
-            value["attributes"]
-                .as_object_mut()
-                .unwrap()
-                .remove("forecast");
-            ("200 OK", value)
-        }
-        "button.do_not_supply_charger" | "scene.evening" | "scene.next" if services.is_some() => {
-            ("200 OK", entity_state(entity, "unknown", entity))
-        }
-        entity
-            if services
-                .as_ref()
-                .is_some_and(|control| control.numeric_enabled)
-                && NUMBER_TARGETS.contains(&entity) =>
-        {
-            let value = match entity {
-                "number.invalid" => number_state(entity, "1", 0.0, 10.0, 0.0),
-                "number.next" => number_state(entity, "7", 0.0, 10.0, 1.0),
-                _ => number_state(entity, "-0.3", -0.5, 0.5, 0.1),
-            };
-            ("200 OK", value)
-        }
-        entity
-            if services
-                .as_ref()
-                .is_some_and(|control| control.numeric_enabled)
-                && POSITION_TARGETS.contains(&entity) =>
-        {
-            (
+    let mapped = services
+        .as_ref()
+        .and_then(|control| control.mapped_states.as_ref())
+        .and_then(|states| states.lock().unwrap().get(entity).cloned());
+    let (status, value) = if let Some(value) = mapped {
+        ("200 OK", value)
+    } else {
+        match entity {
+            "sensor.temperature" => ("200 OK", entity_state(entity, "21.5", "Temperature")),
+            "input_boolean.do_not_supply_charger" => {
+                ("200 OK", entity_state(entity, "on", "Do not charge EV"))
+            }
+            "sensor.missing" => ("404 Not Found", json!({"message":"Entity not found"})),
+            "sensor.next" => ("200 OK", entity_state(entity, "7", "Next sensor")),
+            "binary_sensor.dishwasher_running" => {
+                ("200 OK", entity_state(entity, "on", "Dishwasher"))
+            }
+            "sensor.dishwasher_duration" => (
                 "200 OK",
-                position_state(
-                    entity,
-                    20,
-                    if entity == "cover.no_position" { 3 } else { 15 },
-                ),
-            )
-        }
-        entity
-            if services
-                .as_ref()
-                .is_some_and(|control| control.cover_enabled)
-                && COVER_TARGETS.contains(&entity) =>
-        {
-            let (state, features) = match entity {
-                "cover.open_only" => ("opening", json!(1)),
-                "cover.malformed" => ("closed", json!("11")),
-                "cover.unavailable" => ("unavailable", json!(11)),
-                _ => ("closed", json!(11)),
-            };
-            ("200 OK", cover_state(entity, state, Some(features)))
-        }
-        entity
-            if services
-                .as_ref()
-                .is_some_and(|control| control.binary_enabled)
-                && BINARY_TARGETS.contains(&entity) =>
-        {
-            match entity {
-                "switch.missing" | "light.missing" => {
-                    ("404 Not Found", json!({"message":"Entity not found"}))
-                }
-                _ => {
-                    let state = match entity {
-                        "switch.unknown" => "unknown",
-                        "input_boolean.unavailable" => "unavailable",
-                        "light.invalid" => "idle",
-                        _ => "off",
-                    };
-                    ("200 OK", entity_state(entity, state, entity))
+                entity_state(entity, "01:23:45", "Dishwasher runtime"),
+            ),
+            "binary_sensor.dishwasher_next_running" => {
+                ("200 OK", entity_state(entity, "off", "Next dishwasher"))
+            }
+            "sensor.dishwasher_next_duration" => (
+                "200 OK",
+                entity_state(entity, "02:00:00", "Next dishwasher runtime"),
+            ),
+            "sensor.washer_remaining" => ("200 OK", entity_state(entity, "00:25:00", "Washer")),
+            "sensor.dryer_remaining" => ("200 OK", entity_state(entity, "00:40:00", "Dryer")),
+            "sensor.washer_next_remaining" => {
+                ("200 OK", entity_state(entity, "00:10:00", "Next washer"))
+            }
+            "sensor.dryer_next_remaining" => {
+                ("200 OK", entity_state(entity, "00:20:00", "Next dryer"))
+            }
+            "weather.home" => ("200 OK", weather_state(entity, "sunny")),
+            "weather.next" => {
+                let mut value = weather_state(entity, "rainy");
+                value["attributes"]["temperature"] = json!(7);
+                value["attributes"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("forecast");
+                ("200 OK", value)
+            }
+            "button.do_not_supply_charger" | "scene.evening" | "scene.next"
+                if services.is_some() =>
+            {
+                ("200 OK", entity_state(entity, "unknown", entity))
+            }
+            entity
+                if services
+                    .as_ref()
+                    .is_some_and(|control| control.numeric_enabled)
+                    && NUMBER_TARGETS.contains(&entity) =>
+            {
+                let value = match entity {
+                    "number.invalid" => number_state(entity, "1", 0.0, 10.0, 0.0),
+                    "number.next" => number_state(entity, "7", 0.0, 10.0, 1.0),
+                    _ => number_state(entity, "-0.3", -0.5, 0.5, 0.1),
+                };
+                ("200 OK", value)
+            }
+            entity
+                if services
+                    .as_ref()
+                    .is_some_and(|control| control.numeric_enabled)
+                    && POSITION_TARGETS.contains(&entity) =>
+            {
+                (
+                    "200 OK",
+                    position_state(
+                        entity,
+                        20,
+                        if entity == "cover.no_position" { 3 } else { 15 },
+                    ),
+                )
+            }
+            entity
+                if services
+                    .as_ref()
+                    .is_some_and(|control| control.cover_enabled)
+                    && COVER_TARGETS.contains(&entity) =>
+            {
+                let (state, features) = match entity {
+                    "cover.open_only" => ("opening", json!(1)),
+                    "cover.malformed" => ("closed", json!("11")),
+                    "cover.unavailable" => ("unavailable", json!(11)),
+                    _ => ("closed", json!(11)),
+                };
+                ("200 OK", cover_state(entity, state, Some(features)))
+            }
+            entity
+                if services
+                    .as_ref()
+                    .is_some_and(|control| control.binary_enabled)
+                    && BINARY_TARGETS.contains(&entity) =>
+            {
+                match entity {
+                    "switch.missing" | "light.missing" => {
+                        ("404 Not Found", json!({"message":"Entity not found"}))
+                    }
+                    _ => {
+                        let state = match entity {
+                            "switch.unknown" => "unknown",
+                            "input_boolean.unavailable" => "unavailable",
+                            "light.invalid" => "idle",
+                            _ => "off",
+                        };
+                        ("200 OK", entity_state(entity, state, entity))
+                    }
                 }
             }
+            entity
+                if services
+                    .as_ref()
+                    .is_some_and(|control| control.media_enabled)
+                    && MEDIA_TARGETS.contains(&entity) =>
+            {
+                let state = match entity {
+                    "media_player.unknown" => "unknown",
+                    "media_player.unavailable" => "unavailable",
+                    _ => "idle",
+                };
+                ("200 OK", entity_state(entity, state, entity))
+            }
+            _ => return Err(()),
         }
-        entity
-            if services
-                .as_ref()
-                .is_some_and(|control| control.media_enabled)
-                && MEDIA_TARGETS.contains(&entity) =>
-        {
-            let state = match entity {
-                "media_player.unknown" => "unknown",
-                "media_player.unavailable" => "unavailable",
-                _ => "idle",
-            };
-            ("200 OK", entity_state(entity, state, entity))
-        }
-        _ => return Err(()),
     };
     let mut consumed = vec![0; headers.len()];
     stream.read_exact(&mut consumed).await.map_err(|_| ())?;
@@ -922,12 +968,20 @@ async fn connection(host: &PluginHost) {
 }
 
 async fn item_value(host: &PluginHost, id: &str, field: &str, value: Value) {
-    until(|| {
-        items(host)
+    let result = timeout(WAIT, async {
+        while !items(host)
             .iter()
             .any(|item| item["id"] == id && item[field] == value)
+        {
+            sleep(Duration::from_millis(25)).await;
+        }
     })
     .await;
+    assert!(
+        result.is_ok(),
+        "HA item {id}.{field} must become {value}; snapshots: {:?}",
+        host.snapshots()
+    );
 }
 
 fn no_private_data(host: &PluginHost, origin: &HomeAssistant) {
@@ -1078,6 +1132,13 @@ impl Drop for CommandProbe {
 }
 
 async fn install(root: &Path) -> (PackageApplication, PluginHost, u64) {
+    install_with_seed(root, None).await
+}
+
+async fn install_with_seed(
+    root: &Path,
+    seed: Option<SettingsSeedProvider>,
+) -> (PackageApplication, PluginHost, u64) {
     let key = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
     let publisher = "disposable-ha-acceptance";
     let trust = TrustStore::new(vec![PublisherTrust::new(
@@ -1096,10 +1157,11 @@ async fn install(root: &Path) -> (PackageApplication, PluginHost, u64) {
     );
     let encryption = rand::random::<[u8; 32]>();
     service
-        .initialize_with_key(
+        .initialize_with_seed(
             Ok(root.join("store")),
             Ok(trust),
             Arc::new(move || Ok(encryption.to_vec())),
+            seed,
         )
         .await;
     let epoch = service.session_changed(true).unwrap();
@@ -1323,9 +1385,12 @@ async fn save_configuration(
     service: &PackageApplication,
     epoch: u64,
     origin: &HomeAssistant,
-    values: BTreeMap<String, Value>,
+    mut values: BTreeMap<String, Value>,
     token: Option<&str>,
 ) {
+    // These existing fixtures isolate flat contribution/read/action compatibility.
+    // The migration fixture below exercises compact presentation without this helper.
+    values.insert("dashboard_layout".into(), json!(""));
     let view = serde_json::to_value(service.get_settings(PLUGIN, epoch).await.unwrap()).unwrap();
     let changes = token
         .map(|token| BTreeMap::from([("ha_token".into(), Some(token.into()))]))
@@ -4175,4 +4240,293 @@ async fn signed_home_assistant_package_discovery() {
     commands.assert_live_without_commands(6).await;
     origin.assert_safe();
     service.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an explicitly built standalone HA worker"]
+async fn signed_home_assistant_package_legacy_migration() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let mut states = BTreeMap::new();
+    for index in 0..15 {
+        let id = format!("switch.room_{index}");
+        states.insert(id.clone(), entity_state(&id, "off", "Shared server title"));
+    }
+    for (id, value) in [
+        ("sensor.washer_remaining", "00:25:00"),
+        ("sensor.dryer_remaining", "00:40:00"),
+        ("binary_sensor.dishwasher_running", "running"),
+        ("sensor.dishwasher_duration", "1.500"),
+        ("button.washer_start", "unknown"),
+        ("button.washer_pause", "unknown"),
+    ] {
+        states.insert(id.into(), entity_state(id, value, id));
+    }
+    for id in (0..18)
+        .map(|index| format!("sensor.load_{index}"))
+        .chain(["sensor.pv_1".into(), "sensor.pv_2".into()])
+    {
+        let mut value = entity_state(&id, "1.500", &id);
+        value["attributes"]["unit_of_measurement"] = json!("W");
+        states.insert(id, value);
+    }
+    states.insert(
+        "weather.home".into(),
+        weather_state("weather.home", "sunny"),
+    );
+    let mapped = Arc::new(Mutex::new(states));
+    let control = ServiceControl {
+        mapped_states: Some(mapped.clone()),
+        discovery: Some(DiscoveryControl::new(json!(mapped
+            .lock()
+            .unwrap()
+            .values()
+            .collect::<Vec<_>>()))),
+        ..ServiceControl::new()
+    };
+    let origin = HomeAssistant::with_prefix(Some(control), "/").await;
+    let home = |id: &str, label: &str, entity: &str, enabled: bool| {
+        serde_json::from_value(json!({
+        "id":id,"label":label,"entity":entity,"domain":entity.split('.').next().unwrap_or("switch"),"enabled":enabled
+    })).unwrap()
+    };
+    let mut homes = vec![home(
+        "core",
+        "Do not charge EV",
+        "input_boolean.do_not_supply_charger",
+        true,
+    )];
+    homes.extend((0..15).map(|index| {
+        home(
+            &format!("home{index}"),
+            &format!("Room {index}"),
+            &format!("switch.room_{index}"),
+            true,
+        )
+    }));
+    homes.push(home("hidden", "Hidden", "switch.hidden", false));
+    let config = crate::FullConfig {
+        ha_use_direct_api: true,
+        ha_url: Some(origin.address.clone()),
+        ha_port: None,
+        ha_longlived_token: Some(origin.first_token.clone()),
+        show_home_section: Some(true),
+        show_header_toggles: Some(true),
+        ha_entities: Some(homes),
+        header_toggles_config: Some(vec![
+            crate::mqtt::HeaderToggle {
+                id: "core".into(),
+                label: "No feed".into(),
+                entity: "no_feed".into(),
+                state_key: None,
+            },
+            crate::mqtt::HeaderToggle {
+                id: "home0".into(),
+                label: "Hall control".into(),
+                entity: "switch.room_0".into(),
+                state_key: None,
+            },
+        ]),
+        show_ha_sensors: Some(true),
+        show_ha_numbers: Some(false),
+        show_ha_covers: Some(false),
+        show_ha_media: Some(false),
+        show_ha_scenes: Some(false),
+        show_ha_weather: Some(true),
+        show_washer: Some(true),
+        show_dryer: Some(false),
+        show_dishwasher: Some(true),
+        ha_washer_entity: Some("sensor.washer_remaining".into()),
+        ha_dryer_entity: Some("sensor.dryer_remaining".into()),
+        ha_dishwasher_running_entity: Some("binary_sensor.dishwasher_running".into()),
+        ha_dishwasher_duration_entity: Some("sensor.dishwasher_duration".into()),
+        ha_washer_start_entity: Some("button.washer_start".into()),
+        ha_washer_pause_entity: Some("button.washer_pause".into()),
+        ha_dryer_start_entity: Some("button.hidden_dryer_start".into()),
+        ha_dryer_pause_entity: Some("button.hidden_dryer_pause".into()),
+        ha_consumption_clamps: Some(
+            (0..18)
+                .map(|index| format!("sensor.load_{index}"))
+                .collect(),
+        ),
+        ha_generation_clamps: Some(vec!["sensor.pv_1".into(), "sensor.pv_2".into()]),
+        ha_ev_soc_entity: Some("sensor.dormant_ev".into()),
+        ..Default::default()
+    };
+    let before = serde_json::to_value(&config).unwrap();
+    let expected = super::legacy_migration::plan_plugin(&config, None, PLUGIN)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        expected.values["watch_entities"]
+            .as_str()
+            .unwrap()
+            .split(',')
+            .count(),
+        41
+    );
+    let planned = Arc::new(AtomicUsize::new(0));
+    let count = planned.clone();
+    let legacy = Arc::new(config);
+    let retained = legacy.clone();
+    let provider: SettingsSeedProvider = Arc::new(move |manifest, current| {
+        if current.legacy_migration_version >= 1 {
+            return Ok(current.clone());
+        }
+        let seed = super::legacy_migration::plan_plugin(&legacy, None, &manifest.plugin_id)
+            .map_err(|error| error.code().to_owned())?
+            .ok_or("Expected legacy HA settings")?;
+        let mut next = super::legacy_migration::merge_seed(current, &seed)
+            .map_err(|error| error.code().to_owned())?;
+        next.revision = uuid::Uuid::new_v4().to_string();
+        count.fetch_add(1, Ordering::AcqRel);
+        Ok(next)
+    });
+    let (service, host, epoch) = install_with_seed(&root, Some(provider)).await;
+    assert_eq!(origin.count("auth"), 0);
+    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    let views = || {
+        host.snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.plugin_id == PLUGIN)
+            .map(|snapshot| {
+                serde_json::to_value(snapshot).unwrap()["presentation"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    };
+    until(|| {
+        views().iter().any(|view| view["id"] == "ha-weather")
+            && views()
+                .iter()
+                .find(|view| view["id"] == "ha-washer")
+                .is_some_and(|view| view["actions"].as_array().unwrap().len() == 2)
+            && actions(&host).len() == 17
+            && views()
+                .iter()
+                .find(|view| view["id"] == "ha-sensors")
+                .is_some_and(|view| view["rows"].as_array().unwrap().len() == 24)
+    })
+    .await;
+    let presentation = views();
+    let view = |id: &str| presentation.iter().find(|view| view["id"] == id).unwrap();
+    assert_eq!(view("header-home0")["title"], "Hall control");
+    assert_eq!(view("header-home0")["order"], 1);
+    assert_eq!(view("home-home0")["title"], "Room 0");
+    assert_eq!(view("home-home0")["order"], 1);
+    assert_eq!(view("home-home14")["order"], 15);
+    assert_eq!(view("header-home0")["action"], view("home-home0")["action"]);
+    assert_eq!(
+        presentation
+            .iter()
+            .filter(|view| view["surface"] == "home")
+            .count(),
+        15
+    );
+    assert_eq!(view("ha-washer")["visible"], true);
+    assert_eq!(view("ha-washer")["text"], "00:25:00");
+    assert_eq!(view("ha-dryer")["active"], true);
+    assert_eq!(view("ha-dryer")["visible"], false);
+    assert!(view("ha-dryer")["actions"].as_array().unwrap().is_empty());
+    assert_eq!(view("ha-dishwasher")["text"], "1.500");
+    assert_eq!(view("ha-weather")["condition"], "sunny");
+    let current_items = items(&host);
+    let clamps: Vec<_> = view("ha-sensors")["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| {
+            row["title"].as_str().unwrap().starts_with("sensor.load_")
+                || row["title"].as_str().unwrap().starts_with("sensor.pv_")
+        })
+        .collect();
+    assert_eq!(clamps.len(), 20);
+    for row in clamps {
+        assert_eq!(
+            current_items
+                .iter()
+                .find(|item| item["id"] == row["value"])
+                .unwrap()["text"],
+            "1.500 W"
+        );
+    }
+    let saved = serde_json::to_value(service.get_settings(PLUGIN, epoch).await.unwrap()).unwrap();
+    assert_eq!(saved["secret_present"]["ha_token"], true);
+    assert!(!saved.to_string().contains(&origin.first_token));
+    for (key, value) in &expected.values {
+        assert_eq!(&saved["values"][key], value);
+    }
+    assert_eq!(planned.load(Ordering::Acquire), 1);
+    let records: Vec<_> = fs::read_dir(root.join("store/settings"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert!(!String::from_utf8_lossy(&fs::read(&records[0]).unwrap()).contains(&origin.first_token));
+    assert_eq!(serde_json::to_value(&*retained).unwrap(), before);
+    assert_eq!(view("home-home0")["state"], "off");
+    mapped.lock().unwrap().get_mut("switch.room_0").unwrap()["state"] = json!("on");
+    let primary_ref = view("home-home0")["action"].as_str().unwrap();
+    let primary = current_items
+        .iter()
+        .find(|item| item["id"] == primary_ref)
+        .unwrap()["action_id"]
+        .as_str()
+        .unwrap();
+    let before_reads = origin.count("state");
+    submit_action(&host, &instance(&host), primary, epoch)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        origin.count("state"),
+        before_reads + 1,
+        "primary toggle must read fresh HA state"
+    );
+    assert_service(&origin, 0, "/", "switch/turn_off", "switch.room_0");
+    for (index, label, target) in [
+        (1, "Start", "button.washer_start"),
+        (2, "Pause", "button.washer_pause"),
+    ] {
+        let reference = view("ha-washer")["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["label"] == label)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        let action = current_items
+            .iter()
+            .find(|item| item["id"] == reference)
+            .unwrap()["action_id"]
+            .as_str()
+            .unwrap();
+        submit_action(&host, &instance(&host), action, epoch)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_service(&origin, index, "/", "button/press", target);
+    }
+    {
+        let observed = origin.observed.lock().unwrap();
+        assert!(observed.violations.is_empty(), "{:?}", observed.violations);
+        for request in &observed.requests {
+            assert!(request.path.starts_with("/api/"));
+            assert!(![
+                "do_not_supply_charger",
+                "no_feed",
+                "switch.hidden",
+                "hidden_dryer",
+                "dormant_ev"
+            ]
+            .iter()
+            .any(|forbidden| request.path.contains(forbidden)));
+        }
+    }
+    no_private_data(&host, &origin);
+    service.close().await.unwrap();
+    origin.no_sockets().await;
 }

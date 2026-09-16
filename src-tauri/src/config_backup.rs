@@ -3,6 +3,7 @@ use super::FullConfig;
 use serde_json::Value;
 
 const PRIVATE_FIELDS: &[&str] = &[
+    "camera_live_urls",
     "mqtt_login",
     "mqtt_password",
     "mqtt_ha_login",
@@ -72,7 +73,15 @@ pub(super) fn restore(content: &str, current: &FullConfig) -> Result<FullConfig,
     // An imported file cannot change local authentication or replace credentials.
     // This rule also applies to legacy exports which included plaintext secrets.
     for key in PRIVATE_FIELDS {
-        object.insert((*key).into(), existing[*key].clone());
+        let retained = if *key == "camera_live_urls" {
+            // Empty maps are omitted by FullConfig serialization; restoring null
+            // would fail to deserialize this retained private mapping.
+            serde_json::to_value(&current.camera_live_urls)
+                .map_err(|_| "Invalid private camera configuration")?
+        } else {
+            existing[*key].clone()
+        };
+        object.insert((*key).into(), retained);
     }
     for key in PRIVATE_URL_FIELDS {
         if !object.contains_key(*key) {
@@ -146,6 +155,39 @@ mod tests {
             current.ring_snapshot_url_template
         );
     }
+    #[test]
+    fn private_camera_maps_never_export_and_restore_empty_or_populated_locals() {
+        for local in [
+            std::collections::BTreeMap::new(),
+            [(
+                "front".into(),
+                "https://camera.invalid/live?token=local-private".into(),
+            )]
+            .into(),
+        ] {
+            let current = FullConfig {
+                camera_live_urls: local.clone(),
+                ..Default::default()
+            };
+            let mut backup = redacted(&current).unwrap();
+            assert!(backup.get("camera_live_urls").is_none());
+            assert!(!backup.to_string().contains("local-private"));
+            assert_eq!(
+                restore(&backup.to_string(), &current)
+                    .unwrap()
+                    .camera_live_urls,
+                local
+            );
+            backup["camera_live_urls"] = serde_json::json!({"other":"https://injected.invalid/"});
+            assert_eq!(
+                restore(&backup.to_string(), &current)
+                    .unwrap()
+                    .camera_live_urls,
+                local
+            );
+        }
+    }
+
     #[test]
     fn importing_a_tls_downgrade_clears_mqtt_credentials() {
         let current = FullConfig {

@@ -28,6 +28,7 @@ struct EventDetails {
 pub struct Motion {
     pub id: String,
     pub title: String,
+    pub camera: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -106,6 +107,7 @@ impl MotionEvents {
         Some(Motion {
             id: format!("frigate-{:x}", Sha256::digest(after.id.as_bytes())),
             title,
+            camera: after.camera,
         })
     }
 

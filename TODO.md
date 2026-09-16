@@ -67,65 +67,148 @@ Open/Close/Stop on main at `c614f07`; all 41 executed checks passed for `f55ace8
 with exact-head approval and no unresolved review threads.
 
 **Configured archive downloads use explicit SHA-256 pins and need no publisher
-keys or app signing.** The embedded publisher policy remains empty and only the
-manual signed-file selection flow is unavailable. Existing HA/camera implementations remain bundled
-desktop features until real package parity is verified. Network/media host services,
-legacy configuration migration, and feature extraction remain unfinished.
+keys or app signing.** The embedded publisher policy remains empty, so only the
+manual signed-file flow is unavailable. The current working tree removes bundled
+HA/camera providers and replaces their UI with compact host-owned plugin views.
+Source extraction and its first local regression pass are complete. The newer
+shared camera viewer, exact-head delivery, and installed-app acceptance are
+tracked separately below. Completed
+checkpoints later in this file describe their historical scope and evidence.
 
-### Active implementation: feature parity and final extraction
+### Active implementation: complete optional feature extraction
 
-The compact dashboard fix is complete. The following work replaces the remaining
-bundled integrations; installing today's workers alone does not complete it.
-Keep each prerequisite independently reviewable, then verify the handover before
-removing the compatibility implementation. Do not replace the compact home UI with
-flat diagnostic contribution panels.
+The core installation contains generic plugin infrastructure but no HA/camera
+provider clients, parsers, feature-specific settings, or worker payloads. Optional
+packages own their connections and household semantics. No flat diagnostic entity
+panel is mounted on the dashboard.
 
-#### Shared prerequisites
+#### Shared host and frontend
 
-- [x] Increase HA capacity to at least 64 selected reads, 16 binary targets, and
-      63 controls; allow 128 host contributions without increasing the 64 KiB wire
-      frame limit. Exercise escaped maximum-length output through real worker pipes.
-- [x] Version the expanded contract as host API 1.7 and require it in new workers;
-      retain compatibility with installed workers acknowledging the negotiated API.
-- [x] Preserve versioned passive module namespaces across desktop/mobile
-      load/save/import/export and core resets. Keep secrets out of portable exports
-      and reject imports that retarget a namespace while retaining local secrets.
-- [x] Support owned JPEG/PNG/WebP snapshots with explicit media types, bounded
-      downloads, correct serving, and a 12-second display lifetime. Preserve video
-      behavior and revoke media on worker/session removal.
+- [x] Keep the 64-read/63-control worker capacity, 128 contributions, and 64 KiB
+      frame limit; add host API 1.8 compact presentation and read-only choices.
+- [x] Replace bundled frontend providers with generic header/Home controls,
+      compact groups, appliance summaries, weather, and fresh connection health.
+      Preserve mixed core/plugin positions and existing core EV/water controls.
+- [x] Dispatch only exact current contribution references through instance-bound
+      native authority; preserve pending/failed feedback and reject changed numeric
+      grants captured by a gesture.
+- [x] Add bounded structured settings forms, entity suggestions, and private
+      key/value mapping replacement. Keep the 32 KiB envelope and raise individual
+      strings to 24 KiB without truncating labels or selections.
+- [x] Control the Cameras group through native package/declaration authority.
+      Refresh only declarations in an open settings draft, retaining dirty core edits.
+- [x] Remove bundled native HA clients, camera adapters, MQTT event lifecycle,
+      legacy commands, frontend translations/settings, and Apple source references.
+      Reject unsupported non-core action targets while retaining seven core flags.
+- [x] Preserve opaque owned snapshots/video through the generic media window.
+- [x] Fail both frontend profiles on bundled provider imports; keep all generic
+      plugin code out of mobile. Extend native mobile artifact guards to catalogs,
+      groups, live windows, and all four worker identities/binaries/manifests.
 
-#### Home Assistant handover
+#### Worker and migration implementation
 
-- [ ] Add compact declarative sections and state/control presentation metadata;
-      preserve home/header ordering, labels, availability, and appliance visibility.
-- [ ] Add a bounded entity-selection settings contract and migrate legacy selected
-      entities, visibility, appliances, and credentials into encrypted worker settings.
-- [ ] Preserve domain discovery/filtering, weather, reconnect/grace behavior, and
-      selected household notifications through worker output and scoped actions.
-- [ ] Activate the worker-backed UI only after settings validation and successful
-      startup; stop the bundled HA client and prove that one client owns the feature.
-- [ ] Remove bundled HA frontend/native imports, commands, settings, translations,
-      and assets; enforce absence from the desktop core build graph.
+- [x] HA owns REST/WS supervision, explicit actions, fresh-read toggles, compact
+      layout, bounded discovery/catalog, legacy forecast attributes, appliance
+      summaries, and household notifications. Modern separate forecast APIs are
+      not added by this parity handover.
+- [x] Package Kerberos and Ring separately; retain Frigate identity. Preserve
+      direct MQTT independence, provider filters, reconnect/cooldown behavior,
+      snapshots/clips, and scoped optional proxy secrets in local worker fixtures.
+- [x] Implement a native legacy planner for explicitly installed/declared matching
+      packages, including labels, positions, selected entities, section visibility,
+      appliance mappings, and private camera live destinations. Never infer install
+      consent or silently drop unsupported/oversized mappings.
+- [x] Use exact plugin IDs for schema-version-1 module namespaces. Keep encrypted
+      SettingsStore records authoritative after handover; retain all legacy fields.
+      Core/mobile saves and resets preserve namespaces and private camera mappings.
+- [x] Omit module credentials and private camera URLs from core IPC; export current
+      public plugin values and declarations through portable namespaces, without secrets.
+- [x] Reject changed portable namespaces against authoritative installed settings
+      before core persistence; keep unknown-namespace credential conflict rules.
+- [x] Verify integrated encrypted settings edit → export → same-install restore,
+      including stale retained namespace shadows, secret preservation, and a
+      concurrent settings save serialized behind the restore snapshot.
+- [x] Run four installed Kerberos/Ring/Frigate lifecycle/media fixtures against
+      packaged workers with independent core transport.
+- [x] Pass all twelve installed-package fixtures with actual worker processes and
+      loopback MQTT/HTTP/WS: eight HA scenarios (including full legacy handover),
+      two Frigate scenarios, Kerberos lifecycle and Ring snapshot lifecycle.
+- [ ] Verify native notification/live-view display and media decoding on supported
+      operating systems. Clickable live-view actions retain the legacy macOS scope;
+      Linux/Windows retain ordinary notifications. This handover does not add a
+      new cross-platform live-action requirement.
 
-#### Camera handover
+#### Newer installed Frigate parity
 
-- [ ] Package Kerberos and Ring separately, preserving the installed Frigate
-      identity and configuration. Keep direct transports independent from HA.
-- [ ] Preserve explicit topic coverage, snapshots, clips, cooldowns, reconnect,
-      and generation-bound cancellation with local broker/HTTP fixtures.
-- [ ] Add explicitly scoped optional proxy credentials and configured live-view
-      notification actions; preserve the separate Kerberos implementation in progress.
-- [ ] Migrate camera settings without duplicate subscriptions, verify installed
-      worker behavior, and remove bundled camera adapters and broker lifecycle.
+The installed `e113f3b` build introduced automatic fifteen-second MJPEG previews
+for fresh Frigate motion. The extraction must preserve that newer behavior as well
+as the earlier downloaded media contracts.
 
-#### Delivery
+- [x] Add an explicit manifest preview grant, separate queued preview discriminator,
+      scoped incognito previews, shared window limits without cache
+      bytes, three-second stale admission expiry, and owned close acknowledgment.
+- [x] Adapt the isolated native smoke harness to the new preview grant while
+      retaining downloaded video and typed snapshot behavior.
+- [x] Run preview service/runtime regressions and the Frigate worker's 27 tests
+      (17 unit, 10 subprocess), with strict worker Clippy and package checks.
+- [x] Pass fresh isolated macOS MJPEG and H.264 graphical smoke runs with the same
+      executable: changing decoded 640x360 frames, fifteen-second preview expiry,
+      generation revocation, preserved focus, downloaded-video close/end behavior,
+      and complete temporary-profile cleanup. See the recorded
+      [native evidence](docs/native-plugin-media-smoke.md#recorded-macos-acceptance).
+- [x] Complete the signed installed-Frigate preview fixture and final native
+      checks. Linux/Windows graphical acceptance and real OS notification display
+      remain separate; local fixture decoding is not release-installation proof.
 
-- [ ] Run desktop core / HA / cameras / both acceptance and mobile exclusion
-      checks, including saved-configuration round trips and interrupted restoration.
-- [ ] Review, lint, test, and merge each PR after exact-head checks pass; record
-      delivery evidence separately from implementation completion.
-- [ ] Install the finished compatible build with a recoverable backup and verify
-      the familiar dashboard, plugin health, and independent core telemetry.
+#### Newer shared camera viewer parity
+
+The parallel camera branch through `fb84683` adds automatic mapped Kerberos
+previews and a shared compact local viewer. Preserve those behaviors before
+replacing the installed application.
+
+- [x] Emit separate ordinary notifications and automatic mapped Kerberos preview
+      requests, with the same episode identity and no worker-supplied URL.
+- [x] Add an explicit bounded manifest lifetime and native exact private URL grant.
+      Keep old manifests without this field compatible without granting automatic
+      preview authority. Preserve 15-second per-camera admission independently of
+      notification permission and equal display labels.
+- [x] Use one local frameless viewer with title, drag and close controls for
+      Frigate and Kerberos. Expose the private image URL only to the exact active
+      owned window; restrict image CSP to its origin and deny general app IPC.
+- [x] Pass mapped grant/runtime/installed-worker tests, shared viewer tests and
+      strict checks after this iteration. Repeat isolated graphical MJPEG/H.264
+      verification with the final shared viewer executable.
+
+#### Current local evidence and delivery gates
+
+- [x] Full frontend suite: 432 tests across 37 files. Mobile suite: 18 tests.
+      Actual bundler profile tests: seven. Native mobile boundary fixture tests: 29.
+      Vue type checking, error-level frontend lint, and both production frontend
+      builds pass. The default local Vitest fork pool stalled before worker startup;
+      completed runs use `--pool threads --maxWorkers 2`.
+- [x] Worker-local fixtures: HA 235 tests (122 unit, 93 actual-worker actions,
+      three TLS, 17 protocol); Frigate 27; Kerberos 20; Ring 21; camera-common three.
+      Package checks cover all six supported archive targets; released asset jobs
+      currently publish four desktop target platforms, not all six.
+- [x] Complete the final native host suite after the atomic restore and migration
+      compatibility and shared viewer fixes: 528 tests pass, plus two packaging CLI
+      tests. All twelve installed-worker fixtures pass with explicit worker paths.
+      The Ring fixture was updated to drain media before notifications, matching
+      the production dispatcher; its fresh isolated rerun passed after that fix.
+      Independent reviews covered HA action ownership, migration/restore authority,
+      preview URL permissions, window ownership, cancellation, and IPC isolation.
+- [x] Pass strict all-target host and native-smoke Clippy. The vendored macOS
+      notification crate passes 14 tests, including four response-lifetime regressions.
+- [ ] Verify desktop core / HA / cameras / both from actual installed files,
+      interrupted restore, offline startup, settings round trips, and independent
+      core telemetry. Local mocks do not establish live household behavior.
+- [ ] Pass exact-head hosted checks and fresh APK/AAB/IPA boundary checks; review
+      and merge the extraction changes and record the exact source revision.
+- [ ] Publish compatible package assets and update explicit configuration pins:
+      HA 0.13+ supplies compact views, Frigate 0.3+ joins Cameras, and Kerberos/Ring
+      start at 0.1. Old pins remain authoritative and are never automatically bumped.
+      Install the reviewed app with a recoverable backup. Verify the familiar dashboard, plugin health, and real
+      camera/HA behavior before recording installed acceptance.
 
 ### Completed implementation: compact plugin presentation
 
@@ -1698,59 +1781,42 @@ remaining host services, and migrated HA/camera packages.
 
 ### 6. Cameras package
 
-- [x] Add a separately built Frigate MQTT motion worker with isolated configuration,
-      status, exact-topic subscription, deduplication/cooldown, and broker recovery.
-      Prove package lifecycle against a real local broker without HA/core MQTT.
-- [x] Move direct Frigate clips into the standalone worker with owned HTTP video
-      and native window cleanup; preserve independent core telemetry.
-- [ ] Move Kerberos/Ring adapters to workers separately from core Cerbo MQTT
-      and source selection, after verifying producer URL/auth requirements.
-- [ ] Preserve snapshots, complete configured-topic coverage, clip behavior, and
-      window stacking; verify actual native notification display on supported OSes.
-- [ ] Move URL resolution, download validation, clip ownership/cancellation,
-      temporary-file cleanup, settings, translations, and media contributions.
-- [ ] Add optional origin-scoped HA proxy/name enrichment; verify direct camera
-      transports with no HA plugin installed.
-- [ ] Test camera-only install, broker recovery, changed settings, disable during
-      download, crashes, and uninstall while media is open.
-- [ ] Remove bundled camera implementation after installable parity is verified.
+- [x] Build Frigate, Kerberos, and Ring as independent workers with isolated MQTT,
+      settings, provider parsing, notifications, and bounded snapshots/clips.
+- [x] Move URL/auth grants, private media ownership, cleanup, and generic window UI
+      behind desktop plugin contracts; remove bundled camera event subscriptions.
+- [x] Support scoped optional proxy credentials without requiring an HA package.
+- [ ] Complete installed camera-only/both lifecycle fixtures and real OS media/
+      notification acceptance within the existing platform capabilities.
 
 ### 7. Home Assistant package
 
-- [ ] Move REST/WS supervision, discovery/filtering, connection status, and
-      household-device actions into the HA worker.
-- [ ] Preserve initial/live state, reconnect, visibility refresh, grace/unavailable
-      behavior, and cancellation when configuration changes.
-- [ ] Move appliance/entity UI, settings, translations, and assets into package
-      contributions.
-- [x] Retain all seven inverter flags, metadata, saved controls, and MQTT routing
-      in core, including `input_boolean.<flag>` aliases. The HA worker treats
-      independently configured HA entity IDs literally without this alias lookup.
-- [ ] Verify HA-only install, real HA IDs resembling flag names, service scopes,
-      worker restart, and removal during requests.
-- [ ] Remove bundled HA implementation after installable parity is verified.
+- [x] Move REST/WS supervision, discovery, household actions, connection status,
+      appliance/weather presentation, and settings to worker-owned declarations.
+- [x] Preserve core flags, aliases, labels, and direct MQTT/IGW control routing.
+- [x] Remove bundled frontend/native HA clients and enforce the frontend boundary.
+- [ ] Complete final installed HA-only/both acceptance and exact-head native checks;
+      distinguish worker fixtures from live server and device behavior.
 
 ### 8. Configuration migration and compatibility
 
-- [ ] Introduce versioned `modules.ha` and `modules.cameras` with idempotent legacy
-      migrations and explicit migration versions.
-- [x] Preserve unknown namespaces during core/mobile load/save/export/import and
-      resets that do not explicitly delete plugin data.
-- [ ] Separate core flags from genuine HA targets in `ha_entities` and
-      `header_toggles_config`; preserve labels, order, IDs, and state keys.
-- [ ] Migrate secrets through encrypted storage; never put them in manifests,
-      logs, diagnostics, process arguments, or package contents.
-- [ ] Offer explicit desktop installation for preserved unavailable features;
-      do not infer installation consent from existing configuration.
-- [ ] Test desktop → core mobile → desktop round trips, missing plugins,
-      downgrade/rollback, partial migration, and failed activation.
+- [x] Preserve versioned namespaces keyed by exact plugin ID, using schema version 1
+      for the built-in handover. Keep unknown future namespaces passive.
+- [x] Separate core flags from genuine HA controls while retaining legacy fields,
+      stable identities, labels, ordering, section choices, and appliance mappings.
+- [x] Keep migration native and credential-safe; old settings never authorize a
+      download. Existing encrypted plugin records remain authoritative.
+- [x] Preserve namespaces through mobile/core save/reset and public portable export;
+      omit private camera URL maps from core IPC and backups.
+- [ ] Complete host-specific restored-seed conflict checks, interrupted handover,
+      and final installed desktop/mobile/desktop compatibility acceptance.
 
 ### 9. Release acceptance and operational verification
 
 - [ ] Verify desktop core / core+HA / core+cameras / both using actual installed
       files and behavior, including clean profiles.
-- [x] Inspect final APK/AAB/IPA files and native libraries for feature absence;
-      module-graph checks complement packaged-artifact inspection.
+- [ ] Inspect fresh extraction APK/AAB/IPA files and native libraries for feature
+      absence; prior checkpoints passed but do not prove this working tree.
 - [ ] Test app updates with installed plugins, incompatible API versions,
       interrupted updates, rollback, and offline startup.
 - [ ] Integrate package signing/provenance, compatibility metadata, and release

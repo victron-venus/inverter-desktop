@@ -5,16 +5,30 @@ use url::Url;
 
 pub const MAX_ENTITIES: usize = 64;
 pub const MAX_ENTITY_LIST_BYTES: usize = MAX_ENTITIES * 129 - 1;
-pub const MAX_ACTION_ENTITIES: usize = 16;
-pub const MAX_MEDIA_PLAYER_ENTITIES: usize = 4;
-pub const MAX_BINARY_ENTITIES: usize = 16;
-pub const MAX_COVER_ENTITIES: usize = 4;
-pub const MAX_NUMBER_ENTITIES: usize = 4;
-pub const MAX_COVER_POSITION_ENTITIES: usize = 4;
+pub const MAX_ACTION_ENTITIES: usize = 63;
+pub const MAX_MEDIA_PLAYER_ENTITIES: usize = 21;
+pub const MAX_BINARY_ENTITIES: usize = 31;
+pub const MAX_COVER_ENTITIES: usize = 21;
+pub const MAX_NUMBER_ENTITIES: usize = 63;
+pub const MAX_COVER_POSITION_ENTITIES: usize = 63;
 pub const MAX_DISCOVERY_PREFIXES: usize = 8;
 pub const MAX_DISCOVERY_PREFIX_BYTES: usize = 1024;
 pub const MAX_ACTION_BUTTONS: usize = 63;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+pub const DEFAULT_DASHBOARD_LAYOUT: &str =
+    r#"{"version":1,"controls":[],"sections":{},"appliances":{}}"#;
+
+fn default_dashboard_layout() -> String {
+    DEFAULT_DASHBOARD_LAYOUT.into()
+}
+fn is_default_dashboard_layout(value: &str) -> bool {
+    value == DEFAULT_DASHBOARD_LAYOUT
+}
 
 // Configuration and credentials deliberately have no Debug implementation.
 #[derive(Deserialize, Serialize)]
@@ -29,6 +43,15 @@ pub struct Configuration {
 #[serde(deny_unknown_fields)]
 pub struct Values {
     pub ha_base_url: String,
+    #[serde(
+        default = "default_dashboard_layout",
+        skip_serializing_if = "is_default_dashboard_layout"
+    )]
+    pub dashboard_layout: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub discovery_domains: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub notify_home: bool,
     #[serde(default)]
     pub watch_entities: String,
     #[serde(default)]
@@ -72,16 +95,19 @@ pub struct Validated {
     pub cover_position_entities: Vec<String>,
     pub discovery_prefixes: Vec<String>,
     pub appliances: ApplianceProfiles,
+    pub layout: Option<crate::presentation::Layout>,
+    pub notify_home: bool,
     pub token: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ApplianceProfiles {
     pub dishwasher: Option<DishwasherProfile>,
     pub washer_remaining_entity: Option<String>,
     pub dryer_remaining_entity: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct DishwasherProfile {
     pub running_entity: String,
     pub duration_entity: Option<String>,
@@ -92,6 +118,13 @@ pub enum BinaryDomain {
     Switch,
     InputBoolean,
     Light,
+    Fan,
+    MediaPlayer,
+    Lock,
+    Script,
+    Climate,
+    Sensor,
+    BinarySensor,
 }
 
 impl BinaryDomain {
@@ -100,6 +133,7 @@ impl BinaryDomain {
             Some(("switch", _)) => Some(Self::Switch),
             Some(("input_boolean", _)) => Some(Self::InputBoolean),
             Some(("light", _)) => Some(Self::Light),
+            Some(("fan", _)) => Some(Self::Fan),
             _ => None,
         }
     }
@@ -119,6 +153,9 @@ pub enum Operation {
     StopCover,
     SetNumber,
     SetCoverPosition,
+    Toggle(BinaryDomain),
+    PrimaryCover,
+    PrimaryNumber,
 }
 
 impl Operation {
@@ -136,11 +173,14 @@ impl Operation {
             Self::StopCover => "Stop ",
             Self::SetNumber => "Set ",
             Self::SetCoverPosition => "Set position ",
+            Self::Toggle(_) => "Toggle ",
+            Self::PrimaryCover => "Close ",
+            Self::PrimaryNumber => "Set zero ",
         }
     }
 
     pub fn allows_unknown(self) -> bool {
-        matches!(self, Self::Press | Self::Activate)
+        matches!(self, Self::Press | Self::Activate | Self::Toggle(_))
     }
 
     pub fn requires_binary_state(self) -> bool {
@@ -169,11 +209,26 @@ impl Operation {
             Self::TurnOff(BinaryDomain::InputBoolean) => "api/services/input_boolean/turn_off",
             Self::TurnOn(BinaryDomain::Light) => "api/services/light/turn_on",
             Self::TurnOff(BinaryDomain::Light) => "api/services/light/turn_off",
+            Self::TurnOn(BinaryDomain::Fan) => "api/services/fan/turn_on",
+            Self::TurnOff(BinaryDomain::Fan) => "api/services/fan/turn_off",
+            Self::TurnOn(BinaryDomain::MediaPlayer) => "api/services/media_player/turn_on",
+            Self::TurnOff(BinaryDomain::MediaPlayer) => "api/services/media_player/turn_off",
+            Self::TurnOn(BinaryDomain::Lock) => "api/services/lock/turn_on",
+            Self::TurnOff(BinaryDomain::Lock) => "api/services/lock/turn_off",
+            Self::TurnOn(BinaryDomain::Script) => "api/services/script/turn_on",
+            Self::TurnOff(BinaryDomain::Script) => "api/services/script/turn_off",
+            Self::TurnOn(BinaryDomain::Climate) => "api/services/climate/turn_on",
+            Self::TurnOff(BinaryDomain::Climate) => "api/services/climate/turn_off",
+            Self::TurnOn(BinaryDomain::Sensor) => "api/services/sensor/turn_on",
+            Self::TurnOff(BinaryDomain::Sensor) => "api/services/sensor/turn_off",
+            Self::TurnOn(BinaryDomain::BinarySensor) => "api/services/binary_sensor/turn_on",
+            Self::TurnOff(BinaryDomain::BinarySensor) => "api/services/binary_sensor/turn_off",
             Self::OpenCover => "api/services/cover/open_cover",
             Self::CloseCover => "api/services/cover/close_cover",
             Self::StopCover => "api/services/cover/stop_cover",
-            Self::SetNumber => "api/services/number/set_value",
-            Self::SetCoverPosition => "api/services/cover/set_cover_position",
+            Self::SetNumber | Self::PrimaryNumber => "api/services/number/set_value",
+            Self::SetCoverPosition | Self::PrimaryCover => "api/services/cover/set_cover_position",
+            Self::Toggle(domain) => Self::TurnOn(domain).path(),
         }
     }
 }
@@ -271,7 +326,7 @@ impl Configuration {
             return Err("invalid HA token");
         }
         let mut entities = entity_list(&self.values.watch_entities, MAX_ENTITY_LIST_BYTES)?;
-        let action_entities = entity_list(&self.values.action_entities, 4096)?;
+        let action_entities = entity_list(&self.values.action_entities, MAX_ENTITY_LIST_BYTES)?;
         if action_entities.len() > MAX_ACTION_ENTITIES
             || action_entities
                 .iter()
@@ -279,7 +334,8 @@ impl Configuration {
         {
             return Err("invalid HA action entities");
         }
-        let media_player_entities = entity_list(&self.values.media_player_entities, 4096)?;
+        let media_player_entities =
+            entity_list(&self.values.media_player_entities, MAX_ENTITY_LIST_BYTES)?;
         if media_player_entities.len() > MAX_MEDIA_PLAYER_ENTITIES
             || media_player_entities
                 .iter()
@@ -287,7 +343,7 @@ impl Configuration {
         {
             return Err("invalid HA media player entities");
         }
-        let binary_entities = entity_list(&self.values.binary_entities, 4096)?;
+        let binary_entities = entity_list(&self.values.binary_entities, MAX_ENTITY_LIST_BYTES)?;
         if binary_entities.len() > MAX_BINARY_ENTITIES
             || binary_entities
                 .iter()
@@ -295,7 +351,7 @@ impl Configuration {
         {
             return Err("invalid HA binary entities");
         }
-        let cover_entities = entity_list(&self.values.cover_entities, 4096)?;
+        let cover_entities = entity_list(&self.values.cover_entities, MAX_ENTITY_LIST_BYTES)?;
         if cover_entities.len() > MAX_COVER_ENTITIES
             || cover_entities
                 .iter()
@@ -303,7 +359,7 @@ impl Configuration {
         {
             return Err("invalid HA cover entities");
         }
-        let number_entities = entity_list(&self.values.number_entities, 4096)?;
+        let number_entities = entity_list(&self.values.number_entities, MAX_ENTITY_LIST_BYTES)?;
         if number_entities.len() > MAX_NUMBER_ENTITIES
             || number_entities
                 .iter()
@@ -311,7 +367,8 @@ impl Configuration {
         {
             return Err("invalid HA number entities");
         }
-        let cover_position_entities = entity_list(&self.values.cover_position_entities, 4096)?;
+        let cover_position_entities =
+            entity_list(&self.values.cover_position_entities, MAX_ENTITY_LIST_BYTES)?;
         if cover_position_entities.len() > MAX_COVER_POSITION_ENTITIES
             || cover_position_entities
                 .iter()
@@ -384,8 +441,37 @@ impl Configuration {
         if entities.len() > MAX_ENTITIES {
             return Err("too many watched entities");
         }
-        let discovery_prefixes = discovery_prefixes(&self.values.discovery_prefixes)?;
-        Ok(Validated {
+        let mut discovery_prefixes = discovery_prefixes(&self.values.discovery_prefixes)?;
+        if self.values.discovery_domains.len() > 256 {
+            return Err("invalid discovery domains");
+        }
+        for domain in self
+            .values
+            .discovery_domains
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !crate::presentation::DISPLAY_DOMAINS.contains(&domain) {
+                return Err("invalid discovery domains");
+            }
+            let prefix = format!("{domain}.");
+            if !discovery_prefixes.contains(&prefix) {
+                discovery_prefixes.push(prefix);
+            }
+        }
+        let layout = crate::presentation::Layout::parse(&self.values.dashboard_layout)?;
+        if let Some(layout) = &layout {
+            for entity in layout.entities() {
+                if !entities.contains(entity) {
+                    entities.push(entity.clone());
+                }
+            }
+        }
+        if entities.len() > MAX_ENTITIES {
+            return Err("too many watched entities");
+        }
+        let validated = Validated {
             base: base_url(&self.values.ha_base_url)?,
             entities,
             action_entities,
@@ -400,8 +486,14 @@ impl Configuration {
                 washer_remaining_entity,
                 dryer_remaining_entity,
             },
+            layout,
+            notify_home: self.values.notify_home,
             token: self.secrets.ha_token,
-        })
+        };
+        if validated.actions().len() + validated.inputs().len() > MAX_ACTION_BUTTONS {
+            return Err("too many HA action buttons");
+        }
+        Ok(validated)
     }
 }
 
@@ -455,7 +547,7 @@ fn safe_path(path: &str) -> bool {
     })
 }
 
-fn literal_entity(entity: &str) -> bool {
+pub(crate) fn literal_entity(entity: &str) -> bool {
     entity.len() <= 128
         && entity.split_once('.').is_some_and(|(domain, object)| {
             !domain.is_empty()
@@ -569,12 +661,16 @@ impl Validated {
     }
 
     pub fn actions(&self) -> Vec<ConfiguredAction> {
-        configured_actions(
+        let mut actions = configured_actions(
             &self.action_entities,
             &self.media_player_entities,
             &self.binary_entities,
             &self.cover_entities,
-        )
+        );
+        if let Some(layout) = &self.layout {
+            actions.extend(layout.actions());
+        }
+        actions
     }
 
     pub fn service_url(&self, operation: Operation) -> Url {
@@ -804,7 +900,7 @@ mod tests {
         config.values.action_entities = list("button", 16);
         assert!(config.validate().is_err());
         let mut config = configuration("http://localhost", "");
-        config.values.action_entities = list("scene", 17);
+        config.values.action_entities = list("scene", MAX_ACTION_ENTITIES + 1);
         assert!(config.validate().is_err());
     }
 
@@ -886,7 +982,7 @@ mod tests {
                 .join(",")
         };
         let mut config = configuration("http://localhost", "");
-        config.values.media_player_entities = list("media_player", 5);
+        config.values.media_player_entities = list("media_player", MAX_MEDIA_PLAYER_ENTITIES + 1);
         assert!(config.validate().is_err());
         let mut config = configuration("http://localhost", &list("sensor", 44));
         config.values.action_entities = list("button", 16);
@@ -894,10 +990,7 @@ mod tests {
             format!("{},media_player.e0", list("media_player", 4));
         let config = config.validate().unwrap();
         assert_eq!(config.entities.len(), MAX_ENTITIES);
-        assert_eq!(
-            config.media_player_entities.len(),
-            MAX_MEDIA_PLAYER_ENTITIES
-        );
+        assert_eq!(config.media_player_entities.len(), 4);
         assert_eq!(config.actions().len(), 28);
         let mut config = configuration("http://localhost", &list("sensor", 45));
         config.values.action_entities = list("scene", 16);
@@ -999,10 +1092,10 @@ mod tests {
                 .join(",")
         };
         let mut config = configuration("http://localhost", "");
-        config.values.binary_entities = list("switch", 17);
+        config.values.binary_entities = list("switch", MAX_BINARY_ENTITIES + 1);
         assert!(config.validate().is_err());
         let mut config = configuration("http://localhost", "");
-        config.values.binary_entities = " ".repeat(4097);
+        config.values.binary_entities = " ".repeat(MAX_ENTITY_LIST_BYTES + 1);
         assert!(config.validate().is_err());
 
         let mut config = configuration(
@@ -1012,7 +1105,7 @@ mod tests {
         config.values.binary_entities = format!("{},light.e0", list("light", 16));
         let config = config.validate().unwrap();
         assert_eq!(config.entities.len(), MAX_ENTITIES);
-        assert_eq!(config.binary_entities.len(), MAX_BINARY_ENTITIES);
+        assert_eq!(config.binary_entities.len(), 16);
         assert_eq!(config.actions().len(), 32);
         let mut config = configuration("http://localhost", &list("sensor", 49));
         config.values.binary_entities = list("light", 16);
@@ -1036,10 +1129,10 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        for actions in 0..=MAX_ACTION_ENTITIES {
-            for media in 0..=MAX_MEDIA_PLAYER_ENTITIES {
-                for binary in 0..=MAX_BINARY_ENTITIES {
-                    for covers in 0..=MAX_COVER_ENTITIES {
+        for actions in 0..=16 {
+            for media in 0..=4 {
+                for binary in 0..=16 {
+                    for covers in 0..=4 {
                         let mut config = configuration("http://localhost", "");
                         config.values.action_entities = list("button", actions);
                         config.values.media_player_entities = list("media_player", media);
@@ -1181,10 +1274,10 @@ mod tests {
                 .join(",")
         };
         let mut config = configuration("http://localhost", "");
-        config.values.cover_entities = list("cover", 5);
+        config.values.cover_entities = list("cover", MAX_COVER_ENTITIES + 1);
         assert!(config.validate().is_err());
         let mut config = configuration("http://localhost", "");
-        config.values.cover_entities = " ".repeat(4097);
+        config.values.cover_entities = " ".repeat(MAX_ENTITY_LIST_BYTES + 1);
         assert!(config.validate().is_err());
         let mut config = configuration(
             "http://localhost",
@@ -1193,7 +1286,7 @@ mod tests {
         config.values.cover_entities = format!("{},cover.e0", list("cover", 4));
         let config = config.validate().unwrap();
         assert_eq!(config.entities.len(), MAX_ENTITIES);
-        assert_eq!(config.cover_entities.len(), MAX_COVER_ENTITIES);
+        assert_eq!(config.cover_entities.len(), 4);
         assert_eq!(
             config.actions().len(),
             12,
@@ -1318,8 +1411,8 @@ mod tests {
                 "number.*".into(),
                 "cover.a/escape".into(),
                 "do_not_supply_charger".into(),
-                " ".repeat(4097),
-                (0..5)
+                " ".repeat(MAX_ENTITY_LIST_BYTES + 1),
+                (0..MAX_NUMBER_ENTITIES + 1)
                     .map(|i| format!("{domain}.e{i}"))
                     .collect::<Vec<_>>()
                     .join(","),
@@ -1346,8 +1439,8 @@ mod tests {
         // Every allowed control total is achievable. Also exercise overlaps between
         // all four selected covers and independently selected positions.
         for previous in 0..=MAX_ACTION_BUTTONS {
-            for numbers in 0..=MAX_NUMBER_ENTITIES {
-                for positions in 0..=MAX_COVER_POSITION_ENTITIES {
+            for numbers in 0..=4 {
+                for positions in 0..=4 {
                     let mut config = configuration("http://localhost", "");
                     let covers = (previous / 3).min(4);
                     let remaining = previous - 3 * covers;

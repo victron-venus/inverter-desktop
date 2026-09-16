@@ -227,12 +227,18 @@ class MobilePluginBoundaryTests(unittest.TestCase):
 
     def test_ha_worker_and_shared_protocol_are_not_mobile_dependencies_or_sources(self):
         """An independent shared worker library must never become mobile core."""
-        for crate in ("inverter-home-assistant-worker", "inverter-worker-protocol"):
+        for crate in (
+            "inverter-home-assistant-worker", "inverter-worker-protocol",
+            "inverter-kerberos-worker", "inverter-ring-worker", "inverter-camera-common",
+        ):
             with self.subTest(crate=crate), self.assertRaisesRegex(ValueError, crate):
                 boundary.verify_dependency_tree(f"inverter-dashboard v1.0.0\n{crate} v0.1.0")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "library.d"
-            for source in ("home-assistant/src/main.rs", "worker-protocol/src/lib.rs"):
+            for source in (
+                "home-assistant/src/main.rs", "worker-protocol/src/lib.rs",
+                "kerberos/src/main.rs", "ring/src/main.rs", "camera-common/src/lib.rs",
+            ):
                 path.write_text(
                     "/target/lib.a: /checkout/src-tauri/src/lib.rs "
                     f"/checkout/desktop-plugins/{source}\n"
@@ -244,8 +250,11 @@ class MobilePluginBoundaryTests(unittest.TestCase):
     def test_ha_worker_and_protocol_markers_are_rejected_in_every_mobile_package_format(self):
         """Hard-coded expectations catch accidental removal from the native guard."""
         self.assert_packaged_markers_rejected((
-            "inverter-desktop.home-assistant", "inverter-home-assistant-worker",
-            "inverter-worker-protocol", "inverter_worker_protocol",
+            "inverter-camera-common", "inverter_camera_common",
+            "inverter-kerberos-worker", "inverter-desktop.kerberos",
+            "inverter-ring-worker", "inverter-desktop.ring",
+            "inverter-home-assistant-worker", "inverter-desktop.home-assistant",
+            "inverter_worker_protocol", "inverter-worker-protocol",
         ))
 
     def test_ha_worker_assets_are_rejected_in_apk_aab_and_ipa(self):
@@ -257,6 +266,9 @@ class MobilePluginBoundaryTests(unittest.TestCase):
                 "HOME-ASSISTANT-MANIFEST.JSON", "home-assistant.idplugin",
                 "desktop-plugins/home-assistant/Cargo.toml",
                 "desktop-plugins/worker-protocol/src/lib.rs",
+                "inverter-kerberos-worker", "inverter-kerberos-worker.exe",
+                "inverter-ring-worker", "inverter-ring-worker.exe",
+                "KERBEROS-MANIFEST.JSON", "RING-MANIFEST.JSON",
             ):
                 for suffix, prefix in (("apk", ""), ("aab", "base/"), ("ipa", "")):
                     if suffix == "ipa":
@@ -340,6 +352,10 @@ class MobilePluginBoundaryTests(unittest.TestCase):
             "get_plugin_manager_snapshot",
             "retry_configured_plugins",
             "get_plugin_settings",
+            "get_plugin_settings_choices",
+            "get_plugin_groups",
+            "set_plugin_group_enabled",
+            "plugin-configuration-changed",
             "get_retained_plugin_data",
             "install_plugin_package",
             "preview_plugin_package",
@@ -352,11 +368,14 @@ class MobilePluginBoundaryTests(unittest.TestCase):
     def test_plugin_media_markers_are_rejected_in_every_mobile_package_format(self):
         """Explicit media expectations catch an accidentally omitted guard marker."""
         self.assert_packaged_markers_rejected((
+            "get_live_preview_url",
             "close_plugin_video_window",
             "drag_plugin_video_window",
             "plugin-media",
             "plugin-video-",
             "desktop-plugin-media",
+            "plugin-live",
+            "plugin-preview-",
         ))
 
     def assert_packaged_markers_rejected(self, markers):

@@ -53,15 +53,22 @@ pub(crate) struct SettingsInventory {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SettingsData {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub legacy_migration_version: u32,
     pub revision: String,
     pub values: BTreeMap<String, Value>,
     pub secrets: BTreeMap<String, String>,
     pub secret_fields: BTreeSet<String>,
 }
 
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 impl Default for SettingsData {
     fn default() -> Self {
         Self {
+            legacy_migration_version: 0,
             revision: "0".into(),
             values: BTreeMap::new(),
             secrets: BTreeMap::new(),

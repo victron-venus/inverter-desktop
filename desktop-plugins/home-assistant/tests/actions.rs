@@ -143,7 +143,7 @@ impl Worker {
         assert_eq!(
             self.next(),
             json!({"type":"ready","protocol_version":1,
-            "host_api_version":"1.7.0","plugin_id":"inverter-desktop.home-assistant"})
+            "host_api_version":"1.8.0","plugin_id":"inverter-desktop.home-assistant"})
         );
         self.send(frame);
         assert_eq!(
@@ -246,7 +246,7 @@ fn assert_state_links(frame: &Value) {
 }
 
 fn hello() -> Value {
-    json!({"type":"hello","protocol_version":1,"host_api_version":"1.7.0",
+    json!({"type":"hello","protocol_version":1,"host_api_version":"1.8.0",
         "plugin_id":"inverter-desktop.home-assistant"})
 }
 
@@ -254,7 +254,7 @@ fn configuration(fixture: &TcpListener, watch: &str, actions: Option<&str>) -> V
     let mut frame = json!({"type":"configuration","configuration":{
         "revision":"actions-1","values":{
             "ha_base_url":format!("http://{}/reverse/proxy/ha",fixture.local_addr().unwrap()),
-            "watch_entities":watch},"secrets":{"ha_token":TOKEN}}});
+            "dashboard_layout":"","watch_entities":watch},"secrets":{"ha_token":TOKEN}}});
     if let Some(actions) = actions {
         frame["configuration"]["values"]["action_entities"] = json!(actions);
     }
@@ -603,6 +603,150 @@ fn exact_service(fixture: &TcpListener, domain: &str, method: &str, entity: &str
     request.stream
 }
 
+fn initialize_primary(
+    worker: &mut Worker,
+    fixture: &TcpListener,
+    target: &str,
+) -> WebSocket<TcpStream> {
+    let mut frame = configuration(fixture, "", None);
+    frame["configuration"]["values"]["dashboard_layout"]=json!(json!({"version":1,"controls":[
+        {"id":"primary","surface":"home","order":3,"label":"Exact configured label","entity":target,"icon":"plug"}
+    ]}).to_string());
+    worker.configure_frame(frame);
+    let socket = authorize(fixture, true);
+    let mut seen = HashSet::new();
+    for _ in 0..2 {
+        let mut requested = request(fixture);
+        assert!(seen.insert(requested.line.clone()));
+        if requested.line == "GET /reverse/proxy/ha/api/states HTTP/1.1" {
+            respond(&mut requested.stream, 200, json!([entity(target, "off")]));
+        } else {
+            assert_eq!(
+                requested.line,
+                format!("GET /reverse/proxy/ha/api/states/{target} HTTP/1.1")
+            );
+            respond(&mut requested.stream, 200, entity(target, "off"));
+        }
+    }
+    let frame = connected(worker, 1);
+    let control = frame["presentation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "primary")
+        .unwrap();
+    assert_eq!(control["action"], "ha-primary-0");
+    assert_eq!(control["state"], "off");
+    socket
+}
+
+#[test]
+fn primary_controls_read_fresh_state_and_use_explicit_legacy_routes_without_cached_toggle() {
+    for domain in [
+        "switch",
+        "input_boolean",
+        "light",
+        "fan",
+        "media_player",
+        "script",
+        "climate",
+        "lock",
+        "sensor",
+        "binary_sensor",
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let target = format!("{domain}.primary");
+        let _socket = initialize_primary(&mut worker, &fixture, &target);
+        for (serial, state, method) in [
+            (0, "on", "turn_off"),
+            (1, "off", "turn_on"),
+            (2, "unknown", "turn_on"),
+        ] {
+            let id = format!("fresh-{serial}");
+            worker.action(&id, "ha-primary-0", 5000);
+            let mut fresh = request(&fixture);
+            assert_eq!(
+                fresh.line,
+                format!("GET /reverse/proxy/ha/api/states/{target} HTTP/1.1")
+            );
+            assert!(fresh.body.is_empty());
+            respond(&mut fresh.stream, 200, entity(&target, state));
+            let mut post = exact_service(&fixture, domain, method, &target);
+            respond(&mut post, 200, json!([]));
+            worker.success(&id);
+            no_request(&fixture, Duration::ZERO);
+        }
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn failed_mismatched_or_redirected_primary_read_never_submits_a_service_or_retries() {
+    for (status, body) in [
+        (404, json!({})),
+        (503, json!({})),
+        (200, entity("switch.unselected", "on")),
+        (200, json!({"entity_id":"switch.primary","state":null})),
+        (302, json!({})),
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let _socket = initialize_primary(&mut worker, &fixture, "switch.primary");
+        worker.action("failed-read", "ha-primary-0", 5000);
+        let mut fresh = request(&fixture);
+        assert_eq!(
+            fresh.line,
+            "GET /reverse/proxy/ha/api/states/switch.primary HTTP/1.1"
+        );
+        respond(&mut fresh.stream, status, body);
+        worker.error("failed-read", "unavailable");
+        no_request(&fixture, Duration::from_millis(30));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn primary_button_scene_cover_and_number_preserve_exact_legacy_default_bodies() {
+    for (target, path, body) in [
+        (
+            "button.start",
+            "button/press",
+            json!({"entity_id":"button.start"}),
+        ),
+        (
+            "scene.evening",
+            "scene/turn_on",
+            json!({"entity_id":"scene.evening"}),
+        ),
+        (
+            "cover.blind",
+            "cover/set_cover_position",
+            json!({"entity_id":"cover.blind","position":0}),
+        ),
+        (
+            "number.limit",
+            "number/set_value",
+            json!({"entity_id":"number.limit","value":0}),
+        ),
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let _socket = initialize_primary(&mut worker, &fixture, target);
+        worker.action("primary-default", "ha-primary-0", 5000);
+        let mut posted = request(&fixture);
+        assert_eq!(
+            posted.line,
+            format!("POST /reverse/proxy/ha/api/services/{path} HTTP/1.1")
+        );
+        assert_eq!(serde_json::from_slice::<Value>(&posted.body).unwrap(), body);
+        respond(&mut posted.stream, 200, json!([]));
+        worker.success("primary-default");
+        no_request(&fixture, Duration::ZERO);
+        worker.stop(false);
+    }
+}
+
 #[test]
 fn omitted_and_empty_action_selection_keep_literal_read_targets_read_only() {
     for selected in [None, Some("")] {
@@ -672,7 +816,7 @@ fn explicit_targets_use_ordered_union_and_exact_self_contained_service_presets()
 #[test]
 fn invalid_action_configuration_never_connects_or_acknowledges() {
     let fixture = listener();
-    let too_many = (0..17)
+    let too_many = (0..64)
         .map(|index| format!("button.b{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -1222,7 +1366,7 @@ fn media_exact_transport_presets_preserve_button_scene_ids_and_literal_targets()
 #[test]
 fn media_invalid_domains_overlong_lists_and_combined_watch_overflow_never_connect() {
     let fixture = listener();
-    let five = (0..5)
+    let five = (0..22)
         .map(|index| format!("media_player.p{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -1230,7 +1374,7 @@ fn media_invalid_domains_overlong_lists_and_combined_watch_overflow_never_connec
         .map(|index| format!("sensor.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
-    let overlong = " ".repeat(4097);
+    let overlong = " ".repeat(8256);
     for (watch, media) in [
         ("", "button.selected"),
         ("", "scene.selected"),
@@ -1818,11 +1962,11 @@ fn binary_missing_deleted_unknown_and_malformed_states_withdraw_both_commands() 
 #[test]
 fn binary_invalid_configuration_rejects_domains_counts_union_and_combined_action_budget() {
     let fixture = listener();
-    let nine = (0..17)
+    let nine = (0..32)
         .map(|index| format!("switch.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
-    let overlong = " ".repeat(4097);
+    let overlong = " ".repeat(8256);
     let mut invalid = [
         "sensor.selected",
         "button.selected",
@@ -2343,11 +2487,11 @@ fn cover_observation_validation_withdraws_commands_and_accepts_moving_states() {
 #[test]
 fn cover_invalid_configuration_rejects_domains_counts_union_and_reserved_action_overflow() {
     let fixture = listener();
-    let five = (0..5)
+    let five = (0..22)
         .map(|index| format!("cover.c{index}"))
         .collect::<Vec<_>>()
         .join(",");
-    let overlong = " ".repeat(4097);
+    let overlong = " ".repeat(8256);
     let mut invalid = [
         "sensor.selected",
         "button.selected",
@@ -3074,10 +3218,10 @@ fn numeric_lists_enforce_domains_shared_reservations_and_watch_limits() {
         ("number_entities", "number.*".into()),
         ("cover_position_entities", "light.a".into()),
         ("cover_position_entities", "cover.a/escape".into()),
-        ("number_entities", list("number", 5)),
-        ("cover_position_entities", list("cover", 5)),
-        ("number_entities", " ".repeat(4097)),
-        ("cover_position_entities", " ".repeat(4097)),
+        ("number_entities", list("number", 64)),
+        ("cover_position_entities", list("cover", 64)),
+        ("number_entities", " ".repeat(8256)),
+        ("cover_position_entities", " ".repeat(8256)),
     ] {
         let fixture = listener();
         let mut worker = Worker::start();
@@ -5756,5 +5900,59 @@ fn laundry_profiles_keep_the_32_state_and_31_control_budget_inside_one_64_item_f
         64
     );
     no_request(&fixture, Duration::from_millis(50));
+    worker.stop(false);
+}
+
+#[test]
+fn compact_catalog_and_opt_in_notifications_cross_real_worker_pipes_without_granting_commands() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut config = configuration(&fixture, "switch.desk", None);
+    config["configuration"]["values"]
+        .as_object_mut()
+        .unwrap()
+        .remove("dashboard_layout");
+    config["configuration"]["values"]["notify_home"] = json!(true);
+    worker.configure_frame(config);
+    let mut socket = authorize(&fixture, true);
+    for _ in 0..2 {
+        let mut requested = request(&fixture);
+        match requested.line.as_str() {
+            "GET /reverse/proxy/ha/api/states HTTP/1.1" => respond(
+                &mut requested.stream,
+                200,
+                json!([
+                    entity("switch.desk", "off"),
+                    entity("fan.catalog_only", "off")
+                ]),
+            ),
+            "GET /reverse/proxy/ha/api/states/switch.desk HTTP/1.1" => {
+                respond(&mut requested.stream, 200, entity("switch.desk", "off"))
+            }
+            other => panic!("unexpected request {other}"),
+        }
+    }
+    let catalog =
+        worker.until(|frame| frame["type"] == "event" && frame["name"] == "settings_choices");
+    assert_eq!(catalog["data"]["offset"], 0);
+    assert_eq!(catalog["data"]["complete"], true);
+    assert_eq!(catalog["data"]["options"].as_array().unwrap().len(), 2);
+    let initial =
+        worker.until(|frame| item(frame, "entity-0").is_some_and(|item| item["text"] == "off"));
+    assert!(actions(&initial).is_empty());
+    assert_eq!(initial["items"].as_array().unwrap().len(), 2);
+    assert!(!worker
+        .deferred
+        .iter()
+        .any(|frame| frame["type"] == "notification"));
+    let mut update = entity("switch.desk", "on");
+    update["attributes"]["friendly_name"] = json!("My desk");
+    live(&mut socket, "switch.desk", Some(update));
+    let notification = worker.until(|frame| frame["type"] == "notification");
+    assert_eq!(notification["title"], "Home Control");
+    assert_eq!(notification["body"], "My desk: ON");
+    worker.action("read-only", "ha-primary-0", 5000);
+    worker.error("read-only", "invalid_action");
+    no_request(&fixture, Duration::ZERO);
     worker.stop(false);
 }

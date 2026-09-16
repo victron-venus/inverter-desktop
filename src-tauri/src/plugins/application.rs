@@ -4,10 +4,13 @@ use super::installer::{InstalledPluginDetails, PackageManager};
 use super::package::{TrustStore, VerifiedPackage};
 use super::protocol::{validate_plugin_id, PluginPermission};
 use super::runtime::{PluginHost, PluginSnapshot};
+#[path = "groups.rs"]
+mod groups;
+pub(crate) use groups::PluginGroupSnapshot;
 #[path = "reconciliation.rs"]
 mod reconciliation;
 use super::settings::{PluginSettingsView, SettingsSchema};
-use super::settings_store::{SettingsKeyProvider, SettingsStore};
+use super::settings_store::{SettingsData, SettingsKeyProvider, SettingsStore};
 use reconciliation::{ConfiguredStatus, Reconciliation};
 use serde::Serialize;
 use serde_json::Value;
@@ -18,6 +21,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
+
+pub(crate) type SettingsSeedProvider = Arc<
+    dyn Fn(&super::protocol::PluginManifest, &SettingsData) -> Result<SettingsData, String>
+        + Send
+        + Sync,
+>;
 
 const PREVIEW_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_FAILURES: usize = 8;
@@ -61,6 +70,7 @@ pub(crate) struct ManagerSnapshot {
     pub data_revision: String,
     pub plugins: Vec<ManagedPlugin>,
     pub configured: Vec<ConfiguredStatus>,
+    pub groups: Vec<PluginGroupSnapshot>,
     pub configuration_error: Option<String>,
 }
 
@@ -114,6 +124,8 @@ enum StoreStatus {
 
 struct ApplicationInner {
     reconciliation: Reconciliation,
+    settings_seed: Mutex<Option<SettingsSeedProvider>>,
+    migration_waiting: AtomicBool,
     host: PluginHost,
     media: Option<super::media::MediaService>,
     target: String,
@@ -152,6 +164,8 @@ impl PackageApplication {
     ) -> Self {
         Self(Arc::new(ApplicationInner {
             reconciliation: Reconciliation::default(),
+            settings_seed: Mutex::new(None),
+            migration_waiting: AtomicBool::new(false),
             host,
             media,
             target,
@@ -183,12 +197,28 @@ impl PackageApplication {
         .await;
     }
 
+    #[cfg(any(test, feature = "native-media-smoke"))]
     pub(crate) async fn initialize_with_key(
         &self,
         root: Result<PathBuf, String>,
         trust: Result<TrustStore, String>,
         key: SettingsKeyProvider,
     ) {
+        self.initialize_with_seed(root, trust, key, None).await;
+    }
+
+    pub(crate) async fn initialize_with_seed(
+        &self,
+        root: Result<PathBuf, String>,
+        trust: Result<TrustStore, String>,
+        key: SettingsKeyProvider,
+        seed: Option<SettingsSeedProvider>,
+    ) {
+        *self
+            .0
+            .settings_seed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = seed;
         let result = async {
             let root = root?;
             let trust = trust?;
@@ -197,14 +227,15 @@ impl PackageApplication {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             let settings = SettingsStore::new(root.clone(), key);
             let worker_settings = settings.clone();
+            let service = self.clone();
             let manager = PackageManager::open_with_configuration(
                 root,
                 self.0.target.clone(),
                 trust,
                 self.0.host.clone(),
-                Arc::new(move |manifest| {
+                Arc::new(move |manifest, epoch| {
                     let schema = SettingsSchema::compile(manifest)?;
-                    let data = worker_settings.read(&manifest.plugin_id)?;
+                    let data = service.load_settings(&worker_settings, manifest, epoch)?;
                     schema.configuration(&data)
                 }),
             )
@@ -263,6 +294,93 @@ impl PackageApplication {
         }
     }
 
+    /// Called under the package operation lock with the verified manifest.
+    /// The seed is committed once, before any worker receives its configuration.
+    fn load_settings(
+        &self,
+        store: &SettingsStore,
+        manifest: &super::protocol::PluginManifest,
+        epoch: u64,
+    ) -> Result<SettingsData, String> {
+        self.check_epoch(epoch)?;
+        let current = store.read(&manifest.plugin_id)?;
+        let seed = self
+            .0
+            .settings_seed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(seed) = seed else {
+            return Ok(current);
+        };
+        let next = seed(manifest, &current).inspect_err(|error| {
+            if error == "legacy_migration_waiting_for_daemon" {
+                self.0.migration_waiting.store(true, Ordering::Release);
+            }
+        })?;
+        if next == current {
+            return Ok(current);
+        }
+        SettingsSchema::compile(manifest)?.seed_configuration(&next)?;
+        let prepared = store.prepare_write(&manifest.plugin_id, &next)?;
+        self.0.host.commit_in_epoch(epoch, || prepared.commit())?;
+        Ok(next)
+    }
+
+    /// Export the current isolated values, never an obsolete configuration shadow.
+    pub(crate) async fn export_modules(
+        &self,
+        epoch: u64,
+    ) -> Result<crate::module_config::ModuleNamespaces, String> {
+        self.with_portable_modules(epoch, Ok).await
+    }
+
+    /// The consumer runs before any package/settings operation can change this
+    /// snapshot. It must perform its final persistence synchronously and bind it
+    /// to the original host epoch; no configuration lock is held while awaiting.
+    pub(crate) async fn with_portable_modules<R, F>(
+        &self,
+        epoch: u64,
+        consume: F,
+    ) -> Result<R, String>
+    where
+        F: FnOnce(crate::module_config::ModuleNamespaces) -> Result<R, String> + Send + 'static,
+        R: Send + 'static,
+    {
+        let activity = self.begin_activity();
+        self.check_epoch(epoch)?;
+        let manager = self.manager()?;
+        let store = self.settings_store()?;
+        let service = self.clone();
+        run_owned(activity, async move {
+            manager
+                .read_all_settings_in_epoch(epoch, move |packages| {
+                    let mut modules = crate::module_config::ModuleNamespaces::new();
+                    for (manifest, digest) in packages {
+                        let schema = SettingsSchema::compile(manifest)?;
+                        let data = store.read(&manifest.plugin_id)?;
+                        schema.view(manifest, digest, &data)?;
+                        modules.insert(
+                            manifest.plugin_id.clone(),
+                            crate::module_config::ModuleNamespace {
+                                schema_version: std::num::NonZeroU32::new(1).unwrap(),
+                                values: data
+                                    .values
+                                    .into_iter()
+                                    .filter(|(key, _)| !data.secret_fields.contains(key))
+                                    .collect(),
+                                secrets: BTreeMap::new(),
+                            },
+                        );
+                    }
+                    service.check_epoch(epoch)?;
+                    consume(modules)
+                })
+                .await
+        })
+        .await
+    }
+
     pub(crate) async fn get_settings(
         &self,
         id: &str,
@@ -275,10 +393,15 @@ impl PackageApplication {
         let id = id.to_owned();
         let service = self.clone();
         run_owned(activity, async move {
+            let loader = service.clone();
             let view = manager
                 .read_settings_in_epoch(&id, epoch, move |manifest, digest| {
                     let schema = SettingsSchema::compile(manifest)?;
-                    schema.view(manifest, digest, &store.read(&manifest.plugin_id)?)
+                    // A migration conflict must not prevent opening the editor to fix it.
+                    let data = loader
+                        .load_settings(&store, manifest, epoch)
+                        .or_else(|_| store.read(&manifest.plugin_id))?;
+                    schema.view(manifest, digest, &data)
                 })
                 .await?;
             service.check_epoch(epoch)?;
@@ -306,7 +429,11 @@ impl PackageApplication {
                 .apply_settings_in_epoch(&id, epoch, move |manifest, digest| {
                     let schema = SettingsSchema::compile(manifest)?;
                     let current = store.read(&manifest.plugin_id)?;
-                    let next = schema.merge(digest, &current, &revision, values, changes)?;
+                    let mut next = schema.merge(digest, &current, &revision, values, changes)?;
+                    if next.legacy_migration_version == 0 {
+                        next.legacy_migration_version = 1;
+                        next.revision = uuid::Uuid::new_v4().to_string();
+                    }
                     // Enforce the worker envelope bound even while the plugin is disabled.
                     schema.configuration(&next)?;
                     let view = schema.view(manifest, digest, &next)?;
@@ -436,6 +563,7 @@ impl PackageApplication {
             data_revision: self.0.metadata_revision.load(Ordering::Acquire).to_string(),
             plugins: Vec::new(),
             configured: self.0.reconciliation.statuses(),
+            groups: Vec::new(),
             configuration_error: self.0.reconciliation.error(),
         };
         let manager = match self.manager() {
@@ -474,6 +602,7 @@ impl PackageApplication {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         snapshot.ready = true;
+        snapshot.groups = groups::project(&details);
         snapshot.plugins = details
             .into_iter()
             .map(|details| {
@@ -842,6 +971,10 @@ impl PackageApplication {
         } else {
             None
         }
+    }
+
+    pub(crate) fn take_waiting_migration(&self) -> bool {
+        self.0.migration_waiting.swap(false, Ordering::AcqRel)
     }
 
     pub(crate) async fn restore(&self, epoch: u64) -> Result<(), String> {

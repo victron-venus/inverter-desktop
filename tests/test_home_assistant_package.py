@@ -43,12 +43,13 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 if "windows" in target:
                     binary += ".exe"
                 self.assertEqual(manifest["plugin_id"], "inverter-desktop.home-assistant")
-                self.assertEqual(manifest["version"], "0.12.0")
-                self.assertEqual(manifest["host_api"], "^1.7")
+                self.assertEqual(manifest["version"], "0.13.0")
+                self.assertEqual(manifest["host_api"], "^1.8")
                 self.assertEqual(manifest["target"], target)
                 self.assertEqual(manifest["entrypoint"], f"bin/{binary}")
                 self.assertEqual(set(manifest["permissions"]), {
                     "plugin_configuration", "dashboard_contributions", "network_http",
+                    "desktop_notifications",
                 })
                 self.assertNotIn("http_video", manifest)
                 self.assertIsNone(manifest["signature"])
@@ -72,24 +73,27 @@ class HomeAssistantPackageTests(unittest.TestCase):
             "cover_position_entities", "discovery_prefixes", "ha_token",
             "dishwasher_running_entity", "dishwasher_duration_entity",
             "washer_remaining_entity", "dryer_remaining_entity",
+            "dashboard_layout", "discovery_domains", "notify_home",
         })
-        self.assertTrue(all(field["type"] == "string" for field in fields.values()))
+        self.assertTrue(all(field["type"] == "string" for key, field in fields.items()
+                            if key != "notify_home"))
         self.assertEqual(fields["ha_base_url"]["maxLength"], 2048)
         self.assertEqual(fields["watch_entities"]["default"], "")
         self.assertEqual(fields["watch_entities"]["maxLength"], 64 * 129 - 1)
         self.assertEqual(fields["action_entities"]["default"], "")
-        self.assertEqual(fields["action_entities"]["maxLength"], 4096)
+        self.assertEqual(fields["action_entities"]["maxLength"], 64 * 129 - 1)
         self.assertNotIn("action_entities", schema["required"])
         self.assertEqual(fields["media_player_entities"]["default"], "")
-        self.assertEqual(fields["media_player_entities"]["maxLength"], 4096)
+        self.assertEqual(fields["media_player_entities"]["maxLength"], 64 * 129 - 1)
         self.assertNotIn("media_player_entities", schema["required"])
         self.assertEqual(fields["binary_entities"]["default"], "")
-        self.assertEqual(fields["binary_entities"]["maxLength"], 4096)
+        self.assertEqual(fields["binary_entities"]["maxLength"], 64 * 129 - 1)
         self.assertNotIn("binary_entities", schema["required"])
         self.assertEqual(fields["cover_entities"]["default"], "")
-        self.assertEqual(fields["cover_entities"]["maxLength"], 4096)
+        self.assertEqual(fields["cover_entities"]["maxLength"], 64 * 129 - 1)
         self.assertNotIn("cover_entities", schema["required"])
-        for key, limit in (("number_entities", 4096), ("cover_position_entities", 4096),
+        for key, limit in (("number_entities", 64 * 129 - 1),
+                           ("cover_position_entities", 64 * 129 - 1),
                            ("discovery_prefixes", 1024),
                            ("dishwasher_running_entity", 128),
                            ("dishwasher_duration_entity", 128),
@@ -110,6 +114,57 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertEqual(fields["ha_token"]["minLength"], 1)
         self.assertEqual(fields["ha_token"]["maxLength"], 4096)
         self.assertNotIn("default", fields["ha_token"])
+
+    def test_compact_editor_choices_and_notifications_are_bounded_and_opt_in(self):
+        """Structured views use exact entity choices and retain a read-only default."""
+        manifest = json.loads((SCRIPTS / "home-assistant-manifest.json").read_text())
+        fields = manifest["config_schema"]["properties"]
+        self.assertEqual(fields["notify_home"]["type"], "boolean")
+        self.assertIs(fields["notify_home"]["default"], False)
+        self.assertEqual(fields["discovery_domains"]["default"], "")
+        self.assertEqual(fields["discovery_domains"]["maxLength"], 256)
+        for name in ("watch_entities", "action_entities", "media_player_entities",
+                     "binary_entities", "cover_entities", "number_entities",
+                     "cover_position_entities"):
+            self.assertEqual(fields[name]["x-options-source"], "entities")
+            self.assertIs(fields[name]["x-options-multiple"], True)
+        self.assertEqual(fields["binary_entities"]["x-options-prefixes"],
+                         ["switch.", "input_boolean.", "light.", "fan."])
+        layout = fields["dashboard_layout"]
+        self.assertEqual(layout["maxLength"], 24576)
+        self.assertEqual({key for key, field in fields.items() if field.get("omitDefault")},
+                         {"dashboard_layout", "discovery_domains", "notify_home"})
+        self.assertEqual(json.loads(layout["default"]),
+                         {"version": 1, "controls": [], "sections": {}, "appliances": {}})
+        self.assertEqual(layout["x-editor"]["kind"], "json")
+        editor = layout["x-editor"]["schema"]
+        self.assertFalse(editor["additionalProperties"])
+        self.assertEqual(editor["properties"]["version"]["const"], 1)
+        controls = editor["properties"]["controls"]
+        self.assertEqual(controls["maxItems"], 64)
+        target = controls["items"]["properties"]["entity"]
+        self.assertEqual(target["x-options-source"], "entities")
+        self.assertEqual(target["maxLength"], 128)
+        self.assertEqual(set(target["x-options-prefixes"]), {
+            "switch.", "input_boolean.", "light.", "fan.", "media_player.",
+            "button.", "scene.", "cover.", "number.", "lock.", "script.",
+            "climate.", "sensor.", "binary_sensor.",
+        })
+        self.assertEqual(set(editor["properties"]["appliances"]["properties"]),
+                         {"washer_start", "washer_pause", "dryer_start", "dryer_pause"})
+        self.assertEqual(set(editor["properties"]["sections"]["properties"]), {
+            "sensors", "numbers", "covers", "media", "scenes", "weather",
+            "washer", "dryer", "dishwasher",
+        })
+        def shape_bound(node, depth=0):
+            self.assertLessEqual(depth, 8)
+            children = list(node.get("properties", {}).values())
+            if "items" in node:
+                children.append(node["items"])
+            return 1 + sum(shape_bound(child, depth + 1) for child in children)
+        self.assertLessEqual(shape_bound(editor), 256)
+        self.assertFalse(any(field.get("writeOnly") for key, field in fields.items()
+                             if key != "ha_token"))
 
     def test_plugin_choice_is_validated_before_reading_or_creating_output(self):
         """A CLI selection is not a manifest path or an arbitrary payload name."""

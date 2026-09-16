@@ -28,6 +28,9 @@ target/
 Cargo.lock
 !desktop-plugins/frigate/Cargo.lock
 !desktop-plugins/home-assistant/Cargo.lock
+!desktop-plugins/kerberos/Cargo.lock
+!desktop-plugins/ring/Cargo.lock
+!desktop-plugins/camera-common/Cargo.lock
 !desktop-plugins/worker-protocol/Cargo.lock
 src-tauri/advisory-db/
 

@@ -84,11 +84,52 @@ async fn service(
         };
     }
     let mut authentication_rejected = false;
+    let mut submitted = false;
     let operation = async {
+        let mut selected = action.operation;
+        let mut body = body;
+        if let crate::config::Operation::Toggle(domain) = selected {
+            // Resolve the primary operation from a fresh read, never from the
+            // displayed cache. Failure cannot authorize a write or a core fallback.
+            let response = client
+                .get(configuration.state_url(&action.entity))
+                .bearer_auth(&configuration.token)
+                .timeout(deadline.saturating_duration_since(Instant::now()))
+                .send()
+                .await
+                .map_err(|_| ())?;
+            authentication_rejected = matches!(response.status().as_u16(), 401 | 403);
+            if !response.status().is_success() {
+                return Err(());
+            }
+            let state = network::action_state(response).await?;
+            if state["entity_id"].as_str() != Some(action.entity.as_str()) {
+                return Err(());
+            }
+            let value = state["state"].as_str().ok_or(())?;
+            selected = if value == "on" {
+                crate::config::Operation::TurnOff(domain)
+            } else {
+                crate::config::Operation::TurnOn(domain)
+            };
+        }
+        match selected {
+            crate::config::Operation::PrimaryCover => {
+                body["position"] = json!(0);
+            }
+            crate::config::Operation::PrimaryNumber => {
+                body["value"] = json!(0);
+            }
+            _ => {}
+        }
+        if deadline <= Instant::now() {
+            return Err(());
+        }
         // The body was derived from the selected literal entity and either an
         // immutable preset or an exactly validated published numeric grant.
+        submitted = true;
         let mut response = client
-            .post(configuration.service_url(action.operation))
+            .post(configuration.service_url(selected))
             .bearer_auth(&configuration.token)
             .json(&body)
             .timeout(deadline.saturating_duration_since(Instant::now()))
@@ -116,6 +157,8 @@ async fn service(
     Completed {
         response: if success {
             json!({"type":"action_result","request_id":request_id,"value":{}})
+        } else if !submitted {
+            error(&request_id, "unavailable", "The current Home Assistant state could not be read; no service operation was submitted.")
         } else {
             // Errors can arrive after HA accepted a write. Never infer that a
             // transport error, deadline or non-success response means no effect.

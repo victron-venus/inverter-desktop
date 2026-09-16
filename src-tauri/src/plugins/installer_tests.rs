@@ -114,6 +114,8 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
     let entrypoint = format!("worker{}", std::env::consts::EXE_SUFFIX);
     fs::copy(fixture(mode), payload.join(&entrypoint)).unwrap();
     let mut manifest = PluginManifest {
+        group: None,
+        live_view: None,
         schema_version: 1,
         plugin_id: id.into(),
         version: version.into(),
@@ -137,6 +139,10 @@ fn package_for(directory: &Path, id: &str, version: &str, mode: &str) -> PathBuf
     if mode == "configuration_video_authorized" {
         manifest.permissions.push(PluginPermission::HttpVideo);
         manifest.http_video = Some(super::super::protocol::HttpVideoDeclaration {
+            live_preview: None,
+            allow_query: false,
+            bearer_token_setting: None,
+            cooldown_seconds: None,
             base_url_setting: "server".into(),
         });
     }
@@ -296,6 +302,81 @@ async fn queue_operation<F: std::future::Future>(mut operation: std::pin::Pin<&m
     })
     .await;
     tokio::task::yield_now().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn coherent_settings_snapshot_consumer_excludes_concurrent_settings_writes() {
+    use std::sync::atomic::AtomicUsize;
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    manager
+        .install(package(&directory.0, "1.0.0", "configuration"), false)
+        .await
+        .unwrap();
+    let epoch = host.authority_epoch();
+    let value = Arc::new(AtomicUsize::new(1));
+    let (entered, observed) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let snapshot_value = value.clone();
+    let mut snapshot = Box::pin(manager.read_all_settings_in_epoch(epoch, move |packages| {
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].0.plugin_id, PLUGIN);
+        let before = snapshot_value.load(Ordering::SeqCst);
+        let _ = entered.send(before);
+        wait.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            snapshot_value.load(Ordering::SeqCst),
+            before,
+            "the restore consumer must retain its settings authority through commit"
+        );
+        Ok(before)
+    }));
+    queue_operation(snapshot.as_mut()).await;
+    assert_eq!(observed.await.unwrap(), 1);
+    let (prepared, mut write_started) = tokio::sync::oneshot::channel();
+    let write_value = value.clone();
+    let mut write = Box::pin(manager.apply_settings_in_epoch(PLUGIN, epoch, move |_, _| {
+        let _ = prepared.send(());
+        Ok((
+            (),
+            Box::new(move || {
+                write_value.store(2, Ordering::SeqCst);
+                Ok(())
+            }) as SettingsCommit,
+        ))
+    }));
+    queue_operation(write.as_mut()).await;
+    assert!(
+        time::timeout(Duration::from_millis(100), &mut write_started)
+            .await
+            .is_err()
+    );
+    release.send(()).unwrap();
+    assert_eq!(snapshot.await.unwrap(), 1);
+    write.await.unwrap();
+    write_started.await.unwrap();
+    assert_eq!(value.load(Ordering::SeqCst), 2);
+    manager.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_coherent_settings_snapshot_cannot_cross_authentication_epoch() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    let epoch = host.authority_epoch();
+    let lock = manager.0.operation.lock().await;
+    let (called, observed) = tokio::sync::oneshot::channel();
+    let mut snapshot = Box::pin(manager.read_all_settings_in_epoch(epoch, move |_| {
+        let _ = called.send(());
+        Ok(())
+    }));
+    queue_operation(snapshot.as_mut()).await;
+    host.revoke();
+    host.resume();
+    drop(lock);
+    assert!(snapshot.await.is_err());
+    assert!(observed.await.is_err());
+    manager.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -617,7 +698,7 @@ async fn settings_are_scoped_to_verified_permission_and_restart_only_enabled_wor
         Arc::new({
             let current = current.clone();
             let calls = calls.clone();
-            move |manifest| {
+            move |manifest, _epoch| {
                 assert_eq!(manifest.plugin_id, PLUGIN);
                 assert!(manifest
                     .permissions
@@ -773,7 +854,7 @@ async fn saved_settings_survive_worker_restart_failure_without_reverting_secrets
         host.clone(),
         Arc::new({
             let current = current.clone();
-            move |_| {
+            move |_, _epoch| {
                 let configuration = current.lock().unwrap().clone();
                 if configuration.revision == "changed" {
                     Err("configuration unavailable".into())
@@ -823,7 +904,7 @@ async fn candidate_settings_failure_preserves_the_previous_running_worker() {
         host.clone(),
         Arc::new({
             let loads = loads.clone();
-            move |manifest| {
+            move |manifest, _epoch| {
                 loads.fetch_add(1, Ordering::SeqCst);
                 if manifest.version == "2.0.0" {
                     Err("Required plugin setting is missing".into())
@@ -2180,6 +2261,8 @@ async fn signed_deep_inventory_cannot_create_excessive_implicit_directories() {
         })
         .collect();
     let mut manifest = PluginManifest {
+        group: None,
+        live_view: None,
         schema_version: 1,
         plugin_id: PLUGIN.into(),
         version: "1.0.0".into(),
@@ -2269,7 +2352,7 @@ async fn http_video_permission_and_origin_come_from_verified_package_and_its_sta
         host_target(),
         trust(),
         host.clone(),
-        Arc::new(move |_| Ok(current.lock().unwrap().clone())),
+        Arc::new(move |_, _epoch| Ok(current.lock().unwrap().clone())),
     )
     .await
     .unwrap();

@@ -60,6 +60,9 @@ jobs:
             src-tauri -> target
             desktop-plugins/frigate -> target
             desktop-plugins/home-assistant -> target
+            desktop-plugins/kerberos -> target
+            desktop-plugins/ring -> target
+            desktop-plugins/camera-common -> target
             desktop-plugins/worker-protocol -> target
 
       - name: Install cargo-audit
@@ -101,7 +104,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         # Host-only advisory exceptions do not apply to the separate workers.
         run: |
-          for plugin in frigate home-assistant worker-protocol; do
+          for plugin in frigate home-assistant kerberos ring camera-common worker-protocol; do
             cargo fetch --locked --manifest-path "desktop-plugins/$plugin/Cargo.toml"
             cargo audit --file "desktop-plugins/$plugin/Cargo.lock"
           done

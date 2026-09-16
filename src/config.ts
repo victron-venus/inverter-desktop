@@ -28,7 +28,7 @@ export interface ModuleConfig {
   schema_version: number
   /** Portable, non-secret JSON settings; arbitrary future payload fields are retained. */
   values: Record<string, unknown>
-  /** Stored in encrypted local config, omitted from every portable export. */
+  /** Stored only natively; omitted from frontend reads and portable exports. */
   secrets?: Record<string, string>
 }
 
@@ -47,13 +47,7 @@ export interface AppConfig {
   ha_longlived_token?: string | null
   ha_url?: string | null
   ha_port?: number | null
-  /**
-   * When URL+token are set, home-device actions (garage, recliner, laundry,
-   * EV, covers, …) use HA REST. Does **not** apply to inverter-control flags
-   * (only_charging, no_feed, house_support, charge_battery,
-   * do_not_supply_charger, set_limit_to_ev_charger, minimize_charging) —
-   * those always publish to Cerbo MQTT `inverter/cmd/toggle`.
-   */
+  /** Passive legacy field. Installed packages receive migrated settings natively. */
   ha_use_direct_api?: boolean
   ha_entities?: Array<{
     id: string
@@ -94,6 +88,8 @@ export interface AppConfig {
    * Example: http://ha:8123/api/camera_proxy/camera.front_door_snapshot
    */
   ring_snapshot_url_template?: string | null
+  /** Retained legacy live-view mappings; migration is native-only. */
+  camera_live_urls?: Record<string, string>
   camera_enabled?: boolean
   show_advanced_settings?: boolean
 

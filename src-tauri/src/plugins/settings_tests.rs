@@ -3,6 +3,8 @@ use serde_json::json;
 
 fn manifest(schema: Value) -> PluginManifest {
     PluginManifest {
+        group: None,
+        live_view: None,
         schema_version: 1,
         plugin_id: "org.example.settings".into(),
         version: "1.0.0".into(),
@@ -512,6 +514,7 @@ fn ha_optional_selection_upgrade(
     }
     let previous = SettingsSchema::compile(&previous_metadata).unwrap();
     let mut data = SettingsData {
+        legacy_migration_version: 0,
         revision: "12345678-1234-1234-1234-123456789abc".into(),
         values: serde_json::from_value(json!({
             "ha_base_url":"http://localhost","watch_entities":"\u{b}".repeat(4096),
@@ -802,4 +805,205 @@ fn ha_roles_are_opt_in_and_survive_schema_rollback(
         initial_startup.values
     );
     assert_eq!(cleared.secrets, initial.secrets);
+}
+
+#[test]
+fn structured_editor_metadata_is_bounded_and_values_are_validated_without_echoing_secrets() {
+    let field = json!({"type":"string","writeOnly":true,"x-editor":{"kind":"json","schema":{
+        "type":"object","maxProperties":2,"additionalProperties":{"type":"string","maxLength":128}
+    }}});
+    let metadata = manifest(json!({"type":"object","properties":{"private_map":field}}));
+    let schema = SettingsSchema::compile(&metadata).unwrap();
+    let secret = r#"{"front":"https://private.invalid/live"}"#;
+    let data = schema
+        .merge(
+            "archive",
+            &SettingsData::default(),
+            "archive:0",
+            BTreeMap::new(),
+            BTreeMap::from([("private_map".into(), Some(secret.into()))]),
+        )
+        .unwrap();
+    let view = serde_json::to_value(schema.view(&metadata, "archive", &data).unwrap()).unwrap();
+    assert_eq!(view["fields"][0]["editor"]["kind"], "json");
+    assert_eq!(view["secret_present"]["private_map"], true);
+    assert!(view["values"].get("private_map").is_none());
+    assert!(!view.to_string().contains("private.invalid"));
+    assert_eq!(
+        schema.configuration(&data).unwrap().secrets["private_map"],
+        secret
+    );
+    for invalid in [
+        r#"{"front":{"private":"never-echo-this"}}"#,
+        r#"{"a":"1","b":"2","c":"3"}"#,
+        "never-echo-this",
+    ] {
+        let result = schema.merge(
+            "archive",
+            &data,
+            &format!("archive:{}", data.revision),
+            BTreeMap::new(),
+            BTreeMap::from([("private_map".into(), Some(invalid.into()))]),
+        );
+        assert!(result.is_err());
+        assert!(!result.err().unwrap().contains("never-echo-this"));
+        assert_eq!(data.secrets["private_map"], secret);
+    }
+    for editor in [
+        json!({"kind":"html","schema":{"type":"string"}}),
+        json!({"kind":"json","schema":{"type":"string","$ref":"https://invalid"}}),
+        json!({"kind":"json","schema":{"type":"array","maxItems":129,"items":{"type":"string"}}}),
+        json!({"kind":"json","schema":{"type":"object","properties":{"__proto__":{"type":"string"}}}}),
+        json!({"kind":"json","schema":{"type":"string","x-options-multiple":true}}),
+        json!({"kind":"json","schema":{"type":"string","enum":[true]}}),
+        json!({"kind":"json","schema":{"type":"integer","enum":[1,1]}}),
+    ] {
+        let metadata = manifest(
+            json!({"type":"object","properties":{"layout":{"type":"string","x-editor":editor}}}),
+        );
+        assert!(SettingsSchema::compile(&metadata).is_err());
+    }
+    let mut nested = json!({"type":"string"});
+    for _ in 0..10 {
+        nested = json!({"type":"array","items":nested});
+    }
+    assert!(SettingsSchema::compile(&manifest(json!({"type":"object","properties":{"layout":{"type":"string","x-editor":{"kind":"json","schema":nested}}}}))).is_err());
+}
+
+#[test]
+fn installed_ha_editor_accepts_complete_layout_and_keeps_atomic_envelope_limits() {
+    let package: Value = serde_json::from_str(include_str!(
+        "../../../scripts/plugins/home-assistant-manifest.json"
+    ))
+    .unwrap();
+    let metadata = manifest(package["config_schema"].clone());
+    let schema = SettingsSchema::compile(&metadata).unwrap();
+    let controls: Vec<_>=(0..64).map(|index| json!({"id":format!("control-{index}"),"surface":"home","order":index,"label":"L".repeat(128),"entity":format!("light.room_{index}{}", "x".repeat(70)),"icon":"light"})).collect();
+    let layout = json!({"version":1,"controls":controls,"sections":{},"appliances":{}}).to_string();
+    assert!(layout.len() > 16 * 1024);
+    assert!(layout.len() < 24 * 1024);
+    let data = schema
+        .merge(
+            "archive",
+            &SettingsData::default(),
+            "archive:0",
+            BTreeMap::from([
+                ("ha_base_url".into(), json!("https://ha.invalid")),
+                ("dashboard_layout".into(), json!(layout)),
+            ]),
+            BTreeMap::from([("ha_token".into(), Some("private-token".into()))]),
+        )
+        .unwrap();
+    schema.configuration(&data).unwrap();
+    let view = serde_json::to_value(schema.view(&metadata, "archive", &data).unwrap()).unwrap();
+    let fields = view["fields"].as_array().unwrap();
+    let selection = fields
+        .iter()
+        .find(|field| field["key"] == "watch_entities")
+        .unwrap();
+    assert_eq!(selection["options_source"], "entities");
+    assert_eq!(selection["options_multiple"], true);
+    let layout_field = fields
+        .iter()
+        .find(|field| field["key"] == "dashboard_layout")
+        .unwrap();
+    assert_eq!(
+        layout_field["editor"]["schema"]["properties"]["controls"]["items"]["properties"]["entity"]
+            ["x-options-source"],
+        "entities"
+    );
+    let mut values = data.values.clone();
+    values.insert("dashboard_layout".into(), json!("x".repeat(MAX_STRING + 1)));
+    assert!(schema
+        .merge(
+            "archive",
+            &data,
+            &format!("archive:{}", data.revision),
+            values,
+            BTreeMap::new()
+        )
+        .is_err());
+    assert_eq!(data.values["dashboard_layout"], layout);
+    // Each field fits its own scalar ceiling; the complete escaped worker envelope does not.
+    let mut values = data.values.clone();
+    values.insert("watch_entities".into(), json!("\n".repeat(8255)));
+    let candidate = schema
+        .merge(
+            "archive",
+            &data,
+            &format!("archive:{}", data.revision),
+            values,
+            BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(schema.configuration(&candidate).is_err());
+    assert!(schema.configuration(&data).is_ok());
+}
+
+#[test]
+fn partial_restore_validates_supplied_values_and_never_classifies_secret_values_as_public() {
+    let metadata = configured_manifest();
+    let schema = SettingsSchema::compile(&metadata).unwrap();
+    let mut data = SettingsData::default();
+    data.values
+        .insert("endpoint".into(), json!("https://restored.example.invalid"));
+    schema.seed_configuration(&data).unwrap();
+    assert!(schema.configuration(&data).is_err());
+    data.values
+        .insert("token".into(), json!("must-remain-private"));
+    assert!(schema.seed_configuration(&data).is_err());
+    assert!(schema.view(&metadata, "digest", &data).is_err());
+    data.values.remove("token");
+    data.values.insert("port".into(), json!(70000));
+    assert!(schema.seed_configuration(&data).is_err());
+}
+
+#[test]
+fn omitted_defaults_preserve_view_values_without_expanding_old_records_or_worker_frames() {
+    let metadata = manifest(
+        json!({"type":"object","additionalProperties":false,"properties":{
+            "notify":{"type":"boolean","default":false,"omitDefault":true},
+            "layout":{"type":"string","default":"empty-layout","omitDefault":true}
+        }}),
+    );
+    let schema = SettingsSchema::compile(&metadata).unwrap();
+    let original = SettingsData::default();
+    let view = schema.view(&metadata, "archive", &original).unwrap();
+    assert_eq!(view.values["notify"], false);
+    assert_eq!(view.values["layout"], "empty-layout");
+    let saved = schema
+        .merge(
+            "archive",
+            &original,
+            &view.revision,
+            view.values,
+            BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(saved == original);
+    assert_eq!(schema.configuration(&saved).unwrap().values, json!({}));
+    let mut changed = saved;
+    changed.values.insert("notify".into(), json!(true));
+    assert_eq!(
+        schema.configuration(&changed).unwrap().values,
+        json!({"notify":true})
+    );
+    for (key, field) in [
+        (
+            "required",
+            json!({"type":"boolean","default":false,"omitDefault":true}),
+        ),
+        ("no-default", json!({"type":"string","omitDefault":true})),
+        (
+            "secret",
+            json!({"type":"string","writeOnly":true,"omitDefault":true}),
+        ),
+    ] {
+        let mut schema = json!({"type":"object","properties":{}});
+        schema["properties"][key] = field;
+        if key == "required" {
+            schema["required"] = json!([key]);
+        }
+        assert!(SettingsSchema::compile(&manifest(schema)).is_err());
+    }
 }

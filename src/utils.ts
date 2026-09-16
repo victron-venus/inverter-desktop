@@ -69,22 +69,6 @@ export function formatTimestamp(tsString: string | undefined): string {
     .replace(',', '')
 }
 
-/** True when HA reports the entity exists but has no usable state. */
-export function isHaUnavailableState(state: string | null | undefined): boolean {
-  if (state === undefined || state === null) return false
-  const lower = String(state).trim().toLowerCase()
-  return !lower || lower === 'unavailable' || lower === 'unknown'
-}
-
-/** Map raw HA entity state to on / off / unavailable for toggles & home tiles. */
-export function normalizeHaToggleState(raw: string): 'on' | 'off' | 'unavailable' {
-  const lower = String(raw).trim().toLowerCase()
-  if (!lower || lower === 'unavailable' || lower === 'unknown') return 'unavailable'
-  // Covers / locks often use open/closed rather than on/off.
-  if (lower === 'on' || lower === 'open' || lower === 'opening' || lower === 'unlocked') return 'on'
-  return 'off'
-}
-
 /** Normalize boolean-like transport values without interpreting "false" as true. */
 export function coerceBoolean(value: unknown): boolean {
   return (

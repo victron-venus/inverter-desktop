@@ -5,12 +5,32 @@ use crate::state::readonly_contribution;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 
+#[derive(Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+struct Card {
+    item: Value,
+    #[serde(skip)]
+    observation: Option<crate::presentation::Observation>,
+}
+
+impl std::ops::Deref for Card {
+    type Target = Value;
+    fn deref(&self) -> &Value {
+        &self.item
+    }
+}
+impl std::ops::DerefMut for Card {
+    fn deref_mut(&mut self) -> &mut Value {
+        &mut self.item
+    }
+}
+
 const MAX_BOOTSTRAP_EVENTS: usize = 128;
 const MAX_SNAPSHOT_ENTRIES: usize = 4096;
 
 enum Phase {
     Dormant,
-    Bootstrap(BTreeMap<String, Option<Value>>),
+    Bootstrap(BTreeMap<String, Option<Card>>),
     Live,
     Failed,
 }
@@ -20,16 +40,19 @@ pub(crate) struct Discovery {
     prefixes: Vec<String>,
     capacity: usize,
     phase: Phase,
-    cards: BTreeMap<String, Value>,
+    cards: BTreeMap<String, Card>,
     next_id: u64,
     limited: bool,
 }
 
-fn project(name: &str, state: Option<&Value>) -> Option<Value> {
+fn project(name: &str, state: Option<&Value>) -> Option<Card> {
     let state = state.filter(|state| {
         state["entity_id"].as_str() == Some(name) && state["state"].as_str().is_some()
     })?;
-    Some(readonly_contribution(name, state))
+    Some(Card {
+        item: readonly_contribution(name, state),
+        observation: crate::presentation::Observation::from_state(name, Some(state)),
+    })
 }
 
 impl Discovery {
@@ -83,7 +106,17 @@ impl Discovery {
     }
 
     pub(crate) fn items(&self) -> impl Iterator<Item = &Value> {
-        self.cards.values()
+        self.cards.values().map(|card| &card.item)
+    }
+
+    pub(crate) fn rows(&self) -> impl Iterator<Item = crate::presentation::Row<'_>> {
+        self.cards
+            .iter()
+            .map(|(name, card)| crate::presentation::Row {
+                entity: name,
+                item: &card.item,
+                observation: card.observation.as_ref(),
+            })
     }
 
     pub(crate) fn live(&mut self, name: &str, state: Option<&Value>) -> bool {
@@ -123,7 +156,7 @@ impl Discovery {
         }
     }
 
-    fn insert(&mut self, name: String, mut item: Value) -> bool {
+    fn insert(&mut self, name: String, mut item: Card) -> bool {
         let Some(next_id) = self.next_id.checked_add(1) else {
             return self.failed();
         };
@@ -155,8 +188,8 @@ impl Discovery {
     fn select(
         &self,
         states: &[Value],
-        buffer: &BTreeMap<String, Option<Value>>,
-    ) -> Result<(BTreeMap<String, Value>, bool), ()> {
+        buffer: &BTreeMap<String, Option<Card>>,
+    ) -> Result<(BTreeMap<String, Card>, bool), ()> {
         if states.len() > MAX_SNAPSHOT_ENTRIES {
             return Err(());
         }
@@ -165,7 +198,7 @@ impl Discovery {
         let mut seen = HashSet::new();
         let mut cards = BTreeMap::new();
         let mut count = 0usize;
-        let mut include = |name: &str, item: Value| {
+        let mut include = |name: &str, item: Card| {
             count += 1;
             cards.insert(name.to_owned(), item);
             if cards.len() > self.capacity {

@@ -26,6 +26,9 @@ export const featureConfigSections: Array<{
 export const featureSetupAvailable = false
 export const isMobileApp = true
 export { featureDefaultConfig } from './defaults.mobile'
+export async function subscribeFeatureConfig(_config: AppConfig, _current: () => boolean) {
+  return () => {}
+}
 export function prepareFeatureConfig(_config: AppConfig) {
   // Mobile preserves opaque desktop settings without interpreting or normalizing them.
 }
@@ -36,6 +39,7 @@ export const featureConnection = { async connect(_config: AppConfig) {}, cleanup
 export function useDashboardFeatures() {
   return {
     allowHomeControls: false,
+    mergeControls: (_surface: 'header' | 'home', controls: DashboardControl[]) => controls,
     getControlLabel: (label: string) => label,
     getControlIcon: (_entity: string, _label: string): Component | null => null,
     controlsConnected: ref(true),

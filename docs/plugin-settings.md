@@ -4,9 +4,18 @@ Verified installed desktop packages have isolated settings. Installation can use
 an exact archive pin in application configuration or a manually reviewed signed
 package. Configured downloads need no publisher or application signing keys;
 the empty publisher policy keeps manual signed-file selection unavailable.
-Legacy Home Assistant/camera settings are not migrated automatically. Android
+Native handover can seed legacy Home Assistant/camera settings only for an
+explicitly installed or declared matching package. Existing plugin records remain
+authoritative; preserved legacy fields do not install or enable anything. Android
 and iOS preserve package declarations as dormant configuration data but include
 none of this editor, native commands, storage adapter, or worker protocol.
+
+The extraction build requires compatible package pins for the familiar feature
+views: Home Assistant **0.13 or later**, Frigate **0.3 or later** for the Cameras
+group, and Kerberos/Ring **0.1 or later**. Existing pins remain authoritative and
+are not automatically upgraded with the app. Publish and select the matching
+archive URL/checksum for each installed desktop target before recording upgrade
+acceptance; older workers do not gain compact presentation from an app update.
 
 ## Application declarations and restoration
 
@@ -24,9 +33,10 @@ newer package releases automatically.
 
 An application upgrade or reinstall that preserves its data preserves both the
 declarations and the encrypted plugin records. A portable application backup
-includes declarations; restoring it on a clean installation lets desktop fetch
-the packages again. It does not restore plugin settings or credentials from a
-wiped installation. Missing required settings leave a newly installed package
+includes declarations and current public plugin settings in versioned module
+namespaces; restoring it on a clean installation lets desktop fetch the packages
+and seed their settings again. Credentials are not exported and cannot be
+recovered from a portable backup. Missing required settings leave a newly installed package
 stopped and visible in the manager. Saving valid settings retries activation when
 the declaration requests `enabled: true`. A declaration with `enabled: false`
 keeps the package stopped after settings changes.
@@ -46,13 +56,20 @@ desktop rejects unknown declaration fields before interpreting or installing the
 **Configuration → Plugins → Settings** is available for an installed package
 whose manifest declares `plugin_configuration`. Native code reverifies its
 archive before reading or changing settings. Only the authenticated settings
-window can call `get_plugin_settings` and `save_plugin_settings`.
+window can call `get_plugin_settings`, `save_plugin_settings`, and
+`get_plugin_settings_choices`.
 
-The editor supports text, password, boolean, numeric, and enumerated fields.
+The editor supports text, password, boolean, numeric, and enumerated fields,
+plus schema-described structured objects/arrays carried as scalar JSON strings.
+These appear as normal fields, repeatable rows, and key/value mappings rather
+than a raw JSON product editor. Entity fields can offer worker-published choices
+and domain-prefix filtering while retaining exact existing selections.
 Descriptions and titles are plain text. Secrets start blank; a presence indicator
 shows whether one is stored. Leaving a secret unchanged preserves it; entering a
 replacement updates it; explicit clearing removes it. Password drafts are cleared
-on save, cancel, editor teardown, and session changes. No stored secret is sent
+on save, cancel, editor teardown, and session changes. Secret mappings start blank
+until an explicit replacement is selected; editing replaces the complete map and
+never reveals previously stored entries. No stored secret is sent
 back to the webview, returned as a default, or included in runtime snapshots.
 
 The native response revision binds the active archive SHA-256 and encrypted data
@@ -104,9 +121,9 @@ prototype names. Titles occupy at most 128 bytes and descriptions at most 512.
 
 Field types are `string`, `boolean`, `number`, and `integer`. Strings support
 `minLength`, `maxLength`, and at most 32 unique string `enum` choices. Length bounds
-count Unicode characters, while every string also has a hard 16,384-byte UTF-8
-limit in host API 1.7 (4,096 bytes in earlier hosts). Packages needing the larger
-limit must require a compatible host API. The complete transmitted configuration
+count Unicode characters, while every string also has a hard UTF-8
+limit of 24,576 bytes in host API 1.8 (16,384 in 1.7 and 4,096 earlier). Packages
+needing the larger limit must require a compatible host API. The complete transmitted configuration
 and encrypted settings data retain their separate 32 KiB limits.
 Numeric fields support finite `minimum` and `maximum`; integers must be
 integral and within the JavaScript safe-integer range. Optional `default` values must satisfy their field constraints.
@@ -125,6 +142,12 @@ This permits new optional selections without enlarging existing configuration
 or saved data when those selections are empty. Existing stored empty values
 are normalized on the next explicit save; opening settings does not rewrite data.
 
+Host API 1.8 adds `omitDefault: true` for optional public scalar fields with an
+explicit default. Exact defaults remain visible in the editor but are omitted
+from storage and startup configuration, preserving older full-size envelopes as
+new defaulted fields are introduced. Workers must implement the same absent-field
+default; explicit nondefault values, including empty opt-outs, remain intact.
+
 `writeOnly: true` denotes a secret string. Secrets cannot have defaults or enum
 choices. The `required` list checks presence; use `minLength: 1` to reject empty
 strings. Opening settings permits incomplete setup. Save and worker startup
@@ -132,10 +155,44 @@ enforce required values. An optional field omitted from a save takes its default
 if one exists; otherwise it is cleared. Omitted secret changes preserve the
 existing secret. Secret changes accept a replacement string or explicit null.
 
-Arrays, nested objects, references, remote schema loading, regular expressions,
-conditional schemas, scripts, and arbitrary frontend code are unsupported. More
-complex camera/entity configuration needs a later contract extension; this
-checkpoint does not claim feature parity for those integrations.
+Top-level settings remain scalar. A string may declare an `x-editor` extension:
+
+```json
+{
+  "type": "string",
+  "maxLength": 8192,
+  "x-editor": {
+    "kind": "json",
+    "schema": {
+      "type": "object",
+      "maxProperties": 32,
+      "additionalProperties": { "type": "string", "maxLength": 128 }
+    }
+  }
+}
+```
+
+The editor serializes that structure into the original string, and native save
+validates both the string bounds and the contained structure. Supported nested
+keywords are `type`, `title`, `description`, `properties`, `required`,
+`additionalProperties`, `items`, `minItems`, `maxItems`, `maxProperties`,
+`minLength`, `maxLength`, `minimum`, `maximum`, `enum`, `default`, and `const`.
+The schema is bounded to eight levels, 256 nodes, and 128 entries per object/array.
+Unsupported schema keywords, malformed JSON, prototype keys, invalid defaults,
+and oversized values fail without overwriting the saved record. The complete
+32 KiB configuration/storage limits still apply across all fields; a field's
+24 KiB limit is not an entitlement to exceed the envelope. No truncation occurs.
+
+String fields may name `x-options-source`, optional `x-options-prefixes`, and
+`x-options-multiple: true` for CSV selection. The same metadata is supported on
+nested string fields. The authenticated editor reads the current generation's
+catalog through `get_plugin_settings_choices` when opened or retried. Worker
+catalog publication is bounded and read-only: choosing an entity changes a draft,
+not action authority, and saving still restarts/validates through native settings.
+Unavailable suggestions do not erase manually entered or restored selections.
+
+References, remote schema loading, regular expressions, conditional schemas,
+scripts, and arbitrary frontend code remain unsupported.
 
 Unknown fields already stored on disk survive schema changes but are withheld
 from both the editor and worker. Fields once recorded as secret keep a permanent
@@ -155,7 +212,9 @@ between plugins or with core configuration.
 
 The encryption key comes from the application's existing protected key provider.
 This introduces no extra keychain entry or change to legacy credential migration.
-Plugin records are separate from portable application exports. Merely constructing the store or
+Encrypted plugin records are never copied into portable exports. Desktop export
+instead snapshots their public settings into versioned module namespaces, omitting
+secret values and permanent secret classifications from the public payload. Merely constructing the store or
 reading missing settings does not create files or request a key. A corrupt record
 or unavailable key is an explicit failure; neither silently resets settings.
 
