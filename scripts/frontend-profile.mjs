@@ -46,9 +46,9 @@ export function featureAliases(root, profile) {
   }
 }
 
-// Include the legacy entry points until their implementations have all moved.
 // A direct import added to a shared screen must fail the mobile build, even when
 // the UI would be hidden by a runtime setting or the module is tree-shaken later.
+// Keep removed entry points in the guard to catch accidental reintroduction.
 export const desktopModulePatterns = [
   /^(?:desktop-plugins|scripts\/plugins)\//,
   /^src\/features\/desktop[/.]/,
@@ -59,6 +59,26 @@ export const desktopModulePatterns = [
   /^src\/composables\/useDashboardControlsConfig\.ts$/,
   /^src\/components\/(?:HaEntitiesEditor|EntityAutocompleteInput)\.vue$/,
 ]
+
+// Core ships a generic desktop host. Provider implementations and worker package
+// metadata belong exclusively to separately installed archives on every platform.
+export const extractedModulePatterns = [
+  /^(?:desktop-plugins|scripts\/plugins)\//,
+  /^src\/(?:CameraVideo\.vue|types\/ha\.ts)$/,
+  /^src\/composables\/(?:useHA|useDashboardControlsConfig)\.ts$/,
+  /^src\/components\/(?:HaEntitiesEditor|EntityAutocompleteInput)\.vue$/,
+  /^src\/features\/desktop\/(?:CameraAction|CameraStatus|DashboardPanels|DiscoveryDialog|HomeControlsEditor|HomePanels|HomeStatus|IntegrationConfig|SectionVisibility|Setup)\.vue$/,
+  /^src\/features\/desktop\/(?:cameraConnection|homeNotifications|ha|camera)(?:\.ts|\/)/,
+]
+
+export function assertCoreModuleGraph(modules) {
+  const forbidden = modules.filter((id) =>
+    extractedModulePatterns.some((pattern) => pattern.test(id))
+  )
+  if (forbidden.length) {
+    throw new Error(`Bundled provider modules in core build:\n${forbidden.join('\n')}`)
+  }
+}
 
 export function assertMobileModuleGraph(modules) {
   const forbidden = modules.filter((id) =>
@@ -92,6 +112,7 @@ export function frontendProfileAudit(root, profile) {
       ].sort((left, right) => left.localeCompare(right, 'en'))
       if (!modules.includes('src/main.ts')) throw new Error('Frontend module graph is empty')
       if (profile === 'mobile') assertMobileModuleGraph(modules)
+      assertCoreModuleGraph(modules)
       this.emitFile({
         type: 'asset',
         fileName: 'build-profile.json',

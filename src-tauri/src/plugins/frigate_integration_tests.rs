@@ -61,7 +61,7 @@ impl Broker {
         broker
     }
 
-    async fn start(&mut self) {
+    pub(super) async fn start(&mut self) {
         assert!(self.child.is_none());
         let output = fs::OpenOptions::new()
             .create(true)
@@ -91,7 +91,7 @@ impl Broker {
         .expect("private loopback MQTT broker must become ready");
     }
 
-    fn stop(&mut self) {
+    pub(super) fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             child.wait().unwrap();
@@ -103,7 +103,7 @@ impl Broker {
             .await;
     }
 
-    async fn publish_bytes(&self, topic: &str, payload: &[u8], retained: bool) {
+    pub(super) async fn publish_bytes(&self, topic: &str, payload: &[u8], retained: bool) {
         timeout(WAIT, async {
             let mut stream = TcpStream::connect(("127.0.0.1", self.port)).await.unwrap();
             // A tiny MQTT 3.1.1 producer keeps this acceptance fixture independent
@@ -434,116 +434,15 @@ async fn signed_frigate_package_real_mqtt_lifecycle() {
     service.close().await.unwrap();
 }
 
-/// Loopback byte fixture. It does not establish MP4 decoding or OS presentation.
-struct ClipOrigin {
-    base: String,
-    body: Arc<Vec<u8>>,
-    paths: tokio::sync::mpsc::Receiver<String>,
-    release: tokio::sync::watch::Sender<bool>,
-    task: tokio::task::JoinHandle<()>,
-}
-
-impl ClipOrigin {
-    async fn new() -> Self {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}/frigate-prefix/", listener.local_addr().unwrap());
-        let mut bytes: Vec<u8> = (0..1024 * 1024 + 128)
-            .map(|index| (index % 251) as u8)
-            .collect();
-        bytes[..12].copy_from_slice(b"\0\0\0\x18ftypisom");
-        let body = Arc::new(bytes);
-        let served = body.clone();
-        let (paths, receiver) = tokio::sync::mpsc::channel(8);
-        let (release, mut released) = tokio::sync::watch::channel(false);
-        let task = tokio::spawn(async move {
-            // Exactly bounded acceptance traffic; no production endpoint or credentials.
-            for _ in 0..8 {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    return;
-                };
-                let mut headers = Vec::new();
-                timeout(WAIT, async {
-                    while !headers.ends_with(b"\r\n\r\n") {
-                        assert!(headers.len() < 8192, "HTTP fixture request bound");
-                        let mut byte = [0];
-                        stream.read_exact(&mut byte).await.unwrap();
-                        headers.push(byte[0]);
-                    }
-                })
-                .await
-                .expect("HTTP request headers must arrive");
-                let headers = String::from_utf8(headers).unwrap();
-                let path = headers
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .strip_prefix("GET ")
-                    .unwrap()
-                    .strip_suffix(" HTTP/1.1")
-                    .unwrap()
-                    .to_owned();
-                let lower = headers.to_ascii_lowercase();
-                assert!(!lower.contains("\r\nauthorization:") && !lower.contains("\r\ncookie:"));
-                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", served.len());
-                timeout(WAIT, stream.write_all(response.as_bytes()))
-                    .await
-                    .unwrap()
-                    .unwrap();
-                if path.contains("/stalled/") {
-                    // Publish the observation only after all but the final byte
-                    // has entered the socket; the download cannot yet complete.
-                    timeout(WAIT, stream.write_all(&served[..served.len() - 1]))
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    assert!(paths.send(path).await.is_ok());
-                    timeout(WAIT, released.wait_for(|release| *release))
-                        .await
-                        .expect("test must release stalled HTTP fixture")
-                        .unwrap();
-                    let _ = timeout(WAIT, stream.write_all(&served[served.len() - 1..])).await;
-                } else {
-                    timeout(WAIT, stream.write_all(&served))
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    assert!(paths.send(path).await.is_ok());
-                }
-                let _ = stream.shutdown().await;
-            }
-        });
-        Self {
-            base,
-            body,
-            paths: receiver,
-            release,
-            task,
-        }
-    }
-
-    async fn path(&mut self) -> String {
-        timeout(WAIT, self.paths.recv())
-            .await
-            .unwrap()
-            .expect("real clip HTTP request")
-    }
-}
-
-impl Drop for ClipOrigin {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
 /// This collector acknowledges simulated windows only. Native window creation,
 /// stacking, playback and presentation require their separate platform checks.
-struct ClipWindows {
+struct PreviewWindows {
     ready: tokio::sync::mpsc::Receiver<super::media::ReadyMedia>,
     closed: tokio::sync::mpsc::Receiver<(String, tokio::sync::oneshot::Sender<()>)>,
     task: tokio::task::JoinHandle<()>,
 }
 
-impl ClipWindows {
+impl PreviewWindows {
     fn new(
         media: super::media::MediaService,
         mut events: tokio::sync::mpsc::Receiver<super::media::MediaEvent>,
@@ -589,10 +488,10 @@ impl ClipWindows {
         let ready = timeout(WAIT, self.ready.recv())
             .await
             .unwrap()
-            .expect("completed owned clip");
+            .expect("owned live preview");
         assert!(
             ready.error.is_none(),
-            "fixture download must complete successfully"
+            "live preview must not enter the download path"
         );
         ready
     }
@@ -607,7 +506,7 @@ impl ClipWindows {
     }
 }
 
-impl Drop for ClipWindows {
+impl Drop for PreviewWindows {
     fn drop(&mut self) {
         self.task.abort();
     }
@@ -684,7 +583,7 @@ fn completed_motion(id: &str, camera: &str) -> Value {
     json!({"type":"end","after":{"id":id,"camera":camera,"has_clip":true,"start_time":now - 3600.0,"end_time":now}})
 }
 
-async fn configure_clips(
+async fn configure_preview(
     service: &PackageApplication,
     epoch: u64,
     broker: &Broker,
@@ -711,7 +610,7 @@ async fn configure_clips(
     assert!(serde_json::to_value(saved).unwrap()["restart_error"].is_null());
 }
 
-async fn submit_clip(
+async fn submit_live(
     host: &PluginHost,
     media: &super::media::MediaService,
 ) -> super::generation::GenerationLease {
@@ -725,9 +624,10 @@ async fn submit_clip(
         }
     })
     .await
-    .expect("real worker must emit an authorized HTTP clip request");
+    .expect("real worker must emit an authorized HTTP live request");
     assert_eq!(requests.len(), 1);
     let request = requests.pop().unwrap();
+    assert!(request.live_preview);
     let lease = request.lease.clone();
     media.try_submit(request).unwrap();
     lease
@@ -748,102 +648,58 @@ async fn expect_media_empty(media: &super::media::MediaService, root: &Path) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires explicitly built INVERTER_FRIGATE_WORKER and local MOSQUITTO_BIN; CI runs this clip acceptance test"]
-async fn signed_frigate_package_real_mqtt_clip_lifecycle() {
+#[ignore = "requires explicitly built INVERTER_FRIGATE_WORKER and local MOSQUITTO_BIN; CI runs this live acceptance test"]
+async fn signed_frigate_package_real_mqtt_live_lifecycle() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let broker = Broker::new(&root).await;
     let mut telemetry = TelemetryProbe::new(&broker).await;
-    let mut origin = ClipOrigin::new().await;
+    let base = "http://127.0.0.1:1/frigate-prefix/";
     let (media, events) = super::media::MediaService::new();
-    let mut windows = ClipWindows::new(media.clone(), events);
+    let mut windows = PreviewWindows::new(media.clone(), events);
     let (service, host, epoch) = installed_application_with_media(&root, Some(media.clone())).await;
-    configure_clips(&service, epoch, &broker, TOPIC, &origin.base).await;
+    configure_preview(&service, epoch, &broker, TOPIC, base).await;
     service.set_enabled(PLUGIN, true, epoch).await.unwrap();
     wait_connection(&host, "Connected").await;
     telemetry.assert_live(&broker, 0).await;
 
     let mut notices = Vec::new();
-    broker.publish(TOPIC, motion("first clip", "front")).await;
+    broker.publish(TOPIC, motion("first live", "front")).await;
+    let first_lease = submit_live(&host, &media).await;
     expect_count(&host, &mut notices, 1).await;
-    broker
-        .publish(TOPIC, completed_motion("first clip", "front"))
-        .await;
-    let first_lease = submit_clip(&host, &media).await;
-    expect_count(&host, &mut notices, 2).await;
     assert_eq!(notices[0].body, "Motion started");
-    assert_eq!(notices[1].body, "Camera motion clip available");
-    assert_ne!(notices[0].id, notices[1].id);
-    assert_eq!(
-        origin.path().await,
-        "/frigate-prefix/api/events/first%20clip/clip.mp4"
-    );
     let first = windows.next_ready().await;
-    let range = media
-        .read_range(
-            &first.media_id,
-            &first.window_label,
-            Some("bytes=0-"),
-            false,
-        )
-        .await
-        .unwrap();
-    assert_eq!(range.status, 206);
     assert_eq!(
-        range.content_range,
-        Some(format!("bytes 0-1048575/{}", origin.body.len()))
+        first.live_url.as_ref().unwrap().as_str(),
+        "http://127.0.0.1:1/frigate-prefix/api/front?fps=2&height=360"
     );
-    assert_eq!(range.bytes.len(), 1024 * 1024);
-    assert_eq!(range.bytes, origin.body[..1024 * 1024]);
-    drop(range);
-    let tail = media
-        .read_range(
-            &first.media_id,
-            &first.window_label,
-            Some("bytes=1048576-"),
-            false,
-        )
-        .await
-        .unwrap();
-    assert_eq!(tail.bytes, origin.body[1024 * 1024..]);
-    drop(tail);
+    assert!(first.window_label.starts_with("plugin-preview-"));
     assert!(media
-        .read_range(&first.media_id, "main", Some("bytes=0-1"), false)
+        .read_range(&first.media_id, &first.window_label, None, false)
         .await
         .is_err());
-    let head = media
-        .read_range(&first.media_id, &first.window_label, None, true)
-        .await
-        .unwrap();
-    assert_eq!(head.content_length, origin.body.len() as u64);
-    assert!(head.bytes.is_empty());
-    drop(head);
     broker
-        .publish(TOPIC, completed_motion("first clip", "front"))
+        .publish(TOPIC, completed_motion("first live", "front"))
         .await;
-    expect_quiet(&host, &mut notices, 2).await;
-    assert!(host.take_http_video_requests().is_empty());
+    expect_quiet(&host, &mut notices, 1).await;
+    assert!(
+        host.take_http_video_requests().is_empty(),
+        "end event cannot download or open a second clip on host 1.8"
+    );
 
-    // Saving settings restarts the actual signed worker and invalidates its
-    // existing media before the simulated native Close acknowledgement.
-    configure_clips(&service, epoch, &broker, NEXT_TOPIC, &origin.base).await;
+    // Settings replacement revokes the original instance before native absence.
+    configure_preview(&service, epoch, &broker, NEXT_TOPIC, base).await;
     assert!(!first_lease.is_active());
     assert!(!media.is_window_active(&first.media_id, &first.window_label));
     windows.expect_closed(&first.window_label).await;
     expect_media_empty(&media, &root).await;
     wait_connection(&host, "Connected").await;
     telemetry.assert_live(&broker, 1).await;
-    broker
-        .publish(NEXT_TOPIC, completed_motion("second", "back"))
-        .await;
-    let second_lease = submit_clip(&host, &media).await;
+    broker.publish(NEXT_TOPIC, motion("second", "back")).await;
+    let second_lease = submit_live(&host, &media).await;
     assert_ne!(first_lease.instance_id(), second_lease.instance_id());
-    assert_eq!(
-        origin.path().await,
-        "/frigate-prefix/api/events/second/clip.mp4"
-    );
     let second = windows.next_ready().await;
-    expect_count(&host, &mut notices, 3).await;
+    expect_count(&host, &mut notices, 2).await;
     service.set_enabled(PLUGIN, false, epoch).await.unwrap();
     assert!(!second_lease.is_active());
     assert!(!media.is_window_active(&second.media_id, &second.window_label));
@@ -853,48 +709,31 @@ async fn signed_frigate_package_real_mqtt_clip_lifecycle() {
 
     service.set_enabled(PLUGIN, true, epoch).await.unwrap();
     wait_connection(&host, "Connected").await;
-    broker
-        .publish(NEXT_TOPIC, completed_motion("stalled", "garage"))
-        .await;
-    let stalled_lease = submit_clip(&host, &media).await;
-    assert_eq!(
-        origin.path().await,
-        "/frigate-prefix/api/events/stalled/clip.mp4"
-    );
-    expect_count(&host, &mut notices, 4).await;
-    assert!(
-        windows.ready.try_recv().is_err(),
-        "partial HTTP body cannot become Ready"
-    );
-    service.set_enabled(PLUGIN, false, epoch).await.unwrap();
-    assert!(!stalled_lease.is_active());
-    origin.release.send_replace(true);
+    broker.publish(NEXT_TOPIC, motion("logout", "garage")).await;
+    let logout_lease = submit_live(&host, &media).await;
+    let logout_preview = windows.next_ready().await;
+    expect_count(&host, &mut notices, 3).await;
+    assert!(service.session_changed(false).is_none());
+    assert!(!logout_lease.is_active());
+    assert!(!media.is_window_active(&logout_preview.media_id, &logout_preview.window_label));
+    windows.expect_closed(&logout_preview.window_label).await;
     expect_media_empty(&media, &root).await;
-    assert!(
-        windows.ready.try_recv().is_err(),
-        "late HTTP completion must not open a window"
-    );
     telemetry.assert_live(&broker, 3).await;
 
-    service.set_enabled(PLUGIN, true, epoch).await.unwrap();
+    let epoch = service.session_changed(true).unwrap();
+    service.restore(epoch).await.unwrap();
     wait_connection(&host, "Connected").await;
-    broker
-        .publish(NEXT_TOPIC, completed_motion("final", "side"))
-        .await;
-    let final_lease = submit_clip(&host, &media).await;
-    assert_eq!(
-        origin.path().await,
-        "/frigate-prefix/api/events/final/clip.mp4"
-    );
-    let final_clip = windows.next_ready().await;
-    expect_count(&host, &mut notices, 5).await;
+    broker.publish(NEXT_TOPIC, motion("final", "side")).await;
+    let final_lease = submit_live(&host, &media).await;
+    let final_preview = windows.next_ready().await;
+    expect_count(&host, &mut notices, 4).await;
     service
         .uninstall_with_settings(PLUGIN, true, epoch)
         .await
         .unwrap();
     assert!(!final_lease.is_active());
-    assert!(!media.is_window_active(&final_clip.media_id, &final_clip.window_label));
-    windows.expect_closed(&final_clip.window_label).await;
+    assert!(!media.is_window_active(&final_preview.media_id, &final_preview.window_label));
+    windows.expect_closed(&final_preview.window_label).await;
     expect_media_empty(&media, &root).await;
     assert!(host.snapshots().is_empty());
     assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
@@ -903,9 +742,5 @@ async fn signed_frigate_package_real_mqtt_clip_lifecycle() {
     assert!(
         !windows.task.is_finished(),
         "simulated adapter must survive through cleanup"
-    );
-    assert!(
-        !origin.task.is_finished(),
-        "HTTP fixture must not have failed silently"
     );
 }

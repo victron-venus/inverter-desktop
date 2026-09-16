@@ -1,6 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import CameraVideo from '../../../CameraVideo.vue'
+import CameraVideo from './PluginMedia.vue'
 
 const native = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -241,18 +241,14 @@ describe('native-owned plugin video player', () => {
     expect(native.invoke).not.toHaveBeenCalled()
   })
 
-  it('preserves the bundled image timeout when a legacy image fails to load', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  it('rejects legacy local file routes after provider extraction', async () => {
     const wrapper = await player(
       { localPath: '/private/legacy.jpg', media: 'image' },
       'camera-video-legacy'
     )
-    expect(native.convertFileSrc).toHaveBeenCalledExactlyOnceWith('/private/legacy.jpg')
-    await wrapper.get('img').trigger('error')
-    await vi.advanceTimersByTimeAsync(11999)
-    expect(native.close).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(1)
-    expect(native.close).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('This video window is unavailable.')
+    expect(wrapper.find('img, video').exists()).toBe(false)
+    expect(native.convertFileSrc).not.toHaveBeenCalled()
     expect(native.invoke).not.toHaveBeenCalled()
   })
 })

@@ -88,5 +88,10 @@
     "ready": "Ready",
     "disabled": "Installed, disabled",
     "failed": "Restoration needs attention"
-  }
+  },
+  "replaceSecret": "Replace stored value",
+  "cancelReplacement": "Cancel replacement",
+  "invalidStructuredSetting": "This saved value cannot be edited with the installed settings schema. It has been preserved.",
+  "refreshChoices": "Refresh available choices",
+  "choicesUnavailable": "Choices are unavailable. You can still enter exact values."
 }

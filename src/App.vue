@@ -182,10 +182,12 @@ const {
 } = useConnection()
 const features = useDashboardFeatures()
 const { controlsConnected } = features
-const { headerControls, headerControlStates, homeButtons, homeButtonStates } = useDashboardControls(
-  features.getControlState,
-  features.allowHomeControls
+const coreControls = useDashboardControls(features.getControlState, features.allowHomeControls)
+const { headerControlStates, homeButtonStates } = coreControls
+const headerControls = computed(() =>
+  features.mergeControls('header', coreControls.headerControls.value)
 )
+const homeButtons = computed(() => features.mergeControls('home', coreControls.homeButtons.value))
 const { setInverterWindowHidden, cleanupInverterVisibility } = useInverterVisibility()
 const {
   waterLevel,

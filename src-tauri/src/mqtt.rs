@@ -7,14 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
-#[cfg(desktop)]
-use crate::ha_api::HaEntityEntry;
-#[cfg(desktop)]
-mod camera_events;
-#[cfg(desktop)]
-use camera_events::{
-    camera_topic_matches, parse_camera_mqtt_payload, split_camera_topics, CameraMqttAction,
-};
 mod cerbo;
 mod lifecycle;
 mod security;
@@ -984,15 +976,6 @@ pub struct MqttClient {
     /// Either side may be None — dbus-ev and dbus-evcharger are independent
     /// services, so the EV tile must populate if just one is configured.
     ev_instances: Option<(Option<u32>, Option<u32>)>,
-    #[cfg(desktop)]
-    camera_topic: Option<String>,
-    #[cfg(desktop)]
-    frigate_base_url: Option<String>,
-    /// HTTP(S) URL template for Ring-MQTT motion/ding snapshots.
-    /// Placeholders: `{device_id}`, `{location_id}`, `{event}` (motion|ding).
-    /// Example: `http://ha:8123/api/camera_proxy/camera.front_door_snapshot`
-    #[cfg(desktop)]
-    ring_snapshot_url_template: Option<String>,
     notifications: Arc<Mutex<NotificationState>>,
     alarms: Arc<Mutex<HashMap<String, u8>>>,
     /// Venus-platform notification slots (GUIv2 Notifications/[0-19]).
@@ -1001,8 +984,6 @@ pub struct MqttClient {
     /// banners are suppressed to avoid duplicate/generic "Dvcc alarm" text.
     platform_notifs_seen: Arc<std::sync::atomic::AtomicBool>,
     status_event: String,
-    #[cfg(desktop)]
-    ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
     /// Throttled last-good EV sample cache (see EvCache docs). Wrapped in
     /// Mutex so the run_mqtt_loop closure can hold an Arc clone.
     ev_cache: Arc<Mutex<EvCache>>,
@@ -1267,43 +1248,6 @@ fn fmt_watts(v: f64) -> String {
     }
 }
 
-/// Resolve an HA entity's friendly_name, falling back to the entity_id.
-#[cfg(desktop)]
-fn entity_friendly_name(entry: &HaEntityEntry) -> Option<String> {
-    entry
-        .attributes
-        .as_ref()
-        .and_then(|a| a.get("friendly_name"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-/// Find the HA friendly name for a load key (e.g. `stove` → `sensor.stove_power`'s friendly name).
-/// Matches full entity ids, exact trailing segments, or ids containing the load as a segment,
-/// preferring the most specific (shortest) entity id.
-#[cfg(desktop)]
-fn load_friendly_name(
-    load: &str,
-    entity_states: &HashMap<String, HaEntityEntry>,
-) -> Option<String> {
-    let load_lower = load.to_lowercase();
-    let mut best: Option<(String, usize)> = None;
-    for (entity_id, entry) in entity_states {
-        let Some(name) = entity_friendly_name(entry) else {
-            continue;
-        };
-        let eid_lower = entity_id.to_lowercase();
-        let matches = eid_lower == load_lower
-            || eid_lower.ends_with(&load_lower)
-            || eid_lower.ends_with(&format!(".{}", load_lower))
-            || eid_lower.contains(&format!(".{}", load_lower));
-        if matches && best.as_ref().is_none_or(|(_, len)| entity_id.len() < *len) {
-            best = Some((name, entity_id.len()));
-        }
-    }
-    best.map(|(name, _)| name)
-}
-
 impl Drop for MqttClient {
     fn drop(&mut self) {
         self.stop();
@@ -1331,12 +1275,6 @@ impl MqttClient {
             portal_id: Arc::new(Mutex::new(None)),
             water_instances: None,
             ev_instances: None,
-            #[cfg(desktop)]
-            camera_topic: None,
-            #[cfg(desktop)]
-            frigate_base_url: None,
-            #[cfg(desktop)]
-            ring_snapshot_url_template: None,
             notifications: Arc::new(Mutex::new(NotificationState {
                 high_consumption: AlertState::new(),
                 low_water: AlertState::new(),
@@ -1347,8 +1285,6 @@ impl MqttClient {
             platform_notifs: Arc::new(Mutex::new(HashMap::new())),
             platform_notifs_seen: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             status_event: "mqtt-connection-status".to_string(),
-            #[cfg(desktop)]
-            ha_entity_states: None,
             ev_cache: Arc::new(Mutex::new(EvCache::default())),
             shutdown: Arc::new(Shutdown::new()),
             emitter: Arc::new(StateEmitter::new(true)),
@@ -1372,11 +1308,6 @@ impl MqttClient {
         self.app_handle = Some(handle);
     }
 
-    #[cfg(desktop)]
-    pub fn set_ha_entity_states(&mut self, states: Arc<Mutex<HashMap<String, HaEntityEntry>>>) {
-        self.ha_entity_states = Some(states);
-    }
-
     pub fn set_portal_id(&mut self, id: Option<String>) {
         if let Ok(mut g) = self.portal_id.lock() {
             *g = id;
@@ -1392,26 +1323,6 @@ impl MqttClient {
 
     pub fn set_ev_instances(&mut self, instances: Option<(Option<u32>, Option<u32>)>) {
         self.ev_instances = instances;
-    }
-
-    #[cfg(desktop)]
-    pub fn set_camera_topic(&mut self, topic: Option<String>) {
-        self.camera_topic = topic;
-    }
-
-    #[cfg(desktop)]
-    pub fn set_frigate_base_url(&mut self, url: Option<String>) {
-        self.frigate_base_url = url;
-    }
-
-    #[cfg(desktop)]
-    pub fn set_ring_snapshot_url_template(&mut self, url: Option<String>) {
-        self.ring_snapshot_url_template = url;
-    }
-
-    #[cfg(desktop)]
-    pub fn set_status_event(&mut self, event: String) {
-        self.status_event = event;
     }
 
     pub fn get_state(&self) -> InverterState {
@@ -1448,19 +1359,11 @@ impl MqttClient {
         let portal_id = self.portal_id.clone();
         let water_instances_owned = self.water_instances;
         let ev_instances_owned = self.ev_instances;
-        #[cfg(desktop)]
-        let cam_topic_owned = self.camera_topic.clone();
-        #[cfg(desktop)]
-        let frigate_base_owned = self.frigate_base_url.clone();
-        #[cfg(desktop)]
-        let ring_snapshot_owned = self.ring_snapshot_url_template.clone();
         let notifications = self.notifications.clone();
         let alarms = self.alarms.clone();
         let platform_notifs = self.platform_notifs.clone();
         let platform_notifs_seen = self.platform_notifs_seen.clone();
         let status_event = self.status_event.clone();
-        #[cfg(desktop)]
-        let ha_entity_states = self.ha_entity_states.clone();
         let client_slot = self.client.clone();
         let ev_cache = self.ev_cache.clone();
         let shutdown = self.shutdown.clone();
@@ -1487,18 +1390,10 @@ impl MqttClient {
                         portal_id.clone(),
                         water_instances_owned,
                         ev_instances_owned,
-                        #[cfg(desktop)]
-                        cam_topic_owned.clone(),
-                        #[cfg(desktop)]
-                        frigate_base_owned.clone(),
-                        #[cfg(desktop)]
-                        ring_snapshot_owned.clone(),
                         notifications.clone(),
                         alarms.clone(),
                         platform_notifs.clone(),
                         platform_notifs_seen.clone(),
-                        #[cfg(desktop)]
-                        ha_entity_states.clone(),
                         &status_event,
                         client_slot.clone(),
                         ev_cache.clone(),
@@ -1557,14 +1452,10 @@ impl MqttClient {
         portal_id: Arc<Mutex<Option<String>>>,
         water_instances: Option<(Option<u32>, Option<u32>, Option<u32>)>,
         ev_instances: Option<(Option<u32>, Option<u32>)>,
-        #[cfg(desktop)] camera_topic: Option<String>,
-        #[cfg(desktop)] frigate_base_url: Option<String>,
-        #[cfg(desktop)] ring_snapshot_url_template: Option<String>,
         notifications: Arc<Mutex<NotificationState>>,
         alarms: Arc<Mutex<HashMap<String, u8>>>,
         platform_notifs: Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
         platform_notifs_seen: Arc<std::sync::atomic::AtomicBool>,
-        #[cfg(desktop)] ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         status_event: &str,
         client_slot: Arc<Mutex<Option<Client>>>,
         ev_cache: Arc<Mutex<EvCache>>,
@@ -1623,23 +1514,11 @@ impl MqttClient {
             }
         }
 
-        #[cfg(desktop)]
-        for cam_topic in split_camera_topics(&camera_topic) {
-            client.subscribe(&cam_topic, QoS::AtMostOnce)?;
-            log::info!("Subscribed to camera topic {cam_topic}");
-        }
-
         // NOTE: use tokio net (async) instead of blocking rumqttc sync iter.
         // Since rumqttc's AsyncClient/disconnection requires refactor, keep
         // spawn_blocking for backward compat but treat EOF as reconnect signal.
         let state_c = state.clone();
         let app_c = app_handle.clone();
-        #[cfg(desktop)]
-        let cam_c = camera_topic.clone();
-        #[cfg(desktop)]
-        let frigate_c = frigate_base_url.clone();
-        #[cfg(desktop)]
-        let ring_c = ring_snapshot_url_template.clone();
         let water_c = water_instances;
         let ev_c = ev_instances;
         let notif_c = notifications.clone();
@@ -1647,8 +1526,6 @@ impl MqttClient {
         let platform_notifs_c = platform_notifs.clone();
         let platform_notifs_seen_c = platform_notifs_seen.clone();
         let portal_id_c = portal_id.clone();
-        #[cfg(desktop)]
-        let ha_states_c = ha_entity_states.clone();
         let cerbo_devices: Arc<Mutex<CerboDevices>> = Arc::new(Mutex::new(CerboDevices::default()));
         let cerbo_c = cerbo_devices.clone();
         let ev_cache_c = ev_cache.clone();
@@ -1694,20 +1571,12 @@ impl MqttClient {
                                 &payload,
                                 &state_c,
                                 &app_c,
-                                #[cfg(desktop)]
-                                &cam_c,
-                                #[cfg(desktop)]
-                                &frigate_c,
-                                #[cfg(desktop)]
-                                &ring_c,
                                 &water_c,
                                 &ev_c,
                                 &notif_c,
                                 &alarms_c,
                                 &platform_notifs_c,
                                 &platform_notifs_seen_c,
-                                #[cfg(desktop)]
-                                &ha_states_c,
                                 &cerbo_c,
                                 &ev_cache_c,
                                 &emitter,
@@ -1838,16 +1707,12 @@ impl MqttClient {
         payload: &str,
         state: &Arc<Mutex<InverterState>>,
         app_handle: &Option<tauri::AppHandle>,
-        #[cfg(desktop)] camera_topic: &Option<String>,
-        #[cfg(desktop)] frigate_base_url: &Option<String>,
-        #[cfg(desktop)] ring_snapshot_url_template: &Option<String>,
         water_instances: &Option<(Option<u32>, Option<u32>, Option<u32>)>,
         ev_instances: &Option<(Option<u32>, Option<u32>)>,
         notifications: &Arc<Mutex<NotificationState>>,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
         platform_notifs: &Arc<Mutex<HashMap<u32, PlatformNotifSlot>>>,
         platform_notifs_seen: &Arc<std::sync::atomic::AtomicBool>,
-        #[cfg(desktop)] ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         cerbo_devices: &Arc<Mutex<CerboDevices>>,
         ev_cache: &Arc<Mutex<EvCache>>,
         emitter: &Arc<StateEmitter>,
@@ -1861,8 +1726,6 @@ impl MqttClient {
                         state.clone(),
                         app_handle.clone(),
                         notifications.clone(),
-                        #[cfg(desktop)]
-                        ha_entity_states.clone(),
                         Some(cerbo_devices.clone()),
                         ev_cache.clone(),
                         emitter,
@@ -2162,40 +2025,6 @@ impl MqttClient {
                     guard.clone()
                 };
                 emitter.emit(app_handle, &snapshot, false);
-            }
-        } else {
-            #[cfg(desktop)]
-            if camera_topic_matches(topic, camera_topic) {
-                if let Some(ref handle) = app_handle {
-                    match parse_camera_mqtt_payload(
-                        topic,
-                        payload,
-                        frigate_base_url,
-                        ring_snapshot_url_template,
-                        ha_entity_states,
-                    ) {
-                        Some(CameraMqttAction::StartNotify { agent_name }) => {
-                            let title = format!("{agent_name} camera motion detected");
-                            let _ = handle
-                                .notification()
-                                .builder()
-                                .title(&title)
-                                .body("Motion started")
-                                .show();
-                        }
-                        Some(CameraMqttAction::OpenClip(cam_event)) => {
-                            let title = format!("{} camera motion detected", cam_event.agent_name);
-                            let _ = handle
-                                .notification()
-                                .builder()
-                                .title(&title)
-                                .body("Camera motion clip available")
-                                .show();
-                            let _ = handle.emit("camera-event", cam_event);
-                        }
-                        None => {}
-                    }
-                }
             }
         }
     }
@@ -2618,30 +2447,12 @@ impl MqttClient {
         }
     }
 
-    /// Display name for a load in notifications: HA friendly name when available,
-    /// otherwise the raw load key.
-    fn load_display_name(
-        load: &str,
-        #[cfg(desktop)] ha_entity_states: &Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
-    ) -> String {
-        #[cfg(desktop)]
-        if let Some(states) = ha_entity_states {
-            if let Ok(guard) = states.lock() {
-                if let Some(name) = load_friendly_name(load, &guard) {
-                    return name;
-                }
-            }
-        }
-        load.to_string()
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn process_state_update(
         raw: RawInverterState,
         state: Arc<Mutex<InverterState>>,
         app_handle: Option<tauri::AppHandle>,
         notifications: Arc<Mutex<NotificationState>>,
-        #[cfg(desktop)] ha_entity_states: Option<Arc<Mutex<HashMap<String, HaEntityEntry>>>>,
         cerbo_devices: Option<Arc<Mutex<CerboDevices>>>,
         ev_cache: Arc<Mutex<EvCache>>,
         emitter: &Arc<StateEmitter>,
@@ -2806,13 +2617,7 @@ impl MqttClient {
                                     .load_names
                                     .as_ref()
                                     .and_then(|m| m.get(name).cloned())
-                                    .unwrap_or_else(|| {
-                                        Self::load_display_name(
-                                            name,
-                                            #[cfg(desktop)]
-                                            &ha_entity_states,
-                                        )
-                                    });
+                                    .unwrap_or_else(|| name.clone());
                                 let title = "High Load".to_string();
                                 let body = format!("{}: {}", display_name, fmt_watts(*power));
                                 alert_notifications.push((title.clone(), body.clone()));
@@ -3146,8 +2951,6 @@ mod tests {
                     high_solar: AlertState::new(),
                     high_load: HashMap::new(),
                 })),
-                #[cfg(desktop)]
-                None,
                 None,
                 Arc::new(Mutex::new(EvCache::default())),
                 &Arc::new(StateEmitter::new(false)),
@@ -3190,25 +2993,6 @@ mod tests {
             .request_setpoint_override(Some(-10), "id")
             .unwrap_err()
             .contains("not connected"));
-    }
-
-    #[cfg(desktop)]
-    fn entry(friendly_name: &str) -> HaEntityEntry {
-        HaEntityEntry {
-            state: "on".to_string(),
-            attributes: Some(serde_json::json!({ "friendly_name": friendly_name })),
-        }
-    }
-
-    #[cfg(desktop)]
-    fn states() -> HashMap<String, HaEntityEntry> {
-        let mut map = HashMap::new();
-        map.insert("sensor.stove_power".to_string(), entry("Stove Power"));
-        map.insert("switch.stove".to_string(), entry("Stove"));
-        map.insert("sensor.washer_power_estimate".to_string(), entry("Washer"));
-        map.insert("binary_sensor.dryer_running".to_string(), entry("Dryer"));
-        map.insert("switch.shutoff_valve".to_string(), entry("Shutoff Valve"));
-        map
     }
 
     #[test]
@@ -3507,40 +3291,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(desktop)]
-    fn resolves_friendly_name_from_entity_id() {
-        let map = states();
-        assert_eq!(
-            load_friendly_name("sensor.washer_power_estimate", &map).as_deref(),
-            Some("Washer")
-        );
-    }
-
-    #[test]
-    #[cfg(desktop)]
-    fn resolves_friendly_name_from_bare_load_key() {
-        let map = states();
-        assert_eq!(load_friendly_name("stove", &map).as_deref(), Some("Stove"));
-        assert_eq!(load_friendly_name("dryer", &map).as_deref(), Some("Dryer"));
-    }
-
-    #[test]
-    #[cfg(desktop)]
-    fn prefers_most_specific_matching_entity() {
-        let map = states();
-        // Both switch.stove (Stove) and sensor.stove_power (Stove Power) match "stove";
-        // switch.stove is the shorter/more specific entity id.
-        assert_eq!(load_friendly_name("stove", &map).as_deref(), Some("Stove"));
-    }
-
-    #[test]
-    #[cfg(desktop)]
-    fn returns_none_when_no_match() {
-        let map = states();
-        assert_eq!(load_friendly_name("no_such_load", &map), None);
-    }
-
-    #[test]
     fn water_mode_write_topic_matches_gx_mqtt_api() {
         assert_eq!(
             MqttClient::water_mode_write_topic("portal42", 1),
@@ -3572,20 +3322,6 @@ mod tests {
         assert_eq!(voltage_soc(30.0), 0.0); // below range clamps to 0
         assert_eq!(voltage_soc(60.0), 100.0); // above range clamps to 100
         assert_eq!(voltage_soc(51.2), 78.0); // whole numbers only
-    }
-
-    #[test]
-    #[cfg(desktop)]
-    fn falls_back_when_friendly_name_missing() {
-        let mut map = HashMap::new();
-        map.insert(
-            "sensor.plain".to_string(),
-            HaEntityEntry {
-                state: "on".to_string(),
-                attributes: None,
-            },
-        );
-        assert_eq!(load_friendly_name("plain", &map), None);
     }
 
     #[test]
@@ -3758,8 +3494,6 @@ mod tests {
                 high_solar: AlertState::new(),
                 high_load: std::collections::HashMap::new(),
             })),
-            #[cfg(desktop)]
-            None,
             Some(cerbo_devices),
             ev_cache.clone(),
             &Arc::new(StateEmitter::new(true)),
@@ -3874,8 +3608,6 @@ mod tests {
                 high_solar: AlertState::new(),
                 high_load: std::collections::HashMap::new(),
             })),
-            #[cfg(desktop)]
-            None,
             Some(cerbo_devices),
             ev_cache,
             &Arc::new(StateEmitter::new(true)),
@@ -3960,8 +3692,6 @@ mod tests {
                 high_solar: AlertState::new(),
                 high_load: std::collections::HashMap::new(),
             })),
-            #[cfg(desktop)]
-            None,
             Some(cerbo_devices),
             ev_cache,
             &Arc::new(StateEmitter::new(true)),
@@ -4015,8 +3745,6 @@ mod tests {
             state.clone(),
             None,
             empty_notifications(),
-            #[cfg(desktop)]
-            None,
             None,
             ev_cache,
             &Arc::new(StateEmitter::new(true)),
@@ -4090,8 +3818,6 @@ mod tests {
             state.clone(),
             None,
             empty_notifications(),
-            #[cfg(desktop)]
-            None,
             Some(cerbo_devices),
             ev_cache,
             &Arc::new(StateEmitter::new(true)),
@@ -4147,8 +3873,6 @@ mod tests {
             state.clone(),
             None,
             empty_notifications(),
-            #[cfg(desktop)]
-            None,
             Some(cerbo_devices),
             ev_cache,
             &Arc::new(StateEmitter::new(true)),
@@ -4218,8 +3942,6 @@ mod tests {
             state.clone(),
             None,
             empty_notifications(),
-            #[cfg(desktop)]
-            None,
             Some(cerbo_devices),
             ev_cache,
             &Arc::new(StateEmitter::new(true)),
@@ -4283,8 +4005,6 @@ mod tests {
             state.clone(),
             None,
             empty_notifications(),
-            #[cfg(desktop)]
-            None,
             None,
             ev_cache,
             &Arc::new(StateEmitter::new(true)),

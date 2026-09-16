@@ -10,6 +10,18 @@ import {
 } from '../inverterControl'
 import { appConfig, state } from './useInverterState'
 
+/** Preserve source order, including opaque external entries, when rendering core controls. */
+export function dashboardControlSource(surface: 'header' | 'home'): DashboardControl[] {
+  if (surface === 'header') {
+    const configured = appConfig.value?.header_toggles_config
+    return configured?.length
+      ? configured
+      : (state.value.ui_config?.header_toggles ?? DEFAULT_INVERTER_CONTROLS)
+  }
+  const configured = appConfig.value?.ha_entities
+  return configured?.length ? configured : (state.value.ui_config?.home_buttons ?? [])
+}
+
 /** Optional home-device adapter; inverter controls never consult it. */
 export type HomeControlStateProvider = (control: DashboardControl) => ControlState | undefined
 
@@ -17,29 +29,22 @@ export function useDashboardControls(
   homeState?: HomeControlStateProvider,
   allowHomeControls = true
 ) {
-  const headerControls = computed(() => {
-    const configured = appConfig.value?.header_toggles_config
-    const controls = configured?.length
-      ? configured
-      : (state.value.ui_config?.header_toggles ?? DEFAULT_INVERTER_CONTROLS)
-    return controls
+  const headerControls = computed(() =>
+    dashboardControlSource('header')
       .map(normalizeControlTarget)
       .filter((control) => allowHomeControls || isInverterControlFlag(control.entity))
-  })
+  )
 
-  const homeButtons = computed(() => {
-    const configured = appConfig.value?.ha_entities
-    const controls = configured?.length
-      ? configured.filter((control) => control.enabled)
-      : (state.value.ui_config?.home_buttons ?? [])
-    return controls
+  const homeButtons = computed(() =>
+    dashboardControlSource('home')
+      .filter((control) => !('enabled' in control) || control.enabled !== false)
       .map(normalizeControlTarget)
       .filter(
         (control) =>
           (allowHomeControls && state.value.features?.ha !== false) ||
           isInverterControlFlag(control.entity)
       )
-  })
+  )
 
   function resolve(control: DashboardControl, fallbackKey = control.id): ControlState {
     if (!isInverterControlFlag(control.entity)) {

@@ -11,6 +11,7 @@ pub(crate) mod download;
 pub(crate) mod generation;
 mod http_video;
 pub mod installer;
+pub(crate) mod live_view;
 pub(crate) mod media;
 pub(crate) mod media_windows;
 #[cfg(feature = "native-media-smoke")]
@@ -18,13 +19,22 @@ pub(crate) mod native_media_smoke;
 mod native_notifications;
 pub mod package;
 pub mod packaging;
+pub mod presentation;
 pub mod protocol;
 pub mod publishers;
 pub mod runtime;
 pub(crate) mod settings;
+pub(crate) mod settings_choices;
 pub(crate) mod settings_store;
 
+#[cfg(test)]
+mod camera_grant_tests;
+#[cfg(test)]
+mod camera_integration_tests;
 #[cfg(test)]
 mod frigate_integration_tests;
 #[cfg(test)]
 mod home_assistant_integration_tests;
+
+pub(crate) mod legacy_migration;
+pub(crate) mod migration;

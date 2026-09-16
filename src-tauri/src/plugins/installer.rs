@@ -82,7 +82,7 @@ pub(crate) struct PluginRestoreResult {
 }
 
 pub(crate) type ConfigurationLoader =
-    Arc<dyn Fn(&PluginManifest) -> Result<WorkerConfiguration, String> + Send + Sync>;
+    Arc<dyn Fn(&PluginManifest, u64) -> Result<WorkerConfiguration, String> + Send + Sync>;
 pub(crate) type SettingsCommit = Box<dyn FnOnce() -> Result<(), String> + Send>;
 
 #[derive(Clone, Debug, Serialize)]
@@ -501,6 +501,40 @@ impl PackageManager {
         .map_err(|_| "retained plugin data removal task failed".to_string())?
     }
 
+    /// Keep a coherent settings snapshot and its synchronous consumer under the
+    /// same operation lock as installation, settings writes, and removal.
+    pub(crate) async fn read_all_settings_in_epoch<R, F>(
+        &self,
+        epoch: u64,
+        read: F,
+    ) -> Result<R, String>
+    where
+        F: FnOnce(&[(PluginManifest, String)]) -> Result<R, String> + Send + 'static,
+        R: Send + 'static,
+    {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _operation = manager.0.operation.lock().await;
+            manager.check_epoch(epoch)?;
+            let mut packages = Vec::new();
+            for record in manager.read_state()?.plugins.into_values() {
+                let package = manager.verify_installed(&record.plugin_id, &record.active)?;
+                if package
+                    .manifest()
+                    .permissions
+                    .contains(&PluginPermission::PluginConfiguration)
+                {
+                    packages.push((package.manifest().clone(), record.active.sha256));
+                }
+            }
+            let result = read(&packages)?;
+            manager.check_epoch(epoch)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| "plugin settings snapshot task failed".to_string())?
+    }
+
     pub(crate) async fn read_settings_in_epoch<R, F>(
         &self,
         plugin_id: &str,
@@ -913,13 +947,17 @@ impl PackageManager {
                 .configuration
                 .as_ref()
                 .ok_or("plugin configuration provider is unavailable")?;
-            let configuration = load(manifest)?;
+            let configuration = load(manifest, epoch)?;
             configuration.validate()?;
             Some(configuration)
         } else {
             None
         };
         super::protocol::HttpVideoGrant::from_manifest_configuration(
+            manifest,
+            configuration.as_ref(),
+        )?;
+        super::protocol::LiveViewGrant::from_manifest_configuration(
             manifest,
             configuration.as_ref(),
         )?;
@@ -950,6 +988,10 @@ impl PackageManager {
             package.manifest(),
             configuration.as_ref(),
         )?;
+        let live_view = super::protocol::LiveViewGrant::from_manifest_configuration(
+            package.manifest(),
+            configuration.as_ref(),
+        )?;
         let executable = self
             .version_path(id, version)
             .join("payload")
@@ -963,6 +1005,7 @@ impl PackageManager {
                     args: Vec::new(),
                     configuration,
                     http_video,
+                    live_view,
                     desktop_notifications: package
                         .manifest()
                         .permissions

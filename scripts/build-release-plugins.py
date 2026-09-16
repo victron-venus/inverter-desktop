@@ -70,7 +70,7 @@ def encode_json(value):
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-# Each target produces two workers and one host utility using a shared Cargo cache.
+# Each target produces the registered workers and one host-native packaging utility.
 # pylint: disable=too-many-locals
 def build_plugins(root, plan, repository, target, host):
     """Create target-unique release assets without overwriting an existing artifact."""

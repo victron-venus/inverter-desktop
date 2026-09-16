@@ -3,10 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Config from '../Config.vue'
 import HeaderTogglesEditor from '../components/HeaderTogglesEditor.vue'
 import { useConfigForm } from '../composables/useConfigForm'
-import {
-  isDashboardControlTarget,
-  useDashboardControlsConfig,
-} from '../composables/useDashboardControlsConfig'
+import { isDashboardControlTarget } from '../dashboardControlTarget'
+import { useCoreControlsConfig as useDashboardControlsConfig } from '../features/coreControlsConfig'
 import { defaultConfig } from '../config'
 import { DEFAULT_INVERTER_CONTROLS, INVERTER_CONTROL_FLAGS } from '../inverterControl'
 
@@ -59,7 +57,7 @@ describe('Dashboard control configuration', () => {
       state_key: 'only_charging',
     }
     manager.loadFromConfig({ ...defaultConfig, header_toggles_config: [saved] })
-    expect(manager.headerTogglesList.value).toEqual([saved])
+    expect(manager.headerTogglesList.value).toEqual([{ ...saved, entity: 'only_charging' }])
     manager.addHeaderToggle(DEFAULT_INVERTER_CONTROLS[1])
     manager.headerTogglesList.value[1].label = 'Custom label'
     expect(DEFAULT_INVERTER_CONTROLS[1].label).not.toBe('Custom label')
@@ -78,34 +76,31 @@ describe('Dashboard control configuration', () => {
       DEFAULT_INVERTER_CONTROLS.find((control) => control.entity === 'no_feed')
     )
     expect(manager.headerTogglesList.value).toEqual([
-      { id: 'no_feed', label: 'Garage', entity: 'switch.garage' },
-      { id: 'no_feed_2', label: 'Porch', entity: 'switch.porch' },
       { id: 'no_feed_3', label: 'NO FEED', entity: 'no_feed' },
     ])
   })
 
-  it('retains HA discovery into either home devices or header controls', async () => {
+  it('preserves opaque optional controls without discovery while editing core controls', () => {
     const manager = useDashboardControlsConfig()
-    boundary.invoke.mockResolvedValueOnce([
-      { entity_id: 'switch.garage', friendly_name: 'Garage', domain: 'switch', state: 'on' },
-    ])
-    await manager.fetchHaEntities('http://homeassistant.local', 8123, 'test-token')
-    manager.selectedDiscovery.value = ['switch.garage']
-    manager.addDiscoveredEntities()
-    expect(manager.haEntitiesList.value).toEqual([
-      {
-        id: 'switch_garage',
-        label: 'Garage',
-        entity: 'switch.garage',
-        domain: 'switch',
-        enabled: true,
-      },
-    ])
-    manager.discoveryTargetGroup.value = 'toggle'
-    manager.addDiscoveredEntities()
-    expect(manager.headerTogglesList.value).toEqual([
-      { id: 'switch_garage', label: 'Garage', entity: 'switch.garage' },
-    ])
+    const external = {
+      id: 'room',
+      label: 'Room',
+      entity: 'light.room',
+      domain: 'light',
+      enabled: true,
+    }
+    manager.loadFromConfig({ ...defaultConfig, ha_entities: [external] })
+    expect(manager.haEntitiesList.value).toEqual([])
+    manager.addHomeControl()
+    manager.haEntitiesList.value[0] = {
+      id: 'charge',
+      label: 'Charge',
+      entity: 'only_charging',
+      domain: 'inverter_control',
+      enabled: true,
+    }
+    expect(manager.getSavedControls().home).toEqual([external, manager.haEntitiesList.value[0]])
+    expect(boundary.invoke).not.toHaveBeenCalled()
   })
 
   it('offers all native flags and treats a saved HA alias as an existing inverter control', () => {

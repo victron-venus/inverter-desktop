@@ -16,6 +16,8 @@ fn configuration(base: &str) -> Validated {
         cover_position_entities: vec![],
         discovery_prefixes: vec![],
         appliances: Default::default(),
+        layout: None,
+        notify_home: false,
         token: "fixture-token-only".into(),
     }
 }

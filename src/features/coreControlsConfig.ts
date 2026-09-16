@@ -11,7 +11,10 @@ function mergeVisible<T extends { entity: string }>(original: T[], edited: T[]):
   const merged: T[] = []
   for (const entry of original) {
     if (!isInverterControlFlag(entry.entity)) merged.push({ ...entry })
-    else if (remaining.length) merged.push(remaining.shift()!)
+    else {
+      const next = remaining.shift()
+      if (next) merged.push(next)
+    }
   }
   return [...merged, ...remaining]
 }
@@ -40,6 +43,24 @@ export function useCoreControlsConfig() {
     headerTogglesList.value = originalHeader
       .map(normalizeControlTarget)
       .filter((entry) => isInverterControlFlag(entry.entity))
+  }
+  function addHomeControl() {
+    haEntitiesList.value.push({
+      id: '',
+      label: '',
+      entity: '',
+      domain: 'inverter_control',
+      enabled: true,
+    })
+  }
+  function removeHomeControl(index: number) {
+    haEntitiesList.value.splice(index, 1)
+  }
+  function moveHomeControl(index: number, delta: number) {
+    const target = index + delta
+    if (target < 0 || target >= haEntitiesList.value.length) return
+    const [entry] = haEntitiesList.value.splice(index, 1)
+    haEntitiesList.value.splice(target, 0, entry)
   }
   function addHeaderToggle(control?: DashboardControl) {
     if (!control) {
@@ -70,6 +91,9 @@ export function useCoreControlsConfig() {
   }
   return {
     getSavedControls,
+    addHomeControl,
+    removeHomeControl,
+    moveHomeControl,
     haEntitiesList,
     headerTogglesList,
     discoveredEntities,

@@ -18,7 +18,8 @@ fn notification_body(text: &str, markup: bool) -> String {
 fn native_notification(
     app: &tauri::AppHandle,
     message: &DesktopNotification,
-) -> notify_rust::Notification {
+) -> Result<notify_rust::Notification, ()> {
+    validate_fallback(message)?;
     let mut notification = notify_rust::Notification::new();
     notification
         .summary(&message.title)
@@ -43,7 +44,27 @@ fn native_notification(
             notification.app_id(&app.config().identifier);
         }
     }
-    notification
+    Ok(notification)
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn validate_fallback(message: &DesktopNotification) -> Result<(), ()> {
+    let Some(request) = &message.live_view else {
+        return Ok(());
+    };
+    // These backends currently display an ordinary notification. The private
+    // destination remains native, and its authority must still be current.
+    if !request.lease.is_active()
+        || request.lease.plugin_id() != message.plugin_id
+        || super::protocol::validate_live_id(&request.id).is_err()
+        || !matches!(request.url.scheme(), "http" | "https")
+        || request.url.host_str().is_none()
+        || !request.url.username().is_empty()
+        || request.url.password().is_some()
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
@@ -58,7 +79,7 @@ async fn bounded_submission(
 
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(super) fn submit(app: &tauri::AppHandle, message: &DesktopNotification) -> Result<(), ()> {
-    let notification = native_notification(app, message);
+    let notification = native_notification(app, message)?;
     // Called on the single blocking dispatcher thread. Dropping the timed-out
     // future cancels our wait; no detached task can submit another notification.
     tauri::async_runtime::block_on(bounded_submission(
@@ -69,7 +90,7 @@ pub(super) fn submit(app: &tauri::AppHandle, message: &DesktopNotification) -> R
 
 #[cfg(windows)]
 pub(super) fn submit(app: &tauri::AppHandle, message: &DesktopNotification) -> Result<(), ()> {
-    native_notification(app, message)
+    native_notification(app, message)?
         .show()
         .map(|_| ())
         .map_err(|_| ())
@@ -91,6 +112,9 @@ fn application_ready(
 
 #[cfg(target_os = "macos")]
 pub(super) fn submit(app: &tauri::AppHandle, message: &DesktopNotification) -> Result<(), ()> {
+    if message.live_view.is_some() {
+        return super::live_view::submit(app, message);
+    }
     application_ready(mac_notification_sys::set_application(if tauri::is_dev() {
         "com.apple.Terminal"
     } else {
@@ -116,6 +140,44 @@ mod tests {
     use super::{bounded_submission, notification_body};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn ordinary_fallback_requires_a_current_well_formed_private_action() {
+        use crate::plugins::generation::GenerationLease;
+        use crate::plugins::runtime::{DesktopNotification, LiveViewRequest};
+
+        let lease = GenerationLease::new("test.camera".into(), 1, 1);
+        let mut message = DesktopNotification {
+            plugin_id: "test.camera".into(),
+            id: "motion".into(),
+            title: "Camera".into(),
+            body: "Motion started".into(),
+            live_view: None,
+        };
+        assert_eq!(super::validate_fallback(&message), Ok(()));
+        message.live_view = Some(LiveViewRequest {
+            lease: lease.clone(),
+            id: "front-camera".into(),
+            url: reqwest::Url::parse("https://camera.invalid/live?private=value#camera").unwrap(),
+        });
+        assert_eq!(super::validate_fallback(&message), Ok(()));
+        for invalid in ["", "camera/+", "camera\n"] {
+            message.live_view.as_mut().unwrap().id = invalid.into();
+            assert_eq!(super::validate_fallback(&message), Err(()));
+        }
+        message.live_view.as_mut().unwrap().id = "front-camera".into();
+        for invalid in ["file:///tmp/camera", "https://user:secret@camera.invalid/"] {
+            message.live_view.as_mut().unwrap().url = reqwest::Url::parse(invalid).unwrap();
+            assert_eq!(super::validate_fallback(&message), Err(()));
+        }
+        message.live_view.as_mut().unwrap().url =
+            reqwest::Url::parse("http://camera.invalid/").unwrap();
+        message.plugin_id = "other.camera".into();
+        assert_eq!(super::validate_fallback(&message), Err(()));
+        message.plugin_id = "test.camera".into();
+        lease.revoke();
+        assert_eq!(super::validate_fallback(&message), Err(()));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

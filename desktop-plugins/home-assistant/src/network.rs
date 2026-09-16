@@ -286,6 +286,10 @@ async fn bounded_json(mut response: reqwest::Response) -> Result<Value, Failure>
     serde_json::from_slice(&bytes).map_err(|_| Failure::Retry)
 }
 
+pub(crate) async fn action_state(response: reqwest::Response) -> Result<Value, ()> {
+    bounded_json(response).await.map_err(|_| ())
+}
+
 async fn discovery_states(
     client: &reqwest::Client,
     configuration: &Validated,
@@ -386,7 +390,8 @@ async fn session(
     let mut initial_finished = configuration.entities.is_empty();
     let discovery = discovery_states(client, configuration);
     tokio::pin!(discovery);
-    let mut discovery_finished = !configuration.discovery_enabled();
+    let mut discovery_finished =
+        !configuration.discovery_enabled() && configuration.layout.is_none();
     loop {
         // Check deadlines before each frame, even under continuous server traffic.
         if let Some(id) = heartbeat.due(Instant::now())? {

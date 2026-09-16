@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type {
+  JsonEditorSchema,
+  PluginSettingsChoices,
   PluginSettingsField,
   PluginSettingsSaveResult,
   PluginSettingsView,
@@ -22,8 +24,47 @@ export function createPluginSettings(
   const error = ref<string | null>(null)
   const saved = ref(false)
   const restartError = ref<string | null>(null)
+  const choices = ref<PluginSettingsChoices>({ revision: null, sources: {} })
+  const choicesLoading = ref(false)
+  const choicesError = ref(false)
+  const hasChoices = computed(
+    () =>
+      settings.value?.fields.some(
+        (field) => field.options_source || (field.editor && schemaHasChoices(field.editor.schema))
+      ) ?? false
+  )
+  let choicesGeneration = 0
   let active = true
   let generation = 0
+
+  function schemaHasChoices(schema: JsonEditorSchema): boolean {
+    return (
+      !!schema['x-options-source'] ||
+      Object.values(schema.properties ?? {}).some(schemaHasChoices) ||
+      !!(schema.items && schemaHasChoices(schema.items)) ||
+      (typeof schema.additionalProperties === 'object' &&
+        schemaHasChoices(schema.additionalProperties))
+    )
+  }
+  async function loadChoices() {
+    if (!active || !hasChoices.value) return
+    const request = ++choicesGeneration
+    choicesLoading.value = true
+    choicesError.value = false
+    try {
+      const result = await invoke<PluginSettingsChoices>('get_plugin_settings_choices', {
+        pluginId,
+      })
+      if (active && request === choicesGeneration) choices.value = result
+    } catch {
+      if (active && request === choicesGeneration) {
+        choices.value = { revision: null, sources: {} }
+        choicesError.value = true
+      }
+    } finally {
+      if (active && request === choicesGeneration) choicesLoading.value = false
+    }
+  }
 
   function setBusy(value: boolean) {
     busy.value = value
@@ -38,9 +79,23 @@ export function createPluginSettings(
     let text = ''
     if (value instanceof Error) text = value.message
     else if (typeof value === 'string') text = value
-    for (const secret of Object.values(secrets)) {
-      if (secret) text = text.split(secret).join('••••')
+    const fragments = new Set<string>()
+    function collect(value: unknown) {
+      if (typeof value === 'string' && value) fragments.add(value)
+      else if (Array.isArray(value)) value.forEach(collect)
+      else if (value && typeof value === 'object') Object.values(value).forEach(collect)
     }
+    for (const secret of Object.values(secrets)) {
+      if (!secret) continue
+      fragments.add(secret)
+      try {
+        collect(JSON.parse(secret))
+      } catch {
+        /* Ordinary secrets are not structured JSON. */
+      }
+    }
+    for (const secret of [...fragments].sort((a, b) => b.length - a.length))
+      text = text.split(secret).join('••••')
     return text.slice(0, 512) || fallbackError()
   }
 
@@ -63,6 +118,10 @@ export function createPluginSettings(
     if (!active || busy.value) return
     const request = ++generation
     setBusy(true)
+    choicesGeneration += 1
+    choices.value = { revision: null, sources: {} }
+    choicesLoading.value = false
+    choicesError.value = false
     settings.value = null
     values.value = {}
     secretChanges.value = {}
@@ -71,7 +130,10 @@ export function createPluginSettings(
     restartError.value = null
     try {
       const view = await invoke<PluginSettingsView>('get_plugin_settings', { pluginId })
-      if (current(request)) apply(view)
+      if (current(request)) {
+        apply(view)
+        void loadChoices()
+      }
     } catch (error_) {
       if (current(request)) error.value = message(error_)
     } finally {
@@ -155,6 +217,10 @@ export function createPluginSettings(
   function stop() {
     active = false
     generation += 1
+    choicesGeneration += 1
+    choices.value = { revision: null, sources: {} }
+    choicesLoading.value = false
+    choicesError.value = false
     settings.value = null
     values.value = {}
     secretChanges.value = {}
@@ -166,6 +232,11 @@ export function createPluginSettings(
 
   return {
     settings,
+    choices,
+    hasChoices,
+    choicesLoading,
+    choicesError,
+    loadChoices,
     values,
     secretChanges,
     busy,

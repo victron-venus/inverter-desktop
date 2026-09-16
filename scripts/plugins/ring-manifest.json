@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "plugin_id": "inverter-desktop.ring",
+  "version": "0.1.0",
+  "host_api": "^1.8",
+  "target": "TARGET",
+  "entrypoint": "bin/inverter-ring-worker",
+  "permissions": [
+    "dashboard_contributions",
+    "plugin_configuration",
+    "network_mqtt",
+    "desktop_notifications",
+    "http_video"
+  ],
+  "http_video": {
+    "base_url_setting": "snapshot_base_url",
+    "bearer_token_setting": "snapshot_bearer_token",
+    "cooldown_seconds": 20,
+    "allow_query": true
+  },
+  "config_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["mqtt_host"],
+    "properties": {
+      "mqtt_host": {
+        "type": "string",
+        "title": "MQTT broker host",
+        "description": "Hostname or IP address of the broker used by Ring.",
+        "minLength": 1,
+        "maxLength": 253
+      },
+      "mqtt_port": {
+        "type": "integer",
+        "title": "MQTT broker port",
+        "minimum": 1,
+        "maximum": 65535,
+        "default": 1883
+      },
+      "mqtt_tls": {
+        "type": "boolean",
+        "title": "Use TLS",
+        "description": "Require a server certificate trusted by the worker's TLS roots.",
+        "default": false
+      },
+      "mqtt_username": {
+        "type": "string",
+        "title": "MQTT username",
+        "writeOnly": true,
+        "maxLength": 1024
+      },
+      "mqtt_password": {
+        "type": "string",
+        "title": "MQTT password",
+        "writeOnly": true,
+        "maxLength": 1024
+      },
+      "mqtt_topics": {
+        "type": "string",
+        "title": "MQTT topic filters",
+        "description": "Up to 16 provider-specific filters separated by semicolons. Only complete identity segments may use +; global # filters are rejected.",
+        "minLength": 1,
+        "maxLength": 4096,
+        "default": "ring/+/camera/+/motion/state;ring/+/camera/+/ding/state"
+      },
+      "camera_labels": {
+        "type": "string",
+        "title": "Camera names",
+        "description": "Optional camera names keyed by location/device.",
+        "maxLength": 8192,
+        "x-editor": {
+          "kind": "json",
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "title": "Camera name",
+              "minLength": 1,
+              "maxLength": 96
+            },
+            "maxProperties": 32
+          }
+        }
+      },
+      "snapshot_base_url": {
+        "type": "string",
+        "title": "Snapshot HTTP base address",
+        "description": "Direct HTTP(S) origin and path prefix for snapshots, without credentials, query or fragment. Leave blank for notifications only.",
+        "maxLength": 2048
+      },
+      "snapshot_media_kind": {
+        "type": "string",
+        "title": "Snapshot media type",
+        "enum": ["jpeg", "png", "webp", "video"],
+        "default": "jpeg"
+      },
+      "snapshot_url_template": {
+        "type": "string",
+        "title": "Private snapshot URL template",
+        "description": "Optional HTTP(S) URL within the configured base. Supports {location_id}, {device_id}, and {event}. Query credentials remain private.",
+        "writeOnly": true,
+        "maxLength": 2048
+      },
+      "snapshot_bearer_token": {
+        "type": "string",
+        "title": "Snapshot bearer token",
+        "description": "Optional token sent only to the configured snapshot origin and path. No Home Assistant credentials are inherited.",
+        "writeOnly": true,
+        "maxLength": 4096
+      }
+    }
+  },
+  "inventory": [],
+  "signature": null,
+  "group": {
+    "id": "cameras",
+    "title": "Cameras",
+    "icon": "camera"
+  }
+}

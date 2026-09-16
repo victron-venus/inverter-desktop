@@ -19,6 +19,13 @@ fn canonical_media_id(value: &str) -> Option<String> {
     (id.to_string() == value).then(|| value.to_owned())
 }
 
+pub(crate) fn is_plugin_preview_label(label: &str) -> bool {
+    label
+        .strip_prefix("plugin-preview-")
+        .and_then(canonical_media_id)
+        .is_some()
+}
+
 pub(crate) fn is_plugin_video_label(label: &str) -> bool {
     media_id_for_label(label).is_some()
 }
@@ -190,6 +197,9 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     {
         return Err(());
     }
+    if let Some(url) = ready.live_url.clone() {
+        return open_preview_window(app, media, ready, url);
+    }
     let route = format!(
         "camera-video?pluginMedia={}&pluginMediaKind={}&name={}&error={}",
         ready.media_id,
@@ -249,6 +259,50 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     // Native visibility is asynchronous. A revocation after the final check
     // still revokes media access immediately and queues destruction of this window.
     Ok(())
+}
+
+fn preview_navigation_allowed(candidate: &reqwest::Url, expected: &reqwest::Url) -> bool {
+    candidate == expected
+}
+
+fn open_preview_window(
+    app: &tauri::AppHandle,
+    media: &MediaService,
+    ready: ReadyMedia,
+    url: reqwest::Url,
+) -> Result<(), ()> {
+    if !is_plugin_preview_label(&ready.window_label) {
+        return Err(());
+    }
+    let expected = url.clone();
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        &ready.window_label,
+        tauri::WebviewUrl::External(url),
+    )
+    .title(format!("{} — Live", ready.title))
+    .inner_size(crate::CAMERA_VIDEO_WINDOW_W, crate::CAMERA_VIDEO_WINDOW_H)
+    .resizable(true)
+    .visible(false)
+    .focused(false)
+    .incognito(true)
+    // A remote preview receives no capabilities, new windows, or custom IPC.
+    // Redirects and navigation remain bound to the exact startup-granted URL.
+    .on_navigation(move |candidate| preview_navigation_allowed(candidate, &expected))
+    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+    .build()
+    .map_err(|_| ())?;
+    let event_app = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            crate::reflow_camera_video_windows(&event_app);
+        }
+    });
+    crate::apply_camera_video_window_defaults(app, &window);
+    if media_access(app).is_none() || !media.window_ready(&ready.media_id, &ready.window_label) {
+        return Err(());
+    }
+    show_without_focus(&window, media, &ready.media_id)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -335,6 +389,44 @@ mod tests {
             format!("/{}", id.to_uppercase()),
         ] {
             assert!(request_media_id(&label, &path.parse().unwrap()).is_none());
+        }
+    }
+
+    #[test]
+    fn preview_identity_has_no_opaque_media_route_or_clickable_live_namespace() {
+        let id = "acdb88b6-453a-4f88-8d52-5b902441fe4c";
+        let label = format!("plugin-preview-{id}");
+        assert!(is_plugin_preview_label(&label));
+        assert!(!is_plugin_video_label(&label));
+        assert!(media_id_for_label(&label).is_none());
+        assert!(request_media_id(&label, &format!("/{id}").parse().unwrap()).is_none());
+        for rejected in [
+            format!("plugin-live-{id}"),
+            format!("plugin-preview-{}", id.to_uppercase()),
+            "plugin-preview-other".into(),
+        ] {
+            assert!(!is_plugin_preview_label(&rejected));
+        }
+    }
+
+    #[test]
+    fn preview_navigation_is_bound_to_the_exact_granted_url() {
+        let expected = "https://camera.invalid/prefix/api/front?fps=2&height=360"
+            .parse()
+            .unwrap();
+        assert!(preview_navigation_allowed(&expected, &expected));
+        for value in [
+            "https://camera.invalid/prefix/api/other?fps=2&height=360",
+            "https://camera.invalid/prefix/api/front?fps=30&height=360",
+            "https://camera.invalid/prefix/api/front?fps=2&height=360#other",
+            "https://other.invalid/prefix/api/front?fps=2&height=360",
+            "tauri://localhost/config",
+            "about:blank",
+        ] {
+            assert!(!preview_navigation_allowed(
+                &value.parse().unwrap(),
+                &expected
+            ));
         }
     }
 

@@ -35,7 +35,6 @@
 		98A09541EF9CE7834F442F31 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		9E47E35BEA31C5D824C2BBD2 /* mqtt.rs */ = {isa = PBXFileReference; path = mqtt.rs; sourceTree = "<group>"; };
 		9EA0014341B30B2F5C9F4B51 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
-		A180707E7B9AE8291D303A75 /* ha_api.rs */ = {isa = PBXFileReference; path = ha_api.rs; sourceTree = "<group>"; };
 		AF2F32F4DFD89BD33BCDFEE7 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		C43A10CCCCD3236C2F644DA2 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 
@@ -76,7 +75,6 @@
 			isa = PBXGroup;
 			children = (
 				FB41F5FAA1F0EDEF0D02BB77 /* biometric.m */,
-				A180707E7B9AE8291D303A75 /* ha_api.rs */,
 				070DA153EB1FA671D9744757 /* lib.rs */,
 				3439BD1F12DCB31A6E994435 /* main.rs */,
 				9E47E35BEA31C5D824C2BBD2 /* mqtt.rs */,

@@ -66,8 +66,9 @@ impl std::fmt::Display for MediaError {
     }
 }
 
-/// Native adapter input only. Contains neither a remote URL nor a local path.
+/// Native adapter input only. Preview URLs never enter snapshots or frontend IPC.
 pub(crate) struct ReadyMedia {
+    pub live_url: Option<reqwest::Url>,
     pub media_id: String,
     pub window_label: String,
     pub title: String,
@@ -94,6 +95,7 @@ enum Phase {
     Queued,
     Downloading,
     Ready,
+    Closing,
 }
 
 struct Item {
@@ -193,16 +195,33 @@ impl MediaService {
 
     /// Only bounded metadata and task admission occur here; never file or HTTP I/O.
     pub(crate) fn try_submit(&self, request: QueuedHttpVideo) -> Result<(), MediaError> {
-        let url = request
-            .grant
-            .validate_url(&request.url)
-            .map_err(|_| MediaError::InvalidRequest)?;
+        let (url, preview_duration) = if request.live_preview {
+            if request.media_kind != HttpMediaKind::Video {
+                return Err(MediaError::InvalidRequest);
+            }
+            (
+                request.grant.validate_preview_url(&request.url),
+                Some(
+                    request
+                        .grant
+                        .preview_duration()
+                        .ok_or(MediaError::InvalidRequest)?,
+                ),
+            )
+        } else {
+            (request.grant.validate_url(&request.url), None)
+        };
+        let url = url.map_err(|_| MediaError::InvalidRequest)?;
         let mut tasks = self.0.tasks.lock().unwrap_or_else(|e| e.into_inner());
         if self.0.closing.load(Ordering::Acquire) || self.0.cleanup_failed.load(Ordering::Acquire) {
             return Err(MediaError::Unavailable);
         }
         let id = Uuid::new_v4().to_string();
-        let label = format!("plugin-video-{id}");
+        let label = if request.live_preview {
+            format!("plugin-preview-{id}")
+        } else {
+            format!("plugin-video-{id}")
+        };
         let (retired, receiver) = watch::channel(false);
         request
             .lease
@@ -239,16 +258,22 @@ impl MediaService {
         tasks.retain(|task| !task.is_finished());
         let service = self.clone();
         tasks.push(tokio::spawn(async move {
-            service
-                .own_item(
-                    id,
-                    request.lease,
-                    request.title,
-                    request.media_kind,
-                    url,
-                    receiver,
-                )
-                .await;
+            if let Some(duration) = preview_duration {
+                service
+                    .own_live(id, request.lease, request.title, url, receiver, duration)
+                    .await;
+            } else {
+                service
+                    .own_item(
+                        id,
+                        request.lease,
+                        request.title,
+                        request.media_kind,
+                        (url, request.grant.bearer_token().map(str::to_owned)),
+                        receiver,
+                    )
+                    .await;
+            }
         }));
         Ok(())
     }
@@ -329,6 +354,7 @@ impl MediaService {
         id: &str,
         lease: &GenerationLease,
         retired: &mut watch::Receiver<bool>,
+        preview: bool,
     ) -> bool {
         let mut shutdown = self.0.shutdown.subscribe();
         loop {
@@ -359,14 +385,23 @@ impl MediaService {
                     let Some(item) = state.items.get_mut(id) else {
                         return false;
                     };
-                    let reservation = media_byte_limit(item.media_kind);
-                    if transfers >= MAX_TRANSFERS
-                        || windows >= MAX_WINDOWS
-                        || bytes + reservation > MAX_MEDIA_BYTES
+                    let reservation = if preview {
+                        0
+                    } else {
+                        media_byte_limit(item.media_kind)
+                    };
+                    if windows >= MAX_WINDOWS
+                        || (!preview
+                            && (transfers >= MAX_TRANSFERS
+                                || bytes + reservation > MAX_MEDIA_BYTES))
                     {
                         return false;
                     }
-                    item.phase = Phase::Downloading;
+                    item.phase = if preview {
+                        Phase::Ready
+                    } else {
+                        Phase::Downloading
+                    };
                     item.bytes = reservation;
                     true
                 })
@@ -390,10 +425,10 @@ impl MediaService {
         lease: GenerationLease,
         title: String,
         media_kind: HttpMediaKind,
-        url: reqwest::Url,
+        source: (reqwest::Url, Option<String>),
         mut retired: watch::Receiver<bool>,
     ) {
-        if !self.reserve(&id, &lease, &mut retired).await {
+        if !self.reserve(&id, &lease, &mut retired, false).await {
             self.remove_item(&id).await;
             return;
         }
@@ -412,8 +447,9 @@ impl MediaService {
             Ok(Ok(file)) => {
                 let file = Arc::new(file);
                 let result = transfer
+                    .with_bearer(source.1)
                     .download(
-                        url,
+                        source.0,
                         media_kind,
                         file.clone(),
                         &lease,
@@ -452,12 +488,68 @@ impl MediaService {
         // The registry now owns the file. Dropping this extra reference does no I/O.
         drop(file);
         let ready = MediaEvent::Ready(ReadyMedia {
+            live_url: None,
             media_id: id.clone(),
             window_label: label.clone(),
             title,
             media_kind,
             error: result.err().map(MediaError::Transfer),
         });
+        self.present_until_retired(id, lease, label, retired, ready, None)
+            .await;
+    }
+
+    async fn own_live(
+        &self,
+        id: String,
+        lease: GenerationLease,
+        title: String,
+        url: reqwest::Url,
+        mut retired: watch::Receiver<bool>,
+        duration: std::time::Duration,
+    ) {
+        // Motion expires while waiting for a shared window. A preview reserves
+        // no transfer capacity, file, or disk bytes; the webview owns its stream.
+        if !tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.reserve(&id, &lease, &mut retired, true),
+        )
+        .await
+        .unwrap_or(false)
+        {
+            self.remove_item(&id).await;
+            return;
+        }
+        let label = {
+            let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+            state
+                .items
+                .get(&id)
+                .expect("reserved preview")
+                .label
+                .clone()
+        };
+        let ready = MediaEvent::Ready(ReadyMedia {
+            live_url: Some(url),
+            media_id: id.clone(),
+            window_label: label.clone(),
+            title,
+            media_kind: HttpMediaKind::Video,
+            error: None,
+        });
+        self.present_until_retired(id, lease, label, retired, ready, Some(duration))
+            .await;
+    }
+
+    async fn present_until_retired(
+        &self,
+        id: String,
+        lease: GenerationLease,
+        label: String,
+        mut retired: watch::Receiver<bool>,
+        ready: MediaEvent,
+        lifetime: Option<std::time::Duration>,
+    ) {
         let mut shutdown = self.0.shutdown.subscribe();
         let delivered = tokio::select! {
             biased;
@@ -471,6 +563,24 @@ impl MediaService {
                 _ = retired.wait_for(|done| *done) => {},
                 _ = lease.cancelled() => {},
                 _ = shutdown.wait_for(|done| *done) => {},
+                _ = async {
+                    if let Some(duration) = lifetime { tokio::time::sleep(duration).await; }
+                    else { std::future::pending::<()>().await; }
+                } => {},
+            }
+            if lifetime.is_some() {
+                if let Some(item) = self
+                    .0
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .items
+                    .get_mut(&id)
+                {
+                    // Deny display before Close; retain the slot until Destroyed
+                    // acknowledges that the native stream no longer exists.
+                    item.phase = Phase::Closing;
+                }
             }
             if !*retired.borrow()
                 && self

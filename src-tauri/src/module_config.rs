@@ -108,6 +108,46 @@ pub(crate) fn restore_portable(
     merge_for_save(incoming, current)
 }
 
+/// Installed settings have their own encrypted authority. A portable import
+/// cannot silently overwrite them or pair them with retained local credentials.
+#[cfg(desktop)]
+pub(crate) fn validate_installed_restore(
+    content: &str,
+    installed: &ModuleNamespaces,
+) -> Result<(), String> {
+    let value: Value = serde_json::from_str(content).map_err(|_| "Invalid settings backup")?;
+    let Some(namespaces) = value.get("modules") else {
+        return Ok(());
+    };
+    let incoming: ModuleNamespaces = serde_json::from_value(namespaces.clone())
+        .map_err(|_| "Invalid portable module settings")?;
+    for (id, local) in installed {
+        if incoming.get(id).is_some_and(|next| {
+            next.schema_version != local.schema_version
+                || next.values != local.values
+                || !next.secrets.is_empty()
+        }) {
+            return Err("This backup changes installed plugin settings; edit that plugin in Configuration before restoring, or restore on a fresh installation".into());
+        }
+    }
+    Ok(())
+}
+
+/// Installed settings supersede their obsolete import/migration shadow. Their
+/// credentials remain only in SettingsStore; unknown namespaces retain the
+/// existing core merge policy, including their local credential bindings.
+#[cfg(desktop)]
+pub(crate) fn restore_with_installed(
+    content: &str,
+    current: &crate::FullConfig,
+    installed: &ModuleNamespaces,
+) -> Result<crate::FullConfig, String> {
+    validate_installed_restore(content, installed)?;
+    let mut source = current.clone();
+    source.modules.extend(portable(installed));
+    crate::config_backup::restore(content, &source)
+}
+
 #[cfg(test)]
 pub(crate) fn test_namespaces() -> ModuleNamespaces {
     serde_json::from_value(serde_json::json!({
@@ -314,6 +354,89 @@ mod tests {
             let error = serde_json::from_value::<ModuleNamespace>(invalid).unwrap_err();
             assert_eq!(error.to_string(), "Invalid module settings envelope");
         }
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn installed_export_restores_after_settings_edits_despite_secret_bearing_stale_shadow() {
+        let mut current = FullConfig {
+            modules: test_namespaces(),
+            ..FullConfig::default()
+        };
+        current.modules.insert(
+            "example.uninstalled".into(),
+            current.modules["example.future"].clone(),
+        );
+        let installed: ModuleNamespaces = serde_json::from_value(json!({
+            "example.future": {"schema_version": 1, "values": {"endpoint":"https://current.invalid"}}
+        })).unwrap();
+        let mut export_source = current.clone();
+        export_source.modules.extend(installed.clone());
+        let mut backup = crate::config_backup::redacted(&export_source).unwrap();
+        backup["show_console"] = json!(false);
+        let content = backup.to_string();
+        assert!(
+            crate::config_backup::restore(&content, &current).is_err(),
+            "negative control: a stale namespace cannot be the installed authority"
+        );
+        let restored = restore_with_installed(&content, &current, &installed).unwrap();
+        assert_eq!(
+            restored.modules["example.future"],
+            installed["example.future"]
+        );
+        assert_eq!(
+            restored.modules["example.offline"],
+            current.modules["example.offline"]
+        );
+        assert_eq!(restored.show_console, Some(false));
+        assert_eq!(
+            restored.modules["example.uninstalled"],
+            current.modules["example.uninstalled"]
+        );
+        assert!(restored.modules["example.future"].secrets.is_empty());
+        assert!(current.modules["example.future"]
+            .secrets
+            .contains_key("access_token"));
+        // A legacy backup without module data still uses current installed values.
+        let legacy = crate::config_backup::redacted(&FullConfig::default())
+            .unwrap()
+            .to_string();
+        let restored = restore_with_installed(&legacy, &current, &installed).unwrap();
+        assert_eq!(
+            restored.modules["example.future"],
+            installed["example.future"]
+        );
+        assert_eq!(
+            restored.modules["example.offline"],
+            current.modules["example.offline"]
+        );
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn installed_conflicts_fail_and_fresh_public_namespaces_can_seed_restoration() {
+        let installed = portable(&test_namespaces());
+        let current = FullConfig::default();
+        let mut incoming = crate::config_backup::redacted(&current).unwrap();
+        incoming["modules"] = serde_json::to_value(&installed).unwrap();
+        let fresh =
+            restore_with_installed(&incoming.to_string(), &current, &ModuleNamespaces::new())
+                .unwrap();
+        assert_eq!(fresh.modules, installed);
+        for alteration in [
+            json!("https://changed.invalid"),
+            json!("private-fixture-token"),
+        ] {
+            let mut changed = incoming.clone();
+            changed["modules"]["example.future"]["values"]["endpoint"] = alteration;
+            let error =
+                restore_with_installed(&changed.to_string(), &current, &installed).unwrap_err();
+            assert!(!error.contains("changed.invalid"));
+            assert!(!error.contains("private-fixture-token"));
+        }
+        incoming["modules"]["example.future"]["secrets"] = json!({"token":"private-fixture-token"});
+        assert!(restore_with_installed(&incoming.to_string(), &current, &installed).is_err());
+        assert!(current.modules.is_empty());
     }
 
     #[test]

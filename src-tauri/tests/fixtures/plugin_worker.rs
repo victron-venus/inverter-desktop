@@ -166,6 +166,16 @@ fn main() {
                     emit(&ack);
                 }
                 contribute();
+                if mode.starts_with("configuration_live") {
+                    let url = if mode == "configuration_live_bad_url" {
+                        "https://other.test/base/api/front?fps=2&height=360"
+                    } else {
+                        "https://video.test/base/api/front?fps=2&height=360"
+                    };
+                    emit(&format!(
+                        r#"{{"type":"http_live","id":"live-1","url":"{url}","title":"Private camera"}}"#
+                    ));
+                }
                 if mode.starts_with("configuration_video") {
                     let url = if mode.ends_with("_bad_url") {
                         "https://other.test/base/clip.mp4"

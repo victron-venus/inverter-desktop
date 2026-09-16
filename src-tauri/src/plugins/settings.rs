@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const MAX_FIELDS: usize = 32;
 // Selected-entity lists may exceed 4 KiB; the complete settings envelope still
 // has the independent 32 KiB configuration limit, including JSON escaping.
-const MAX_STRING: usize = 16 * 1024;
+const MAX_STRING: usize = 24 * 1024;
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -46,6 +46,8 @@ struct RawField {
     secret: bool,
     #[serde(default, rename = "omitEmpty")]
     omit_empty: bool,
+    #[serde(default, rename = "omitDefault")]
+    omit_default: bool,
     #[serde(rename = "enum")]
     choices: Option<Vec<String>>,
     minimum: Option<f64>,
@@ -56,6 +58,326 @@ struct RawField {
     max_length: Option<usize>,
     #[serde(default, deserialize_with = "present_default")]
     default: Option<Value>,
+    #[serde(rename = "x-editor")]
+    editor: Option<JsonEditor>,
+    #[serde(rename = "x-options-source")]
+    options_source: Option<String>,
+    #[serde(default, rename = "x-options-prefixes")]
+    options_prefixes: Vec<String>,
+    #[serde(default, rename = "x-options-multiple")]
+    options_multiple: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JsonEditor {
+    kind: String,
+    schema: Value,
+}
+
+fn valid_options(source: Option<&str>, prefixes: &[String], multiple: bool) -> bool {
+    if source.is_none() {
+        return prefixes.is_empty() && !multiple;
+    }
+    source.is_some_and(|source| {
+        !source.is_empty()
+            && source.len() <= 64
+            && source
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
+    }) && prefixes.len() <= 16
+        && prefixes.iter().all(|prefix| {
+            !prefix.is_empty() && prefix.len() <= 128 && !prefix.chars().any(char::is_control)
+        })
+}
+
+fn valid_editor(editor: &JsonEditor) -> bool {
+    let mut remaining = 256;
+    editor.kind == "json"
+        && editor.schema.is_object()
+        && editor_schema(&editor.schema, 0, &mut remaining)
+}
+
+fn editor_schema(schema: &Value, depth: usize, remaining: &mut usize) -> bool {
+    if depth > 8 || *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    let Some(object) = schema.as_object() else {
+        return false;
+    };
+    let allowed = [
+        "type",
+        "title",
+        "description",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "minItems",
+        "maxItems",
+        "maxProperties",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "enum",
+        "default",
+        "const",
+        "x-options-source",
+        "x-options-prefixes",
+        "x-options-multiple",
+    ];
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return false;
+    }
+    let kind = schema["type"].as_str().unwrap_or("");
+    if !["object", "array", "string", "boolean", "number", "integer"].contains(&kind) {
+        return false;
+    }
+    for (key, bound) in [("title", 128), ("description", 512)] {
+        if object
+            .get(key)
+            .is_some_and(|value| value.as_str().is_none_or(|text| text.len() > bound))
+        {
+            return false;
+        }
+    }
+    for (key, bound) in [
+        ("minItems", 128),
+        ("maxItems", 128),
+        ("maxProperties", 128),
+        ("minLength", MAX_STRING),
+        ("maxLength", MAX_STRING),
+    ] {
+        if object
+            .get(key)
+            .is_some_and(|value| value.as_u64().is_none_or(|n| n > bound as u64))
+        {
+            return false;
+        }
+    }
+    for (min, max) in [
+        ("minItems", "maxItems"),
+        ("minLength", "maxLength"),
+        ("minimum", "maximum"),
+    ] {
+        if object.get(min).is_some_and(|v| v.as_f64().is_none())
+            || object.get(max).is_some_and(|v| v.as_f64().is_none())
+        {
+            return false;
+        }
+        if let (Some(min), Some(max)) = (schema[min].as_f64(), schema[max].as_f64()) {
+            if min > max {
+                return false;
+            }
+        }
+    }
+    let source = object.get("x-options-source").and_then(Value::as_str);
+    if object.contains_key("x-options-source") && source.is_none() {
+        return false;
+    }
+    let prefixes: Vec<String> = match object.get("x-options-prefixes") {
+        None => Vec::new(),
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        },
+    };
+    let multiple = match object.get("x-options-multiple") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return false,
+    };
+    if !valid_options(source, &prefixes, multiple)
+        || (source.is_some() && (kind != "string" || object.contains_key("enum")))
+    {
+        return false;
+    }
+    if let Some(values) = object.get("enum") {
+        let Some(values) = values.as_array() else {
+            return false;
+        };
+        let mut scalar_schema = schema.clone();
+        if let Some(scalar) = scalar_schema.as_object_mut() {
+            scalar.remove("enum");
+            scalar.remove("default");
+            scalar.remove("const");
+        }
+        if values.is_empty()
+            || values.len() > 128
+            || values.iter().enumerate().any(|(index, value)| {
+                (!value.is_string() && !value.is_number() && !value.is_boolean())
+                    || values[..index].contains(value)
+                    || !json_value_matches(value, &scalar_schema)
+            })
+        {
+            return false;
+        }
+    }
+    for (allowed_kind, keys) in [
+        (
+            "object",
+            &[
+                "properties",
+                "required",
+                "additionalProperties",
+                "maxProperties",
+            ][..],
+        ),
+        ("array", &["items", "minItems", "maxItems"][..]),
+        ("string", &["minLength", "maxLength"][..]),
+    ] {
+        if kind != allowed_kind && keys.iter().any(|key| object.contains_key(*key)) {
+            return false;
+        }
+    }
+    if !["number", "integer"].contains(&kind)
+        && ["minimum", "maximum"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+    {
+        return false;
+    }
+    if kind == "object" {
+        let properties = match object.get("properties") {
+            None => None,
+            Some(Value::Object(value)) => Some(value),
+            _ => return false,
+        };
+        if properties.is_some_and(|values| {
+            values.len() > 128
+                || values.iter().any(|(key, value)| {
+                    key.is_empty()
+                        || key.len() > 64
+                        || matches!(key.as_str(), "__proto__" | "constructor" | "prototype")
+                        || !editor_schema(value, depth + 1, remaining)
+                })
+        }) {
+            return false;
+        }
+        if let Some(required) = object.get("required") {
+            let Some(required) = required.as_array() else {
+                return false;
+            };
+            if required.len() > 128
+                || required.iter().any(|key| {
+                    key.as_str().is_none_or(|key| {
+                        !properties.is_some_and(|properties| properties.contains_key(key))
+                    })
+                })
+            {
+                return false;
+            }
+        }
+        if let Some(additional) = object.get("additionalProperties") {
+            if !additional.is_boolean() && !editor_schema(additional, depth + 1, remaining) {
+                return false;
+            }
+        }
+    } else if kind == "array" {
+        if !editor_schema(&schema["items"], depth + 1, remaining) {
+            return false;
+        }
+    } else if object.contains_key("properties")
+        || object.contains_key("items")
+        || object.contains_key("additionalProperties")
+        || object.contains_key("required")
+    {
+        return false;
+    }
+    for key in ["default", "const"] {
+        if object
+            .get(key)
+            .is_some_and(|value| !json_value_matches(value, schema))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn json_value_matches(value: &Value, schema: &Value) -> bool {
+    if schema
+        .get("const")
+        .is_some_and(|expected| value != expected)
+    {
+        return false;
+    }
+    if schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.contains(value))
+    {
+        return false;
+    }
+    match schema["type"].as_str() {
+        Some("object") => value.as_object().is_some_and(|object| {
+            if object.len() > 128
+                || object.keys().any(|key| {
+                    key.is_empty()
+                        || key.len() > 128
+                        || matches!(key.as_str(), "__proto__" | "constructor" | "prototype")
+                })
+            {
+                return false;
+            }
+            if schema["maxProperties"]
+                .as_u64()
+                .is_some_and(|max| object.len() as u64 > max)
+            {
+                return false;
+            }
+            if schema["required"].as_array().is_some_and(|required| {
+                required
+                    .iter()
+                    .any(|key| key.as_str().is_none_or(|key| !object.contains_key(key)))
+            }) {
+                return false;
+            }
+            object.iter().all(|(key, value)| {
+                if let Some(field) = schema["properties"].get(key) {
+                    json_value_matches(value, field)
+                } else if schema["additionalProperties"] == Value::Bool(false) {
+                    false
+                } else if schema["additionalProperties"].is_object() {
+                    json_value_matches(value, &schema["additionalProperties"])
+                } else {
+                    true
+                }
+            })
+        }),
+        Some("array") => value.as_array().is_some_and(|items| {
+            schema["minItems"]
+                .as_u64()
+                .is_none_or(|min| items.len() as u64 >= min)
+                && schema["maxItems"]
+                    .as_u64()
+                    .is_none_or(|max| items.len() as u64 <= max)
+                && items.len() <= 128
+                && items
+                    .iter()
+                    .all(|item| json_value_matches(item, &schema["items"]))
+        }),
+        Some("string") => value.as_str().is_some_and(|text| {
+            text.len() <= MAX_STRING
+                && schema["minLength"]
+                    .as_u64()
+                    .is_none_or(|min| text.chars().count() as u64 >= min)
+                && schema["maxLength"]
+                    .as_u64()
+                    .is_none_or(|max| text.chars().count() as u64 <= max)
+        }),
+        Some("boolean") => value.is_boolean(),
+        Some("number" | "integer") => value.as_f64().is_some_and(|number| {
+            number.is_finite()
+                && (schema["type"] != "integer"
+                    || (number.fract() == 0.0 && number.abs() <= 9_007_199_254_740_991.0))
+                && schema["minimum"].as_f64().is_none_or(|min| number >= min)
+                && schema["maximum"].as_f64().is_none_or(|max| number <= max)
+        }),
+        _ => false,
+    }
 }
 
 fn present_default<'de, D: serde::Deserializer<'de>>(
@@ -79,10 +401,19 @@ pub(crate) struct SettingField {
     maximum: Option<f64>,
     min_length: Option<usize>,
     max_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    editor: Option<JsonEditor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options_source: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    options_prefixes: Vec<String>,
+    options_multiple: bool,
     #[serde(skip)]
     default: Option<Value>,
     #[serde(skip)]
     omit_empty: bool,
+    #[serde(skip)]
+    omit_default: bool,
 }
 
 #[derive(Serialize)]
@@ -151,6 +482,23 @@ impl SettingsSchema {
                         || raw.secret
                         || raw.kind != SettingType::String
                         || raw.default.as_ref().and_then(Value::as_str) != Some("")))
+                || (raw.omit_default
+                    && (required.contains(&key) || raw.secret || raw.default.is_none()))
+                || (raw.editor.is_some()
+                    && (raw.kind != SettingType::String
+                        || raw.choices.is_some()
+                        || raw.options_source.is_some()))
+                || raw
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| !valid_editor(editor))
+                || !valid_options(
+                    raw.options_source.as_deref(),
+                    &raw.options_prefixes,
+                    raw.options_multiple,
+                )
+                || (raw.options_source.is_some()
+                    && (raw.kind != SettingType::String || raw.secret || raw.choices.is_some()))
                 || (raw.kind != SettingType::String
                     && (raw.choices.is_some()
                         || raw.min_length.is_some()
@@ -192,6 +540,11 @@ impl SettingsSchema {
                 max_length: raw.max_length,
                 default: raw.default,
                 omit_empty: raw.omit_empty,
+                omit_default: raw.omit_default,
+                editor: raw.editor,
+                options_source: raw.options_source,
+                options_prefixes: raw.options_prefixes,
+                options_multiple: raw.options_multiple,
             };
             if let Some(choices) = &field.choices {
                 for choice in choices {
@@ -208,11 +561,12 @@ impl SettingsSchema {
 
     fn check_classification(&self, data: &SettingsData) -> Result<(), String> {
         if self.fields.iter().any(|field| {
-            !field.secret
-                && (data.secret_fields.contains(&field.key)
-                    || data.secrets.contains_key(&field.key))
+            (field.secret && data.values.contains_key(&field.key))
+                || (!field.secret
+                    && (data.secret_fields.contains(&field.key)
+                        || data.secrets.contains_key(&field.key)))
         }) {
-            return Err("A previously secret setting cannot become a public field".into());
+            return Err("Plugin settings contain incompatible secret classifications".into());
         }
         Ok(())
     }
@@ -301,6 +655,7 @@ impl SettingsSchema {
                 .get(&field.key)
                 .or(field.default.as_ref())
                 .filter(|value| !field.omit_empty || value.as_str() != Some(""))
+                .filter(|value| !field.omit_default || Some(*value) != field.default.as_ref())
             {
                 next.values.insert(field.key.clone(), value.clone());
             }
@@ -316,6 +671,10 @@ impl SettingsSchema {
     }
 
     fn validate_data(&self, data: &SettingsData) -> Result<(), String> {
+        self.validate_fields(data, true)
+    }
+
+    fn validate_fields(&self, data: &SettingsData, require_complete: bool) -> Result<(), String> {
         self.check_classification(data)?;
         for field in &self.fields {
             let secret;
@@ -330,7 +689,7 @@ impl SettingsSchema {
             };
             match value {
                 Some(value) => field.validate(value)?,
-                None if field.required => {
+                None if field.required && require_complete => {
                     return Err(format!("Required plugin setting is missing: {}", field.key))
                 }
                 None => {}
@@ -339,11 +698,30 @@ impl SettingsSchema {
         Ok(())
     }
 
+    /// Portable restores intentionally omit secrets but still validate supplied
+    /// values, field classification, and the complete encoded envelope budget.
+    pub(crate) fn seed_configuration(
+        &self,
+        data: &SettingsData,
+    ) -> Result<WorkerConfiguration, String> {
+        self.configuration_impl(data, false)
+    }
+
     pub(crate) fn configuration(&self, data: &SettingsData) -> Result<WorkerConfiguration, String> {
-        self.validate_data(data)?;
+        self.configuration_impl(data, true)
+    }
+
+    fn configuration_impl(
+        &self,
+        data: &SettingsData,
+        require_complete: bool,
+    ) -> Result<WorkerConfiguration, String> {
+        self.validate_fields(data, require_complete)?;
         let mut values = self.public_values(data);
         for field in &self.fields {
-            if field.omit_empty && values.get(&field.key).and_then(Value::as_str) == Some("") {
+            if (field.omit_empty && values.get(&field.key).and_then(Value::as_str) == Some(""))
+                || (field.omit_default && values.get(&field.key) == field.default.as_ref())
+            {
                 // Opted-in defaults stay visible without consuming startup bytes.
                 values.remove(&field.key);
             }
@@ -373,6 +751,12 @@ impl SettingField {
             SettingType::String => value.as_str().is_some_and(|value| {
                 let length = value.chars().count();
                 value.len() <= MAX_STRING
+                    && self.editor.as_ref().is_none_or(|editor| {
+                        // Empty optional settings retain their existing omit-empty semantics.
+                        (value.is_empty() && !self.required)
+                            || serde_json::from_str::<Value>(value)
+                                .is_ok_and(|value| json_value_matches(&value, &editor.schema))
+                    })
                     && self.min_length.is_none_or(|min| length >= min)
                     && self.max_length.is_none_or(|max| length <= max)
                     && self

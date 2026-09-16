@@ -30,7 +30,7 @@ struct Desired {
 #[derive(Default)]
 pub(super) struct Reconciliation {
     desired: Mutex<Desired>,
-    operation: tokio::sync::Mutex<()>,
+    pub(super) operation: tokio::sync::Mutex<()>,
 }
 
 impl Reconciliation {
@@ -97,6 +97,28 @@ impl PackageApplication {
         (self.0.changed)();
     }
 
+    /// Called under the native save gate and current host epoch after persistence.
+    pub(crate) fn group_desired_changed(&self, members: &[String], enabled: bool) {
+        let mut desired = self
+            .0
+            .reconciliation
+            .desired
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for declaration in &mut desired.declarations {
+            if members.contains(&declaration.plugin_id) {
+                declaration.enabled = enabled;
+            }
+        }
+        for (id, status) in &mut desired.statuses {
+            if members.contains(id) {
+                status.enabled = enabled;
+                status.state = "pending".into();
+                status.error = None;
+            }
+        }
+    }
+
     pub(super) fn require_unmanaged(&self, id: &str) -> Result<(), String> {
         if self.0.reconciliation.contains(id) {
             Err("This plugin is managed by desktop_plugins in the application configuration".into())
@@ -105,7 +127,13 @@ impl PackageApplication {
         }
     }
 
-    fn configured_status(&self, id: &str, epoch: u64, state: &str, error: Option<String>) {
+    pub(super) fn configured_status(
+        &self,
+        id: &str,
+        epoch: u64,
+        state: &str,
+        error: Option<String>,
+    ) {
         let _ = self.0.host.commit_in_epoch(epoch, || {
             if let Some(status) = self
                 .0

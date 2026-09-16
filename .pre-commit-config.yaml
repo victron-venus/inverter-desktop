@@ -18,7 +18,8 @@ repos:
     rev: v1
     hooks:
       - id: typos
-        exclude: '.github/secrets/ANDROID_KEYSTORE_BASE64'
+        # Preserve upstream APIs and spelling in reviewed vendored dependencies.
+        exclude: '(^src-tauri/vendor/|^\.github/secrets/ANDROID_KEYSTORE_BASE64$)'
   # TypeScript / Vue / JSON / YAML / Markdown formatting.
   - repo: local
     hooks:
@@ -48,11 +49,17 @@ repos:
         language: system
         entry: cargo fmt --manifest-path src-tauri/Cargo.toml --
         types: [rust]
+        exclude: '^src-tauri/vendor/'
         pass_filenames: true
-  - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: v9.39.1
+  # Use the repository's configured frontend linter; ESLint has no project config.
+  - repo: local
     hooks:
-      - id: eslint
+      - id: biome
+        name: biome lint
+        language: system
+        entry: pnpm run lint
+        types_or: [ts, tsx, javascript, jsx, vue]
+        pass_filenames: false
   - repo: https://github.com/pylint-dev/pylint
     rev: v4.0.6
     hooks:

@@ -8,7 +8,7 @@ Android and iOS cannot build this executable.
 
 The harness creates temporary application state and uses a nonpersistent browser
 profile. It does not initialize normal authentication, saved configuration,
-keychain access, core MQTT, bundled cameras, or installed plugins. It initializes
+keychain access, core MQTT, camera workers, or installed plugins. It initializes
 an empty temporary package manager for the real bridge lifecycle. Its publisher
 policy is empty and its settings key provider cannot supply a key. No production
 publisher key, package installation, or new application-signing step is required.
@@ -79,7 +79,52 @@ notification display, or playback on other operating systems. CI compiles the
 opt-in example and runs `--help`; those checks do not launch its graphical test.
 Current results and remaining acceptance work are recorded in [TODO.md](../TODO.md).
 
+## Live preview mode
+
+The same isolated harness supports the optional automatic preview path:
+
+```text
+plugin-media-smoke --live-fixture-url 'http://127.0.0.1:PORT/prefix/api/front?fps=2&height=360' --evidence /absolute/new-live-evidence.json
+```
+
+Serve a loopback MJPEG response with alternating visibly different frames. The
+harness derives an explicit preview grant with a fifteen-second lifetime and no
+bearer credential. It inspects decoded image dimensions and changing pixels by
+native evaluation, checks window placement/focus, then verifies both timed expiry
+and generation revocation. The external preview receives no IPC or frontend
+observer script. Its URL must stay exact; redirects and new windows are denied.
+Preview tests are separate from downloaded H.264/image tests and use no media
+cache file. Run this mode explicitly to establish current graphical acceptance;
+merely building it or passing the pure media tests is not playback evidence.
+
 ## Recorded macOS acceptance
+
+The extraction checkpoint passed both graphical modes with the same isolated
+executable (SHA-256
+`55ea779afc86bd961f8ad56022accafc122c082b9a326981c6d209c4368f84d6`). Local evidence
+files are `inverter-extraction-preview-w0ljgfb3-ready.json` and
+`inverter-extraction-h264-w0ljgfb3-ready.json`; both report `passed: true`, no
+failure, native exit code 0, and successful private-profile removal.
+
+The MJPEG fixture produced distinct decoded 640x360 frames in visible, unfocused
+windows without taking the anchor's focus. The first window expired after
+15.055 seconds; generation revocation destroyed the second. The harness waits
+through Wry's pre-navigation callback cancellation within its existing five-second
+decode deadline; it still requires decoded dimensions and changing pixel values.
+
+The H.264 fixture was 7,459,136 bytes, 640x360 pixels and 16 seconds long. All three
+players decoded and advanced; the final player reached its actual `ended` event.
+Two simultaneous 660x372 physical-pixel windows remained inside the monitor work
+area, visible, unfocused and nonoverlapping. The focused anchor, bounded 1 MiB
+`206` response, wrong-window rejection, real Vue Close button, revocation,
+automatic end close and owned-file cleanup all passed. The disposable loopback
+fixture server was stopped afterward.
+
+This is source-checkpoint graphical evidence on macOS, separate from a signed
+release installation or real camera/OS notification acceptance. Linux and Windows
+graphical acceptance remains open; their build/help checks do not prove playback.
+
+### Earlier clip checkpoint
 
 The local `inverter-frigate-clips-native-smoke-3.json` reports `passed: true`, no
 failure and native exit code 0. The actual H.264 fixture was 4,727,159 bytes,

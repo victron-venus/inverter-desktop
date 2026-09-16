@@ -12,6 +12,8 @@ use zip::ZipArchive;
 
 fn manifest() -> PluginManifest {
     PluginManifest {
+        group: None,
+        live_view: None,
         schema_version: MANIFEST_SCHEMA_VERSION,
         plugin_id: "test.publisher.monitor".into(),
         version: "1.2.3".into(),

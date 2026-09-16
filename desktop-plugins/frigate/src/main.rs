@@ -34,7 +34,7 @@ async fn session(
     tokio::select! {
         biased;
         _=incoming.recv()=>Err("unexpected host command"),
-        result=network::run(configuration,output,wire::supports_http_video(&api))=>result,
+        result=network::run(configuration,output,wire::supports_http_video(&api),wire::supports_http_live(&api))=>result,
     }
 }
 

@@ -1,73 +1,60 @@
-/** Desktop compatibility composition. Installable package delivery is tracked in TODO.md. */
-import { provide, type Component } from 'vue'
-import { Home, Lightbulb, WashingMachine, PlugZap, Puzzle } from '@lucide/vue'
-import { useHA } from '../composables/useHA'
-import { initHomeNotifications } from './desktop/homeNotifications'
-import CameraVideo from '../CameraVideo.vue'
+/** Desktop owns only generic installed-package UI. Integrations live in workers. */
+import { defineComponent, provide, ref, type Component } from 'vue'
+import { Puzzle } from '@lucide/vue'
+import { listen } from '@tauri-apps/api/event'
 import type { AppConfig } from '../config'
+import type { ControlState, DashboardControl } from '../inverterControl'
+import PluginMedia from './desktop/plugins/PluginMedia.vue'
+import { createPluginPresentation, pluginPresentationKey } from './desktop/plugins/presentation'
 
-export { default as DashboardFeaturePanels } from './desktop/DashboardPanels.vue'
-export { default as DashboardFeatureActions } from './desktop/CameraAction.vue'
-export { default as DashboardFeatureStatus } from './desktop/HomeStatus.vue'
-export { default as DashboardConnectionStatus } from './desktop/CameraStatus.vue'
-export { default as FeatureConfigSection } from './desktop/IntegrationConfig.vue'
+export { default as DashboardFeaturePanels } from './desktop/plugins/PluginCompactPanels.vue'
+export { default as DashboardFeatureActions } from './desktop/plugins/PluginGroupActions.vue'
+export { default as DashboardFeatureStatus } from './desktop/plugins/PluginConnectionStatus.vue'
 export { default as FeaturePluginManager } from './desktop/plugins/PluginManager.vue'
-export { default as FeatureSectionVisibility } from './desktop/SectionVisibility.vue'
-export { default as FeatureControlsEditor } from './desktop/HomeControlsEditor.vue'
-export { default as FeatureDiscoveryDialog } from './desktop/DiscoveryDialog.vue'
-export { default as FeatureSetup } from './desktop/Setup.vue'
 export { default as HeaderControlsEditor } from '../components/HeaderTogglesEditor.vue'
-export { default as ControlTargetInput } from '../components/EntityAutocompleteInput.vue'
-export { useDashboardControlsConfig as useConfigControls } from '../composables/useDashboardControlsConfig'
-export { cameraConnection as featureConnection } from './desktop/cameraConnection'
+export { default as ControlTargetInput } from './CoreControlInput.vue'
+export { useCoreControlsConfig as useConfigControls } from './coreControlsConfig'
 export { featureDefaultConfig } from './desktop/defaultConfig'
-
+const Empty = defineComponent({ inheritAttrs: false, setup: () => () => null })
+export const DashboardConnectionStatus = Empty
+export const FeatureConfigSection = Empty
+export const FeatureSectionVisibility = Empty
+export { default as FeatureControlsEditor } from './CoreHomeControlsEditor.vue'
+export const FeatureDiscoveryDialog = Empty
+export const FeatureSetup = Empty
 export const featureConfigSections = [
-  { id: 'integrations', label: 'Home Assistant & Cameras', icon: Home },
   { id: 'plugins', label: '', labelKey: 'plugins.manager.title', icon: Puzzle },
 ]
 export const featurePluginManagerTabId = 'plugins'
-export const featureSetupAvailable = true
+export const featureSetupAvailable = false
 export const isMobileApp = false
-
-export function prepareFeatureConfig(config: AppConfig) {
-  config.ha_use_direct_api = !!(config.ha_url?.trim() && config.ha_longlived_token?.trim())
-  config.ha_port ??= 8123
-  config.mqtt_ha_port ??= 1883
+export async function subscribeFeatureConfig(config: AppConfig, current: () => boolean) {
+  return listen<{ desktop_plugins: NonNullable<AppConfig['desktop_plugins']> }>(
+    'plugin-configuration-changed',
+    (event) => {
+      if (current() && Array.isArray(event.payload?.desktop_plugins))
+        config.desktop_plugins = structuredClone(event.payload.desktop_plugins)
+    }
+  )
 }
-
+export function prepareFeatureConfig(_config: AppConfig) {}
 export function getFeatureView(path: string): Component | undefined {
-  return path === '/camera-video' ? CameraVideo : undefined
+  return path === '/camera-video' ? PluginMedia : undefined
 }
-
+/** Core reconnects never establish optional integration connections. */
+export const featureConnection = { async connect(_config: AppConfig) {}, cleanup() {} }
 export function useDashboardFeatures() {
-  const home = useHA()
-  provide('desktop-home', home)
-  let stopNotifications: (() => void) | undefined
+  const context = createPluginPresentation()
+  provide(pluginPresentationKey, context)
   return {
-    allowHomeControls: true,
-    controlsConnected: home.haConnected,
-    getControlState: home.getHaControlState,
-    getControlLabel: (label: string) =>
-      label
-        .replace(/\b(laundry|washer|washing|guard)\b/gi, '')
-        .replace(/\s{2,}/g, ' ')
-        .trim(),
-    getControlIcon: (entity: string, label: string): Component | null => {
-      if (entity.split('.')[0] === 'light') return Lightbulb
-      if (/laundry|washer|washing/.test(label.toLowerCase())) return WashingMachine
-      if (label.toLowerCase().includes('guard')) return PlugZap
-      return null
-    },
-    async init() {
-      await home.initHa()
-      stopNotifications ??= initHomeNotifications(home.haEntityStates, home.haEntityAttributes)
-    },
-    cleanup() {
-      home.cleanupHa()
-      stopNotifications?.()
-      stopNotifications = undefined
-    },
-    setWindowHidden: home.setHaWindowHidden,
+    allowHomeControls: false,
+    controlsConnected: ref(true),
+    getControlState: (_control: DashboardControl): ControlState | undefined => undefined,
+    getControlLabel: (label: string) => label,
+    getControlIcon: (_entity: string, _label: string): Component | null => null,
+    mergeControls: context.mergeControls,
+    init: context.dashboard.start,
+    cleanup: context.dashboard.stop,
+    async setWindowHidden(_hidden: boolean) {},
   }
 }

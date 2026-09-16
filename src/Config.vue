@@ -744,6 +744,7 @@ import {
   featureConfigSections,
   useConfigControls,
   prepareFeatureConfig,
+  subscribeFeatureConfig,
   isMobileApp,
 } from '@features'
 import { useConfigForm } from './composables/useConfigForm'
@@ -821,6 +822,7 @@ function ingestDiscovered(list: DiscoveredInst[] | null | undefined) {
 }
 
 let unlistenMqttState: UnlistenFn | null = null
+let unlistenFeatures: (() => void) | null = null
 let disposed = false
 
 const sections = computed(() => [
@@ -933,6 +935,16 @@ async function handleRestore() {
     if (done) {
       const cfg = await loadConfig()
       loadFromConfig(cfg)
+      try {
+        const stop = await subscribeFeatureConfig(config, () => !disposed)
+        if (disposed) {
+          stop()
+          return
+        }
+        unlistenFeatures = stop
+      } catch {
+        logger.warn('Optional settings updates are unavailable')
+      }
       applyTheme(cfg.color_scheme)
       await emit('config-saved', { color_scheme: cfg.color_scheme })
       message.value = 'Configuration loaded'
@@ -1021,6 +1033,16 @@ onMounted(async () => {
     const cfg = await loadConfig()
     if (disposed) return
     loadFromConfig(cfg)
+    try {
+      const stop = await subscribeFeatureConfig(config, () => !disposed)
+      if (disposed) {
+        stop()
+        return
+      }
+      unlistenFeatures = stop
+    } catch {
+      logger.warn('Optional settings updates are unavailable')
+    }
     // Re-apply after loading to be absolutely sure
     applyTheme(cfg.color_scheme)
     try {
@@ -1043,6 +1065,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   disposed = true
+  unlistenFeatures?.()
+  unlistenFeatures = null
   globalThis.removeEventListener('keydown', handleKeyDown)
   if (unlistenMqttState) {
     unlistenMqttState()

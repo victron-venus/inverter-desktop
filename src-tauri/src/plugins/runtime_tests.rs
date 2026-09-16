@@ -22,7 +22,7 @@ fn number_params() -> Value {
 fn replace_inputs(entry: &WorkerEntry, items: Vec<DashboardContribution>) {
     super::super::protocol::validate_contributions(&items).unwrap();
     let _authority = entry.authority.lock().unwrap();
-    entry.replace_contributions(items);
+    entry.replace_contributions(items, Vec::new());
 }
 
 fn card_state(id: &str, text: &str) -> DashboardContribution {
@@ -688,6 +688,7 @@ fn fixture() -> PathBuf {
 
 fn spec(mode: &str) -> WorkerSpec {
     WorkerSpec {
+        live_view: None,
         plugin_id: TEST_PLUGIN.into(),
         executable: fixture(),
         args: vec![mode.into()],
@@ -1986,4 +1987,96 @@ async fn generation_is_revoked_if_the_first_spawn_callback_panics() {
         .unwrap();
     assert!(!lease.is_active());
     host.shutdown().await;
+}
+
+#[tokio::test]
+async fn explicit_media_cooldown_ids_separate_equal_camera_titles_and_keep_global_bounds() {
+    let host = PluginHost::default();
+    let worker = video_spec("configuration");
+    let grant = worker.http_video.clone().unwrap();
+    host.start(worker).await.unwrap();
+    ready(&host).await;
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    {
+        let _authority = entry.authority.lock().unwrap();
+        let enqueue = |id: &str, bucket: &str| {
+            entry.queue_http_video(
+                &grant,
+                id.into(),
+                "https://video.test/base/snapshot".into(),
+                "Front door".into(),
+                MediaAdmission {
+                    kind: HttpMediaKind::Png,
+                    cooldown_id: Some(bucket.into()),
+                    live_preview: false,
+                },
+            )
+        };
+        assert!(enqueue("motion-1", "front-motion"));
+        assert!(enqueue("ding-1", "front-ding"));
+        assert!(!enqueue("motion-2", "front-motion"));
+        assert!(
+            !enqueue("motion-1", "new-bucket"),
+            "a different bucket cannot replay the same request"
+        );
+        assert_eq!(entry.http_videos.lock().unwrap().rate.count, 2);
+    }
+    assert_eq!(host.take_http_video_requests().len(), 2);
+    host.shutdown().await;
+}
+
+fn live_spec(mode: &str) -> WorkerSpec {
+    let mut worker = video_spec(mode);
+    let manifest = serde_json::from_value(json!({
+        "schema_version":1,"plugin_id":TEST_PLUGIN,"version":"1.0.0","host_api":"^1.8",
+        "target":"aarch64-apple-darwin","entrypoint":"worker","inventory":[],"signature":null,
+        "config_schema":{"type":"object","properties":{"server":{"type":"string"}}},
+        "permissions":["plugin_configuration","http_video"],
+        "http_video":{"base_url_setting":"server","live_preview":{"query":"fps=2&height=360","max_duration_seconds":15}}
+    })).unwrap();
+    worker.http_video =
+        HttpVideoGrant::from_manifest_configuration(&manifest, worker.configuration.as_ref())
+            .unwrap();
+    worker
+}
+
+#[tokio::test]
+async fn http_live_admission_is_private_revocable_and_uses_motion_notification() {
+    let host = PluginHost::default();
+    let mut worker = live_spec("configuration_live");
+    worker.desktop_notifications = true;
+    host.start(worker).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let mut requests = host.take_http_video_requests();
+    assert_eq!(requests.len(), 1);
+    let request = requests.pop().unwrap();
+    assert!(request.live_preview);
+    assert_eq!(request.media_kind, HttpMediaKind::Video);
+    assert_eq!(request.id, "live-1");
+    assert!(!serde_json::to_string(&host.snapshots())
+        .unwrap()
+        .contains("video.test"));
+    let mut notifications = Vec::new();
+    host.dispatch_notifications(|item| notifications.push(item.body.clone()));
+    assert_eq!(notifications, ["Motion started"]);
+    host.revoke();
+    assert!(!request.lease.is_active());
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn http_live_requires_explicit_preview_policy_and_configured_origin() {
+    for worker in [
+        configured_spec("configuration_live"),
+        video_spec("configuration_live"),
+        live_spec("configuration_live_bad_url"),
+    ] {
+        let host = PluginHost::default();
+        host.start(worker).await.unwrap();
+        wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert!(host.take_http_video_requests().is_empty());
+        assert!(!host.has_pending_notifications());
+        host.shutdown().await;
+    }
 }

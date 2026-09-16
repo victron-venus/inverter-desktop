@@ -20,6 +20,8 @@ from pathlib import Path
 PLUGINS = {
     "frigate": ("frigate-manifest.json", "inverter-frigate-worker"),
     "home-assistant": ("home-assistant-manifest.json", "inverter-home-assistant-worker"),
+    "kerberos": ("kerberos-manifest.json", "inverter-kerberos-worker"),
+    "ring": ("ring-manifest.json", "inverter-ring-worker"),
 }
 TARGETS = (
     "aarch64-apple-darwin",

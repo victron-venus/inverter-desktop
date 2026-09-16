@@ -21,6 +21,7 @@ const STAGES: [&str; 3] = ["Smoke close", "Smoke revoke", "Smoke ended"];
 const WAIT: Duration = Duration::from_secs(45);
 
 struct Options {
+    live: bool,
     url: String,
     output: PathBuf,
     hold: Duration,
@@ -29,12 +30,17 @@ struct Options {
 fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut args = args.into_iter();
     let mut url = None;
+    let mut live = false;
     let mut output = None;
     let mut hold = Duration::ZERO;
     while let Some(argument) = args.next() {
         let value = args.next().ok_or("Every option requires a value")?;
         match argument.as_str() {
             "--fixture-url" if url.is_none() => url = Some(value),
+            "--live-fixture-url" if url.is_none() => {
+                url = Some(value);
+                live = true;
+            }
             "--evidence" if output.is_none() => output = Some(PathBuf::from(value)),
             "--hold-seconds" => {
                 let seconds: u64 = value.parse().map_err(|_| "Invalid hold duration")?;
@@ -47,11 +53,17 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         }
     }
     let result = Options {
-        url: url.ok_or("--fixture-url is required (explicit loopback MP4)")?,
+        live,
+        url: url
+            .ok_or("--fixture-url or --live-fixture-url is required (explicit loopback media)")?,
         output: output.ok_or("--evidence is required (new JSON file)")?,
         hold,
     };
-    fixture_grant(&result.url)?;
+    if live {
+        fixture_live_grant(&result.url)?;
+    } else {
+        fixture_grant(&result.url)?;
+    }
     if !result.output.is_absolute() || result.output.file_name().is_none() {
         return Err("Evidence path must be an absolute new file path".into());
     }
@@ -59,6 +71,14 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
 }
 
 fn fixture_grant(value: &str) -> Result<HttpVideoGrant, String> {
+    fixture_media_grant(value, false)
+}
+
+fn fixture_live_grant(value: &str) -> Result<HttpVideoGrant, String> {
+    fixture_media_grant(value, true)
+}
+
+fn fixture_media_grant(value: &str, preview: bool) -> Result<HttpVideoGrant, String> {
     let url = reqwest::Url::parse(value).map_err(|_| "Invalid fixture URL")?;
     let loopback = url
         .host_str()
@@ -72,23 +92,33 @@ fn fixture_grant(value: &str) -> Result<HttpVideoGrant, String> {
         return Err("Fixture must use plain HTTP at an explicit loopback IP".into());
     }
     let base = url.join(".").map_err(|_| "Invalid fixture base")?;
-    let manifest: PluginManifest = serde_json::from_value(json!({
+    let mut declaration = json!({
         "schema_version":1,"plugin_id":PLUGIN,"version":"0.0.0",
-        "host_api":"^1.3","target":env!("INVERTER_DESKTOP_TARGET"),
+        "host_api":"^1.8","target":env!("INVERTER_DESKTOP_TARGET"),
         "entrypoint":"fixture", "permissions":["plugin_configuration","http_video"],
         "http_video":{"base_url_setting":"fixture_base"},
         "config_schema":{"type":"object","properties":{"fixture_base":{"type":"string"}}},
         "inventory":[],"signature":null
-    }))
-    .map_err(|_| "Cannot form native fixture declaration")?;
+    });
+    if preview {
+        declaration["http_video"]["live_preview"] = json!({
+            "query":"fps=2&height=360", "max_duration_seconds":15
+        });
+    }
+    let manifest: PluginManifest = serde_json::from_value(declaration)
+        .map_err(|_| "Cannot form native fixture declaration")?;
     let configuration = WorkerConfiguration {
         revision: "native-smoke".into(),
         values: json!({"fixture_base":base.as_str()}),
         secrets: BTreeMap::new(),
     };
     let grant = HttpVideoGrant::from_manifest_configuration(&manifest, Some(&configuration))?
-        .ok_or("Fixture video grant unavailable")?;
-    grant.validate_url(value)?;
+        .ok_or("Fixture media grant unavailable")?;
+    if preview {
+        grant.validate_preview_url(value)?;
+    } else {
+        grant.validate_url(value)?;
+    }
     Ok(grant)
 }
 
@@ -317,12 +347,13 @@ fn submit(
     state.leases.lock().unwrap().push(lease.clone());
     media
         .try_submit(QueuedHttpVideo {
+            live_preview: false,
+            media_kind: HttpMediaKind::Video,
             lease: lease.clone(),
             grant: fixture_grant(&options.url)?,
             id: format!("native-smoke-{sequence}"),
             url: options.url.clone(),
             title: STAGES[sequence].into(),
-            media_kind: HttpMediaKind::Video,
         })
         .map_err(|_| "Native media admission failed")?;
     Ok(lease)
@@ -356,6 +387,139 @@ fn geometry(window: &tauri::WebviewWindow) -> Result<Value, String> {
     )
 }
 
+/// Native evaluation returns structured observations directly, without granting
+/// remote pages an IPC capability or adding a production frontend route.
+async fn live_sample(window: &tauri::WebviewWindow) -> Result<Option<Value>, String> {
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let sent = Mutex::new(Some(sent));
+    window.eval_with_callback(r#"(() => {
+      try {
+        const image = document.images[0];
+        if (!image || !image.naturalWidth || !image.naturalHeight) return null;
+        const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+        const context = canvas.getContext('2d'); context.drawImage(image, 0, 0, 1, 1);
+        return {width:image.naturalWidth,height:image.naturalHeight,pixel:Array.from(context.getImageData(0,0,1,1).data)};
+      } catch (_) { return null; }
+    })()"#, move |value| {
+        if let Some(sent) = sent.lock().unwrap().take() { let _ = sent.send(value); }
+    }).map_err(|_| "Cannot inspect native live image")?;
+    let value = timeout(Duration::from_secs(2), received)
+        .await
+        .map_err(|_| "Native live observation timed out")?;
+    // Wry queues evaluations before navigation commits but drops their callbacks.
+    // Keep waiting inside the caller's bounded decode deadline; visibility alone
+    // does not establish page readiness or supply any decoding evidence.
+    let Ok(value) = value else {
+        return Ok(None);
+    };
+    let value: Value =
+        serde_json::from_str(&value).map_err(|_| "Invalid native live observation")?;
+    Ok(
+        (value["width"].as_u64().is_some_and(|n| n > 0 && n <= 16384)
+            && value["height"]
+                .as_u64()
+                .is_some_and(|n| n > 0 && n <= 16384)
+            && value["pixel"].as_array().is_some_and(|p| p.len() == 4))
+        .then_some(value),
+    )
+}
+
+async fn exercise_live(
+    app: &tauri::AppHandle,
+    state: &SmokeState,
+    media: &MediaService,
+    anchor: &tauri::WebviewWindow,
+    options: &Options,
+) -> Result<(), String> {
+    for (sequence, revoke) in [(10, false), (11, true)] {
+        let lease = GenerationLease::new(PLUGIN.into(), 1, sequence);
+        state.leases.lock().unwrap().push(lease.clone());
+        let _owner = RevokeOnDrop(lease.clone());
+        let title = if revoke {
+            "Smoke live revoke"
+        } else {
+            "Smoke live expiry"
+        };
+        let started = tokio::time::Instant::now();
+        media
+            .try_submit(QueuedHttpVideo {
+                live_preview: true,
+                media_kind: HttpMediaKind::Video,
+                lease: lease.clone(),
+                grant: fixture_live_grant(&options.url)?,
+                id: format!("native-live-{sequence}"),
+                url: options.url.clone(),
+                title: title.into(),
+            })
+            .map_err(|_| "Cannot admit native live fixture")?;
+        let expected_title = format!("{title} — Live");
+        let window = until(|| {
+            Ok(app.webview_windows().into_values().find(|window| {
+                window.title().is_ok_and(|title| title == expected_title)
+                    && window.is_visible().unwrap_or(false)
+            }))
+        })
+        .await?;
+        let geometry = geometry(&window)?;
+        let first = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(sample) = live_sample(&window).await? {
+                    break Ok::<_, String>(sample);
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| "MJPEG fixture never decoded an image")??;
+        let second = timeout(Duration::from_secs(5), async {
+            loop {
+                sleep(Duration::from_millis(200)).await;
+                if let Some(sample) = live_sample(&window).await? {
+                    if sample["pixel"] != first["pixel"] {
+                        break Ok::<_, String>(sample);
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| "MJPEG fixture did not advance between distinct frames")??;
+        let focused = anchor.is_focused().unwrap_or(false) && !window.is_focused().unwrap_or(true);
+        state.check(
+            title,
+            json!({"geometry":geometry,"first_decoded_frame":first,
+            "second_decoded_frame":second,"focus_preserved":focused}),
+        );
+        state.persist()?;
+        if !focused {
+            return Err("Live preview stole focus from the native anchor".into());
+        }
+        if revoke {
+            lease.revoke();
+        }
+        until(|| {
+            Ok(app
+                .get_webview_window(window.label())
+                .is_none()
+                .then_some(()))
+        })
+        .await?;
+        let seconds = started.elapsed().as_secs_f64();
+        if !revoke && !(14.0..=25.0).contains(&seconds) {
+            return Err("Live preview lifetime was not bounded to 15 seconds".into());
+        }
+        state.check(
+            if revoke {
+                "live_revocation_destroyed_window"
+            } else {
+                "live_15_second_expiry"
+            },
+            json!({"elapsed_seconds":seconds}),
+        );
+        until(|| Ok((!media.has_owned_work()).then_some(()))).await?;
+    }
+    Ok(())
+}
+
 async fn exercise(
     app: tauri::AppHandle,
     state: Arc<SmokeState>,
@@ -382,6 +546,9 @@ async fn exercise(
     .map_err(|_| "Focus precondition failed: activate the Native Media Smoke anchor window before testing focus preservation")?;
     state.check("anchor_focused", json!(true));
     state.persist()?;
+    if options.live {
+        return exercise_live(&app, &state, &media, &anchor, &options).await;
+    }
 
     let first_lease = submit(&media, &state, &options, 0)?;
     let _first_owner = RevokeOnDrop(first_lease.clone());
@@ -520,6 +687,7 @@ pub fn run() -> Result<(), String> {
     if arguments == ["--help"] {
         println!("plugin-media-smoke --fixture-url http://127.0.0.1:PORT/prefix/clip.mp4 --evidence /absolute/new-evidence.json [--hold-seconds 0..30]");
         println!("Use a decodable video MP4 larger than one MiB, lasting 8–40 seconds (at least hold + 6 seconds). No production services or settings are opened.");
+        println!("Live mode: --live-fixture-url 'http://127.0.0.1:PORT/prefix/api/front?fps=2&height=360' --evidence /absolute/new.json. Serve MJPEG with alternating distinct frames for native decoding and 15-second expiry proof.");
         return Ok(());
     }
     let options = options(arguments)?;
@@ -559,12 +727,21 @@ pub fn run() -> Result<(), String> {
         .map_err(|_| "Cannot canonicalize private smoke profile")?;
     let builder = super::media_windows::register(tauri::Builder::default())
         .manage(state.clone())
-        .invoke_handler(tauri::generate_handler![
-            auth_status,
-            observe_native_media_smoke,
-            super::bridge::close_plugin_video_window,
-            super::bridge::drag_plugin_video_window
-        ])
+        .invoke_handler(|invoke| {
+            if super::media_windows::is_plugin_preview_label(invoke.message.webview().label()) {
+                invoke
+                    .resolver
+                    .reject("Remote live windows cannot invoke host commands");
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                auth_status,
+                observe_native_media_smoke,
+                super::bridge::close_plugin_video_window,
+                super::bridge::drag_plugin_video_window
+            ];
+            handler(invoke)
+        })
         .on_page_load(|webview, _| {
             if super::media_windows::is_plugin_video_label(webview.label()) {
                 let _ = webview.eval(OBSERVER);

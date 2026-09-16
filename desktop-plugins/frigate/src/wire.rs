@@ -22,7 +22,7 @@ pub fn validate_hello(frame: HostFrame) -> Result<String, &'static str> {
         } if plugin_id == PLUGIN_ID => {
             let version =
                 semver::Version::parse(&host_api_version).map_err(|_| "unsupported host API")?;
-            if !semver::VersionReq::parse("^1.2")
+            if !semver::VersionReq::parse("^1.8")
                 .expect("fixed version requirement")
                 .matches(&version)
             {
@@ -42,6 +42,14 @@ pub fn supports_http_video(host_api: &str) -> bool {
     })
 }
 
+pub fn supports_http_live(host_api: &str) -> bool {
+    semver::Version::parse(host_api).is_ok_and(|version| {
+        semver::VersionReq::parse("^1.8")
+            .expect("fixed version requirement")
+            .matches(&version)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,9 +59,9 @@ mod tests {
     #[test]
     fn accepts_only_compatible_host_api_and_own_identity() {
         for (api, accepted) in [
-            ("1.2.0", true),
-            ("1.3.1", true),
-            ("1.1.0", false),
+            ("1.8.0", true),
+            ("1.9.1", true),
+            ("1.7.0", false),
             ("2.0.0", false),
             ("1.2.0-beta.1", false),
             ("invalid", false),
@@ -70,13 +78,13 @@ mod tests {
         }
         assert!(validate_hello(HostFrame::Hello {
             protocol_version: 1,
-            host_api_version: "1.2.0".into(),
+            host_api_version: "1.8.0".into(),
             plugin_id: "other.plugin".into()
         })
         .is_err());
         assert!(validate_hello(HostFrame::Hello {
             protocol_version: 2,
-            host_api_version: "1.2.0".into(),
+            host_api_version: "1.8.0".into(),
             plugin_id: PLUGIN_ID.into()
         })
         .is_err());
@@ -95,6 +103,20 @@ mod tests {
             ("invalid", false),
         ] {
             assert_eq!(supports_http_video(version), supported);
+        }
+    }
+
+    #[test]
+    fn live_capability_requires_stable_host_api_18() {
+        for (version, supported) in [
+            ("1.7.99", false),
+            ("1.8.0", true),
+            ("1.10.0", true),
+            ("1.8.0-beta.1", false),
+            ("2.0.0", false),
+            ("invalid", false),
+        ] {
+            assert_eq!(supports_http_live(version), supported);
         }
     }
 
@@ -137,7 +159,7 @@ mod tests {
         assert!(frames
             .send(HostFrame::Hello {
                 protocol_version: 1,
-                host_api_version: "1.2.0".into(),
+                host_api_version: "1.8.0".into(),
                 plugin_id: PLUGIN_ID.into(),
             })
             .await

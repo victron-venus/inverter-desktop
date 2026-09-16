@@ -1,4 +1,4 @@
-//! Bounded direct-media HTTP transfers. No application configuration or credentials.
+//! Bounded media transfers. Credentials are explicitly scoped by native grants.
 
 use super::generation::GenerationLease;
 use super::media::MediaFile;
@@ -89,6 +89,7 @@ impl Default for TransferPolicy {
 pub(super) struct VideoTransfer {
     client: reqwest::Client,
     policy: TransferPolicy,
+    bearer_token: Option<String>,
 }
 
 impl VideoTransfer {
@@ -99,7 +100,16 @@ impl VideoTransfer {
             .read_timeout(policy.read_timeout)
             .build()
             .map_err(|_| VideoError::Network)?;
-        Ok(Self { client, policy })
+        Ok(Self {
+            client,
+            policy,
+            bearer_token: None,
+        })
+    }
+
+    pub(super) fn with_bearer(mut self, token: Option<String>) -> Self {
+        self.bearer_token = token;
+        self
     }
 
     pub(super) async fn download(
@@ -158,15 +168,15 @@ impl VideoTransfer {
         shutdown: &mut watch::Receiver<bool>,
         deadline: Instant,
     ) -> Result<u64, AttemptError> {
-        let mut response = cancellable(
-            lease,
-            shutdown,
-            deadline,
-            self.client.get(url.clone()).send(),
-        )
-        .await
-        .map_err(AttemptError::Terminal)?
-        .map_err(|_| AttemptError::Retry(VideoError::Network))?;
+        let request = self.client.get(url.clone());
+        let request = match &self.bearer_token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        };
+        let mut response = cancellable(lease, shutdown, deadline, request.send())
+            .await
+            .map_err(AttemptError::Terminal)?
+            .map_err(|_| AttemptError::Retry(VideoError::Network))?;
         let status = response.status();
         if !status.is_success() {
             // An error body contains no useful native UI data; do not read or log

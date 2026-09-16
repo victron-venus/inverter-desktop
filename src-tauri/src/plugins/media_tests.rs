@@ -38,6 +38,7 @@ fn request(base: &str, lease: GenerationLease) -> QueuedHttpVideo {
         .unwrap()
         .unwrap();
     QueuedHttpVideo {
+        live_preview: false,
         lease,
         grant,
         id: Uuid::new_v4().to_string(),
@@ -157,6 +158,7 @@ async fn typed_raster_images_have_exact_mime_and_generation_owned_files() {
         let image = ready(&mut events).await;
         assert_eq!(image.error, None);
         assert_eq!(image.media_kind, kind);
+        assert!(image.live_url.is_none());
         let path = directory
             .path()
             .join("media")
@@ -1151,4 +1153,231 @@ async fn recovery_rejects_symlinks_hardlinks_and_nonprivate_files_without_deleti
         assert_eq!(fs::read(&outside).unwrap(), b"preserve");
         service.shutdown().await.unwrap();
     }
+}
+
+fn live_request_with_duration(base: &str, lease: GenerationLease, seconds: u16) -> QueuedHttpVideo {
+    let mut manifest: PluginManifest = serde_json::from_str(include_str!(
+        "../../../scripts/plugins/frigate-manifest.json"
+    ))
+    .unwrap();
+    manifest.http_video.as_mut().unwrap().live_preview =
+        Some(crate::plugins::protocol::LivePreviewDeclaration {
+            query: "fps=2&height=360".into(),
+            max_duration_seconds: seconds,
+        });
+    let configuration = WorkerConfiguration {
+        revision: "preview-fixture".into(),
+        values: json!({"frigate_base_url":base}),
+        secrets: BTreeMap::new(),
+    };
+    let mut request = live_request(base, lease);
+    request.grant = HttpVideoGrant::from_manifest_configuration(&manifest, Some(&configuration))
+        .unwrap()
+        .unwrap();
+    request
+}
+
+#[tokio::test]
+async fn preview_lifetime_uses_its_verified_grant_and_holds_closing_slot() {
+    let (_directory, service, mut events) = service(policy()).await;
+    service
+        .try_submit(live_request_with_duration("http://127.0.0.1:1", lease(), 5))
+        .unwrap();
+    let preview = ready(&mut events).await;
+    tokio::time::pause();
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(4)).await;
+    assert!(events.try_recv().is_err());
+    assert!(service.is_window_active(&preview.media_id, &preview.window_label));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    let MediaEvent::Close { window_label } = events.recv().await.unwrap() else {
+        panic!("grant expiry must close preview")
+    };
+    assert_eq!(window_label, preview.window_label);
+    assert!(!service.is_window_active(&preview.media_id, &window_label));
+    assert!(service.has_owned_work());
+    service.window_destroyed(&window_label);
+    tokio::time::resume();
+    idle(&service).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn preview_needs_only_window_capacity_while_clip_transfers_and_bytes_are_full() {
+    let (_directory, service, mut events) = service(policy()).await;
+    {
+        let mut state = service.0.state.lock().unwrap();
+        for _ in 0..MAX_TRANSFERS {
+            state.items.insert(
+                Uuid::new_v4().to_string(),
+                Item {
+                    lease: lease(),
+                    label: "occupied-clip".into(),
+                    phase: Phase::Downloading,
+                    media_kind: HttpMediaKind::Video,
+                    bytes: MAX_CLIP_BYTES,
+                    file: None,
+                    retired: watch::channel(false).0,
+                    cleanup_failed: false,
+                },
+            );
+        }
+    }
+    service
+        .try_submit(live_request("http://127.0.0.1:1", lease()))
+        .unwrap();
+    let preview = ready(&mut events).await;
+    {
+        let mut state = service.0.state.lock().unwrap();
+        assert_eq!(
+            state.items.values().map(|item| item.bytes).sum::<u64>(),
+            MAX_MEDIA_BYTES
+        );
+        assert_eq!(state.items[&preview.media_id].bytes, 0);
+        assert!(state.items[&preview.media_id].file.is_none());
+        state.items.retain(|_, item| item.label != "occupied-clip");
+    }
+    service.window_destroyed(&preview.window_label);
+    idle(&service).await;
+    service.shutdown().await.unwrap();
+}
+
+fn live_request(base: &str, lease: GenerationLease) -> QueuedHttpVideo {
+    let mut request = request(base, lease);
+    request.live_preview = true;
+    request.url = format!("{base}/api/front?fps=2&height=360");
+    request
+}
+
+#[tokio::test]
+async fn live_preview_owns_no_download_or_file_and_expires_before_releasing_its_window() {
+    let (_directory, service, mut events) = service(policy()).await;
+    let owner = lease();
+    // An unreachable endpoint proves Ready does not wait for or download an endless stream.
+    service
+        .try_submit(live_request("http://127.0.0.1:1", owner))
+        .unwrap();
+    let preview = ready(&mut events).await;
+    assert!(preview.live_url.is_some());
+    assert!(preview.window_label.starts_with("plugin-preview-"));
+    {
+        let state = service.0.state.lock().unwrap();
+        let item = state.items.get(&preview.media_id).unwrap();
+        assert!(item.file.is_none());
+        assert_eq!(item.bytes, 0);
+        assert!(std::fs::read_dir(state.root.as_ref().unwrap())
+            .unwrap()
+            .next()
+            .is_none());
+    }
+    assert!(service
+        .read_range(&preview.media_id, &preview.window_label, None, false)
+        .await
+        .is_err());
+    tokio::time::pause();
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(14)).await;
+    assert!(events.try_recv().is_err());
+    assert!(service.is_window_active(&preview.media_id, &preview.window_label));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    let MediaEvent::Close { window_label } = events.recv().await.unwrap() else {
+        panic!("expected live expiry")
+    };
+    assert_eq!(window_label, preview.window_label);
+    assert!(!service.is_window_active(&preview.media_id, &preview.window_label));
+    assert!(
+        service.has_owned_work(),
+        "native absence must be acknowledged before releasing ownership"
+    );
+    service.window_destroyed(&window_label);
+    tokio::time::resume();
+    idle(&service).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn live_previews_share_window_bounds_and_revocation_cancels_queued_and_visible_work() {
+    let (_directory, service, mut events) = service(policy()).await;
+    let owner = lease();
+    let mut previews = Vec::new();
+    for _ in 0..MAX_WINDOWS {
+        service
+            .try_submit(live_request("http://127.0.0.1:1", owner.clone()))
+            .unwrap();
+        previews.push(ready(&mut events).await);
+    }
+    service
+        .try_submit(live_request("http://127.0.0.1:1", owner.clone()))
+        .unwrap();
+    tokio::task::yield_now().await;
+    assert!(
+        events.try_recv().is_err(),
+        "ninth live window must remain queued"
+    );
+    owner.revoke();
+    for preview in &previews {
+        assert!(!service.is_window_active(&preview.media_id, &preview.window_label));
+    }
+    for _ in 0..MAX_WINDOWS {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let MediaEvent::Close { window_label } = event else {
+            panic!("revoked queued preview must never become Ready")
+        };
+        service.window_destroyed(&window_label);
+    }
+    idle(&service).await;
+    assert!(events.try_recv().is_err());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn saturated_live_preview_expires_in_queue_and_never_replays_when_capacity_returns() {
+    let (_directory, service, mut events) = service(policy()).await;
+    let visible_owner = lease();
+    let mut previews = Vec::new();
+    for _ in 0..MAX_WINDOWS {
+        service
+            .try_submit(live_request("http://127.0.0.1:1", visible_owner.clone()))
+            .unwrap();
+        previews.push(ready(&mut events).await);
+    }
+    let queued_owner = lease();
+    service
+        .try_submit(live_request("http://127.0.0.1:1", queued_owner.clone()))
+        .unwrap();
+    tokio::task::yield_now().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(4)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        service.0.state.lock().unwrap().items.len(),
+        MAX_WINDOWS,
+        "expired live queue entry released"
+    );
+    assert!(
+        queued_owner.is_active(),
+        "expiry must not revoke the worker or sibling requests"
+    );
+    let first = previews.remove(0);
+    service.window_destroyed(&first.window_label);
+    tokio::task::yield_now().await;
+    assert!(
+        events.try_recv().is_err(),
+        "freeing capacity cannot replay an expired start"
+    );
+    tokio::time::resume();
+    visible_owner.revoke();
+    for _ in &previews {
+        let MediaEvent::Close { window_label } = events.recv().await.unwrap() else {
+            panic!("only remaining visible windows close")
+        };
+        service.window_destroyed(&window_label);
+    }
+    idle(&service).await;
+    service.shutdown().await.unwrap();
 }

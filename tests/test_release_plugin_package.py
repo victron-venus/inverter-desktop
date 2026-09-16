@@ -75,11 +75,12 @@ class ReleasePluginPackageTests(unittest.TestCase):
         for target in release.plugin_package.TARGETS:
             with self.subTest(target=target):
                 paths = self.build(target, target)
-                self.assertEqual(len(paths), 5)
+                self.assertEqual(len(paths), 2 * len(release.plugin_package.PLUGINS) + 1)
                 self.assertFalse(names.intersection(path.name for path in paths))
                 names.update(path.name for path in paths)
                 fragment = json.loads(paths[-1].read_text(encoding="utf-8"))
-                self.assertEqual(len(fragment["desktop_plugins"]), 2)
+                self.assertEqual(len(fragment["desktop_plugins"]),
+                                 len(release.plugin_package.PLUGINS))
                 for declaration in fragment["desktop_plugins"]:
                     self.assertTrue(declaration["enabled"])
                     self.assertEqual(list(declaration["artifacts"]), [target])
@@ -133,7 +134,7 @@ class ReleasePluginPackageTests(unittest.TestCase):
     def test_worker_version_drift_is_rejected_before_publication(self):
         """Metadata must identify the actual independently versioned worker."""
         cargo = self.root / "desktop-plugins/frigate/Cargo.toml"
-        cargo.write_text(cargo.read_text().replace('version = "0.2.0"', 'version = "99.0.0"'))
+        cargo.write_text(cargo.read_text().replace('version = "0.3.0"', 'version = "99.0.0"'))
         with self.assertRaisesRegex(ValueError, "version does not match"):
             self.build()
         self.assertEqual(list((self.root / "release-output/desktop").iterdir()), [])
