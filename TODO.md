@@ -72,7 +72,7 @@ manual signed-file selection flow is unavailable. Existing HA/camera implementat
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
-### Current checkpoint: configuration-driven desktop plugin restoration
+### Completed checkpoint: configuration-driven desktop plugin restoration
 
 Start from verified main `46abfd3`. A portable `desktop_plugins` declaration
 selects an exact version and an HTTPS archive/SHA-256 pair for each supported
@@ -113,8 +113,10 @@ without downloading packages or including the desktop runtime.
       reinstall limits: deleted credentials are not reconstructed, changing the
       selected version is explicit, and corrupt stores are not silently erased.
 - [x] Run formatting, lint, appropriate tests/builds and independent source review.
-- [ ] Deliver the PR in English, pass final-head CI, merge as authorized and
-      verify clean canonical main and the published desktop plugin assets.
+- [x] Deliver the PR in English, pass final-head CI, merge as authorized and
+      verify clean canonical main.
+- [x] Verify the published desktop plugin archives, checksums and configuration
+      fragments against the exact release source and record delivery evidence.
 
 Local validation passed: 485 native library tests, all nine explicitly run
 installed HA/Frigate scenarios, 420 frontend tests, 17 mobile tests, five build
@@ -125,6 +127,37 @@ closed configuration epoch-publication and save/logout races. Local graphical
 fixtures verified English/Russian restoration states, retry, disabled managed
 controls and available settings in light/dark themes without browser errors or
 horizontal overflow. These fixtures do not establish live HA/device acceptance.
+
+[PR #450](https://github.com/victron-venus/inverter-desktop/pull/450) merged as
+`192b014` after all 41 final-head checks passed, three auxiliary checks were
+skipped, the exact head was approved and all review threads were resolved.
+The clean canonical main tree matches reviewed head `5bf4a9f`; all six existing
+stashes and private agent instructions were preserved. CI follow-up fixed target
+argument canonicalization, Windows path assertions and test-only key generation
+without suppressing security rules.
+
+All five post-merge source workflows also passed for `192b014`:
+[CI](https://github.com/victron-venus/inverter-desktop/actions/runs/35040112760),
+[Unit Tests](https://github.com/victron-venus/inverter-desktop/actions/runs/35040112788),
+[CodeQL](https://github.com/victron-venus/inverter-desktop/actions/runs/35040112819),
+[Code Quality](https://github.com/victron-venus/inverter-desktop/actions/runs/35040112101)
+and [Cargo Security Audit](https://github.com/victron-venus/inverter-desktop/actions/runs/35040112679).
+
+[Release `v2.5.42-beta.38`](https://github.com/victron-venus/inverter-desktop/releases/tag/v2.5.42-beta.38)
+was published from the same source. All 28 executed
+[release pipeline jobs](https://github.com/victron-venus/inverter-desktop/actions/runs/35040113067)
+passed. Independent HTTPS readback verified all 20 plugin assets: four target
+configuration fragments, eight actual worker archives and eight SHA-256 sidecars.
+Each fragment selects HA `0.11.0` and Frigate `0.2.0` for macOS ARM64/x64,
+Linux x64 or Windows x64. Every URL selects this exact release; the configuration,
+sidecar and GitHub asset digests agree. Canonical ZIP/manifest encoding, CRC,
+payload inventories, sizes, hashes and unsigned package metadata also passed.
+No publisher key or new application signing requirement was introduced.
+
+These results establish delivery for the four shipping desktop targets and
+configuration-driven package restoration. They do not establish live HA/device
+acceptance, native graphical acceptance on every platform, automatic recovery of
+deleted plugin settings/secrets, or completion of bundled feature extraction.
 
 ### Completed checkpoint: explicit read-only washer and dryer profiles
 
@@ -1540,10 +1573,11 @@ feature implementation does not satisfy worker lifecycle verification.
 
 - [x] Implement a deterministic, bounded `.idplugin` format and a native packaging
       CLI that signs actual file inventories with an externally supplied key.
-- [ ] Produce and publish real worker archives for supported macOS, Linux, and
-      Windows architectures; a host-platform fixture does not establish delivery
-      on every desktop target. No new application/executable signing prerequisite
-      is introduced by the desktop plugin architecture.
+- [x] Produce and publish real worker archives for all four shipping desktop
+      targets: macOS ARM64/x64, Linux x64 and Windows x64. Release `beta.38` and
+      independent public-asset readback are recorded above. Custom Linux/Windows
+      ARM64 staging remains tooling support, not published release delivery.
+      No new application/executable signing prerequisite is introduced.
 - [x] Verify publisher signature, API range, target, schema, complete file
       inventory, sizes, and digests before executing package content.
 - [x] Reject traversal, absolute paths, links, duplicate/case-colliding entries,
