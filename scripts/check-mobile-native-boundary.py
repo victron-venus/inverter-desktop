@@ -60,6 +60,7 @@ FORBIDDEN_COMMANDS = (
     "delete_retained_plugin_data",
     "preview_plugin_package",
     "uninstall_plugin_package",
+    "remove_configured_plugin",
     "install_plugin_package",
     "discard_plugin_package",
     "set_plugin_enabled",

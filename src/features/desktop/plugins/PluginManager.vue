@@ -44,6 +44,39 @@
           <p v-if="plugin.error" role="alert" class="text-[11px] text-consumption break-words">
             {{ plugin.error }}
           </p>
+          <template v-if="isUninstalledConfigured(plugin.plugin_id)">
+            <UiButton
+              class="mt-1"
+              :disabled="!canManage"
+              @click="requestConfiguredRemoval(plugin.plugin_id)"
+            >
+              {{ $t('plugins.manager.removeConfiguration') }}
+            </UiButton>
+            <div
+              v-if="confirmConfiguredRemoval?.plugin_id === plugin.plugin_id"
+              class="classic-inset mt-2 p-2 flex flex-col gap-2"
+            >
+              <p class="break-words">
+                {{
+                  $t('plugins.manager.confirmRemoveConfiguration', {
+                    plugin: plugin.plugin_id,
+                    version: plugin.version,
+                  })
+                }}
+              </p>
+              <div class="flex flex-wrap gap-2">
+                <UiButton
+                  variant="danger"
+                  :disabled="!canManage"
+                  @click="removeConfigured(plugin.plugin_id)"
+                  >{{ $t('plugins.manager.removeConfigurationConfirm') }}</UiButton
+                >
+                <UiButton :disabled="busy" @click="confirmConfiguredRemoval = null">{{
+                  $t('plugins.manager.cancel')
+                }}</UiButton>
+              </div>
+            </div>
+          </template>
         </div>
         <UiButton :disabled="!canManage" @click="retryConfigured">
           {{ $t('plugins.manager.retryConfigured') }}
@@ -224,6 +257,7 @@ const {
   preview,
   enableAfterInstall,
   confirmRemoval,
+  confirmConfiguredRemoval,
   deleteSettings,
   settingsEditor,
   retainedData,
@@ -244,6 +278,9 @@ const {
   rollback,
   requestRemoval,
   uninstall,
+  isUninstalledConfigured,
+  requestConfiguredRemoval,
+  removeConfigured,
   openSettings,
   setSettingsBusy,
   closeSettings,

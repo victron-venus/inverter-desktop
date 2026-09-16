@@ -99,7 +99,7 @@
             v-for="btn in homeButtons"
             :key="btn.id"
             variant="tile"
-            class="home-btn-tile"
+            class="home-btn-tile relative"
             toggle
             :active="(btn.state ?? buttonStates[btn.id]) === 'on'"
             :unavailable="(btn.state ?? buttonStates[btn.id]) === 'unavailable'"
@@ -109,13 +109,23 @@
             :loading="btn.pending"
             @click="activate(btn)"
           >
+            <template #loading>
+              <Loader2
+                :size="12"
+                class="absolute inset-0 m-auto animate-spin pointer-events-none"
+                aria-hidden="true"
+              />
+            </template>
             <component
               :is="btn.icon ?? getControlIcon?.(btn.entity, btn.label)"
               v-if="btn.icon || getControlIcon?.(btn.entity, btn.label)"
               :size="12"
-              class="home-tile-icon opacity-70 shrink-0"
+              class="home-tile-icon shrink-0"
+              :class="btn.pending ? 'opacity-0' : 'opacity-70'"
             />
-            <span class="home-tile-label">{{ getControlLabel?.(btn.label) ?? btn.label }}</span
+            <span class="home-tile-label" :class="{ 'opacity-0': btn.pending }">{{
+              getControlLabel?.(btn.label) ?? btn.label
+            }}</span
             ><span
               v-if="btn.failed"
               role="alert"
@@ -133,7 +143,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import type { DashboardControlView } from '../dashboardControlView'
-import { Car, Droplets, Home as HomeIcon } from '@lucide/vue'
+import { Car, Droplets, Home as HomeIcon, Loader2 } from '@lucide/vue'
 import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
 import { isInverterControlFlag } from '../inverterControl'

@@ -91,6 +91,15 @@ download the removed package again. Settings are retained by default. Manual
 archive replacement and rollback remain unavailable while an exact declaration
 owns the version. Settings remain editable.
 
+If a declaration has no installed package, its configured row offers **Remove
+from configuration** with a confirmation. This removes only the saved declaration
+and stops future automatic restoration; retained settings, secrets, and stored
+data are kept. The confirmation is bound to the complete declaration, so a newer
+version, same-version pin replacement, or enabled-state change requires a fresh
+confirmation. The operation waits for any active restoration. If that restoration
+installs the package first, removal is rejected and the refreshed installed card
+offers the ordinary **Uninstall** action instead.
+
 Individual and camera-group changes share the restoration operation lock and
 notify configuration windows without overwriting dirty core fields. Ordinary
 core settings saves preserve the current saved declarations, even when submitted
@@ -350,6 +359,12 @@ The management IPC surface is:
 - `get_plugin_manager_snapshot`: authenticated inventory, runtime status,
   initialization errors, configured-plugin results, and manual installation availability.
 - `retry_configured_plugins`: retry saved declarations in the current authenticated session.
+- `remove_configured_plugin({ pluginId, expectedDeclarationRevision })`: remove
+  a declared but uninstalled package from automatic restoration. The manager
+  snapshot supplies the opaque `declaration_revision`; the native save gate
+  compares it with the complete current encrypted declaration before persistence.
+  This command never uninstalls a package or deletes settings/data, and rejects
+  a changed declaration, installed package, or revoked session.
 - `preview_plugin_package`: takes no path argument; opens the native dialog and
   returns `null` on cancellation or verified metadata with an opaque token.
 - `install_plugin_package({ token, enable })` and

@@ -85,7 +85,9 @@ beta.43's plugins. This initial stall is resolved; it is not a current Keychain
 failure.
 
 Read-only installed acceptance passed all four states: HA and cameras enabled,
-HA only, core only, and cameras only. The compact dashboard and core telemetry
+HA only, all plugins disabled, and cameras only. The disabled state retained
+installed packages; it was not a clean core installation. The compact dashboard
+and core telemetry
 remained available as appropriate in each state. Both groups were restored at
 the end: HA, Frigate, and Kerberos reported Running/Connected, all three selected
 declarations were enabled, and the final inspection confirmed unchanged

@@ -83,6 +83,9 @@
   "configuredHelp": "These packages are restored automatically from the saved application configuration.",
   "configurationManaged": "This plugin has a version pinned in configuration. Enable, disable, and uninstall changes are saved immediately; rollback is unavailable while the version is pinned.",
   "retryConfigured": "Retry restoration",
+  "removeConfiguration": "Remove from configuration…",
+  "confirmRemoveConfiguration": "Remove {plugin} version {version} from configuration? Automatic restoration will stop. All stored settings, secrets, and other data will be kept.",
+  "removeConfigurationConfirm": "Remove from configuration",
   "restoreState": {
     "pending": "Waiting to restore",
     "downloading": "Downloading",

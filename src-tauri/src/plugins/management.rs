@@ -4,6 +4,31 @@ use super::{run_owned, PackageApplication};
 use crate::plugin_config::DesktopPluginConfig;
 use crate::plugins::protocol::validate_plugin_id;
 
+/// The complete typed declaration is JSON-only, including preserved metadata.
+/// Hashing its serialization binds confirmation to every configured field.
+pub(crate) fn declaration_revision(declaration: &DesktopPluginConfig) -> String {
+    let bytes = serde_json::to_vec(declaration)
+        .expect("desktop plugin declarations contain only serializable JSON values");
+    crate::plugins::package::sha256_hex(&bytes)
+}
+
+/// The caller must reload declarations under the configuration save gate.
+pub(crate) fn remove_configured_declaration(
+    declarations: &mut Vec<DesktopPluginConfig>,
+    id: &str,
+    expected_revision: &str,
+) -> Result<(), String> {
+    let index = declarations
+        .iter()
+        .position(|declaration| declaration.plugin_id == id)
+        .ok_or("Plugin declaration is no longer configured; refresh before continuing")?;
+    if declaration_revision(&declarations[index]) != expected_revision {
+        return Err("Plugin declaration changed; refresh before removing it".into());
+    }
+    declarations.remove(index);
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PluginDesiredChange {
     Enabled(bool),
@@ -35,6 +60,54 @@ impl PluginDesiredChange {
 }
 
 impl PackageApplication {
+    /// Remove only uninstalled intent. A download that wins the shared gate
+    /// must be handled by the separate uninstall flow, never silently removed.
+    pub(crate) async fn remove_configured_with_config<F>(
+        &self,
+        id: &str,
+        expected_revision: &str,
+        epoch: u64,
+        persist: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(&str, &str, &PackageApplication) -> Result<(), String> + Send + 'static,
+    {
+        let activity = self.begin_activity();
+        self.check_epoch(epoch)?;
+        validate_plugin_id(id)?;
+        if expected_revision.len() != 64
+            || !expected_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("Plugin declaration changed; refresh before removing it".into());
+        }
+        let id = id.to_owned();
+        let expected_revision = expected_revision.to_owned();
+        let service = self.clone();
+        run_owned(activity, async move {
+            let _operation = service.0.reconciliation.operation.lock().await;
+            service.check_epoch(epoch)?;
+            let result = async {
+                if service
+                    .manager()?
+                    .list()
+                    .await?
+                    .iter()
+                    .any(|entry| entry.plugin_id == id)
+                {
+                    return Err("Plugin is installed; refresh and use Uninstall instead".into());
+                }
+                service.check_epoch(epoch)?;
+                persist(&id, &expected_revision, &service)
+            }
+            .await;
+            service.record_result(&id, epoch, &result);
+            result
+        })
+        .await
+    }
+
     /// Join restoration's gate so a previously cloned declaration cannot undo
     /// the user's persisted intent. The owned task survives IPC cancellation.
     pub(crate) async fn set_enabled_with_config<F>(

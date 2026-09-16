@@ -1521,6 +1521,7 @@ pub fn run() {
                     plugins::bridge::set_plugin_group_enabled,
                     plugins::bridge::rollback_plugin_package,
                     plugins::bridge::uninstall_plugin_package,
+                    plugins::bridge::remove_configured_plugin,
                     get_state,
                     get_setpoint_override,
                     set_setpoint_override,

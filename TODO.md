@@ -106,6 +106,65 @@ Ready/Running/Connected with active Disable/Uninstall controls. Frigate's uninst
 confirmation was inspected and cancelled, leaving configuration, settings, and
 pins unchanged. No live uninstall or household commands were performed.
 
+### Follow-up: keep Home action button sizes stable
+
+- [x] Locate the Home action pending indicator and keep its spinner in an absolute
+      overlay over the existing label area. Preserve the button's normal width
+      and height so pending state does not resize its neighboring buttons.
+- [x] Preserve action routing, disabled/busy behavior, and accessible labels;
+      verify with relevant frontend regressions, type checks, lint, and formatting.
+- [ ] Include the fix in the current reviewed PR and verify the resulting release.
+
+### Follow-up: remove an uninstalled configured package
+
+Start from reviewed main `98ab094`. A valid declaration whose download or first
+installation failed currently offers only Retry in Plugins. Without an installed
+inventory record, the user cannot remove its automatic-restoration intent through
+the application. Camera-group failures also publish an unsupported status value.
+
+- [x] Reproduce both gaps in the current frontend/native contracts; retain the
+      delivered installed-package uninstall behavior from PR #461.
+- [x] Add a compact confirmed **Remove from configuration** action only when the
+      declared package has no installed inventory record. Keep settings and stored
+      data, and explain that future automatic restoration stops.
+- [x] Bind confirmation to an opaque revision of the complete declaration,
+      including enabled state, artifact pins, and retained future metadata.
+      Clear stale confirmation after declaration replacement, package installation,
+      loss of a current snapshot, or authentication revocation.
+- [x] Add a desktop-only native command with current settings-window authority,
+      original session epoch, an owned operation, and restoration serialization.
+      Recheck the authoritative encrypted declaration under the configuration-save
+      gate before persistence. Reject a package installed while removal was waiting;
+      never turn declaration removal into an unconfirmed package uninstall.
+- [x] Preserve unrelated declarations, core configuration, settings, workers, and
+      transport. Keep the declaration intact on persistence failure and prevent
+      cold startup from downloading a successfully removed declaration again.
+- [x] Cover failed downloads, a preceding install winning the race, same-version
+      repins, changed future metadata, cancellation, stale authorization, retained
+      data, and frontend busy/error/confirmation behavior with focused regressions.
+- [x] Publish camera-group lifecycle failures as the existing `failed` state and
+      verify a real activation failure produces a localized manager status.
+- [x] Keep the command, UI, and runtime excluded from Android/iOS; run formatting,
+      lint, type checks, appropriate native/frontend tests, and mobile boundaries.
+- [x] Update English configuration/lifecycle documentation, and clarify that the
+      earlier installed "core only" matrix disabled plugins rather than removing
+      their packages. Keep clean-profile and released-app offline acceptance open.
+- [x] Obtain independent implementation and documentation review.
+- [ ] Deliver an English PR, pass exact-head hosted checks, resolve review
+      comments, and merge as authorized.
+- [ ] Verify the published runtime containing this correction before upgrading
+      the installed application; retain its settings and working package pins.
+      Record source, release, installation, and graphical evidence separately.
+
+Validation so far: 553 native tests and two packaging CLI tests passed; 12
+installed-worker scenarios retain their existing opt-in gates and run separately
+in hosted CI. Seven focused removal regressions and five group regressions passed.
+The frontend suite passed 442 tests before the additional Home-spinner regression;
+19 scoped Home/presentation tests cover that follow-up separately. Desktop and
+mobile builds, strict all-target Clippy, formatting, lint, and type checks passed.
+Mobile/profile boundary suites passed 18 frontend, 29 native-verifier, and seven
+build-profile checks.
+
 ### Delivered follow-up: manage configured plugins from the Plugins tab
 
 Beta.45 incorrectly disabled individual enable/disable and uninstall buttons for
@@ -2010,8 +2069,9 @@ never become shipped trust, and no application-signing requirement is introduced
 
 ### 9. Release acceptance and operational verification
 
-- [x] Verify desktop core / core+HA / core+cameras / both using the actual beta.43
-      installation and retained configuration; restore both groups afterward.
+- [x] Verify all plugins disabled / HA only / cameras only / both using the actual
+      beta.43 installation and retained configuration; restore both groups afterward.
+      The disabled state retained installed packages; it was not a clean core install.
 - [ ] Repeat the installed matrix using clean profiles. Existing-profile
       acceptance and isolated clean-install fixtures are separate evidence.
 - [x] Inspect fresh APK/AAB/IPA payloads and native libraries for optional-feature

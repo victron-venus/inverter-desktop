@@ -104,6 +104,45 @@ describe('SidePanel', () => {
     expect(wrapper.find('.home-tile-label').text().replace(/\s+/g, ' ')).toContain('Garage opener')
   })
 
+  it('keeps a pending Home control labeled and blocks repeat actions until it settles', async () => {
+    const activate = vi.fn()
+    const control = {
+      id: 'lamp',
+      label: 'Living room lamp',
+      entity: 'light.living_room',
+      state: 'on' as const,
+      activate,
+    }
+    const wrapper = mount(SidePanel, {
+      props: {
+        ...baseProps,
+        showHomeSection: true,
+        controlsConnected: true,
+        homeButtons: [control],
+      },
+    })
+    const button = wrapper.get('button.classic-btn-tile')
+    expect(button.attributes('disabled')).toBeUndefined()
+    await button.trigger('click')
+    expect(activate).toHaveBeenCalledOnce()
+    await wrapper.setProps({ homeButtons: [{ ...control, pending: true }] })
+    expect(button.text()).toBe(control.label)
+    expect(button.get('.home-tile-label').attributes('aria-hidden')).toBeUndefined()
+    expect(button.attributes('aria-busy')).toBe('true')
+    expect(button.attributes('aria-pressed')).toBe('true')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.get('svg').attributes('aria-hidden')).toBe('true')
+    await button.trigger('click')
+    expect(activate).toHaveBeenCalledOnce()
+    await wrapper.setProps({ homeButtons: [control] })
+    expect(button.text()).toBe(control.label)
+    expect(button.attributes('aria-busy')).toBeUndefined()
+    expect(button.attributes('disabled')).toBeUndefined()
+    await button.trigger('click')
+    expect(activate).toHaveBeenCalledTimes(2)
+    expect(wrapper.emitted('send')).toBeUndefined()
+  })
+
   it('hides home section when showHomeSection false', () => {
     const wrapper = mount(SidePanel, {
       props: {
