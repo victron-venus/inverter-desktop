@@ -348,19 +348,37 @@ describe('desktop plugin manager', () => {
   })
 
   it.each([
-    ['en', 'Desktop notifications'],
-    ['ru', 'Уведомления на компьютере'],
-  ])('labels notification capability before installation in %s', async (locale, label) => {
-    selection = { ...selected, permissions: ['desktop_notifications'] }
-    await openManager(locale)
-    await button(locale === 'en' ? 'Choose plugin package…' : 'Выбрать пакет плагина…').trigger(
-      'click'
-    )
-    await flushPromises()
-    expect(wrapper?.text()).toContain(label)
-    expect(wrapper?.text()).not.toContain('desktop_notifications')
-    expect(calls('install_plugin_package')).toHaveLength(0)
-  })
+    [
+      'en',
+      [
+        'Desktop notifications',
+        'Camera clips, snapshots, and live previews',
+        'Live camera viewing',
+      ],
+    ],
+    [
+      'ru',
+      [
+        'Уведомления на компьютере',
+        'Клипы, снимки и предпросмотр камер',
+        'Просмотр камер в реальном времени',
+      ],
+    ],
+  ] as const)(
+    'labels media and notification capabilities before installation in %s',
+    async (locale, labels) => {
+      selection = { ...selected, permissions: ['desktop_notifications', 'http_video', 'live_view'] }
+      await openManager(locale)
+      await button(locale === 'en' ? 'Choose plugin package…' : 'Выбрать пакет плагина…').trigger(
+        'click'
+      )
+      await flushPromises()
+      for (const label of labels) expect(wrapper?.text()).toContain(label)
+      for (const permission of selection.permissions)
+        expect(wrapper?.text()).not.toContain(permission)
+      expect(calls('install_plugin_package')).toHaveLength(0)
+    }
+  )
 
   it('shows the actual empty publisher policy and does not offer installation', async () => {
     snapshot.installation_available = false
@@ -368,7 +386,9 @@ describe('desktop plugin manager', () => {
     expect(wrapper?.text()).toContain('Local signed-file installation has no approved publishers')
     expect(wrapper?.text()).toContain('Configured archive downloads remain available.')
     expect(wrapper?.text()).toContain('No plugins installed.')
-    expect(wrapper?.text()).toContain('Home Assistant and cameras are still included')
+    expect(wrapper?.text()).toContain(
+      'Home Assistant and camera integrations are optional plugins.'
+    )
     expect(button('Choose plugin package…').attributes('disabled')).toBeDefined()
     await button('Choose plugin package…').trigger('click')
     expect(calls('preview_plugin_package')).toHaveLength(0)

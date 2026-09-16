@@ -79,10 +79,13 @@ through [PR #456](https://github.com/victron-venus/inverter-desktop/pull/456) at
 The exact head was approved, with no unresolved review threads at merge.
 Release `v2.5.42-beta.43` is published from that merge revision. Its exact release
 run passed 37 checks with two intended skips; public macOS app/package bytes,
-source tag, frozen plan, and inventory were independently verified. Installed-app
-acceptance is awaiting the existing macOS Keychain access prompt after the app
-and three configuration pins were installed. Track those distinct gates in the
-[delivery record](docs/desktop-plugin-delivery.md).
+source tag, frozen plan, and inventory were independently verified. Installed
+beta.43 passed read-only acceptance with both plugin groups, HA only, core only,
+and cameras only; both groups are restored and all three selected workers are
+Running/Connected. The initial Keychain access stall was resolved, followed by a
+normal restart. A source fix for automatic recovery after a delayed unlock is
+implemented and locally checked, but is not part of installed beta.43. Track its
+remaining release/install gates in the [delivery record](docs/desktop-plugin-delivery.md).
 
 ### Completed implementation: optional feature extraction
 
@@ -233,11 +236,41 @@ replacing the installed application.
       recorded privately with original values, not treated as exact metadata
       restoration. Pins change only by explicit selection, never automatically
       because the app was upgraded.
-- [ ] Verify the installed compact dashboard, plugin health/restoration, retained
-      mappings, and independent core telemetry across the selected plugin states.
-      First startup currently awaits the existing macOS Keychain access prompt;
-      no migrated or healthy-worker state is claimed yet. Use read-only household
-      acceptance; no physical commands as test traffic.
+- [x] Verify installed beta.43 with HA+cameras, HA only, core only, and cameras
+      only. Core telemetry remains available in all four states. Restore both
+      groups and confirm HA/Frigate/Kerberos are Running/Connected, all three
+      declarations are enabled, and non-plugin configuration is unchanged.
+      No household commands were sent as test traffic.
+- [x] Verify the real encrypted settings handover: HA and Kerberos use migration
+      version 1; authoritative existing Frigate settings retain marker 0 without
+      requiring migration. All 18 previous HA reads are retained in 45 selected
+      reads, all 20 configured clamps are selected, and credentials are preserved.
+      All 15 Home controls retain their
+      targets, labels, and order. No HA header controls were saved; DRY/External
+      and the seven inverter flags are core controls, not missing HA controls.
+- [x] Observe a natural Kerberos event opening an automatic preview and the
+      window expiring. This establishes the installed event/window lifecycle,
+      not decoded physical camera-frame evidence.
+- [x] Record short native host/worker CPU, RSS, and connection observations across
+      the four states. These exclude WebKit and are not benchmarks or proof of
+      whole-application resource savings.
+
+#### Implemented follow-up: recovery after delayed credential access
+
+- [x] Recover a revoked plugin host on a later successful unlocked `auth_status`
+      read, using fresh configuration under configuration/session locks. Keep
+      the session guard through synchronous authorization, then release locks
+      before scheduling package restoration. Healthy polls do not restart workers;
+      logout, policy changes, shutdown, and stale epochs retain their guards.
+- [x] Pass 12 focused recovery regressions and the full native suite: 535 tests
+      plus two packaging CLI tests. The frontend suite passes 432 tests and mobile
+      passes 18; type checking, desktop/mobile builds, formatting, error-level
+      lint, and strict all-target Clippy pass. Frontend lint retains existing
+      warnings and informational diagnostics.
+- [ ] Complete exact-head hosted checks, review/merge, release verification, and
+      installed acceptance for this recovery follow-up. Beta.43's successful
+      normal restart and four-state acceptance do not prove the new automatic
+      recovery path in a released application.
 
 The following completed checkpoints are chronological evidence. Statements such
 as "later work" or "not added" describe their original scope, not current missing
@@ -1765,8 +1798,11 @@ mobile gate fail. A successful desktop build is insufficient evidence.
       host has no MQTT/IGW handles or core transport dependency.
 - [x] Share one native registry across windows; verify duplicate registration,
       window authority, revocation, and repeated quit waiting for cleanup.
-- [ ] Verify installed-plugin recovery alongside active MQTT/IGW telemetry and
-      real multiwindow interaction during final operational acceptance.
+- [x] Verify beta.43 package restoration after normal restart and active core
+      telemetry across all four HA/camera states, including dashboard/settings
+      interaction and a naturally opened owned preview.
+- [ ] Verify the automatic delayed-unlock recovery follow-up in its released
+      application; source regressions are not installed-release evidence.
 
 Acceptance for the runtime checkpoint: a separately built worker completes the
 lifecycle through the actual host. The original executable proof used trusted native test/development code. The
@@ -1775,8 +1811,8 @@ previously enabled packages and explicitly configured downloads after authentica
 there is no executable-path IPC. Native settings handover runs for explicitly
 installed or declared matching packages without inferring installation consent.
 Compact presentation, discovery choices, notifications, and owned media services
-are implemented and covered by real worker fixtures. Live multiwindow/core
-telemetry acceptance remains separate from those automated results.
+are implemented and covered by real worker fixtures. Beta.43's read-only installed
+matrix and macOS window observations are recorded separately from those fixtures.
 
 ### 5. Installation, update, rollback, and removal — application/UI checkpoint
 
@@ -1822,8 +1858,9 @@ Acceptance: a clean core installation contains no HA/camera payloads. Installing
 or removing a package changes available features without reinstalling the app.
 Native lifecycle and desktop application/UI integration are implemented. Full
 worker extraction, settings handover, and exact-head integration checks are also
-complete. Release beta.43 publication and public asset readback are verified;
-installed-app acceptance remains open and is recorded separately.
+complete. Release beta.43 publication, public asset readback, and the installed
+macOS four-state matrix are verified. The automatic startup-recovery follow-up
+has a separate release/install gate.
 
 Optional future distribution policy: if manual signed-file installation is
 offered, add reviewed publisher keys/provenance to that path. This is not a
@@ -1839,8 +1876,10 @@ never become shipped trust, and no application-signing requirement is introduced
 - [x] Support scoped optional proxy credentials without requiring an HA package.
 - [x] Pass installed camera lifecycle/media fixtures with real worker processes
       and independent core transport, plus isolated macOS graphical media checks.
-- [ ] Complete real OS notification and Linux/Windows graphical acceptance, and
-      observe the selected camera packages in the released installation.
+- [x] Observe selected Frigate/Kerberos packages Running/Connected in installed
+      beta.43, independent of HA, and a natural Kerberos preview opening/expiring.
+- [ ] Complete real OS notification display and Linux/Windows graphical
+      acceptance; natural preview lifecycle is not physical frame-decoding proof.
 
 ### 7. Home Assistant package
 
@@ -1851,8 +1890,9 @@ never become shipped trust, and no application-signing requirement is introduced
 - [x] Pass all eight installed HA fixtures, including planner-to-encrypted-settings
       handover and actual worker actions against local fixtures; pass exact-head
       native checks in PR #456.
-- [ ] Observe the released HA package with the real server and core telemetry;
-      distinguish read-only health/presentation evidence from physical device actions.
+- [x] Observe released HA 0.13.0 with the real server and core telemetry on
+      beta.43, with cameras enabled and disabled. Verify 15 preserved Home controls
+      without sending household commands; physical device actions remain untested.
 
 ### 8. Configuration migration and compatibility
 
@@ -1874,30 +1914,41 @@ never become shipped trust, and no application-signing requirement is introduced
 
 ### 9. Release acceptance and operational verification
 
-- [ ] Verify desktop core / core+HA / core+cameras / both using actual installed
-      files and behavior, including clean profiles.
+- [x] Verify desktop core / core+HA / core+cameras / both using the actual beta.43
+      installation and retained configuration; restore both groups afterward.
+- [ ] Repeat the installed matrix using clean profiles. Existing-profile
+      acceptance and isolated clean-install fixtures are separate evidence.
 - [x] Inspect fresh APK/AAB/IPA payloads and native libraries for optional-feature
       absence in PR #456's exact-head hosted artifact checks.
 - [x] Exercise installed package updates, incompatible API rejection, interrupted
       staging/recovery, rollback, and offline startup with actual archive/worker
       fixtures, including same-version explicitly pinned replacements.
-- [ ] Verify the released application upgrade against the selected existing
-      installed package/configuration state and record offline restart behavior.
+- [x] Verify the beta.43 application upgrade against the selected existing
+      packages/configuration, preserved non-plugin fields, and normal restart.
+- [ ] Record offline restart behavior in the released application; offline
+      archive/worker fixtures do not establish this operational result.
 - [x] Integrate exact archive digests, compatibility metadata, package inventories,
       and provenance receipts into release production and validation. Configured
       archives do not require publisher keys or application signing.
 - [x] Read back beta.43's published app/package assets and verify them against the
       frozen source/plan before installing or changing selected pins.
-- [ ] Measure installed size, startup, CPU/RAM, and connections per combination;
-      do not promise savings based on source size.
-- [ ] Verify real desktop HA/camera installations and representative mobile
-      devices separately from mocks. Record exact tested versions and limits.
+- [x] Record bounded native host/worker CPU/RSS/connection observations for the
+      installed four-state matrix, with WebKit excluded and no benchmark claim.
+- [ ] Measure installed size, cold startup, and repeatable whole-application
+      CPU/RAM/connections, including WebKit; do not infer savings from source size
+      or short native-only observations.
+- [x] Verify the real macOS HA/Frigate/Kerberos installation and record exact
+      versions and read-only limits in the delivery record.
+- [ ] Verify representative mobile devices and other desktop operating systems
+      separately from source, artifact, and macOS acceptance.
 - [x] Update user/developer implementation documentation for extracted workers,
       native migration, configuration-driven restoration, and generic media/UI.
       Retain historical checkpoint evidence without treating its old scope as
       current unfinished implementation.
-- [ ] Complete the release and installed acceptance record with observed versions,
-      asset identities, backup/rollback scope, and remaining device limits.
+- [x] Complete the beta.43 release and installed acceptance record with observed
+      versions, asset identities, backup/rollback scope, and remaining device limits.
+- [ ] Add exact release and installed evidence for the startup-recovery follow-up
+      after its separate reviewed delivery.
 - [x] Deliver reviewed PR #456 and merge at `32a079c` after exact-head checks pass:
       60 succeeded, six skipped, approved head `2ebba507`, no unresolved threads.
 
