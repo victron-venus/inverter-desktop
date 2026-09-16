@@ -27,11 +27,10 @@ Presentation precedence is a nonempty saved `header_toggles_config`, then the
 daemon list, then the compatibility list. An explicit empty daemon list remains
 empty. Configuring a different button id or label does not change the flag's
 authoritative state key. Controls placed in Home retain the same MQTT ownership,
-including when HA features are disabled. For custom HA controls received only
-through daemon metadata, save their definitions in Desktop settings to include
-them in the current backend's live entity whitelist; an unsaved metadata-only
-HA control is refreshed by REST at initialization/resume. This limitation does
-not affect inverter-control flags.
+including when the HA package is absent or disabled. Custom HA controls belong
+to the separately installed HA worker. Its one-time native migration can use
+saved controls or the actual daemon metadata; when daemon defaults are needed,
+handover waits for that metadata instead of inventing a replacement layout.
 
 For example, Desktop renders `{ "id": "export", "label": "NO FEED", "entity":
 "no_feed" }` using `booleans.no_feed`. Clicking it invokes the core dispatcher;
@@ -45,8 +44,10 @@ that the daemon or physical device has applied it.
 Legacy saved targets `input_boolean.<flag>` are accepted and normalized to bare
 keys before publication. A real HA entity such as `switch.no_feed` is not an
 inverter flag just because its suffix or local UI id matches one. Custom home
-entities and custom HA header controls continue to use the optional HA adapter.
-That adapter is desktop-only. Mobile builds show core inverter controls and
+entities and custom HA header controls use the optional HA worker's declared,
+instance-bound actions. The core native dispatcher rejects non-flag toggle
+targets; it cannot fall back to an HA client. The worker is desktop-only.
+Mobile builds show core inverter controls and
 preserve unavailable HA definitions in saved settings; they contain no HA or
 camera implementation. See [the platform build boundary](desktop-features-and-mobile-core.md).
 
@@ -55,25 +56,29 @@ camera implementation. See [the platform build boundary](desktop-features-and-mo
 - `src/inverterControl.ts`: neutral flag keys, compatibility presentation,
   legacy target normalization and MQTT state lookup.
 - `src/composables/useDashboardControls.ts`: presentation composition, optional
-  home-state adapter and core action dispatch. It works without `useHA`.
-- `src/composables/useDashboardControlsConfig.ts`: settings for mixed dashboard
-  controls in the desktop composition; MQTT flag presets do not require HA discovery.
-- `src/features/coreControlsConfig.ts`: mobile core control editing, preserving
+  home-state interface and core action dispatch. Core flag state always comes
+  from MQTT; the desktop entry point disables legacy non-core controls.
+- `src/features/coreControlsConfig.ts`: core control editing on every platform, preserving
   opaque desktop control definitions when settings are saved.
-- `src/composables/useHA.ts`: HA connections, entities and appliance displays;
-  supplies only the optional home-state adapter to dashboard controls.
+- `src/features/desktop/plugins/presentation.ts`: generic composition of installed
+  package contributions and core controls, retaining their saved positions.
+- `desktop-plugins/home-assistant/src/`: separately packaged HA connections,
+  explicit household actions, and compact dashboard declarations.
+- `src-tauri/src/plugins/legacy_migration.rs`: native legacy settings handover
+  for explicitly selected matching packages; core flag targets are excluded
+  from HA action grants.
 - `src/composables/useInverterVisibility.ts`: core snapshot refresh on window
   resume, independent from HA refresh and its request lifecycle.
 - `src-tauri/src/inverter_control.rs`: MQTT command normalization, absolute flag
   commands and ownership classification.
-- `src-tauri/src/ha_api.rs`: HA entity classification, REST routing and HA state.
-- `src-tauri/src/app_visibility.rs`: shared window visibility used by both MQTT
-  and HA event coalescing.
+- `src-tauri/src/app_visibility.rs`: core window visibility and event coalescing.
 
 Persisted keys `ha_entities`, `header_toggles_config` and `show_header_toggles`
 remain unchanged for compatibility. The historical `ha_entities` key can contain
-Home controls; its name does not decide the transport. Tauri command names and
-MQTT topics also remain stable. This cleanup does not implement a plugin loader.
+Home controls; its name does not decide the transport. Core command names and
+MQTT topics remain stable. Removed legacy HA commands are replaced by the
+generic installed-package action boundary. See [package installation and
+configuration restoration](plugin-packages.md).
 
 ## HA MQTT switches
 
@@ -83,6 +88,15 @@ command topics. Its JSON `payload_on`/`payload_off` values differ from the
 `state_off: "OFF"` explicitly. See the
 [official MQTT switch options](https://www.home-assistant.io/integrations/switch.mqtt/).
 This is a static HA integration example, not automatic MQTT discovery.
+
+Adding these two state fields changes how HA confirms received state; it does
+not change switch identities, command topics, JSON command payloads, or a time
+trigger. A midnight or 15:00 automation that calls the same switch's explicit
+`turn_on`/`turn_off` action therefore sends the same absolute command. An
+automation that tests switch state, reacts to a state transition, or calls
+`toggle` can observe the corrected state; those dependencies need separate
+inspection before claiming identical runtime behavior. Installing or disabling
+a Desktop plugin does not edit or disable HA server automations.
 
 Ownership and physical effects are separate: `minimize_charging` is a daemon
 flag, but its current dump-load actuator uses optional HA measurements/services.

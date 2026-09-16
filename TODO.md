@@ -29,7 +29,9 @@ The completed resilience checklist is preserved in
 - Preserve daemon flag keys, topics, absolute command semantics, and saved core
   controls. HA remains another consumer of the same MQTT contract.
 - Preserve legacy feature configuration without automatically installing plugins.
-  Installation remains an explicit desktop choice.
+  Installation remains an explicit desktop choice. Once a matching package is
+  explicitly installed or declared, native startup can migrate its legacy settings
+  and restore its pinned package without another manual setup step.
 
 ## Delivery strategy and current checkpoint
 
@@ -68,14 +70,21 @@ with exact-head approval and no unresolved review threads.
 
 **Configured archive downloads use explicit SHA-256 pins and need no publisher
 keys or app signing.** The embedded publisher policy remains empty, so only the
-manual signed-file flow is unavailable. The current working tree removes bundled
+manual signed-file flow is unavailable. The merged implementation removes bundled
 HA/camera providers and replaces their UI with compact host-owned plugin views.
-Source extraction and its first local regression pass are complete. The newer
-shared camera viewer, exact-head delivery, and installed-app acceptance are
-tracked separately below. Completed
-checkpoints later in this file describe their historical scope and evidence.
+The extraction, native settings handover, and shared camera viewer are merged
+through [PR #456](https://github.com/victron-venus/inverter-desktop/pull/456) at
+`32a079cad994e3326f3704096fd1594b91dd07ac`. Its final reviewed head
+`2ebba50736b8a1543f9f004ee9d51365994f5370` passed 60 hosted checks; six were skipped.
+The exact head was approved, with no unresolved review threads at merge.
+Release `v2.5.42-beta.43` is published from that merge revision. Its exact release
+run passed 37 checks with two intended skips; public macOS app/package bytes,
+source tag, frozen plan, and inventory were independently verified. Installed-app
+acceptance is awaiting the existing macOS Keychain access prompt after the app
+and three configuration pins were installed. Track those distinct gates in the
+[delivery record](docs/desktop-plugin-delivery.md).
 
-### Active implementation: complete optional feature extraction
+### Completed implementation: optional feature extraction
 
 The core installation contains generic plugin infrastructure but no HA/camera
 provider clients, parsers, feature-specific settings, or worker payloads. Optional
@@ -133,10 +142,14 @@ panel is mounted on the dashboard.
 - [x] Pass all twelve installed-package fixtures with actual worker processes and
       loopback MQTT/HTTP/WS: eight HA scenarios (including full legacy handover),
       two Frigate scenarios, Kerberos lifecycle and Ring snapshot lifecycle.
-- [ ] Verify native notification/live-view display and media decoding on supported
-      operating systems. Clickable live-view actions retain the legacy macOS scope;
-      Linux/Windows retain ordinary notifications. This handover does not add a
-      new cross-platform live-action requirement.
+- [x] Implement permission-bound automatic previews on desktop and preserve the
+      historical macOS-only notification-click action for compatible older
+      manifests. Automatic previews use separate media authority and do not depend
+      on notification permission. Verify current macOS decoding/window behavior in
+      the isolated graphical harness described below.
+- [ ] Verify real OS notification display and Linux/Windows graphical media
+      behavior separately from native compilation and process fixtures. The older
+      notification-click action is not a new cross-platform requirement.
 
 #### Newer installed Frigate parity
 
@@ -199,16 +212,37 @@ replacing the installed application.
       preview URL permissions, window ownership, cancellation, and IPC isolation.
 - [x] Pass strict all-target host and native-smoke Clippy. The vendored macOS
       notification crate passes 14 tests, including four response-lifetime regressions.
-- [ ] Verify desktop core / HA / cameras / both from actual installed files,
-      interrupted restore, offline startup, settings round trips, and independent
-      core telemetry. Local mocks do not establish live household behavior.
-- [ ] Pass exact-head hosted checks and fresh APK/AAB/IPA boundary checks; review
-      and merge the extraction changes and record the exact source revision.
-- [ ] Publish compatible package assets and update explicit configuration pins:
-      HA 0.13+ supplies compact views, Frigate 0.3+ joins Cameras, and Kerberos/Ring
-      start at 0.1. Old pins remain authoritative and are never automatically bumped.
-      Install the reviewed app with a recoverable backup. Verify the familiar dashboard, plugin health, and real
-      camera/HA behavior before recording installed acceptance.
+- [x] Verify actual package/worker fixtures for recovery, offline startup,
+      transactional updates/rollback, settings round trips, and independent core
+      transport. These fixtures do not establish live household behavior.
+- [x] Pass exact-head hosted checks, including fresh APK/AAB/IPA boundary checks,
+      and merge PR #456: 60 checks succeeded and six were skipped for reviewed head
+      `2ebba50736b8a1543f9f004ee9d51365994f5370`; approval covered that head and no
+      review threads remained unresolved. Merge revision:
+      `32a079cad994e3326f3704096fd1594b91dd07ac`.
+- [x] Publish and independently verify compatible app/package assets from
+      [release run 35069268321](https://github.com/victron-venus/inverter-desktop/actions/runs/35069268321).
+      Release `v2.5.42-beta.43` was published on 2026-09-16 from `32a079c`:
+      37 checks passed and two were skipped. Public macOS app and four worker
+      archives match the frozen source/plan and SHA-256 pins. HA 0.13 supplies
+      compact views, Frigate 0.3 joins Cameras, and Kerberos/Ring start at 0.1.
+- [x] Update explicitly selected configuration pins and install the verified app
+      with a matched, verified bundle/configuration/app-data backup. The beta.43
+      executable and HA/Frigate/Kerberos declarations are installed; retained
+      non-plugin config is unchanged. OS tracking differences in copied data are
+      recorded privately with original values, not treated as exact metadata
+      restoration. Pins change only by explicit selection, never automatically
+      because the app was upgraded.
+- [ ] Verify the installed compact dashboard, plugin health/restoration, retained
+      mappings, and independent core telemetry across the selected plugin states.
+      First startup currently awaits the existing macOS Keychain access prompt;
+      no migrated or healthy-worker state is claimed yet. Use read-only household
+      acceptance; no physical commands as test traffic.
+
+The following completed checkpoints are chronological evidence. Statements such
+as "later work" or "not added" describe their original scope, not current missing
+implementation. The current checkpoint above and phase summary below supersede
+those historical scope limits; operating-system/device evidence remains separate.
 
 ### Completed implementation: compact plugin presentation
 
@@ -1613,12 +1647,18 @@ This checkpoint does not establish real HA/camera package or physical-device par
 - [x] Bind advertised actions to their original session and reject stale calls
       before enqueueing to a replacement worker; pass the real-worker regression.
 
-The intended package is a signed first-party `.idplugin` archive: a versioned
-manifest, a target-specific executable worker, and declarative UI contributions.
-Use a bounded, versioned JSON protocol instead of Rust dynamic-library ABI or
-runtime loading of Tauri crates. Prove the worker contract before shipping the
-installer. Native workers have the user's OS privileges; broker permissions are
-not an OS sandbox. Arbitrary executable UI is outside the initial package contract.
+## Current implementation and remaining acceptance
+
+A `.idplugin` archive contains a versioned manifest, a target-specific executable
+worker, and declarative UI contributions. Configured downloads are authorized by
+an exact plugin/version/target/archive SHA-256 pin and do not require a publisher
+key or application signing. The separate manual-file verifier retains publisher
+signature checks; its embedded trust policy is empty. Both paths verify the same
+bounded inventory, API compatibility, and target constraints before execution.
+Workers use a bounded, versioned JSON protocol rather than Rust dynamic-library
+ABI or runtime-loaded Tauri crates. Native workers have the user's OS privileges;
+host permissions are not an OS sandbox. Arbitrary executable UI is outside the
+package contract.
 
 ### 0. Baseline and ownership
 
@@ -1645,8 +1685,8 @@ not an OS sandbox. Arbitrary executable UI is outside the initial package contra
       and feature translations behind the desktop boundary.
 - [x] Keep core flag presets independent from HA discovery. Preserved HA controls
       must not become misleading mobile buttons when their implementation is absent.
-- [x] Preserve desktop behavior and saved field names during this checkpoint;
-      do not advertise package installation as available yet.
+- [x] Preserve saved field names and desktop behavior through the staged extraction
+      and explicit-package settings handover; expose the implemented package manager.
 
 Acceptance: the same core dashboard builds for desktop/mobile. The mobile module
 graph has no HA/camera implementation, feature UI, or plugin manager. Mobile does
@@ -1654,9 +1694,10 @@ not invoke desktop commands or subscribe to feature events.
 
 ### 2. Native mobile exclusion — implemented
 
-- [x] Compile HA REST/WS/session implementations only for desktop.
-- [x] Compile camera parsing, subscriptions, downloads, windows, and cache handling
-      only for desktop; extract camera parsing from core MQTT.
+- [x] Remove bundled HA REST/WS/session implementations; ship the HA worker only
+      as an optional desktop package.
+- [x] Ship camera parsing and subscriptions in optional desktop workers; compile
+      generic media downloads, windows, and cache handling only for desktop.
 - [x] Remove HA/camera commands, state, startup tasks, and authorization entries
       from mobile instead of registering no-op handlers.
 - [x] Move feature-only dependencies into desktop target declarations. Retain
@@ -1689,13 +1730,12 @@ their MQTT route. Desktop regression checks remain green.
 Acceptance: deliberately including a desktop module or native command makes a
 mobile gate fail. A successful desktop build is insufficient evidence.
 
-### 4. Versioned desktop host and worker protocol — runtime checkpoint implemented
+### 4. Versioned desktop host and worker protocol — implemented
 
 - [x] Define host API version independently from app/package versions.
 - [x] Specify manifest schema, stable ID, package version, host API range, target
       triple, entrypoint, config schema, permissions, file sizes/digests, and
-      signature encoding. Package trust and cryptographic verification remain
-      phase 5 requirements.
+      signature encoding. Implement archive trust and integrity checks in phase 5.
 - [x] Define request/response/events, correlation IDs, deadlines, maximum frame
       sizes, cancellation, startup handshake, and error codes.
 - [x] Implement desktop-only start/stop/restart supervision, exit monitoring,
@@ -1712,8 +1752,12 @@ mobile gate fail. A successful desktop build is insufficient evidence.
       reject stale queued writes, contributions, and action results after re-login.
 - [x] Authorize scoped settings/secrets delivery through the verified startup
       configuration handshake for packages declaring configuration permission.
-- [ ] Authorize scoped host services for permitted origins/topics and owned files.
-      Manifest permission metadata alone grants none of these services.
+- [x] Authorize the host services used by extracted packages: scoped media origins,
+      exact private live URLs, optional proxy credentials, owned media files/windows,
+      isolated settings, and bounded notifications. Enforce verified permission,
+      generation/session ownership, and revocation at each host boundary.
+      Workers own their provider HTTP/MQTT connections; this is not a generic
+      MQTT broker or OS-level restriction on a native worker's network access.
 - [x] Keep inverter writes in core; expose no arbitrary Tauri invocation or
       core MQTT publishing operation to workers.
 - [x] Exercise a separately compiled fixture executable through actual pipes:
@@ -1728,10 +1772,11 @@ Acceptance for the runtime checkpoint: a separately built worker completes the
 lifecycle through the actual host. The original executable proof used trusted native test/development code. The
 application now constructs workers from verified installed packages and restores
 previously enabled packages and explicitly configured downloads after authentication;
-there is still no executable-path IPC or automatic legacy-feature migration.
-Complete phase 4 acceptance also requires the remaining contribution
-surfaces and scoped host services above. A fake registry or statically linked
-feature implementation does not satisfy worker lifecycle verification.
+there is no executable-path IPC. Native settings handover runs for explicitly
+installed or declared matching packages without inferring installation consent.
+Compact presentation, discovery choices, notifications, and owned media services
+are implemented and covered by real worker fixtures. Live multiwindow/core
+telemetry acceptance remains separate from those automated results.
 
 ### 5. Installation, update, rollback, and removal — application/UI checkpoint
 
@@ -1742,21 +1787,21 @@ feature implementation does not satisfy worker lifecycle verification.
       independent public-asset readback are recorded above. Custom Linux/Windows
       ARM64 staging remains tooling support, not published release delivery.
       No new application/executable signing prerequisite is introduced.
-- [x] Verify publisher signature, API range, target, schema, complete file
-      inventory, sizes, and digests before executing package content.
+- [x] Verify explicit archive pins for configured downloads or publisher signatures
+      for manual files, then API range, target, schema, complete file inventory,
+      sizes, and digests before executing package content.
 - [x] Reject traversal, absolute paths, links, duplicate/case-colliding entries,
       oversized archives, unexpected files, and unsupported schemas.
-- [x] Stage privately and atomically activate immutable versions after validation
+- [x] Stage privately and atomically activate verified archives after validation
       and a successful startup handshake; retain a working rollback version.
+      Explicit pin changes may select a same-version rebuild or older version;
+      the manual signed-file path retains its newer immutable-version rule.
 - [x] Serialize native install/update/remove operations; recover interrupted
       initialization, staging, and inventory changes without executing workers.
 - [x] Bind asynchronous activation to its original authentication epoch and
       release worker registry capacity only after process reaping.
 - [x] Embed a release-owned publisher policy scoped to exact plugin IDs; reject
       unknown keys and never trust a key supplied by the package or webview.
-- [ ] If manual signed-file distribution is introduced, configure its production
-      publisher keys and provenance in a reviewed release. This is optional for
-      configured archive pins; disposable fixture keys must never become shipped trust.
 - [x] Add desktop install/enable/disable/update/uninstall UI with verified review,
       compatibility errors, declared capabilities, rollback target, and immediate
       application of changes without an app restart.
@@ -1776,8 +1821,14 @@ feature implementation does not satisfy worker lifecycle verification.
 Acceptance: a clean core installation contains no HA/camera payloads. Installing
 or removing a package changes available features without reinstalling the app.
 Native lifecycle and desktop application/UI integration are implemented. Full
-phase acceptance still requires final integration checks and worker distribution,
-remaining host services, and migrated HA/camera packages.
+worker extraction, settings handover, and exact-head integration checks are also
+complete. Release beta.43 publication and public asset readback are verified;
+installed-app acceptance remains open and is recorded separately.
+
+Optional future distribution policy: if manual signed-file installation is
+offered, add reviewed publisher keys/provenance to that path. This is not a
+prerequisite for the implemented configured-pin flow. Disposable fixture keys must
+never become shipped trust, and no application-signing requirement is introduced.
 
 ### 6. Cameras package
 
@@ -1786,8 +1837,10 @@ remaining host services, and migrated HA/camera packages.
 - [x] Move URL/auth grants, private media ownership, cleanup, and generic window UI
       behind desktop plugin contracts; remove bundled camera event subscriptions.
 - [x] Support scoped optional proxy credentials without requiring an HA package.
-- [ ] Complete installed camera-only/both lifecycle fixtures and real OS media/
-      notification acceptance within the existing platform capabilities.
+- [x] Pass installed camera lifecycle/media fixtures with real worker processes
+      and independent core transport, plus isolated macOS graphical media checks.
+- [ ] Complete real OS notification and Linux/Windows graphical acceptance, and
+      observe the selected camera packages in the released installation.
 
 ### 7. Home Assistant package
 
@@ -1795,8 +1848,11 @@ remaining host services, and migrated HA/camera packages.
       appliance/weather presentation, and settings to worker-owned declarations.
 - [x] Preserve core flags, aliases, labels, and direct MQTT/IGW control routing.
 - [x] Remove bundled frontend/native HA clients and enforce the frontend boundary.
-- [ ] Complete final installed HA-only/both acceptance and exact-head native checks;
-      distinguish worker fixtures from live server and device behavior.
+- [x] Pass all eight installed HA fixtures, including planner-to-encrypted-settings
+      handover and actual worker actions against local fixtures; pass exact-head
+      native checks in PR #456.
+- [ ] Observe the released HA package with the real server and core telemetry;
+      distinguish read-only health/presentation evidence from physical device actions.
 
 ### 8. Configuration migration and compatibility
 
@@ -1808,26 +1864,42 @@ remaining host services, and migrated HA/camera packages.
       download. Existing encrypted plugin records remain authoritative.
 - [x] Preserve namespaces through mobile/core save/reset and public portable export;
       omit private camera URL maps from core IPC and backups.
-- [ ] Complete host-specific restored-seed conflict checks, interrupted handover,
-      and final installed desktop/mobile/desktop compatibility acceptance.
+- [x] Verify restored-seed conflicts, rejected/revoked handover without commits,
+      authoritative encrypted edits, portable export/same-install restore, stale
+      shadow handling, and serialization with concurrent settings saves.
+- [x] Verify core/mobile preservation of passive module namespaces and credentials
+      through save/reset/import/export fixtures and actual mobile build boundaries.
+- [ ] Complete a recorded desktop/mobile/desktop round trip using released apps
+      on representative devices; source and artifact checks do not prove this path.
 
 ### 9. Release acceptance and operational verification
 
 - [ ] Verify desktop core / core+HA / core+cameras / both using actual installed
       files and behavior, including clean profiles.
-- [ ] Inspect fresh extraction APK/AAB/IPA files and native libraries for feature
-      absence; prior checkpoints passed but do not prove this working tree.
-- [ ] Test app updates with installed plugins, incompatible API versions,
-      interrupted updates, rollback, and offline startup.
-- [ ] Integrate package signing/provenance, compatibility metadata, and release
-      receipts into existing release gates.
+- [x] Inspect fresh APK/AAB/IPA payloads and native libraries for optional-feature
+      absence in PR #456's exact-head hosted artifact checks.
+- [x] Exercise installed package updates, incompatible API rejection, interrupted
+      staging/recovery, rollback, and offline startup with actual archive/worker
+      fixtures, including same-version explicitly pinned replacements.
+- [ ] Verify the released application upgrade against the selected existing
+      installed package/configuration state and record offline restart behavior.
+- [x] Integrate exact archive digests, compatibility metadata, package inventories,
+      and provenance receipts into release production and validation. Configured
+      archives do not require publisher keys or application signing.
+- [x] Read back beta.43's published app/package assets and verify them against the
+      frozen source/plan before installing or changing selected pins.
 - [ ] Measure installed size, startup, CPU/RAM, and connections per combination;
       do not promise savings based on source size.
 - [ ] Verify real desktop HA/camera installations and representative mobile
       devices separately from mocks. Record exact tested versions and limits.
-- [ ] Update user/developer docs and remove compatibility-stage statements only
-      after the corresponding implementation and delivery path are complete.
-- [ ] Deliver reviewed PRs and merge after required checks pass.
+- [x] Update user/developer implementation documentation for extracted workers,
+      native migration, configuration-driven restoration, and generic media/UI.
+      Retain historical checkpoint evidence without treating its old scope as
+      current unfinished implementation.
+- [ ] Complete the release and installed acceptance record with observed versions,
+      asset identities, backup/rollback scope, and remaining device limits.
+- [x] Deliver reviewed PR #456 and merge at `32a079c` after exact-head checks pass:
+      60 succeeded, six skipped, approved head `2ebba507`, no unresolved threads.
 
 ## Evidence log
 
