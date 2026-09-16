@@ -12,6 +12,7 @@ mod ha_session;
 mod mobile_build;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_credentials;
+mod module_config;
 mod release_info;
 mod tls;
 #[cfg(desktop)]
@@ -117,6 +118,8 @@ struct HomeButtonConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct FullConfig {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    modules: module_config::ModuleNamespaces,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     desktop_plugins: Vec<plugin_config::DesktopPluginConfig>,
     mqtt_host: String,
@@ -227,6 +230,7 @@ fn default_ev_instance() -> Option<u32> {
 impl Default for FullConfig {
     fn default() -> Self {
         Self {
+            modules: module_config::ModuleNamespaces::new(),
             desktop_plugins: Vec::new(),
             mqtt_host: DEFAULT_MQTT_HOST.to_string(),
             mqtt_port: DEFAULT_MQTT_PORT,
@@ -810,6 +814,8 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
         save_config_encrypted(&app, &config)?;
     }
 
+    // Core/mobile carry passive public data; credentials remain in native storage.
+    config.modules = module_config::portable(&config.modules);
     Ok(config)
 }
 
@@ -823,6 +829,7 @@ async fn save_config(
         .lock()
         .map_err(|_| "Config update lock failed")?;
     let previous = load_config(&app)?;
+    config.modules = module_config::merge_for_save(config.modules, &previous.modules)?;
     auth::validate_policy(&config)?;
     // Any explicit save (wizard or Config UI) completes first-run setup.
     config.setup_completed = true;

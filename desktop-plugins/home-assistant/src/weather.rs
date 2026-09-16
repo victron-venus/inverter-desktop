@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-const MAX_TEXT_BYTES: usize = 512;
+use crate::state::MAX_TEXT_BYTES;
 const MAX_CONDITION_BYTES: usize = 128;
 const MAX_UNIT_BYTES: usize = 32;
 const MAX_NUMBER_BYTES: usize = 32;
@@ -353,9 +353,14 @@ mod tests {
     #[test]
     fn forecast_entries_fit_as_whole_segments_and_never_expose_partial_numbers() {
         let forecast = json!({"datetime":"2026-09-16T12:00:00+00:00","condition":"\\\"".repeat(64),"temperature":12345678901234567890123456789012_i128,"templow":-4});
-        let attributes =
+        let mut attributes =
             json!({"temperature":21,"temperature_unit":"°C","forecast":vec![forecast;5]});
-        let text = summary(&"☀".repeat(42), &attributes).unwrap();
+        let oversized = summary("sunny", &attributes).unwrap();
+        assert_eq!(oversized, "Condition: sunny; Temperature: 21 °C");
+        for entry in attributes["forecast"].as_array_mut().unwrap() {
+            entry["condition"] = json!("\\\"".repeat(32));
+        }
+        let text = summary("sunny", &attributes).unwrap();
         assert!(text.len() <= MAX_TEXT_BYTES);
         assert_eq!(text.matches("Forecast:").count(), 1);
         assert!(text.ends_with("High: 12345678901234567890123456789012 °C, Low: -4 °C"));

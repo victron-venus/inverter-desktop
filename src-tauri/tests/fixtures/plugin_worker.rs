@@ -167,12 +167,18 @@ fn main() {
                 }
                 contribute();
                 if mode.starts_with("configuration_video") {
-                    let url = if mode == "configuration_video_bad_url" {
+                    let url = if mode.ends_with("_bad_url") {
                         "https://other.test/base/clip.mp4"
                     } else {
                         "https://video.test/base/api/events/one/clip.mp4"
                     };
-                    http_video("clip-1", "Private camera", url);
+                    if mode.starts_with("configuration_video_image") {
+                        emit(&format!(
+                            r#"{{"type":"http_video","id":"image-1","url":"{url}","title":"Private snapshot","media_kind":"jpeg"}}"#
+                        ));
+                    } else {
+                        http_video("clip-1", "Private camera", url);
+                    }
                 }
                 if mode == "configuration_notifications" {
                     notification("configured-motion");

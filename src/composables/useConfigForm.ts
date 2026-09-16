@@ -94,7 +94,8 @@ export function useConfigForm() {
   }
 
   function resetToDefaults() {
-    Object.assign(config, defaultConfig)
+    // Core defaults do not own installed or unknown modules' persistent data.
+    Object.assign(config, defaultConfig, { modules: config.modules })
     message.value = 'Reset to defaults (unsaved)'
     messageType.value = 'info'
   }

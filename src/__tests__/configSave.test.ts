@@ -1,8 +1,8 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Config from '../Config.vue'
-import { defaultConfig } from '../config'
 import { useConfigForm } from '../composables/useConfigForm'
+import { defaultConfig, getAppConfig } from '../config'
 
 const boundary = vi.hoisted(() => ({ invoke: vi.fn(), emit: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: boundary.invoke }))
@@ -27,6 +27,32 @@ afterEach(() => {
 })
 
 describe('Configuration save result', () => {
+  it('preserves public opaque module schemas during core load, reset and save', async () => {
+    const modules = {
+      'example.future': {
+        schema_version: 407,
+        values: { layout: [{ kind: 'new-kind', details: { nested: [null, false, 2.5] } }] },
+      },
+    }
+    boundary.invoke.mockImplementation(async (name: string) =>
+      name === 'get_config' ? { ...defaultConfig, modules: structuredClone(modules) } : undefined
+    )
+    expect((await getAppConfig()).modules).toEqual(modules)
+    const form = useConfigForm()
+    await form.loadConfig()
+    form.config.show_console = false
+    form.resetToDefaults()
+    expect(form.config.modules).toEqual(modules)
+    expect(await form.saveConfig([], [])).toBe(true)
+    const written = boundary.invoke.mock.calls.find(([name]) => name === 'save_config')?.[1].config
+    expect(written.modules).toEqual(modules)
+    expect(boundary.invoke.mock.calls.map(([name]) => name)).toEqual([
+      'get_config',
+      'get_config',
+      'save_config',
+    ])
+  })
+
   it('disables Save and keeps the load failure visible instead of saving defaults', async () => {
     boundary.invoke.mockRejectedValue(new Error('Cannot decrypt configuration'))
     wrapper = mount(Config)

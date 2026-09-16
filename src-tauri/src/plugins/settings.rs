@@ -7,7 +7,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_FIELDS: usize = 32;
-const MAX_STRING: usize = 4096;
+// Selected-entity lists may exceed 4 KiB; the complete settings envelope still
+// has the independent 32 KiB configuration limit, including JSON escaping.
+const MAX_STRING: usize = 16 * 1024;
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

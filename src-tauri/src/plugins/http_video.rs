@@ -1,14 +1,51 @@
-//! Bounded direct-video HTTP transfers. No application configuration or credentials.
+//! Bounded direct-media HTTP transfers. No application configuration or credentials.
 
 use super::generation::GenerationLease;
 use super::media::MediaFile;
+use super::protocol::HttpMediaKind;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::{self, Instant};
 
 pub(crate) const MAX_CLIP_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
+const IMAGE_SIGNATURE_BYTES: usize = 12;
+
+pub(super) fn media_byte_limit(kind: HttpMediaKind) -> u64 {
+    match kind {
+        HttpMediaKind::Video => MAX_CLIP_BYTES,
+        HttpMediaKind::Jpeg | HttpMediaKind::Png | HttpMediaKind::Webp => MAX_IMAGE_BYTES,
+    }
+}
+
+pub(super) fn media_content_type(kind: HttpMediaKind) -> &'static str {
+    match kind {
+        HttpMediaKind::Video => "video/mp4",
+        HttpMediaKind::Jpeg => "image/jpeg",
+        HttpMediaKind::Png => "image/png",
+        HttpMediaKind::Webp => "image/webp",
+    }
+}
+
+pub(super) fn media_extension(kind: HttpMediaKind) -> &'static str {
+    match kind {
+        HttpMediaKind::Video => "mp4",
+        HttpMediaKind::Jpeg => "jpg",
+        HttpMediaKind::Png => "png",
+        HttpMediaKind::Webp => "webp",
+    }
+}
+
+fn matches_image_signature(kind: HttpMediaKind, prefix: &[u8]) -> bool {
+    match kind {
+        HttpMediaKind::Video => true,
+        HttpMediaKind::Jpeg => prefix.starts_with(&[0xff, 0xd8, 0xff]),
+        HttpMediaKind::Png => prefix.starts_with(b"\x89PNG\r\n\x1a\n"),
+        HttpMediaKind::Webp => prefix.starts_with(b"RIFF") && prefix.get(8..12) == Some(b"WEBP"),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VideoError {
@@ -18,6 +55,7 @@ pub(crate) enum VideoError {
     Http,
     Empty,
     Oversized,
+    InvalidMedia,
     Storage,
 }
 
@@ -67,6 +105,7 @@ impl VideoTransfer {
     pub(super) async fn download(
         &self,
         url: reqwest::Url,
+        kind: HttpMediaKind,
         output: Arc<MediaFile>,
         lease: &GenerationLease,
         mut shutdown: watch::Receiver<bool>,
@@ -82,7 +121,7 @@ impl VideoTransfer {
                 .await
                 .map_err(|_| VideoError::Storage)??;
             let result = self
-                .attempt(&url, &output, lease, &mut shutdown, deadline)
+                .attempt(&url, kind, &output, lease, &mut shutdown, deadline)
                 .await;
             match result {
                 Ok(bytes) => {
@@ -113,6 +152,7 @@ impl VideoTransfer {
     async fn attempt(
         &self,
         url: &reqwest::Url,
+        kind: HttpMediaKind,
         output: &Arc<MediaFile>,
         lease: &GenerationLease,
         shutdown: &mut watch::Receiver<bool>,
@@ -137,13 +177,15 @@ impl VideoTransfer {
                 AttemptError::Terminal(VideoError::Http)
             });
         }
+        let max_bytes = self.policy.max_bytes.min(media_byte_limit(kind));
         if response
             .content_length()
-            .is_some_and(|bytes| bytes > self.policy.max_bytes)
+            .is_some_and(|bytes| bytes > max_bytes)
         {
             return Err(AttemptError::Terminal(VideoError::Oversized));
         }
         let mut received = 0u64;
+        let mut prefix = Vec::with_capacity(IMAGE_SIGNATURE_BYTES);
         while let Some(chunk) = cancellable(lease, shutdown, deadline, response.chunk())
             .await
             .map_err(AttemptError::Terminal)?
@@ -151,8 +193,16 @@ impl VideoTransfer {
         {
             let next = received
                 .checked_add(chunk.len() as u64)
-                .filter(|size| *size <= self.policy.max_bytes)
+                .filter(|size| *size <= max_bytes)
                 .ok_or(AttemptError::Terminal(VideoError::Oversized))?;
+            if kind != HttpMediaKind::Video && prefix.len() < IMAGE_SIGNATURE_BYTES {
+                let remaining = IMAGE_SIGNATURE_BYTES - prefix.len();
+                prefix.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                if prefix.len() == IMAGE_SIGNATURE_BYTES && !matches_image_signature(kind, &prefix)
+                {
+                    return Err(AttemptError::Terminal(VideoError::InvalidMedia));
+                }
+            }
             for bytes in chunk.chunks(WRITE_CHUNK_BYTES) {
                 check_active(lease, shutdown, deadline).map_err(AttemptError::Terminal)?;
                 let file = output.clone();
@@ -169,6 +219,8 @@ impl VideoTransfer {
         }
         if received == 0 {
             Err(AttemptError::Retry(VideoError::Empty))
+        } else if !matches_image_signature(kind, &prefix) {
+            Err(AttemptError::Terminal(VideoError::InvalidMedia))
         } else {
             Ok(received)
         }

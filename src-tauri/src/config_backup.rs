@@ -29,7 +29,9 @@ fn sensitive_url(value: &str) -> bool {
 }
 
 pub(super) fn redacted(config: &FullConfig) -> Result<Value, String> {
-    let mut value = serde_json::to_value(config).map_err(|e| e.to_string())?;
+    let mut portable = config.clone();
+    portable.modules = crate::module_config::portable(&config.modules);
+    let mut value = serde_json::to_value(portable).map_err(|e| e.to_string())?;
     let object = value.as_object_mut().ok_or("Invalid config")?;
     for key in PRIVATE_FIELDS {
         object.remove(*key);
@@ -55,6 +57,18 @@ pub(super) fn restore(content: &str, current: &FullConfig) -> Result<FullConfig,
         serde_json::from_str(content).map_err(|e| format!("Invalid backup: {e}"))?;
     let object = incoming.as_object_mut().ok_or("Backup must be an object")?;
     let existing = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    let incoming_modules = match object.get("modules") {
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| "Invalid portable module settings".to_owned())?,
+        None => crate::module_config::ModuleNamespaces::new(),
+    };
+    let modules = crate::module_config::restore_portable(incoming_modules, &current.modules)?;
+    if !modules.is_empty() {
+        object.insert(
+            "modules".into(),
+            serde_json::to_value(modules).map_err(|_| "Invalid portable module settings")?,
+        );
+    }
     // An imported file cannot change local authentication or replace credentials.
     // This rule also applies to legacy exports which included plaintext secrets.
     for key in PRIVATE_FIELDS {
@@ -152,6 +166,82 @@ mod tests {
     fn invalid_backup_does_not_become_default_settings() {
         assert!(restore("[]", &FullConfig::default()).is_err());
         assert!(restore("{}", &FullConfig::default()).is_err());
+    }
+
+    #[test]
+    fn module_backup_is_portable_and_matching_import_preserves_local_secrets() {
+        let current = FullConfig {
+            modules: crate::module_config::test_namespaces(),
+            ..FullConfig::default()
+        };
+        let backup = redacted(&current).unwrap();
+        let text = backup.to_string();
+        assert!(!text.contains("test-module-secret"));
+        assert!(backup["modules"]["example.future"].get("secrets").is_none());
+        assert_eq!(backup["modules"]["example.future"]["schema_version"], 407);
+        let same_installation = restore(&text, &current).unwrap();
+        assert_eq!(same_installation.modules, current.modules);
+        let other_installation = restore(&text, &FullConfig::default()).unwrap();
+        assert!(other_installation.modules["example.future"]
+            .secrets
+            .is_empty());
+        assert_eq!(
+            other_installation.modules["example.future"].values,
+            current.modules["example.future"].values
+        );
+    }
+
+    #[test]
+    fn older_or_partial_backups_cannot_remove_local_module_namespaces() {
+        let current = FullConfig {
+            modules: crate::module_config::test_namespaces(),
+            ..FullConfig::default()
+        };
+        let legacy = redacted(&FullConfig::default()).unwrap();
+        assert_eq!(
+            restore(&legacy.to_string(), &current).unwrap().modules,
+            current.modules
+        );
+        let mut partial = legacy;
+        partial["modules"] = serde_json::json!({
+            "example.new": {"schema_version": 600, "values": {"future": [null, true, 3]}}
+        });
+        let restored = restore(&partial.to_string(), &current).unwrap();
+        assert_eq!(restored.modules.len(), 3);
+        for (id, local) in &current.modules {
+            assert_eq!(&restored.modules[id], local);
+        }
+    }
+
+    #[test]
+    fn module_conflict_rejects_the_entire_backup_without_changing_current_config() {
+        let current = FullConfig {
+            modules: crate::module_config::test_namespaces(),
+            ..FullConfig::default()
+        };
+        let original = serde_json::to_value(&current).unwrap();
+        let mut backup = redacted(&current).unwrap();
+        backup["mqtt_host"] = Value::String("changed-cerbo".into());
+        backup["modules"]["example.future"]["values"]["endpoint"] =
+            Value::String("https://another-server.example.invalid".into());
+        assert!(restore(&backup.to_string(), &current).is_err());
+        assert_eq!(serde_json::to_value(&current).unwrap(), original);
+    }
+
+    #[test]
+    fn imports_reject_module_credentials_and_unclassified_fields_without_echoing_them() {
+        for namespace in [
+            serde_json::json!({"schema_version": 1, "values": {}, "secrets": {"token": "private-test-value"}}),
+            serde_json::json!({"schema_version": 1, "values": {}, "future_credentials": "private-test-value"}),
+            serde_json::json!({"schema_version": "private-test-value", "values": {}}),
+            Value::Null,
+        ] {
+            let mut backup = redacted(&FullConfig::default()).unwrap();
+            backup["modules"] = serde_json::json!({"example.unknown": namespace});
+            let error = restore(&backup.to_string(), &FullConfig::default()).unwrap_err();
+            assert!(!error.contains("private-test-value"));
+            assert!(!error.contains("future_credentials"));
+        }
     }
 
     #[test]

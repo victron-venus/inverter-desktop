@@ -10,6 +10,11 @@ use tokio::sync::watch;
 
 pub type Shared = Arc<Mutex<Book>>;
 
+// Quotes/backslashes can double the encoded size. Together with the configured
+// entity/control limits these bounds keep full snapshots within 64 KiB.
+const MAX_TITLE_BYTES: usize = 64;
+pub(crate) const MAX_TEXT_BYTES: usize = 256;
+
 #[derive(Clone, Copy, Default)]
 pub struct Connection {
     pub epoch: u64,
@@ -91,7 +96,7 @@ pub(crate) fn bounded(value: &str, limit: usize) -> String {
 }
 
 fn unavailable(index: usize, name: &str, status: &str) -> Value {
-    json!({"kind":"status","id":format!("entity-{index}"),"title":name,
+    json!({"kind":"status","id":format!("entity-{index}"),"title":bounded(name, MAX_TITLE_BYTES),
         "value":status,"tone":"neutral"})
 }
 
@@ -104,9 +109,9 @@ fn contribution(index: usize, entity: &str, state: Option<&Value>) -> Value {
     };
     let title = state["attributes"]["friendly_name"]
         .as_str()
-        .map(|name| bounded(name, 128))
+        .map(|name| bounded(name, MAX_TITLE_BYTES))
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| entity.to_owned());
+        .unwrap_or_else(|| bounded(entity, MAX_TITLE_BYTES));
     if matches!(value, "unknown" | "unavailable") {
         return json!({"kind":"status","id":format!("entity-{index}"),"title":title,
             "value":if value=="unknown" {"Unknown"} else {"Unavailable"},"tone":"neutral"});
@@ -131,8 +136,7 @@ fn contribution(index: usize, entity: &str, state: Option<&Value>) -> Value {
             .filter(|unit| !unit.is_empty());
         return json!({"kind":"metric","id":format!("entity-{index}"),"title":title,"value":number,"unit":unit});
     }
-    // Keep every frame below the host's 64 KiB limit even with all 32 entities.
-    let text = bounded(value, 512);
+    let text = bounded(value, MAX_TEXT_BYTES);
     if text.is_empty() {
         return unavailable(index, &title, "Unavailable");
     }
@@ -189,7 +193,7 @@ impl Book {
                     unknown: false,
                     binary_known: false,
                     cover_features: 0,
-                    title: name.clone(),
+                    title: bounded(name, MAX_TITLE_BYTES),
                 })
                 .collect(),
             discovery: Discovery::new(entities, discovery_prefixes),
@@ -466,7 +470,10 @@ impl Book {
             if let Some(entity) = self.action_entity(index) {
                 let action = &self.actions[index];
                 let verb = action.operation.label();
-                let label = format!("{verb}{}", bounded(&entity.title, 128 - verb.len()));
+                let label = format!(
+                    "{verb}{}",
+                    bounded(&entity.title, MAX_TITLE_BYTES - verb.len())
+                );
                 items.push(json!({"kind":"action","id":action.id,
                     "title":entity.title,"action_id":action.id,
                     "label":label,"params":{},"state_id":entity.item["id"]}));
@@ -485,7 +492,10 @@ impl Book {
                     continue;
                 };
                 let verb = input.action.operation.label();
-                let label = format!("{verb}{}", bounded(&entity.title, 128 - verb.len()));
+                let label = format!(
+                    "{verb}{}",
+                    bounded(&entity.title, MAX_TITLE_BYTES - verb.len())
+                );
                 let constraints = &observation.constraints;
                 items.push(json!({"kind":"number_input","id":input.action.id,
                     "title":entity.title,"action_id":input.action.id,"label":label,
@@ -1443,8 +1453,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thirty_two_weather_items_stay_within_the_actual_utf8_and_escaped_frame_limits() {
-        let entities = (0..32)
+    async fn sixty_four_weather_items_stay_within_the_actual_utf8_and_escaped_frame_limits() {
+        let entities = (0..crate::config::MAX_ENTITIES)
             .map(|index| format!("weather.house_{index}"))
             .collect::<Vec<_>>();
         let shared = Book::new(&entities, &[], &[]);
@@ -1454,7 +1464,7 @@ mod tests {
             for (index, name) in entities.iter().enumerate() {
                 let mut state = weather_state(&"\\\"".repeat(64), json!(21));
                 state["entity_id"] = json!(name);
-                state["attributes"]["friendly_name"] = json!("☀\n".repeat(128));
+                state["attributes"]["friendly_name"] = json!("\\\"".repeat(128));
                 state["attributes"]["forecast"] = json!((0..5).map(|day| json!({
                     "datetime":format!("2026-09-{:02}", day + 16), "condition":"\\\"".repeat(64),
                     "temperature":12345678901234567890123456789012_i128,"templow":-10
@@ -1468,12 +1478,12 @@ mod tests {
             book.frame()
         };
         let items = frame["items"].as_array().unwrap();
-        assert_eq!(items.len(), 33);
+        assert_eq!(items.len(), 65);
         for item in &items[1..] {
             assert_eq!(item["kind"], "text");
             let text = item["text"].as_str().unwrap();
             assert!(
-                text.len() <= 512
+                text.len() <= MAX_TEXT_BYTES
                     && text
                         .chars()
                         .all(|character| character == '\n' || !character.is_control())
@@ -2179,7 +2189,7 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>();
             assert_eq!(ids.len(), items.len());
             for (entity, item) in config.entities.iter().zip(&items[1..33]) {
-                assert_eq!(item["title"].as_str().unwrap().len(), 128);
+                assert_eq!(item["title"].as_str().unwrap().len(), MAX_TITLE_BYTES);
                 assert_eq!(
                     item["text"].as_str().unwrap().len(),
                     if covers.contains(entity) {
@@ -2187,13 +2197,13 @@ mod tests {
                     } else if binary.contains(entity) {
                         3
                     } else {
-                        512
+                        MAX_TEXT_BYTES
                     }
                 );
             }
             for item in &items[33..] {
-                assert_eq!(item["title"].as_str().unwrap().len(), 128);
-                assert_eq!(item["label"].as_str().unwrap().len(), 128);
+                assert_eq!(item["title"].as_str().unwrap().len(), MAX_TITLE_BYTES);
+                assert_eq!(item["label"].as_str().unwrap().len(), MAX_TITLE_BYTES);
                 assert_eq!(item["params"], json!({}));
             }
             assert!(
@@ -2266,16 +2276,20 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>();
             assert_eq!(ids.len(), items.len());
             for (entity, item) in config.entities.iter().zip(&items[1..33]) {
-                assert_eq!(item["title"].as_str().unwrap().len(), 128);
+                assert_eq!(item["title"].as_str().unwrap().len(), MAX_TITLE_BYTES);
                 assert_eq!(
                     item["text"].as_str().unwrap().len(),
-                    if binary.contains(entity) { 3 } else { 512 }
+                    if binary.contains(entity) {
+                        3
+                    } else {
+                        MAX_TEXT_BYTES
+                    }
                 );
             }
             for item in &items[33..] {
                 assert_eq!(item["kind"], "action");
-                assert_eq!(item["title"].as_str().unwrap().len(), 128);
-                assert_eq!(item["label"].as_str().unwrap().len(), 128);
+                assert_eq!(item["title"].as_str().unwrap().len(), MAX_TITLE_BYTES);
+                assert_eq!(item["label"].as_str().unwrap().len(), MAX_TITLE_BYTES);
                 assert_eq!(item["params"], json!({}));
             }
             assert!(
@@ -2339,12 +2353,12 @@ mod tests {
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(ids.len(), items.len());
         for item in &items[1..33] {
-            assert_eq!(item["title"].as_str().unwrap().len(), 128);
-            assert_eq!(item["text"].as_str().unwrap().len(), 512);
+            assert_eq!(item["title"].as_str().unwrap().len(), MAX_TITLE_BYTES);
+            assert_eq!(item["text"].as_str().unwrap().len(), MAX_TEXT_BYTES);
         }
         for item in &items[33..] {
-            assert_eq!(item["title"].as_str().unwrap().len(), 128);
-            assert_eq!(item["label"].as_str().unwrap().len(), 128);
+            assert_eq!(item["title"].as_str().unwrap().len(), MAX_TITLE_BYTES);
+            assert_eq!(item["label"].as_str().unwrap().len(), MAX_TITLE_BYTES);
             assert_eq!(item["params"], json!({}));
         }
         let encoded = serde_json::to_vec(&frame).unwrap();
@@ -2502,7 +2516,7 @@ mod tests {
                 book.live(entity, Some(&json!({"entity_id":entity,"state":value,"attributes":{
                     "friendly_name":"\\\"".repeat(128),"current_position":100,"supported_features":15}})));
             }
-            let discoveries = (0..22)
+            let discoveries = (0..54)
                 .map(|index| {
                     json!({"entity_id":literal("sensor", index),
                 "state":"\\\"".repeat(512),"attributes":{"friendly_name":"\\\"".repeat(128)}})
@@ -2516,7 +2530,7 @@ mod tests {
         };
         assert_grouped_frame(&frame, &config);
         let items = frame["items"].as_array().unwrap();
-        assert_eq!(items.len(), 64);
+        assert_eq!(items.len(), 96);
         assert_eq!(
             items.iter().filter(|item| item["kind"] == "action").count(),
             27
@@ -2532,14 +2546,14 @@ mod tests {
             .iter()
             .filter(|item| item["id"].as_str().unwrap().starts_with("discovery-"))
             .collect::<Vec<_>>();
-        assert_eq!(discovered.len(), 21);
+        assert_eq!(discovered.len(), 53);
         assert!(discovered
             .iter()
             .all(|item| item["kind"] == "text" && item.get("action_id").is_none()));
         assert_eq!(items[0]["value"], "Connected; Discovery limit reached");
         let bytes = serde_json::to_vec(&frame).unwrap().len();
         // Reserve the extra digits that monotonic discovery IDs may acquire.
-        assert!(bytes + 21 * 20 < inverter_worker_protocol::MAX_FRAME_BYTES);
+        assert!(bytes + 53 * 20 < inverter_worker_protocol::MAX_FRAME_BYTES);
         Output::with_writer(std::io::sink())
             .send(frame)
             .await
@@ -2748,9 +2762,10 @@ mod tests {
             )
         };
         for (buttons, media, binary, covers, numbers, positions) in [
-            (15, 4, 0, 1, 0, 1),
-            (16, 4, 1, 0, 1, 0),
-            (11, 4, 0, 0, 4, 4),
+            (16, 4, 16, 1, 0, 0),
+            (16, 4, 16, 0, 3, 0),
+            (16, 4, 8, 4, 3, 4),
+            (11, 4, 10, 4, 4, 4),
         ] {
             let list = |domain, count| (0..count).map(|i| literal(domain, i)).collect::<Vec<_>>();
             let actions = list("button", buttons);
@@ -2768,12 +2783,12 @@ mod tests {
                 .chain(&positions)
                 .cloned()
                 .collect::<std::collections::HashSet<_>>();
-            let sensors = list("sensor", 32 - targets.len());
+            let sensors = list("sensor", crate::config::MAX_ENTITIES - targets.len());
             targets.extend(sensors.iter().cloned());
             let config: crate::config::Configuration = serde_json::from_value(json!({"revision":"maximum-numeric","values":{
                 "ha_base_url":"http://localhost","watch_entities":sensors.join(","),"action_entities":actions.join(","),"media_player_entities":media.join(","),"binary_entities":binary.join(","),"cover_entities":covers.join(","),"number_entities":numbers.join(","),"cover_position_entities":positions.join(",")},"secrets":{"ha_token":"fixture"}})).unwrap();
             let config = config.validate().unwrap();
-            assert_eq!(config.entities.len(), 32);
+            assert_eq!(config.entities.len(), 64);
             let shared = Book::new(&config.entities, &config.actions(), &config.inputs());
             let frame = {
                 let mut book = shared.lock().unwrap();
@@ -2804,7 +2819,7 @@ mod tests {
             };
             assert_grouped_frame(&frame, &config);
             let items = frame["items"].as_array().unwrap();
-            assert_eq!(items.len(), 64);
+            assert_eq!(items.len(), 128);
             assert_eq!(
                 items
                     .iter()
@@ -2813,12 +2828,13 @@ mod tests {
                 numbers.len() + positions.len()
             );
             for input in items.iter().filter(|item| item["kind"] == "number_input") {
-                assert_eq!(input["title"].as_str().unwrap().len(), 128);
-                assert_eq!(input["label"].as_str().unwrap().len(), 128);
+                assert_eq!(input["title"].as_str().unwrap().len(), MAX_TITLE_BYTES);
+                assert_eq!(input["label"].as_str().unwrap().len(), MAX_TITLE_BYTES);
             }
+            let bytes = serde_json::to_vec(&frame).unwrap().len();
             assert!(
-                serde_json::to_vec(&frame).unwrap().len()
-                    < inverter_worker_protocol::MAX_FRAME_BYTES
+                bytes + 64 * 20 < inverter_worker_protocol::MAX_FRAME_BYTES,
+                "escaped snapshot uses {bytes} bytes"
             );
             Output::with_writer(std::io::sink())
                 .send(frame)

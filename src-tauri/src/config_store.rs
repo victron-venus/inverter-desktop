@@ -301,6 +301,7 @@ mod tests {
         use aead::Generate;
 
         let config = FullConfig {
+            modules: crate::module_config::test_namespaces(),
             mqtt_password: Some("test-credential".into()),
             show_batteries: Some(false),
             desktop_plugins: crate::plugin_config::test_declarations(),
@@ -311,6 +312,11 @@ mod tests {
         other_key[0] ^= 1;
         let encrypted = encrypt_config(&config, &key).unwrap();
         assert!(!encrypted.contains("test-credential"));
+        assert!(!encrypted.contains("test-module-secret"));
+        assert_eq!(
+            decrypt_config(&encrypted, &key).unwrap().modules,
+            config.modules
+        );
         assert_eq!(
             decrypt_config(&encrypted, &key).unwrap().mqtt_password,
             config.mqtt_password

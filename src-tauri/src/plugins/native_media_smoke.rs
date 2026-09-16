@@ -3,7 +3,7 @@
 
 use super::generation::{GenerationLease, RevokeOnDrop};
 use super::media::MediaService;
-use super::protocol::{HttpVideoGrant, PluginManifest, WorkerConfiguration};
+use super::protocol::{HttpMediaKind, HttpVideoGrant, PluginManifest, WorkerConfiguration};
 use super::runtime::QueuedHttpVideo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -322,6 +322,7 @@ fn submit(
             id: format!("native-smoke-{sequence}"),
             url: options.url.clone(),
             title: STAGES[sequence].into(),
+            media_kind: HttpMediaKind::Video,
         })
         .map_err(|_| "Native media admission failed")?;
     Ok(lease)

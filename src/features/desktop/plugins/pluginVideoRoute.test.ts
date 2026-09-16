@@ -11,7 +11,7 @@ describe('owned plugin video route', () => {
         `?pluginMedia=${id}&name=Front&localPath=/private/other&videoUrl=https://other.invalid`,
         label
       )
-    ).toEqual({ id, name: 'Front', failed: false })
+    ).toEqual({ id, mediaKind: 'video', name: 'Front', failed: false })
   })
 
   it('requires the exact native owner and canonical identifier', () => {
@@ -26,8 +26,22 @@ describe('owned plugin video route', () => {
   it('exposes only a generic download failure flag', () => {
     expect(pluginVideoRoute(`?pluginMedia=${id}&error=download`, label)).toEqual({
       id,
+      mediaKind: 'video',
       name: 'Camera',
       failed: true,
     })
+  })
+
+  it('accepts only the dedicated typed media selector and ignores legacy image flags', () => {
+    expect(pluginVideoRoute(`?pluginMedia=${id}&pluginMediaKind=image`, label)).toEqual({
+      id,
+      mediaKind: 'image',
+      name: 'Camera',
+      failed: false,
+    })
+    expect(pluginVideoRoute(`?pluginMedia=${id}&media=image`, label)?.mediaKind).toBe('video')
+    for (const kind of ['', 'svg', 'html', 'IMAGE', 'https://other.invalid/image.jpg']) {
+      expect(pluginVideoRoute(`?pluginMedia=${id}&pluginMediaKind=${kind}`, label)).toBeNull()
+    }
   })
 })

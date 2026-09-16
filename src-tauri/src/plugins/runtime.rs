@@ -7,9 +7,9 @@
 use super::generation::{GenerationLease, RevokeOnDrop};
 use super::protocol::{
     encode_host_frame, parse_worker_frame, validate_handshake, validate_host_message,
-    validate_plugin_id, DashboardContribution, HostMessage, HttpVideoGrant, NumberInputGrant,
-    WorkerConfiguration, WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS, MAX_FRAME_BYTES,
-    PROTOCOL_VERSION,
+    validate_plugin_id, DashboardContribution, HostMessage, HttpMediaKind, HttpVideoGrant,
+    NumberInputGrant, WorkerConfiguration, WorkerMessage, HOST_API_VERSION, MAX_ACTION_DEADLINE_MS,
+    MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -57,6 +57,7 @@ pub(crate) struct QueuedHttpVideo {
     pub id: String,
     pub url: String,
     pub title: String,
+    pub media_kind: HttpMediaKind,
 }
 
 #[derive(Default)]
@@ -225,6 +226,7 @@ impl WorkerEntry {
         id: String,
         url: String,
         title: String,
+        media_kind: HttpMediaKind,
     ) -> bool {
         let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         if snapshot.state != WorkerState::Running
@@ -268,6 +270,7 @@ impl WorkerEntry {
             id,
             url,
             title,
+            media_kind,
         };
         state.seen.push_back((request.id.clone(), now));
         state.titles.push_back((request.title.clone(), now));
@@ -1632,7 +1635,12 @@ fn handle_frame(
     }
     let mut notify = false;
     match message {
-        WorkerMessage::HttpVideo { id, url, title } => {
+        WorkerMessage::HttpVideo {
+            id,
+            url,
+            title,
+            media_kind,
+        } => {
             let grant = spec
                 .http_video
                 .as_ref()
@@ -1640,13 +1648,18 @@ fn handle_frame(
             grant
                 .validate_url(&url)
                 .map_err(|_| Outcome::Failed("worker_http_video_url_invalid"))?;
-            notify = entry.queue_http_video(grant, id.clone(), url, title.clone());
+            notify = entry.queue_http_video(grant, id.clone(), url, title.clone(), media_kind);
             if notify && spec.desktop_notifications {
                 entry.queue_notification(DesktopNotification {
                     plugin_id: spec.plugin_id.clone(),
                     id,
                     title,
-                    body: "Camera motion clip available".into(),
+                    body: if media_kind.is_video() {
+                        "Camera motion clip available"
+                    } else {
+                        "Camera snapshot available"
+                    }
+                    .into(),
                 });
             }
         }

@@ -72,6 +72,61 @@ manual signed-file selection flow is unavailable. Existing HA/camera implementat
 desktop features until real package parity is verified. Network/media host services,
 legacy configuration migration, and feature extraction remain unfinished.
 
+### Active implementation: feature parity and final extraction
+
+The compact dashboard fix is complete. The following work replaces the remaining
+bundled integrations; installing today's workers alone does not complete it.
+Keep each prerequisite independently reviewable, then verify the handover before
+removing the compatibility implementation. Do not replace the compact home UI with
+flat diagnostic contribution panels.
+
+#### Shared prerequisites
+
+- [x] Increase HA capacity to at least 64 selected reads, 16 binary targets, and
+      63 controls; allow 128 host contributions without increasing the 64 KiB wire
+      frame limit. Exercise escaped maximum-length output through real worker pipes.
+- [x] Version the expanded contract as host API 1.7 and require it in new workers;
+      retain compatibility with installed workers acknowledging the negotiated API.
+- [x] Preserve versioned passive module namespaces across desktop/mobile
+      load/save/import/export and core resets. Keep secrets out of portable exports
+      and reject imports that retarget a namespace while retaining local secrets.
+- [x] Support owned JPEG/PNG/WebP snapshots with explicit media types, bounded
+      downloads, correct serving, and a 12-second display lifetime. Preserve video
+      behavior and revoke media on worker/session removal.
+
+#### Home Assistant handover
+
+- [ ] Add compact declarative sections and state/control presentation metadata;
+      preserve home/header ordering, labels, availability, and appliance visibility.
+- [ ] Add a bounded entity-selection settings contract and migrate legacy selected
+      entities, visibility, appliances, and credentials into encrypted worker settings.
+- [ ] Preserve domain discovery/filtering, weather, reconnect/grace behavior, and
+      selected household notifications through worker output and scoped actions.
+- [ ] Activate the worker-backed UI only after settings validation and successful
+      startup; stop the bundled HA client and prove that one client owns the feature.
+- [ ] Remove bundled HA frontend/native imports, commands, settings, translations,
+      and assets; enforce absence from the desktop core build graph.
+
+#### Camera handover
+
+- [ ] Package Kerberos and Ring separately, preserving the installed Frigate
+      identity and configuration. Keep direct transports independent from HA.
+- [ ] Preserve explicit topic coverage, snapshots, clips, cooldowns, reconnect,
+      and generation-bound cancellation with local broker/HTTP fixtures.
+- [ ] Add explicitly scoped optional proxy credentials and configured live-view
+      notification actions; preserve the separate Kerberos implementation in progress.
+- [ ] Migrate camera settings without duplicate subscriptions, verify installed
+      worker behavior, and remove bundled camera adapters and broker lifecycle.
+
+#### Delivery
+
+- [ ] Run desktop core / HA / cameras / both acceptance and mobile exclusion
+      checks, including saved-configuration round trips and interrupted restoration.
+- [ ] Review, lint, test, and merge each PR after exact-head checks pass; record
+      delivery evidence separately from implementation completion.
+- [ ] Install the finished compatible build with a recoverable backup and verify
+      the familiar dashboard, plugin health, and independent core telemetry.
+
 ### Completed implementation: compact plugin presentation
 
 Start from verified main `0f34d51`. Installing HA and Frigate must not append
@@ -1679,7 +1734,7 @@ remaining host services, and migrated HA/camera packages.
 
 - [ ] Introduce versioned `modules.ha` and `modules.cameras` with idempotent legacy
       migrations and explicit migration versions.
-- [ ] Preserve unknown namespaces during core/mobile load/save/export/import and
+- [x] Preserve unknown namespaces during core/mobile load/save/export/import and
       resets that do not explicitly delete plugin data.
 - [ ] Separate core flags from genuine HA targets in `ha_entities` and
       `header_toggles_config`; preserve labels, order, IDs, and state keys.

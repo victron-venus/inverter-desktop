@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useCoreControlsConfig } from '../features/coreControlsConfig'
 import { useConfigForm } from '../composables/useConfigForm'
+import { useCoreControlsConfig } from '../features/coreControlsConfig'
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke }))
 
 const saved = {
+  modules: {
+    'example.future': {
+      schema_version: 407,
+      values: { layout: [{ kind: 'future-card', options: { visible: false } }], empty: null },
+    },
+    'example.offline': { schema_version: 99, values: { nested: [true, 12.5, 'Label'] } },
+  },
   mqtt_host: 'Cerbo',
   mqtt_port: 1883,
   ha_url: 'http://existing-home',
@@ -81,6 +88,7 @@ describe('mobile control configuration roundtrip', () => {
     expect(written.ha_entities).toEqual(saved.ha_entities)
     expect(written.ha_url).toBe(saved.ha_url)
     expect(written.desktop_plugins).toEqual(saved.desktop_plugins)
+    expect(written.modules).toEqual(saved.modules)
   })
 
   it('resets visible controls without deleting hidden desktop definitions', async () => {
@@ -95,6 +103,20 @@ describe('mobile control configuration roundtrip', () => {
     expect(written.header_toggles_config).toEqual([saved.header_toggles_config[1]])
     expect(written.ha_entities).toEqual([saved.ha_entities[0]])
     expect(written.desktop_plugins).toEqual(saved.desktop_plugins)
+    expect(written.modules).toEqual(saved.modules)
+  })
+
+  it('keeps unknown module data through a mobile core reset and later save', async () => {
+    const form = useConfigForm()
+    await form.loadConfig()
+    form.config.mqtt_host = 'ChangedCerbo'
+    form.resetToDefaults()
+    expect(form.config.mqtt_host).toBe('Cerbo')
+    expect(form.config.modules).toEqual(saved.modules)
+    expect(await form.saveConfig(saved.ha_entities, saved.header_toggles_config, [])).toBe(true)
+    const written = invoke.mock.calls.find(([command]) => command === 'save_config')?.[1].config
+    expect(written.modules).toEqual(saved.modules)
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual(['get_config', 'save_config'])
   })
   it('reserves hidden IDs for presets and automatically named controls', async () => {
     const form = useConfigForm()

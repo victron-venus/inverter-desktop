@@ -104,8 +104,11 @@ prototype names. Titles occupy at most 128 bytes and descriptions at most 512.
 
 Field types are `string`, `boolean`, `number`, and `integer`. Strings support
 `minLength`, `maxLength`, and at most 32 unique string `enum` choices. Length bounds
-count Unicode characters, while every string also has a hard 4,096-byte UTF-8
-limit. Numeric fields support finite `minimum` and `maximum`; integers must be
+count Unicode characters, while every string also has a hard 16,384-byte UTF-8
+limit in host API 1.7 (4,096 bytes in earlier hosts). Packages needing the larger
+limit must require a compatible host API. The complete transmitted configuration
+and encrypted settings data retain their separate 32 KiB limits.
+Numeric fields support finite `minimum` and `maximum`; integers must be
 integral and within the JavaScript safe-integer range. Optional `default` values must satisfy their field constraints.
 
 Host API 1.5 adds the opt-in field keyword `omitEmpty`. It may be true only for
