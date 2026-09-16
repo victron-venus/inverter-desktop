@@ -81,17 +81,20 @@ Release `v2.5.42-beta.43` is published from that merge revision. Its exact relea
 run passed 37 checks with two intended skips; public macOS app/package bytes,
 source tag, frozen plan, and inventory were independently verified. Installed
 beta.43 passed read-only acceptance with both plugin groups, HA only, core only,
-and cameras only; both groups are restored and all three selected workers are
-Running/Connected. The initial Keychain access stall was resolved, followed by a
-normal restart. The automatic recovery fix was reviewed and merged through
+and cameras only; that acceptance ended with both groups restored and all three
+selected workers Running/Connected. The initial Keychain access stall was
+resolved, followed by a normal restart. The automatic recovery fix was reviewed and merged through
 [PR #458](https://github.com/victron-venus/inverter-desktop/pull/458) at `74d7311`
 on 2026-09-16 at `13:06Z`: exact head `4151436` passed 59 checks with three skips,
 was approved, and had no unresolved review threads. Release `v2.5.42-beta.45`
 is published; run `35099769637` passed 37 jobs with two skips. Independent public
-macOS ARM app/four-worker verification passed, and the candidate was staged
-without execution. The three selected package hashes match beta.43, so existing
-pins are retained. Beta.43 and its three workers remain running; installing the
-new host and recording its acceptance await macOS unlock. Track that gate in the
+macOS ARM app/four-worker verification passed. After macOS became accessible,
+the verified beta.45 host was installed with a fresh stopped-app backup; its first
+launch automatically restored all three selected workers. The dashboard showed
+live core data and all 15 Home controls. Configuration, encrypted plugin settings,
+and existing package pins are unchanged. This completes the host upgrade and
+normal-start acceptance; delayed/denied Keychain recovery remains fixture evidence,
+not a forced live fault. See the
 [delivery record](docs/desktop-plugin-delivery.md).
 
 ### Completed implementation: optional feature extraction
@@ -285,11 +288,22 @@ replacing the installed application.
 - [x] Stage the verified beta.45 candidate without executing or installing it.
       The selected HA/Frigate/Kerberos archive hashes match beta.43, so the
       existing declarations and pins are retained.
-- [ ] Install the verified recovery release and record its acceptance. Installed
-      beta.43's successful normal restart and four-state acceptance do not prove
-      the new automatic recovery path in a released application. This step awaits
-      macOS unlock; beta.43 and its three workers are left running. No new
-      Keychain failure is claimed.
+- [x] Install the verified beta.45 host after macOS access is restored, using the
+      unchanged reviewed installer and a fresh backup with no app/worker processes
+      running. Independently verify all five backup fingerprints, four protected
+      security groups, staged/source identity, and the same permitted OS tracking
+      differences. Record the installation receipt in the delivery document.
+- [x] Accept beta.45's normal first launch: Frigate, HA, and Kerberos restore
+      automatically; the dashboard shows Desktop 2.5.42-beta.45, Control 1.23.4,
+      IGW Live data, seven core flags, DRY/ESS, EV/water/battery/solar, Cameras ON,
+      and all 15 Home controls. Configuration ciphertext, non-plugin fields,
+      selected pins, and all three encrypted plugin settings are unchanged.
+- [x] Record the live evidence limits: a natural Kerberos preview window opened,
+      but its pixels were not inspected. Later GUI inspection timed out while
+      native workers remained stable and the main thread stayed in its normal
+      event loop, without Keychain blocking. No refreshed Plugin Manager Connected
+      labels, new introduction copy, household actions, or forced Keychain faults
+      are claimed; the recovery races have 12 focused regression tests.
 
 The following completed checkpoints are chronological evidence. Statements such
 as "later work" or "not added" describe their original scope, not current missing
@@ -1820,8 +1834,10 @@ mobile gate fail. A successful desktop build is insufficient evidence.
 - [x] Verify beta.43 package restoration after normal restart and active core
       telemetry across all four HA/camera states, including dashboard/settings
       interaction and a naturally opened owned preview.
-- [ ] Verify the automatic delayed-unlock recovery follow-up in its released
-      application; source regressions are not installed-release evidence.
+- [x] Install the exact verified beta.45 recovery release and observe automatic
+      restoration of all three workers on normal first launch. Delayed/denied
+      Keychain faults were not induced live; source regression evidence remains
+      distinct from this successful normal-start acceptance.
 
 Acceptance for the runtime checkpoint: a separately built worker completes the
 lifecycle through the actual host. The original executable proof used trusted native test/development code. The
@@ -1879,8 +1895,9 @@ Native lifecycle and desktop application/UI integration are implemented. Full
 worker extraction, settings handover, and exact-head integration checks are also
 complete. Release beta.43 publication, public asset readback, and the installed
 macOS four-state matrix are verified. The automatic startup-recovery follow-up is
-published and independently verified in beta.45; installation and its acceptance
-await macOS unlock.
+published, independently verified, and installed in beta.45. Normal first-start
+acceptance passed with retained settings and automatic worker restoration; a
+forced credential-access failure was not part of live acceptance.
 
 Optional future distribution policy: if manual signed-file installation is
 offered, add reviewed publisher keys/provenance to that path. This is not a
@@ -1969,8 +1986,10 @@ never become shipped trust, and no application-signing requirement is introduced
       versions, asset identities, backup/rollback scope, and remaining device limits.
 - [x] Record the startup-recovery follow-up's reviewed PR #458, published beta.45,
       independent public-byte verification, and unexecuted staged candidate.
-- [ ] Add beta.45 installed evidence after macOS unlock permits the host upgrade;
-      keep beta.43's completed acceptance separate from this pending step.
+- [x] Record beta.45's verified host upgrade, matched stopped-app backup,
+      byte-preserved settings/configuration, and normal first-start acceptance.
+      Keep beta.43's four-state matrix and fixture-only recovery fault coverage
+      distinct from the beta.45 observations.
 - [x] Deliver reviewed PR #456 and merge at `32a079c` after exact-head checks pass:
       60 succeeded, six skipped, approved head `2ebba507`, no unresolved threads.
 
