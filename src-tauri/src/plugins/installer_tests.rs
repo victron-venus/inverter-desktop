@@ -1340,6 +1340,70 @@ async fn store_lease_rejects_other_instances_and_closed_manager_cannot_operate()
     second.close().await.unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn explicit_close_releases_store_lock_while_a_duplicate_descriptor_remains_open() {
+    let directory = TestDirectory::new();
+    let (manager, host) = manager(&directory).await;
+    manager
+        .install(package(&directory.0, "1.0.0", "normal"), true)
+        .await
+        .unwrap();
+    wait_running(&host).await;
+    // Models a descriptor inherited by an unrelated concurrent fork before exec.
+    let inherited = manager
+        .0
+        .lease
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .try_clone()
+        .unwrap();
+    manager.close().await.unwrap();
+    assert!(host.snapshots().is_empty());
+    assert!(manager.list().await.is_err());
+    let reopened = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        trust(),
+        PluginHost::default(),
+    )
+    .await
+    .unwrap();
+    assert!(inherited.metadata().is_ok());
+    reopened.close().await.unwrap();
+    drop(inherited);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_idle_manager_releases_store_lock_while_a_duplicate_descriptor_remains_open() {
+    let directory = TestDirectory::new();
+    let (manager, _) = manager(&directory).await;
+    let inherited = manager
+        .0
+        .lease
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .try_clone()
+        .unwrap();
+    drop(manager);
+    let reopened = PackageManager::open(
+        directory.0.join("store"),
+        host_target(),
+        trust(),
+        PluginHost::default(),
+    )
+    .await
+    .unwrap();
+    assert!(inherited.metadata().is_ok());
+    reopened.close().await.unwrap();
+    drop(inherited);
+}
+
 #[tokio::test]
 async fn interrupted_staging_and_unreferenced_versions_are_recovered_without_starting() {
     let directory = TestDirectory::new();
@@ -1968,6 +2032,16 @@ async fn dropping_manager_keeps_lease_until_its_worker_is_reaped() {
         .install(package(&directory.0, "1.0.0", "stalled"), true)
         .await
         .unwrap();
+    #[cfg(unix)]
+    let inherited = manager
+        .0
+        .lease
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .try_clone()
+        .unwrap();
     drop(manager);
     assert!(PackageManager::open(
         directory.0.join("store"),
@@ -1996,6 +2070,8 @@ async fn dropping_manager_keeps_lease_until_its_worker_is_reaped() {
     .unwrap();
     assert!(host.snapshots().is_empty());
     reopened.close().await.unwrap();
+    #[cfg(unix)]
+    drop(inherited);
 }
 
 #[tokio::test]

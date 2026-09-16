@@ -122,6 +122,12 @@ struct CleanupLease(Option<File>);
 
 impl CleanupLease {
     fn release(mut self) {
+        // A fork can briefly retain this descriptor before exec closes it.
+        // Explicitly release the shared lock only after cleanup has succeeded.
+        if self.0.as_ref().is_some_and(|lease| lease.unlock().is_err()) {
+            // Drop retains the lease when its release could not be confirmed.
+            return;
+        }
         self.0.take();
     }
 }
@@ -151,10 +157,11 @@ impl Drop for ManagerInner {
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let lease = CleanupLease(Some(lease));
         if owned.is_empty() {
+            lease.release();
             return;
         }
-        let lease = CleanupLease(Some(lease));
         let host = self.host.clone();
         // Keep the lease alive while asynchronous cleanup finishes. A dropped
         // caller cannot make a second process replace a still-running package.
@@ -629,7 +636,7 @@ impl PackageManager {
     }
 
     /// Explicitly stop owned workers and release the cross-process store lease.
-    /// A failed reap leaves the manager and lease available for another cleanup attempt.
+    /// Failed cleanup or unlock keeps the manager and lease available for another attempt.
     pub async fn close(&self) -> Result<(), String> {
         let manager = self.clone();
         tokio::spawn(async move {
@@ -646,13 +653,14 @@ impl PackageManager {
             for id in owned.into_keys() {
                 manager.stop_owned(&id).await?;
             }
+            let mut lease = manager.0.lease.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(file) = lease.as_ref() {
+                // Close alone waits for any descriptors inherited by an unrelated
+                // concurrent fork. Reaping owned workers makes explicit unlock safe.
+                file.unlock().map_err(io_error)?;
+            }
+            lease.take();
             manager.0.closed.store(true, Ordering::Release);
-            manager
-                .0
-                .lease
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take();
             Ok(())
         })
         .await

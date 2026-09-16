@@ -418,6 +418,9 @@ mutex. A lifetime OS file lock excludes another
 manager/process from the same store until owned workers have been reaped. Call
 `close().await` to complete cleanup explicitly; if process cleanup cannot be
 confirmed, the lease must remain held until the hosting process exits.
+Successful cleanup explicitly unlocks the file before closing it, so a descriptor
+temporarily inherited by an unrelated process cannot delay reopening the store.
+An unlock failure retains the lease; explicit close can be retried.
 
 The store uses an atomically created `store-v1/` ownership directory, a bounded
 `state.json` inventory, private
