@@ -2091,7 +2091,6 @@ async fn signed_deep_inventory_cannot_create_excessive_implicit_directories() {
     use super::super::package::{canonical_manifest_bytes, manifest_signing_payload};
     use super::super::protocol::{InventoryEntry, SignatureMetadata};
     use ed25519_dalek::Signer;
-    use sha2::{Digest, Sha256};
     use std::io::Cursor;
     use zip::write::SimpleFileOptions;
 
@@ -2101,7 +2100,7 @@ async fn signed_deep_inventory_cannot_create_excessive_implicit_directories() {
         .map(|index| InventoryEntry {
             path: format!("p{index:03}/{}payload", "d/".repeat(65)),
             size: 1,
-            sha256: format!("{:x}", Sha256::digest(b"x")),
+            sha256: sha256_hex(b"x"),
         })
         .collect();
     let mut manifest = PluginManifest {

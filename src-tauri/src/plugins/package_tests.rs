@@ -10,6 +10,28 @@ const PLUGIN_ID: &str = "org.example.verification-test";
 const KEY_ID: &str = "verification-test-key";
 const WORKER: &[u8] = b"test worker bytes\n";
 
+#[test]
+fn sha256_encoding_matches_known_vectors_including_leading_zero_bytes() {
+    // Fixed SHA-256 vectors independently checked with Python hashlib. Package
+    // pins, inventory hashes and retained settings filenames require all 64 digits.
+    for (input, expected) in [
+        (
+            b"".as_slice(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            b"abc".as_slice(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+        (
+            b"286".as_slice(),
+            "00328ce57bbc14b33bd6695bc8eb32cdf2fb5f3a7d89ec14a42825e15d39df60",
+        ),
+    ] {
+        assert_eq!(sha256_hex(input), expected);
+    }
+}
+
 fn signing_key() -> SigningKey {
     // Test fixture only; never exported to a host's production trust store.
     SigningKey::from_bytes(&[73_u8; 32])

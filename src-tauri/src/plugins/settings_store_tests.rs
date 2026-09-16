@@ -84,7 +84,7 @@ fn missing_reads_and_recovery_do_not_create_directories_or_request_a_key() {
     assert_eq!(inventory.max_records, 64);
     assert_eq!(inventory.max_bytes, 8 * 1024 * 1024);
     let record_id = SettingsStore::record_id(PLUGIN).unwrap();
-    let revision = format!("{:x}", Sha256::digest([]));
+    let revision = sha256_hex(&[]);
     assert!(store.remove_record(&record_id, &revision).is_err());
     store.recover().unwrap();
     store.remove(PLUGIN).unwrap();
@@ -499,17 +499,17 @@ fn inventory_is_sorted_redacted_and_read_only_without_a_key() {
     let mut expected = vec![
         SettingsRecord {
             record_id: SettingsStore::record_id(PLUGIN).unwrap(),
-            revision: format!("{:x}", Sha256::digest(&encrypted)),
+            revision: sha256_hex(&encrypted),
             bytes: encrypted.len() as u64,
         },
         SettingsRecord {
             record_id: SettingsStore::record_id("unknown.owner").unwrap(),
-            revision: format!("{:x}", Sha256::digest(invalid)),
+            revision: sha256_hex(invalid),
             bytes: invalid.len() as u64,
         },
         SettingsRecord {
             record_id: SettingsStore::record_id("empty.owner").unwrap(),
-            revision: format!("{:x}", Sha256::digest([])),
+            revision: sha256_hex(&[]),
             bytes: 0,
         },
     ];
@@ -619,7 +619,10 @@ fn retained_record_tokens_reject_paths_extensions_and_noncanonical_hashes() {
     }
     assert_eq!(fs::read(path).unwrap(), bytes);
     let record_id = SettingsStore::record_id("con.example").unwrap();
-    assert_eq!(record_id, format!("{:x}", Sha256::digest(b"con.example")));
+    assert_eq!(
+        record_id,
+        "f184a16e54af9f9fc8b9e67d5c504a6b1692c593d6e1e7d5b31e2c830313d566"
+    );
     for invalid in ["../outside", "Test.invalid", "test/other", "test\\other"] {
         assert!(SettingsStore::record_id(invalid).is_err());
     }
