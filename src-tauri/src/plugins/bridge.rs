@@ -101,6 +101,41 @@ pub(crate) async fn get_plugin_manager_snapshot(
 }
 
 #[tauri::command]
+pub(crate) async fn retry_configured_plugins(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPlugins>,
+) -> Result<(), String> {
+    let epoch = management_epoch(&app, &window, &state)?;
+    state.packages.restore(epoch).await?;
+    finish_management(&app, &window, &state, epoch)
+}
+
+/// Declaring native code is restricted to the authenticated configuration window.
+/// Ordinary core settings saves, including mobile and first-run setup, need no
+/// plugin authority when they merely preserve the existing declarations.
+pub(crate) fn save_configuration(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    previous: &crate::FullConfig,
+    next: &crate::FullConfig,
+) -> Result<(), String> {
+    if previous.desktop_plugins == next.desktop_plugins {
+        return crate::save_config_encrypted(app, next);
+    }
+    let state = app.state::<DesktopPlugins>();
+    let epoch = management_epoch(app, window, &state)?;
+    super::download::validate_declarations(&next.desktop_plugins)?;
+    state
+        .host
+        .commit_in_epoch(epoch, || crate::save_config_encrypted(app, next))
+}
+
+pub(crate) fn configuration_changed(app: &tauri::AppHandle) {
+    authentication_changed(app);
+}
+
+#[tauri::command]
 pub(crate) async fn preview_plugin_package(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -274,6 +309,10 @@ pub(crate) async fn save_plugin_settings(
         .save_settings(&plugin_id, epoch, revision, values, secret_changes)
         .await?;
     finish_management(&app, &window, &state, epoch)?;
+    let packages = state.packages.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = packages.restore(epoch).await;
+    });
     Ok(result)
 }
 
@@ -615,7 +654,13 @@ pub(crate) fn authentication_changed(app: &tauri::AppHandle) {
         // Resume never revives the previous epoch's processes or queued actions.
         let unlocked =
             !state.exit.started.load(Ordering::Acquire) && auth::require_session(app).is_ok();
-        if let Some(epoch) = state.packages.session_changed(unlocked) {
+        let epoch = state.packages.session_configured(
+            unlocked,
+            crate::load_config(app)
+                .map(|config| config.desktop_plugins)
+                .map_err(|_| "Plugin declarations could not be loaded".into()),
+        );
+        if let Some(epoch) = epoch {
             let packages = state.packages.clone();
             tauri::async_runtime::spawn(async move {
                 // Errors remain visible in the manager snapshot. A revoked

@@ -287,16 +287,19 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   async function setEnabled(pluginId: string, enabled: boolean) {
-    if (findPlugin(pluginId)) await mutate('set_plugin_enabled', { pluginId, enabled })
+    const plugin = findPlugin(pluginId)
+    if (plugin && !plugin.configuration_managed)
+      await mutate('set_plugin_enabled', { pluginId, enabled })
   }
 
   async function rollback(pluginId: string) {
-    if (findPlugin(pluginId)?.rollback_version)
+    if (findPlugin(pluginId)?.rollback_version && !findPlugin(pluginId)?.configuration_managed)
       await mutate('rollback_plugin_package', { pluginId })
   }
 
   function requestRemoval(pluginId: string) {
-    if (!canManage.value || !findPlugin(pluginId)) return
+    if (!canManage.value || !findPlugin(pluginId) || findPlugin(pluginId)?.configuration_managed)
+      return
     clearSettings()
     retainedData.cancelDeletion()
     confirmRemoval.value = pluginId
@@ -304,7 +307,11 @@ export function createPluginManager(fallbackError: () => string) {
   }
 
   async function uninstall(pluginId: string) {
-    if (confirmRemoval.value === pluginId && findPlugin(pluginId)) {
+    if (
+      confirmRemoval.value === pluginId &&
+      findPlugin(pluginId) &&
+      !findPlugin(pluginId)?.configuration_managed
+    ) {
       await mutate('uninstall_plugin_package', { pluginId, deleteSettings: deleteSettings.value })
     }
   }
@@ -361,6 +368,7 @@ export function createPluginManager(fallbackError: () => string) {
     start,
     stop,
     retry,
+    retryConfigured: () => mutate('retry_configured_plugins', {}),
     refresh,
     pickPackage,
     clearPreview,

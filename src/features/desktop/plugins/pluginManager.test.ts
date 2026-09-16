@@ -186,7 +186,8 @@ describe('desktop plugin manager', () => {
   it('shows the actual empty publisher policy and does not offer installation', async () => {
     snapshot.installation_available = false
     await openManager()
-    expect(wrapper?.text()).toContain('This build has no approved plugin publishers.')
+    expect(wrapper?.text()).toContain('Local signed-file installation has no approved publishers')
+    expect(wrapper?.text()).toContain('Configured archive downloads remain available.')
     expect(wrapper?.text()).toContain('No plugins installed.')
     expect(wrapper?.text()).toContain('Home Assistant and cameras are still included')
     expect(button('Choose plugin package…').attributes('disabled')).toBeDefined()
@@ -287,6 +288,160 @@ describe('desktop plugin manager', () => {
     })
     expect(wrapper?.text()).toContain('No plugins installed.')
   })
+
+  it.each([true, false])(
+    'keeps configured lifecycle controls locked while settings stay usable (enabled=%s)',
+    async (enabled) => {
+      snapshot.plugins = [
+        {
+          ...structuredClone(installed),
+          enabled,
+          configuration_managed: true,
+          permissions: ['plugin_configuration'],
+        },
+      ]
+      handlers.set('get_plugin_settings', settingsView)
+      handlers.set('save_plugin_settings', () => ({
+        settings: settingsView(),
+        restart_error: null,
+      }))
+      await openManager()
+      expect(wrapper?.text()).toContain('Version and enabled state are managed in desktop_plugins.')
+      for (const label of [enabled ? 'Disable' : 'Enable', 'Roll back to 1.0.0', 'Uninstall…']) {
+        expect(button(label).attributes('disabled')).toBeDefined()
+        await button(label).trigger('click')
+      }
+      expect(button('Settings').attributes('disabled')).toBeUndefined()
+      await button('Settings').trigger('click')
+      await flushPromises()
+      expect(native.invoke).toHaveBeenCalledWith('get_plugin_settings', {
+        pluginId: installed.plugin_id,
+      })
+      await managerWrapper().find('input[name="token"]').setValue('configured-plugin-secret')
+      await managerWrapper().find('form').trigger('submit')
+      await flushPromises()
+      expect(calls('save_plugin_settings')).toHaveLength(1)
+      for (const command of [
+        'set_plugin_enabled',
+        'rollback_plugin_package',
+        'uninstall_plugin_package',
+      ])
+        expect(calls(command)).toHaveLength(0)
+      expect(calls('save_config')).toHaveLength(0)
+    }
+  )
+
+  it('guards configured lifecycle controller calls and releases ownership without deleting the plugin', async () => {
+    snapshot.plugins = [{ ...structuredClone(installed), configuration_managed: true }]
+    const value = controller()
+    await value.start()
+    await value.setEnabled(installed.plugin_id, false)
+    await value.rollback(installed.plugin_id)
+    value.requestRemoval(installed.plugin_id)
+    expect(value.confirmRemoval.value).toBeNull()
+    value.confirmRemoval.value = installed.plugin_id
+    await value.uninstall(installed.plugin_id)
+    for (const command of [
+      'set_plugin_enabled',
+      'rollback_plugin_package',
+      'uninstall_plugin_package',
+    ])
+      expect(calls(command)).toHaveLength(0)
+
+    snapshot.plugins[0].configuration_managed = false
+    await value.refresh()
+    expect(value.snapshot.value?.plugins).toHaveLength(1)
+    expect(calls('uninstall_plugin_package')).toHaveLength(0)
+    await value.setEnabled(installed.plugin_id, false)
+    expect(native.invoke).toHaveBeenCalledWith('set_plugin_enabled', {
+      pluginId: installed.plugin_id,
+      enabled: false,
+    })
+    await value.rollback(installed.plugin_id)
+    expect(calls('rollback_plugin_package')).toHaveLength(1)
+    value.requestRemoval(installed.plugin_id)
+    expect(value.confirmRemoval.value).toBe(installed.plugin_id)
+    expect(calls('uninstall_plugin_package')).toHaveLength(0)
+  })
+
+  it('retries configured restoration through native authority once and refreshes progress', async () => {
+    snapshot.configured = [
+      {
+        plugin_id: installed.plugin_id,
+        version: installed.version,
+        enabled: true,
+        state: 'failed',
+        error: 'Package download failed',
+      },
+    ]
+    const pending = deferred<void>()
+    handlers.set('retry_configured_plugins', () => pending.promise)
+    await openManager()
+    expect(wrapper?.text()).toContain('Package download failed')
+    await button('Retry restoration').trigger('click')
+    expect(button('Retry restoration').attributes('disabled')).toBeDefined()
+    await button('Retry restoration').trigger('click')
+    expect(calls('retry_configured_plugins')).toHaveLength(1)
+    expect(native.invoke).toHaveBeenCalledWith('retry_configured_plugins', {})
+    snapshot.configured[0].state = 'ready'
+    snapshot.configured[0].error = null
+    snapshot.plugins = [{ ...structuredClone(installed), configuration_managed: true }]
+    pending.resolve()
+    await flushPromises()
+    expect(wrapper?.text()).toContain('Ready')
+    expect(wrapper?.text()).not.toContain('Package download failed')
+    expect(button('Retry restoration').attributes('disabled')).toBeUndefined()
+    expect(calls('save_config')).toHaveLength(0)
+    expect(calls('install_plugin_package')).toHaveLength(0)
+  })
+
+  it.each([
+    ['en', 'Configured plugins', 'Downloading', 'Installing', 'Installed, disabled'],
+    ['ru', 'Плагины из конфигурации', 'Загрузка', 'Установка', 'Установлен, выключен'],
+  ])(
+    'renders configured progress and escaped failures in %s',
+    async (locale, title, downloading, installing, disabled) => {
+      snapshot.configuration_error = '<script>invalid declarations</script>'
+      snapshot.configured = [
+        {
+          plugin_id: 'example.downloading',
+          version: '3.0.0',
+          enabled: true,
+          state: 'downloading',
+          error: null,
+        },
+        {
+          plugin_id: 'example.installing',
+          version: '4.0.0',
+          enabled: true,
+          state: 'installing',
+          error: null,
+        },
+        {
+          plugin_id: 'example.disabled',
+          version: '5.0.0',
+          enabled: false,
+          state: 'disabled',
+          error: null,
+        },
+        {
+          plugin_id: '<img src=x onerror=alert(1)>',
+          version: '6.0.0',
+          enabled: true,
+          state: 'failed',
+          error: '<b>Archive verification failed</b>',
+        },
+      ]
+      await openManager(locale)
+      for (const label of [title, downloading, installing, disabled])
+        expect(wrapper?.text()).toContain(label)
+      expect(wrapper?.text()).toContain('<script>invalid declarations</script>')
+      expect(wrapper?.text()).toContain('<b>Archive verification failed</b>')
+      expect(wrapper?.text()).toContain('<img src=x onerror=alert(1)>')
+      expect(wrapper?.find('script, img, b').exists()).toBe(false)
+      expect(calls('retry_configured_plugins')).toHaveLength(0)
+    }
+  )
 
   it('prevents duplicate operations and requires a fresh preview after an expired token', async () => {
     const pending = deferred<void>()

@@ -134,6 +134,83 @@ fn real_signature_verifies_and_result_owns_exact_inventory_and_archive() {
         verified.files().collect::<Vec<_>>(),
         [("bin/worker", WORKER)]
     );
+    assert!(!verified.archive_pin());
+    assert!(verified.reverify(&TrustStore::default(), TARGET).is_err());
+}
+
+#[test]
+fn configured_pin_authorizes_only_the_exact_unsigned_archive() {
+    let bytes = package(&unsigned_manifest(), WORKER);
+    let digest = sha256_hex(&bytes);
+    let verified =
+        verify_pinned_archive_bytes(bytes.clone(), PLUGIN_ID, "1.0.0", TARGET, &digest).unwrap();
+    assert!(verified.archive_pin());
+    assert!(verified.manifest().signature.is_none());
+    assert_eq!(verified.archive_bytes(), bytes);
+    assert_eq!(
+        verified.files().collect::<Vec<_>>(),
+        [("bin/worker", WORKER)]
+    );
+    assert!(verified
+        .reverify(&TrustStore::default(), TARGET)
+        .unwrap()
+        .archive_pin());
+    assert!(verify_archive_bytes(bytes.clone(), &trust(), TARGET).is_err());
+    for (id, version, target, expected_digest) in [
+        ("org.example.other", "1.0.0", TARGET, digest.clone()),
+        (PLUGIN_ID, "1.0.1", TARGET, digest.clone()),
+        (
+            PLUGIN_ID,
+            "1.0.0",
+            "x86_64-unknown-linux-gnu",
+            digest.clone(),
+        ),
+        (PLUGIN_ID, "1.0.0", TARGET, "0".repeat(64)),
+        (PLUGIN_ID, "1.0.0", TARGET, digest.to_uppercase()),
+        (PLUGIN_ID, "1.0.0", TARGET, "a".repeat(63)),
+        (PLUGIN_ID, "*", TARGET, digest.clone()),
+        ("../other", "1.0.0", TARGET, digest.clone()),
+    ] {
+        assert!(
+            verify_pinned_archive_bytes(bytes.clone(), id, version, target, &expected_digest)
+                .is_err(),
+            "mismatched or malformed configured pin was accepted"
+        );
+    }
+    assert!(verified
+        .reverify(&trust(), "x86_64-unknown-linux-gnu")
+        .is_err());
+}
+
+#[test]
+fn matching_pins_never_bypass_manifest_inventory_or_archive_validation() {
+    let manifest = unsigned_manifest();
+    let canonical = canonical_manifest_bytes(&manifest).unwrap();
+    let incompatible = String::from_utf8(canonical.clone())
+        .unwrap()
+        .replace("\"host_api\":\"^1.0\"", "\"host_api\":\"^2.0\"");
+    let pretty = serde_json::to_vec_pretty(&manifest).unwrap();
+    let mut trailing = package(&manifest, WORKER);
+    trailing.push(0);
+    for bytes in [
+        package(&manifest, b"different worker bytes"),
+        zip_entries(&[(MANIFEST_PATH, &canonical)]),
+        zip_entries(&[(MANIFEST_PATH, &canonical), ("../worker", WORKER)]),
+        zip_entries(&[
+            (MANIFEST_PATH, incompatible.as_bytes()),
+            ("bin/worker", WORKER),
+        ]),
+        zip_entries(&[(MANIFEST_PATH, &pretty), ("bin/worker", WORKER)]),
+        zip_entries(&[
+            (MANIFEST_PATH, &canonical),
+            ("bin/worker", WORKER),
+            ("extra", b"extra"),
+        ]),
+        trailing,
+    ] {
+        let digest = sha256_hex(&bytes);
+        assert!(verify_pinned_archive_bytes(bytes, PLUGIN_ID, "1.0.0", TARGET, &digest).is_err());
+    }
 }
 
 #[test]

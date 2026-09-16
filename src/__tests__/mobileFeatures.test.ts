@@ -42,6 +42,19 @@ const config = {
   mqtt_ha_host: 'camera-broker',
   mqtt_ha_port: 1883,
   camera_enabled: true,
+  desktop_plugins: [
+    {
+      plugin_id: 'example.monitor',
+      version: '1.2.3',
+      enabled: true,
+      artifacts: {
+        'aarch64-apple-darwin': {
+          url: 'https://packages.example.invalid/monitor.idplugin',
+          sha256: 'a'.repeat(64),
+        },
+      },
+    },
+  ],
   header_toggles_config: [
     { id: 'limit', label: 'Export limit', entity: 'no_feed', state_key: 'no_feed' },
     {
@@ -266,11 +279,13 @@ describe('mobile build feature boundary', () => {
     await connection.connectMqtt()
     expect(invoke).toHaveBeenCalledWith('connect_mqtt', expect.objectContaining({ host: 'Cerbo' }))
     expect(
-      invoke.mock.calls.map(([command]) => command).some((command) => /ha|camera/.test(command))
+      invoke.mock.calls
+        .map(([command]) => command)
+        .some((command) => /ha|camera|plugin/.test(command))
     ).toBe(false)
-    expect(listen.mock.calls.map(([name]) => name).some((name) => /ha-|camera/.test(name))).toBe(
-      false
-    )
+    expect(
+      listen.mock.calls.map(([name]) => name).some((name) => /ha-|camera|plugin/.test(name))
+    ).toBe(false)
     connection.cleanup()
   })
 
@@ -309,6 +324,7 @@ describe('mobile build feature boundary', () => {
     expect(saved.header_toggles_config[1]).toEqual(config.header_toggles_config[1])
     expect(saved.ha_entities).toEqual(config.ha_entities)
     expect(saved.ha_url).toBe(config.ha_url)
+    expect(saved.desktop_plugins).toEqual(config.desktop_plugins)
     expect(invoke.mock.calls.some(([command]) => /plugin_settings/.test(command))).toBe(false)
     expect(invoke.mock.calls.some(([command]) => /retained_plugin_data/.test(command))).toBe(false)
     wrapper.unmount()

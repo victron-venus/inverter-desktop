@@ -17,12 +17,22 @@ are desktop-only. Implementation progress is tracked in [TODO.md](TODO.md), with
 the build boundary documented in
 [desktop features and mobile core](docs/desktop-features-and-mobile-core.md).
 
-Desktop settings now include a **Plugins** tab for reviewing signed packages,
-installing/updating, enabling/disabling, rolling back, and uninstalling them. The
-[native package pipeline](docs/plugin-packages.md) verifies the selected archive
-before showing its identity, version, publisher, and declared capabilities. Only
-an explicit Install/Update action commits those reviewed bytes. Enabled installed
-workers can resume after authentication and stop on logout. Configuration-capable
+Desktop plugins can be declared in the application's `desktop_plugins` settings
+with an exact version, enabled state, and per-platform HTTPS URL plus SHA-256.
+On startup, configuration import/save, or explicit retry, the app downloads missing
+packages and applies those exact pins. An upgrade that preserves app data retains
+the declarations; after a clean reinstall, restore them from your config backup.
+Healthy matching installations are reused. Android and iOS only preserve these
+settings as dormant data and never download or run plugins.
+Pins change only when edited or imported; an explicit change can select rebuilt
+bytes at the same worker version or intentionally restore an older version.
+See the [configuration and restoration contract](docs/plugin-packages.md#declaring-plugins-in-application-configuration).
+
+The **Plugins** tab shows restoration results and installed packages. Configured
+plugins take their version and enabled state from the declaration; remove the
+declaration before manually updating, disabling, rolling back, or uninstalling one.
+Manual file selection remains a separate signed-package review flow. Enabled
+workers resume after authentication and stop on logout. Configuration-capable
 packages have a [typed settings editor](docs/plugin-settings.md) with isolated
 encrypted records and write-only secrets. Saving restarts enabled workers with
 acknowledged configuration; uninstall retains settings unless deletion is selected.
@@ -30,11 +40,15 @@ An on-demand stored-data view shows usage and allows confirmed cleanup of record
 with no installed owner, including corrupt records or unavailable credentials.
 Data belonging to installed packages stays protected from this cleanup.
 
-**The current release publisher policy is empty, so package installation is
-disabled.** The manager reports this directly; it does not offer unsigned packages
-or user-supplied trust. Production publisher provisioning remains a separate step.
-Home Assistant and cameras still come bundled with desktop and are not managed as
-packages yet. A separately built [Frigate worker](desktop-plugins/frigate/README.md)
+Configured downloads use exact archive pins and need no publisher or app signing
+keys. The current publisher policy is empty, so manual signed-file selection is
+unavailable. Hosted desktop releases build unsigned `.idplugin` assets, checksums,
+and platform config fragments; their URLs work after that release is published.
+Backups preserve declarations but omit credentials. On a fresh installation,
+configure the plugin's required settings and secrets before it can start.
+Home Assistant and cameras still have bundled desktop implementations alongside
+the optional workers; migration and bundled removal remain unfinished.
+A separately built [Frigate worker](desktop-plugins/frigate/README.md)
 starts their extraction with an independent MQTT connection, native motion
 notifications, and direct completed-clip requests handled by owned native media
 services. Clip/window acceptance is tracked separately from source implementation.

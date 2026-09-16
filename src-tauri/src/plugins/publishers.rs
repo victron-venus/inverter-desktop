@@ -20,8 +20,9 @@ struct Publisher {
     plugin_ids: Vec<String>,
 }
 
-/// Only a reviewed application release can change this policy. Until real
-/// publisher keys are configured, every package is rejected as untrusted.
+/// Only a reviewed application release can change this policy. Without publisher
+/// keys, manual signed-file installation is unavailable. Explicit configured
+/// archive pins use a separate native authorization path.
 pub fn embedded_trust() -> Result<TrustStore, String> {
     parse_policy(include_str!("publishers.json"))
 }

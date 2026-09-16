@@ -1,5 +1,7 @@
 use super::*;
-use crate::plugins::package::{verify_archive_bytes, PublisherTrust, TrustStore};
+use crate::plugins::package::{
+    verify_archive_bytes, verify_pinned_archive_bytes, PublisherTrust, TrustStore,
+};
 use crate::plugins::protocol::{PluginPermission, MANIFEST_SCHEMA_VERSION};
 use serde_json::json;
 use std::fs::{File, FileTimes};
@@ -57,6 +59,47 @@ fn produced_archive_passes_the_installer_verifier_with_scoped_publisher_trust() 
 }
 
 #[test]
+fn unsigned_archive_removes_signatures_and_requires_an_exact_pin() {
+    let (_temporary, root) = source();
+    let mut input = manifest();
+    input.signature = Some(SignatureMetadata {
+        algorithm: "ed25519".into(),
+        key_id: "stale-key".into(),
+        signature: "0".repeat(128),
+    });
+    let archive = build_pinned_package(input, &root).unwrap();
+    let digest = format!("{:x}", Sha256::digest(&archive));
+    let verified = verify_pinned_archive_bytes(
+        archive.clone(),
+        "test.publisher.monitor",
+        "1.2.3",
+        "x86_64-unknown-linux-gnu",
+        &digest,
+    )
+    .unwrap();
+    assert!(verified.manifest().signature.is_none());
+    assert_eq!(verified.manifest().inventory.len(), 1);
+    assert_eq!(
+        verified.manifest().inventory[0].sha256,
+        format!("{:x}", Sha256::digest(b"test worker payload"))
+    );
+    assert!(verify_archive_bytes(
+        archive.clone(),
+        &TrustStore::new(vec![]).unwrap(),
+        "x86_64-unknown-linux-gnu"
+    )
+    .is_err());
+    assert!(verify_pinned_archive_bytes(
+        archive,
+        "test.publisher.monitor",
+        "1.2.3",
+        "x86_64-unknown-linux-gnu",
+        &"0".repeat(64)
+    )
+    .is_err());
+}
+
+#[test]
 fn package_bytes_ignore_source_creation_order_permissions_and_timestamps() {
     let (_first, left) = source();
     let (_second, right) = source();
@@ -83,6 +126,10 @@ fn package_bytes_ignore_source_creation_order_permissions_and_timestamps() {
         fs::set_permissions(right.join("a.txt"), fs::Permissions::from_mode(0o755)).unwrap();
     }
     assert_eq!(build(&left), build(&right));
+    assert_eq!(
+        build_pinned_package(manifest(), &left).unwrap(),
+        build_pinned_package(manifest(), &right).unwrap()
+    );
 }
 
 #[test]
@@ -165,14 +212,17 @@ fn reserved_names_empty_entrypoints_and_oversized_sources_are_rejected() {
     let (_temporary, root) = source();
     fs::write(root.join("manifest.json"), b"not generated").unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
+    assert!(build_pinned_package(manifest(), &root).is_err());
     fs::remove_file(root.join("manifest.json")).unwrap();
     fs::write(root.join("bin/worker"), b"").unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
+    assert!(build_pinned_package(manifest(), &root).is_err());
     File::create(root.join("bin/worker"))
         .unwrap()
         .set_len(MAX_ARCHIVE_BYTES as u64)
         .unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
+    assert!(build_pinned_package(manifest(), &root).is_err());
 }
 
 #[test]
@@ -223,6 +273,7 @@ fn private_signing_seed_or_a_hardlink_copy_cannot_be_a_payload() {
     fs::write(&seed_path, key().to_bytes()).unwrap();
     fs::hard_link(&seed_path, root.join("key-copy")).unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
+    assert!(build_pinned_package(manifest(), &root).is_err());
     fs::remove_file(root.join("key-copy")).unwrap();
     fs::write(root.join("key-copy"), key().to_bytes()).unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
@@ -253,12 +304,15 @@ fn symlinks_in_files_directories_and_source_root_ancestors_are_rejected() {
     fs::write(outside.join("worker"), b"outside contents").unwrap();
     symlink(outside.join("worker"), root.join("linked-file")).unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
+    assert!(build_pinned_package(manifest(), &root).is_err());
     fs::remove_file(root.join("linked-file")).unwrap();
     symlink(&outside, root.join("linked-directory")).unwrap();
     assert!(build_package(manifest(), &root, "test-key", &key()).is_err());
+    assert!(build_pinned_package(manifest(), &root).is_err());
     fs::remove_file(root.join("linked-directory")).unwrap();
     symlink(&root, parent.join("root-link")).unwrap();
     assert!(build_package(manifest(), &parent.join("root-link"), "test-key", &key()).is_err());
+    assert!(build_pinned_package(manifest(), &parent.join("root-link")).is_err());
     symlink(&parent, parent.join("parent-link")).unwrap();
     assert!(build_package(
         manifest(),

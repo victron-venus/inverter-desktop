@@ -298,21 +298,31 @@ mod tests {
 
     #[test]
     fn encrypted_config_roundtrips_and_rejects_other_key() {
+        use aead::Generate;
+
         let config = FullConfig {
             mqtt_password: Some("test-credential".into()),
             show_batteries: Some(false),
+            desktop_plugins: crate::plugin_config::test_declarations(),
             ..Default::default()
         };
-        let encrypted = encrypt_config(&config, &[1; 32]).unwrap();
+        let key = aead::Key::<Aes256Gcm>::generate();
+        let mut other_key = key;
+        other_key[0] ^= 1;
+        let encrypted = encrypt_config(&config, &key).unwrap();
         assert!(!encrypted.contains("test-credential"));
         assert_eq!(
-            decrypt_config(&encrypted, &[1; 32]).unwrap().mqtt_password,
+            decrypt_config(&encrypted, &key).unwrap().mqtt_password,
             config.mqtt_password
         );
-        assert!(decrypt_config(&encrypted, &[2; 32]).is_err());
+        assert!(decrypt_config(&encrypted, &other_key).is_err());
         assert_eq!(
-            decrypt_config(&encrypted, &[1; 32]).unwrap().show_batteries,
+            decrypt_config(&encrypted, &key).unwrap().show_batteries,
             Some(false)
+        );
+        assert_eq!(
+            decrypt_config(&encrypted, &key).unwrap().desktop_plugins,
+            config.desktop_plugins
         );
     }
 }

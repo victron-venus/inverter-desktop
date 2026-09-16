@@ -338,6 +338,7 @@ class MobilePluginBoundaryTests(unittest.TestCase):
             "delete_retained_plugin_data",
             "discard_plugin_package",
             "get_plugin_manager_snapshot",
+            "retry_configured_plugins",
             "get_plugin_settings",
             "get_retained_plugin_data",
             "install_plugin_package",

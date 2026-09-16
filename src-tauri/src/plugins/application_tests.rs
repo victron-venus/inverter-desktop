@@ -1,6 +1,7 @@
 use super::*;
-use crate::plugins::package::PublisherTrust;
-use crate::plugins::packaging::build_package;
+use crate::plugin_config::{DesktopPluginArtifact, DesktopPluginConfig};
+use crate::plugins::package::{sha256_hex, PublisherTrust};
+use crate::plugins::packaging::{build_package, build_pinned_package};
 use crate::plugins::protocol::{PluginManifest, PluginPermission};
 use crate::plugins::runtime::WorkerState;
 use ed25519_dalek::SigningKey;
@@ -8,6 +9,498 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
+
+fn declared_package(
+    directory: &Path,
+    version: &str,
+    schema: Option<Value>,
+) -> (DesktopPluginConfig, Vec<u8>) {
+    declared_package_revision(directory, version, schema, None)
+}
+
+fn declared_package_revision(
+    directory: &Path,
+    version: &str,
+    schema: Option<Value>,
+    revision: Option<&str>,
+) -> (DesktopPluginConfig, Vec<u8>) {
+    let source = directory.join(format!("declared-payload-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&source).unwrap();
+    let mode = if schema.is_some() {
+        "configuration"
+    } else {
+        "worker"
+    };
+    let entrypoint = format!("{mode}{}", std::env::consts::EXE_SUFFIX);
+    fs::copy(fixture(), source.join(&entrypoint)).unwrap();
+    let mut manifest = PluginManifest {
+        schema_version: 1,
+        plugin_id: PLUGIN.into(),
+        version: version.into(),
+        host_api: "^1.0".into(),
+        target: env!("INVERTER_DESKTOP_TARGET").into(),
+        entrypoint,
+        permissions: if schema.is_some() {
+            vec![
+                PluginPermission::DashboardContributions,
+                PluginPermission::PluginConfiguration,
+            ]
+        } else {
+            vec![PluginPermission::DashboardContributions]
+        },
+        config_schema: schema.unwrap_or_else(|| json!({"type":"object"})),
+        http_video: None,
+        inventory: Vec::new(),
+        signature: None,
+    };
+    if let Some(revision) = revision {
+        manifest.config_schema["description"] = json!(revision);
+    }
+    let bytes = build_pinned_package(manifest, &source).unwrap();
+    let declaration = DesktopPluginConfig {
+        plugin_id: PLUGIN.into(),
+        version: version.into(),
+        enabled: true,
+        artifacts: BTreeMap::from([(
+            env!("INVERTER_DESKTOP_TARGET").into(),
+            DesktopPluginArtifact {
+                url: format!("https://plugins.example.invalid/application-{version}.idplugin"),
+                sha256: sha256_hex(&bytes),
+                extra: BTreeMap::new(),
+            },
+        )]),
+        extra: BTreeMap::new(),
+    };
+    (declaration, bytes)
+}
+
+async fn configured_application(
+    directory: &Path,
+    declarations: Vec<DesktopPluginConfig>,
+    key: SettingsKeyProvider,
+) -> (PackageApplication, PluginHost, u64) {
+    let host = PluginHost::default();
+    let service = PackageApplication::new(
+        host.clone(),
+        env!("INVERTER_DESKTOP_TARGET").into(),
+        false,
+        Arc::new(|| {}),
+    );
+    service
+        .initialize_with_key(Ok(directory.join("store")), Ok(TrustStore::default()), key)
+        .await;
+    let epoch = service.session_configured(true, Ok(declarations)).unwrap();
+    (service, host, epoch)
+}
+
+async fn reconcile_bytes(
+    service: &PackageApplication,
+    epoch: u64,
+    bytes: &[u8],
+    requests: &AtomicUsize,
+) {
+    service
+        .reconcile_with(service.manager().unwrap(), epoch, |_| {
+            requests.fetch_add(1, Ordering::SeqCst);
+            let bytes = bytes.to_vec();
+            async move { Ok(bytes) }
+        })
+        .await
+        .unwrap();
+}
+
+async fn wait_configured_worker(host: &PluginHost) -> u64 {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(snapshot) = host.snapshots().into_iter().find(|snapshot| {
+                snapshot.plugin_id == PLUGIN
+                    && snapshot.state == WorkerState::Running
+                    && !snapshot.contributions.is_empty()
+            }) {
+                return snapshot.generation;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap()
+}
+
+async fn configured_status(service: &PackageApplication, epoch: u64) -> Value {
+    let snapshot = serde_json::to_value(service.snapshot(epoch).await.unwrap()).unwrap();
+    assert!(snapshot["configuration_error"].is_null());
+    assert_eq!(snapshot["configured"].as_array().unwrap().len(), 1);
+    snapshot["configured"][0].clone()
+}
+
+#[tokio::test]
+async fn configured_reinstall_downloads_unsigned_package_once_and_reopens_offline() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (declaration, bytes) = declared_package(&root, "1.0.0", None);
+    let key = settings_test_key();
+    let (service, host, epoch) =
+        configured_application(&root, vec![declaration.clone()], key.clone()).await;
+    assert!(service.manager().unwrap().list().await.unwrap().is_empty());
+    let requests = AtomicUsize::new(0);
+    reconcile_bytes(&service, epoch, &bytes, &requests).await;
+    let generation = wait_configured_worker(&host).await;
+    let record = service.manager().unwrap().list().await.unwrap().remove(0);
+    assert!(record.active.archive_pin);
+    assert!(record.enabled);
+    assert_eq!(configured_status(&service, epoch).await["state"], "ready");
+    assert!(
+        !service
+            .snapshot(epoch)
+            .await
+            .unwrap()
+            .installation_available
+    );
+    reconcile_bytes(&service, epoch, b"this must never be downloaded", &requests).await;
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert_eq!(wait_configured_worker(&host).await, generation);
+    // A configured package cannot be removed or have desired state overridden
+    // through the separate manual manager controls.
+    assert!(service.set_enabled(PLUGIN, false, epoch).await.is_err());
+    assert!(service.rollback(PLUGIN, epoch).await.is_err());
+    assert!(service.uninstall(PLUGIN, epoch).await.is_err());
+    service.close().await.unwrap();
+
+    let (service, host, epoch) = configured_application(&root, vec![declaration], key).await;
+    assert!(host.snapshots().is_empty());
+    service
+        .reconcile_with(service.manager().unwrap(), epoch, |_| async {
+            panic!("a verified cached package must not need network access")
+        })
+        .await
+        .unwrap();
+    wait_configured_worker(&host).await;
+    assert_eq!(service.manager().unwrap().list().await.unwrap(), [record]);
+    assert_eq!(configured_status(&service, epoch).await["state"], "ready");
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_disabled_intent_prevents_cached_start_and_installs_new_bytes_stopped() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (mut declaration, bytes) = declared_package(&root, "1.0.0", None);
+    let key = settings_test_key();
+    let (service, host, epoch) =
+        configured_application(&root, vec![declaration.clone()], key.clone()).await;
+    let requests = AtomicUsize::new(0);
+    reconcile_bytes(&service, epoch, &bytes, &requests).await;
+    wait_configured_worker(&host).await;
+    service.close().await.unwrap();
+
+    declaration.enabled = false;
+    let (service, host, epoch) =
+        configured_application(&root, vec![declaration.clone()], key).await;
+    assert!(service.manager().unwrap().list().await.unwrap()[0].enabled);
+    service
+        .reconcile_with(service.manager().unwrap(), epoch, |_| async {
+            panic!("disabling a cached plugin must not download")
+        })
+        .await
+        .unwrap();
+    assert!(host.snapshots().is_empty());
+    assert!(!service.manager().unwrap().list().await.unwrap()[0].enabled);
+    assert_eq!(
+        configured_status(&service, epoch).await["state"],
+        "disabled"
+    );
+    service.close().await.unwrap();
+
+    let fresh = tempfile::tempdir().unwrap();
+    let root = fresh.path().canonicalize().unwrap();
+    let (service, host, epoch) =
+        configured_application(&root, vec![declaration], settings_test_key()).await;
+    let requests = AtomicUsize::new(0);
+    reconcile_bytes(&service, epoch, &bytes, &requests).await;
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert!(host.snapshots().is_empty());
+    assert!(!service.manager().unwrap().list().await.unwrap()[0].enabled);
+    assert_eq!(
+        configured_status(&service, epoch).await["state"],
+        "disabled"
+    );
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_missing_secret_keeps_a_settings_card_and_saved_settings_allow_restore() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (declaration, bytes) = declared_package(&root, "1.0.0", Some(settings_schema()));
+    let (service, host, epoch) =
+        configured_application(&root, vec![declaration], settings_test_key()).await;
+    let requests = AtomicUsize::new(0);
+    reconcile_bytes(&service, epoch, &bytes, &requests).await;
+    let installed = service.manager().unwrap().list().await.unwrap().remove(0);
+    assert!(!installed.enabled);
+    assert!(host.snapshots().is_empty());
+    let status = configured_status(&service, epoch).await;
+    assert_eq!(status["state"], "failed");
+    assert!(status["error"].is_string());
+    assert_eq!(service.snapshot(epoch).await.unwrap().plugins.len(), 1);
+    let settings = settings_view(&service, epoch).await;
+    assert_eq!(settings["secret_present"]["token"], false);
+    let saved = save_fixture_settings(&service, epoch, &settings["revision"]).await;
+    assert!(saved.restart_error.is_none());
+    assert!(host.snapshots().is_empty());
+    // The bridge schedules this retry after settings save. A cached exact pin
+    // does not invoke the production downloader, even with an offline endpoint.
+    service.restore(epoch).await.unwrap();
+    wait_configured_worker(&host).await;
+    assert_eq!(configured_status(&service, epoch).await["state"], "ready");
+    assert_eq!(
+        service.manager().unwrap().list().await.unwrap()[0].active,
+        installed.active
+    );
+    let result = host
+        .action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(result["configuration_secret_matches"], true);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_failed_download_or_pin_preserves_working_version_and_update_is_transactional() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (first, first_bytes) = declared_package(&root, "1.0.0", None);
+    let (second, second_bytes) = declared_package(&root, "1.1.0", None);
+    let (service, host, mut epoch) =
+        configured_application(&root, vec![first], settings_test_key()).await;
+    let requests = AtomicUsize::new(0);
+    reconcile_bytes(&service, epoch, &first_bytes, &requests).await;
+    wait_configured_worker(&host).await;
+    let original = service.manager().unwrap().list().await.unwrap().remove(0);
+    for downloaded in [
+        Err("Download is offline".to_owned()),
+        Ok(first_bytes.clone()),
+    ] {
+        epoch = service
+            .session_configured(true, Ok(vec![second.clone()]))
+            .unwrap();
+        service
+            .reconcile_with(service.manager().unwrap(), epoch, |_| {
+                let downloaded = downloaded.clone();
+                async move { downloaded }
+            })
+            .await
+            .unwrap();
+        wait_configured_worker(&host).await;
+        assert_eq!(
+            service.manager().unwrap().list().await.unwrap().as_slice(),
+            std::slice::from_ref(&original)
+        );
+        let status = configured_status(&service, epoch).await;
+        assert_eq!(status["state"], "failed");
+        assert!(status["error"].is_string());
+        assert_eq!(
+            host.action(PLUGIN, "echo", json!({}), Duration::from_secs(2))
+                .await
+                .unwrap()["ok"],
+            true
+        );
+    }
+    reconcile_bytes(&service, epoch, &second_bytes, &requests).await;
+    wait_configured_worker(&host).await;
+    let updated = service.manager().unwrap().list().await.unwrap().remove(0);
+    assert_eq!(updated.active.version, "1.1.0");
+    assert_eq!(updated.active.sha256, sha256_hex(&second_bytes));
+    assert_eq!(updated.rollback, Some(original.active));
+    assert!(updated.enabled);
+    assert_eq!(configured_status(&service, epoch).await["state"], "ready");
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_same_version_rebuild_replaces_exact_bytes_and_then_restores_offline() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (first, first_bytes) = declared_package(&root, "1.0.0", None);
+    let (rebuilt, rebuilt_bytes) =
+        declared_package_revision(&root, "1.0.0", None, Some("new desktop release build"));
+    assert_ne!(sha256_hex(&first_bytes), sha256_hex(&rebuilt_bytes));
+    let key = settings_test_key();
+    let (service, host, epoch) = configured_application(&root, vec![first], key.clone()).await;
+    let requests = AtomicUsize::new(0);
+    reconcile_bytes(&service, epoch, &first_bytes, &requests).await;
+    wait_configured_worker(&host).await;
+    let old_instance = host.snapshots()[0].instance_id.clone().unwrap();
+    let previous = service.manager().unwrap().list().await.unwrap().remove(0);
+
+    let epoch = service
+        .session_configured(true, Ok(vec![rebuilt.clone()]))
+        .unwrap();
+    let restored_instance = Mutex::new(None);
+    service
+        .reconcile_with(service.manager().unwrap(), epoch, |_| {
+            requests.fetch_add(1, Ordering::SeqCst);
+            // Reconciliation resumes the cached worker before downloading. Capture
+            // that instance so the assertion proves activation replaced it too.
+            *restored_instance.lock().unwrap() = host.snapshots()[0].instance_id.clone();
+            let bytes = rebuilt_bytes.clone();
+            async move { Ok(bytes) }
+        })
+        .await
+        .unwrap();
+    wait_configured_worker(&host).await;
+    let new_instance = host.snapshots()[0].instance_id.clone().unwrap();
+    assert_ne!(new_instance, old_instance);
+    assert_ne!(
+        new_instance,
+        restored_instance.into_inner().unwrap().unwrap()
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    let replaced = service.manager().unwrap().list().await.unwrap().remove(0);
+    assert_eq!(replaced.active.version, previous.active.version);
+    assert_eq!(replaced.active.sha256, sha256_hex(&rebuilt_bytes));
+    assert_eq!(replaced.rollback, Some(previous.active));
+    assert_eq!(configured_status(&service, epoch).await["state"], "ready");
+    service
+        .reconcile_with(service.manager().unwrap(), epoch, |_| async {
+            panic!("a matching rebuilt archive must not be downloaded again")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        host.snapshots()[0].instance_id.as_deref(),
+        Some(new_instance.as_str())
+    );
+    service.close().await.unwrap();
+
+    let (service, host, epoch) = configured_application(&root, vec![rebuilt], key).await;
+    service
+        .reconcile_with(service.manager().unwrap(), epoch, |_| async {
+            panic!("the configured rebuilt archive must restore offline after restart")
+        })
+        .await
+        .unwrap();
+    wait_configured_worker(&host).await;
+    assert_eq!(service.manager().unwrap().list().await.unwrap(), [replaced]);
+    assert_eq!(configured_status(&service, epoch).await["state"], "ready");
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_downloads_are_dropped_on_logout_replacement_and_shutdown() {
+    struct DownloadGuard(Arc<AtomicBool>);
+    impl Drop for DownloadGuard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    for boundary in ["logout", "replacement", "shutdown"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let (declaration, _) = declared_package(&root, "1.0.0", None);
+        let (service, host, epoch) =
+            configured_application(&root, vec![declaration], settings_test_key()).await;
+        let manager = service.manager().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started = Arc::new(Mutex::new(Some(started_tx)));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task_service = service.clone();
+        let task_dropped = dropped.clone();
+        let task = tokio::spawn(async move {
+            task_service
+                .reconcile_with(manager, epoch, move |_| {
+                    let started = started.lock().unwrap().take().unwrap();
+                    let guard = DownloadGuard(task_dropped.clone());
+                    async move {
+                        let _guard = guard;
+                        started.send(()).unwrap();
+                        std::future::pending::<Result<Vec<u8>, String>>().await
+                    }
+                })
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let replacement = match boundary {
+            "replacement" => {
+                let (mut declaration, bytes) = declared_package(&root, "1.1.0", None);
+                declaration.enabled = false;
+                let expected_url = declaration.artifacts[env!("INVERTER_DESKTOP_TARGET")]
+                    .url
+                    .clone();
+                let next = service
+                    .session_configured(true, Ok(vec![declaration]))
+                    .unwrap();
+                assert_ne!(next, epoch);
+                assert!(!host.is_authorized_epoch(epoch));
+                Some((next, bytes, expected_url))
+            }
+            "logout" => {
+                assert!(service.session_changed(false).is_none());
+                None
+            }
+            "shutdown" => {
+                service.begin_shutdown();
+                None
+            }
+            _ => unreachable!(),
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err(),
+            "{boundary}"
+        );
+        assert!(dropped.load(Ordering::SeqCst), "{boundary}");
+        assert!(service.manager().unwrap().list().await.unwrap().is_empty());
+        assert!(host.snapshots().is_empty());
+        if let Some((next, bytes, expected_url)) = replacement {
+            service
+                .reconcile_with(service.manager().unwrap(), next, |url| {
+                    assert_eq!(url, expected_url);
+                    let bytes = bytes.clone();
+                    async move { Ok(bytes) }
+                })
+                .await
+                .unwrap();
+            let installed = service.manager().unwrap().list().await.unwrap();
+            assert_eq!(installed.len(), 1);
+            assert_eq!(installed[0].active.version, "1.1.0");
+            assert!(!installed[0].enabled);
+            let desired = configured_status(&service, next).await;
+            assert_eq!(desired["version"], "1.1.0");
+            assert_eq!(desired["state"], "disabled");
+        }
+        service.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn invalid_configured_declarations_report_errors_without_downloading_or_installing() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (mut declaration, _) = declared_package(&root, "1.0.0", None);
+    declaration.version = "latest".into();
+    let (service, host, epoch) =
+        configured_application(&root, vec![declaration], settings_test_key()).await;
+    assert!(service
+        .reconcile_with(service.manager().unwrap(), epoch, |_| async {
+            panic!("invalid declarations must not start downloads")
+        })
+        .await
+        .is_err());
+    let snapshot = service.snapshot(epoch).await.unwrap();
+    assert!(snapshot.configuration_error.is_some());
+    assert!(snapshot.configured.is_empty());
+    assert!(snapshot.plugins.is_empty());
+    assert!(host.snapshots().is_empty());
+    service.close().await.unwrap();
+}
 
 const PLUGIN: &str = "test.application";
 const PUBLISHER: &str = "application-tests-only";

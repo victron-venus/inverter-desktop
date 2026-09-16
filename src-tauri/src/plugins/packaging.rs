@@ -1,4 +1,4 @@
-//! Reproducible signed package creation for externally supplied publisher keys.
+//! Reproducible package creation for exact pins or supplied publisher keys.
 //!
 //! This API only reads source files and creates archive bytes. It does not install
 //! packages, register trusted publishers, or execute workers.
@@ -48,27 +48,12 @@ pub fn build_package(
     key_id: &str,
     signing_key: &SigningKey,
 ) -> Result<Vec<u8>, String> {
-    // Check metadata before reading a potentially large source tree. The real
-    // inventory below replaces this placeholder before any signature is made.
-    manifest.inventory = vec![InventoryEntry {
-        path: manifest.entrypoint.clone(),
-        size: 1,
-        sha256: "0".repeat(64),
-    }];
     manifest.signature = Some(SignatureMetadata {
         algorithm: "ed25519".into(),
         key_id: key_id.into(),
         signature: "0".repeat(128),
     });
-    manifest.validate()?;
-    let root = checked_directory(source_root)?;
-    let mut sources = Sources {
-        files: BTreeMap::new(),
-        spelling: HashMap::new(),
-        entries: 0,
-        bytes: 0,
-    };
-    sources.collect(&root, "")?;
+    let sources = collect_payload(&mut manifest, source_root)?;
     let mut seed = signing_key.to_bytes();
     let contains_seed = sources
         .files
@@ -78,16 +63,6 @@ pub fn build_package(
     if contains_seed {
         return Err("package payload must not contain the signing key file or a copy of it".into());
     }
-    manifest.inventory = sources
-        .files
-        .iter()
-        .map(|(path, contents)| InventoryEntry {
-            path: path.clone(),
-            size: contents.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(contents)),
-        })
-        .collect();
-    manifest.validate()?;
     let signature = signing_key.sign(&manifest_signing_payload(&manifest)?);
     manifest.signature = Some(SignatureMetadata {
         algorithm: "ed25519".into(),
@@ -100,6 +75,47 @@ pub fn build_package(
     });
     manifest.validate()?;
     encode_archive(&manifest, sources.files)
+}
+
+/// Build an unsigned archive whose exact bytes must be pinned by the caller.
+/// Uses the same inventory, path, source-size and deterministic ZIP rules as
+/// signed packages. Any input signature is removed; this does not establish trust.
+pub fn build_pinned_package(
+    mut manifest: PluginManifest,
+    source_root: &Path,
+) -> Result<Vec<u8>, String> {
+    manifest.signature = None;
+    let sources = collect_payload(&mut manifest, source_root)?;
+    encode_archive(&manifest, sources.files)
+}
+
+fn collect_payload(manifest: &mut PluginManifest, source_root: &Path) -> Result<Sources, String> {
+    // Reject invalid metadata before reading a potentially large source tree.
+    manifest.inventory = vec![InventoryEntry {
+        path: manifest.entrypoint.clone(),
+        size: 1,
+        sha256: "0".repeat(64),
+    }];
+    manifest.validate()?;
+    let root = checked_directory(source_root)?;
+    let mut sources = Sources {
+        files: BTreeMap::new(),
+        spelling: HashMap::new(),
+        entries: 0,
+        bytes: 0,
+    };
+    sources.collect(&root, "")?;
+    manifest.inventory = sources
+        .files
+        .iter()
+        .map(|(path, contents)| InventoryEntry {
+            path: path.clone(),
+            size: contents.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(contents)),
+        })
+        .collect();
+    manifest.validate()?;
+    Ok(sources)
 }
 
 impl Sources {

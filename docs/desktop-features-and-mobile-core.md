@@ -8,13 +8,16 @@ configuration, and app updates.
 Grid submeter telemetry and daemon setpoint override also remain core features;
 the packaged native check requires the override commands on both mobile platforms.
 
-The current checkpoint connects the desktop worker host and signed package
-pipeline to application authentication, startup, settings, and shutdown. The
-**Plugins** settings tab reviews a natively selected package before installation,
-and manages installed workers. The embedded publisher policy is currently empty,
-so installation is disabled and a clean profile has no plugin workers. Existing
+The desktop worker host and package pipeline connect to application
+authentication, startup, settings, and shutdown. Explicit `desktop_plugins`
+declarations restore missing packages from HTTPS sources with exact archive
+SHA-256 pins. Android/iOS preserve these declarations as passive settings only;
+they include no downloader, package store, manager, or worker runtime. The
+**Plugins** settings tab shows restoration results and manages installed workers.
+Its separate manual signed-file flow needs approved publishers and remains
+unavailable with the empty embedded policy. Existing
 HA/camera implementations remain bundled; the manager does not move, disable, or
-uninstall those legacy features. Production trust, HA/camera extraction, and the
+uninstall those legacy features. HA/camera extraction and the
 remaining contribution services stay in [TODO](../TODO.md).
 
 See the [worker protocol](plugin-worker-protocol.md) for process communication and
