@@ -106,21 +106,38 @@ Ready/Running/Connected with active Disable/Uninstall controls. Frigate's uninst
 confirmation was inspected and cancelled, leaving configuration, settings, and
 pins unchanged. No live uninstall or household commands were performed.
 
-### Follow-up: keep Home action button sizes stable
+The uninstalled-declaration removal and Home-spinner corrections are merged
+through [PR #463](https://github.com/victron-venus/inverter-desktop/pull/463) at
+`3b5c1d7ced27d4345b48d3030653ae1f81b0cb99` on 2026-09-16 at `19:52:52Z`.
+Exact head `66623b0e8e1ca6521b8ee970b8c864148900ae9e` passed 60 checks with six
+skips, was approved, and had no unresolved review threads. Release run
+`35143212192` is automatically building frozen tag `v2.5.42-beta.49`, build
+`2005092`, from that merge revision. Source, review, CI, and browser-fixture work
+are complete. At the user's request, this handoff does not include waiting for
+publication, independent published-byte verification, a Mac upgrade, or live
+acceptance of these corrections; those proofs have not been performed.
+
+### Source complete: keep Home action button sizes stable
 
 - [x] Locate the Home action pending indicator and keep its spinner in an absolute
       overlay over the existing label area. Preserve the button's normal width
       and height so pending state does not resize its neighboring buttons.
 - [x] Preserve action routing, disabled/busy behavior, and accessible labels;
       verify with relevant frontend regressions, type checks, lint, and formatting.
-- [ ] Include the fix in the current reviewed PR and verify the resulting release.
+- [x] Verify real component geometry in an isolated Chrome fixture: all eight
+      light/dark, 180/360-pixel, icon/text cases retain identical target, neighbor,
+      and grid rectangles through idle, pending, and settled states. Retain the
+      accessible name and busy/disabled state. This is source-fixture evidence,
+      not installed WKWebView acceptance.
+- [x] Include the fix in reviewed and merged PR #463.
 
-### Follow-up: remove an uninstalled configured package
+### Source complete: remove an uninstalled configured package
 
-Start from reviewed main `98ab094`. A valid declaration whose download or first
-installation failed currently offers only Retry in Plugins. Without an installed
-inventory record, the user cannot remove its automatic-restoration intent through
-the application. Camera-group failures also publish an unsupported status value.
+At baseline `98ab094`, a valid declaration whose download or first installation
+failed offered only Retry in Plugins. Without an installed inventory record, the
+user could not remove its automatic-restoration intent through the application.
+Camera-group failures also published an unsupported status value. PR #463 fixes
+both source gaps; installed acceptance is outside this handoff.
 
 - [x] Reproduce both gaps in the current frontend/native contracts; retain the
       delivered installed-package uninstall behavior from PR #461.
@@ -150,20 +167,21 @@ the application. Camera-group failures also publish an unsupported status value.
       earlier installed "core only" matrix disabled plugins rather than removing
       their packages. Keep clean-profile and released-app offline acceptance open.
 - [x] Obtain independent implementation and documentation review.
-- [ ] Deliver an English PR, pass exact-head hosted checks, resolve review
-      comments, and merge as authorized.
-- [ ] Verify the published runtime containing this correction before upgrading
-      the installed application; retain its settings and working package pins.
-      Record source, release, installation, and graphical evidence separately.
+- [x] Deliver English PR #463, pass exact-head hosted checks, obtain approval
+      with no unresolved review threads, and merge at `3b5c1d7`.
 
-Validation so far: 553 native tests and two packaging CLI tests passed; 12
-installed-worker scenarios retain their existing opt-in gates and run separately
-in hosted CI. Seven focused removal regressions and five group regressions passed.
-The frontend suite passed 442 tests before the additional Home-spinner regression;
-19 scoped Home/presentation tests cover that follow-up separately. Desktop and
-mobile builds, strict all-target Clippy, formatting, lint, and type checks passed.
+Local validation passed 553 native tests and two packaging CLI tests, including
+seven focused removal regressions and five group regressions. Hosted validation
+passed all 443 frontend tests and all 12 separately invoked installed-worker
+fixtures. The local 19-test Home/presentation suite also passed. Desktop and mobile
+builds, strict all-target Clippy, formatting, lint, and type checks passed.
 Mobile/profile boundary suites passed 18 frontend, 29 native-verifier, and seven
-build-profile checks.
+build-profile checks. The [delivery record](docs/desktop-plugin-delivery.md#configured-declaration-removal-and-stable-home-buttons-source-merged)
+records the hosted and browser fixture receipts, in-progress automatic release,
+and the user-requested handoff boundary. The earlier beta.47 installation remains
+separate evidence; no installation or published-byte check of this correction is
+marked complete. Broader clean-profile, offline, performance, and physical-device
+acceptance below remains unchanged.
 
 ### Delivered follow-up: manage configured plugins from the Plugins tab
 

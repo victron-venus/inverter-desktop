@@ -260,6 +260,74 @@ performed. Removal, partial failures, and concurrent restoration remain covered
 by isolated regressions; this acceptance did not exercise forced authorization
 failures or other physical platforms.
 
+## Configured declaration removal and stable Home buttons: source merged
+
+[PR #463](https://github.com/victron-venus/inverter-desktop/pull/463) merged on
+2026-09-16 at `19:52:52Z`, at revision
+`3b5c1d7ced27d4345b48d3030653ae1f81b0cb99`. Its exact reviewed head
+`66623b0e8e1ca6521b8ee970b8c864148900ae9e` passed 60 hosted checks with six skips,
+was approved, and had no unresolved review threads.
+
+Plugins now offers **Remove from configuration** when a declared package has no
+installed inventory record, including after a failed initial download. Confirmation
+removes only its restoration declaration and retains settings, secrets, and other
+data. It is bound to the complete declaration's revision and discarded after a
+changed declaration, installed package, lost snapshot, or revoked session. Native
+removal is serialized with restoration and rechecks the declaration before saving.
+If installation wins first, removal is rejected and the refreshed UI offers the
+existing Uninstall flow. This action does not promise immediate download
+cancellation. Camera-group lifecycle failures now use the existing localized
+`failed` state.
+
+Home buttons render a pending spinner in an absolute overlay while keeping the
+label and icon in their existing layout. Accessible labels, busy/disabled state,
+and action routing are preserved; the default spinner for other buttons is
+unchanged. Local validation passed 553 native tests plus two packaging CLI tests,
+including seven focused removal and five group regressions. Hosted validation
+passed 443 frontend tests and all twelve separately invoked installed-worker
+fixtures. The local Home/presentation suite passed 19 tests. Desktop/mobile builds,
+profile type checks, strict all-target Clippy, formatting, and lint passed; existing
+lint warnings remain.
+
+The completed [frontend job](https://github.com/victron-venus/inverter-desktop/actions/runs/35140649044/job/104944023776)
+and [native job](https://github.com/victron-venus/inverter-desktop/actions/runs/35140649119/job/104944023554)
+checked GitHub's PR merge ref `9fada20f5307f642a925084aed4a79cfb8b2665c`, whose
+parents are base `98ab094` and reviewed head `66623b0`. That checkout is distinct
+from the final merge revision. The hosted log receipt
+`inverter-configured-removal-hosted-tests.json` has SHA-256
+`c95a8f60c3bdcc84da089a3cf02bb8d1e9930df0a1338275546a27819b684d80`.
+It records 443 frontend tests and 550 Linux native tests plus two packaging CLI
+tests; all twelve normally ignored worker scenarios were also explicitly run
+and passed. The local macOS count of 553 above is separate platform evidence.
+
+An isolated Chrome fixture measured the real `SidePanel.vue`, `UiButton.vue`, and
+current CSS from the reviewed source. All eight cases (light/dark, 180/360-pixel
+panel widths, with/without icons) kept the target, neighboring button, and grid
+rectangles exactly unchanged from idle through pending to settled. The pending
+label stayed in the accessibility tree, with busy, disabled, and pressed state
+preserved; the spinner was absolute and hidden from accessibility. The fixture
+used synthetic data and sent no native IPC or household commands. This is browser
+source-fixture evidence, not installed WKWebView acceptance.
+
+The receipt `inverter-home-spinner-geometry.json`, measured at
+`2026-09-16T19:27:22.698Z`, has SHA-256
+`dcc83c702c8d8c7f2e5458ba053ab0ac7b00c02f49c329173993aff3d0f54046`.
+[Release run 35143212192](https://github.com/victron-venus/inverter-desktop/actions/runs/35143212192)
+is automatically building frozen tag `v2.5.42-beta.49`, build `2005092`, from
+merged source `3b5c1d7ced27d4345b48d3030653ae1f81b0cb99`. At the last handoff
+readback, all quality/preparation jobs had passed and platform packaging was
+still running. This is an in-progress release status, not evidence of completed
+publication.
+
+At the user's request, the handoff ends with completed source, review, CI, and
+browser-fixture work while automatic builds continue. Waiting for publication,
+independent published-byte verification, a Mac upgrade, and live acceptance of
+these corrections are outside this handoff and have not been performed. The
+beta.47 installation above remains the latest completed installed evidence in
+this record; no new installed WKWebView or household-action result is claimed.
+Broader clean-profile, offline, performance, and physical-device acceptance in
+the roadmap remains unchanged.
+
 ## Evidence boundaries
 
 Automated process, protocol, restore, and media fixtures do not prove a physical
