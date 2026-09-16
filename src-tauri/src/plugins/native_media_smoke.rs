@@ -396,21 +396,25 @@ async fn live_sample(window: &tauri::WebviewWindow) -> Result<Option<Value>, Str
       try {
         const image = document.images[0];
         if (!image || !image.naturalWidth || !image.naturalHeight) return null;
+        if (!window.__smokeImage) {
+          const probe = new Image(); probe.crossOrigin = 'anonymous'; probe.src = image.src;
+          window.__smokeImage = probe;
+        }
+        const probe = window.__smokeImage;
+        if (!probe.naturalWidth || !probe.naturalHeight) return null;
         const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
-        const context = canvas.getContext('2d'); context.drawImage(image, 0, 0, 1, 1);
-        return {width:image.naturalWidth,height:image.naturalHeight,pixel:Array.from(context.getImageData(0,0,1,1).data)};
+        const context = canvas.getContext('2d'); context.drawImage(probe, 0, 0, 1, 1);
+        return {toolbar:!!document.querySelector('[aria-label="Camera window controls"]'),closeButton:!!document.querySelector('button[aria-label="Close"]'),width:image.naturalWidth,height:image.naturalHeight,pixel:Array.from(context.getImageData(0,0,1,1).data)};
       } catch (_) { return null; }
     })()"#, move |value| {
         if let Some(sent) = sent.lock().unwrap().take() { let _ = sent.send(value); }
     }).map_err(|_| "Cannot inspect native live image")?;
-    let value = timeout(Duration::from_secs(2), received)
-        .await
-        .map_err(|_| "Native live observation timed out")?;
-    // Wry queues evaluations before navigation commits but drops their callbacks.
-    // Keep waiting inside the caller's bounded decode deadline; visibility alone
-    // does not establish page readiness or supply any decoding evidence.
-    let Ok(value) = value else {
-        return Ok(None);
+    // Wry queues pre-navigation JS strings but drops their callback until
+    // didCommitNavigation. Treat that initial cancellation as not loaded yet;
+    // the caller still enforces its overall bounded decoding deadline.
+    let value = match timeout(Duration::from_secs(2), received).await {
+        Ok(Ok(value)) if !value.is_empty() => value,
+        _ => return Ok(None),
     };
     let value: Value =
         serde_json::from_str(&value).map_err(|_| "Invalid native live observation")?;
@@ -432,6 +436,12 @@ async fn exercise_live(
     options: &Options,
 ) -> Result<(), String> {
     for (sequence, revoke) in [(10, false), (11, true)] {
+        // Each independent scenario needs a fresh focus precondition. The user
+        // may have activated another app during the preceding 15-second wait.
+        anchor
+            .set_focus()
+            .map_err(|_| "Cannot focus live scenario anchor")?;
+        until(|| Ok(anchor.is_focused().unwrap_or(false).then_some(()))).await?;
         let lease = GenerationLease::new(PLUGIN.into(), 1, sequence);
         state.leases.lock().unwrap().push(lease.clone());
         let _owner = RevokeOnDrop(lease.clone());
@@ -452,7 +462,7 @@ async fn exercise_live(
                 title: title.into(),
             })
             .map_err(|_| "Cannot admit native live fixture")?;
-        let expected_title = format!("{title} — Live");
+        let expected_title = title;
         let window = until(|| {
             Ok(app.webview_windows().into_values().find(|window| {
                 window.title().is_ok_and(|title| title == expected_title)
@@ -460,7 +470,18 @@ async fn exercise_live(
             }))
         })
         .await?;
-        let geometry = geometry(&window)?;
+        let window_geometry = geometry(&window)?;
+        let scale = window
+            .scale_factor()
+            .map_err(|_| "Window scale unavailable")?;
+        if window.is_decorated().unwrap_or(true)
+            || window_geometry["width"].as_u64()
+                != Some((crate::CAMERA_VIDEO_WINDOW_W * scale).round() as u64)
+            || window_geometry["height"].as_u64()
+                != Some((crate::CAMERA_VIDEO_WINDOW_H * scale).round() as u64)
+        {
+            return Err("Live preview must match the frameless clip size".into());
+        }
         let first = timeout(Duration::from_secs(5), async {
             loop {
                 if let Some(sample) = live_sample(&window).await? {
@@ -483,15 +504,65 @@ async fn exercise_live(
         })
         .await
         .map_err(|_| "MJPEG fixture did not advance between distinct frames")??;
+        if first["toolbar"] != true || first["closeButton"] != true {
+            return Err("Live preview is missing the shared camera controls".into());
+        }
         let focused = anchor.is_focused().unwrap_or(false) && !window.is_focused().unwrap_or(true);
         state.check(
             title,
-            json!({"geometry":geometry,"first_decoded_frame":first,
+            json!({"geometry":window_geometry,"first_decoded_frame":first,
             "second_decoded_frame":second,"focus_preserved":focused}),
         );
         state.persist()?;
         if !focused {
             return Err("Live preview stole focus from the native anchor".into());
+        }
+        if !revoke {
+            // Independently leased previews share the exact same owned viewer and stack.
+            let peer_lease = GenerationLease::new("native.camera-smoke".into(), 1, 12);
+            state.leases.lock().unwrap().push(peer_lease.clone());
+            let _peer_owner = RevokeOnDrop(peer_lease.clone());
+            media
+                .try_submit(QueuedHttpVideo {
+                    live_preview: true,
+                    media_kind: HttpMediaKind::Video,
+                    lease: peer_lease.clone(),
+                    grant: fixture_live_grant(&options.url)?,
+                    id: "native-live-peer".into(),
+                    url: options.url.clone(),
+                    title: "Smoke independent peer".into(),
+                })
+                .map_err(|_| "Cannot admit native camera peer")?;
+            let peer = until(|| {
+                Ok(app.webview_windows().into_values().find(|candidate| {
+                    candidate
+                        .title()
+                        .is_ok_and(|title| title == "Smoke independent peer")
+                        && candidate.is_visible().unwrap_or(false)
+                }))
+            })
+            .await?;
+            let peer_geometry = geometry(&peer)?;
+            let stacked = peer_geometry["x"] == window_geometry["x"]
+                && peer_geometry["y"].as_i64()
+                    == window_geometry["y"]
+                        .as_i64()
+                        .zip(window_geometry["height"].as_i64())
+                        .map(|(y, h)| y + h)
+                && peer_geometry["width"] == window_geometry["width"]
+                && peer_geometry["height"] == window_geometry["height"];
+            let peer_focus =
+                anchor.is_focused().unwrap_or(false) && !peer.is_focused().unwrap_or(true);
+            state.check("independent_previews_shared_stack", json!({"first":window_geometry,"second":peer_geometry,"exact_order_and_size":stacked,"focus_preserved":peer_focus}));
+            if !stacked || !peer_focus {
+                return Err("Independent previews did not share the same ordered stack".into());
+            }
+            // Exercise the shared Vue Close button with a live owner, not just
+            // the downloaded-media path or native destruction from the harness.
+            peer.eval("document.querySelector('button[aria-label=\"Close\"]')?.click()")
+                .map_err(|_| "Cannot activate live preview close control")?;
+            until(|| Ok(app.get_webview_window(peer.label()).is_none().then_some(()))).await?;
+            state.check("live_real_close_control_destroyed_window", json!(true));
         }
         if revoke {
             lease.revoke();
@@ -728,15 +799,20 @@ pub fn run() -> Result<(), String> {
     let builder = super::media_windows::register(tauri::Builder::default())
         .manage(state.clone())
         .invoke_handler(|invoke| {
-            if super::media_windows::is_plugin_preview_label(invoke.message.webview().label()) {
+            if super::media_windows::media_id_for_label(invoke.message.webview().label()).is_some()
+                && !super::media_windows::preview_command_allowed(invoke.message.command())
+                // The observer is harness-only and validates its exact fixture owner.
+                && invoke.message.command() != "observe_native_media_smoke"
+            {
                 invoke
                     .resolver
-                    .reject("Remote live windows cannot invoke host commands");
+                    .reject("Media windows can only access their own media controls");
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
                 auth_status,
                 observe_native_media_smoke,
+                super::bridge::get_live_preview_url,
                 super::bridge::close_plugin_video_window,
                 super::bridge::drag_plugin_video_window
             ];

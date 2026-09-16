@@ -79,7 +79,7 @@
       "camera_live_urls": {
         "type": "string",
         "title": "Private live camera addresses",
-        "description": "Optional HTTP(S) destinations keyed by exact camera ID. Motion notifications open these pages only after a click. Replacing this private mapping replaces all its entries.",
+        "description": "Optional HTTP(S) destinations keyed by exact camera ID. Motion opens an isolated live preview automatically for 15 seconds. Replacing this private mapping replaces all its entries.",
         "writeOnly": true,
         "maxLength": 16384,
         "x-editor": {
@@ -106,6 +106,7 @@
     "icon": "camera"
   },
   "live_view": {
-    "urls_setting": "camera_live_urls"
+    "urls_setting": "camera_live_urls",
+    "preview_duration_seconds": 15
   }
 }

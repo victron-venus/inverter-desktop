@@ -70,8 +70,9 @@ with exact-head approval and no unresolved review threads.
 keys or app signing.** The embedded publisher policy remains empty, so only the
 manual signed-file flow is unavailable. The current working tree removes bundled
 HA/camera providers and replaces their UI with compact host-owned plugin views.
-Source extraction is implemented; final native regressions, exact-head delivery,
-and installed-app acceptance are separate unfinished gates below. Completed
+Source extraction and its first local regression pass are complete. The newer
+shared camera viewer, exact-head delivery, and installed-app acceptance are
+tracked separately below. Completed
 checkpoints later in this file describe their historical scope and evidence.
 
 ### Active implementation: complete optional feature extraction
@@ -144,7 +145,7 @@ for fresh Frigate motion. The extraction must preserve that newer behavior as we
 as the earlier downloaded media contracts.
 
 - [x] Add an explicit manifest preview grant, separate queued preview discriminator,
-      exact-URL incognito windows without IPC, shared window limits without cache
+      scoped incognito previews, shared window limits without cache
       bytes, three-second stale admission expiry, and owned close acknowledgment.
 - [x] Adapt the isolated native smoke harness to the new preview grant while
       retaining downloaded video and typed snapshot behavior.
@@ -159,20 +160,41 @@ as the earlier downloaded media contracts.
       checks. Linux/Windows graphical acceptance and real OS notification display
       remain separate; local fixture decoding is not release-installation proof.
 
+#### Newer shared camera viewer parity
+
+The parallel camera branch through `fb84683` adds automatic mapped Kerberos
+previews and a shared compact local viewer. Preserve those behaviors before
+replacing the installed application.
+
+- [x] Emit separate ordinary notifications and automatic mapped Kerberos preview
+      requests, with the same episode identity and no worker-supplied URL.
+- [x] Add an explicit bounded manifest lifetime and native exact private URL grant.
+      Keep old manifests without this field compatible without granting automatic
+      preview authority. Preserve 15-second per-camera admission independently of
+      notification permission and equal display labels.
+- [x] Use one local frameless viewer with title, drag and close controls for
+      Frigate and Kerberos. Expose the private image URL only to the exact active
+      owned window; restrict image CSP to its origin and deny general app IPC.
+- [x] Pass mapped grant/runtime/installed-worker tests, shared viewer tests and
+      strict checks after this iteration. Repeat isolated graphical MJPEG/H.264
+      verification with the final shared viewer executable.
+
 #### Current local evidence and delivery gates
 
-- [x] Full frontend suite: 424 tests across 37 files. Mobile suite: 18 tests.
+- [x] Full frontend suite: 432 tests across 37 files. Mobile suite: 18 tests.
       Actual bundler profile tests: seven. Native mobile boundary fixture tests: 29.
       Vue type checking, error-level frontend lint, and both production frontend
       builds pass. The default local Vitest fork pool stalled before worker startup;
       completed runs use `--pool threads --maxWorkers 2`.
 - [x] Worker-local fixtures: HA 235 tests (122 unit, 93 actual-worker actions,
-      three TLS, 17 protocol); Frigate 27; Kerberos 19; Ring 21; camera-common three.
+      three TLS, 17 protocol); Frigate 27; Kerberos 20; Ring 21; camera-common three.
       Package checks cover all six supported archive targets; released asset jobs
       currently publish four desktop target platforms, not all six.
 - [x] Complete the final native host suite after the atomic restore and migration
-      compatibility fixes: 516 tests pass, plus two packaging CLI tests. Twelve
-      installed-worker fixtures run separately with explicit worker paths.
+      compatibility and shared viewer fixes: 528 tests pass, plus two packaging CLI
+      tests. All twelve installed-worker fixtures pass with explicit worker paths.
+      The Ring fixture was updated to drain media before notifications, matching
+      the production dispatcher; its fresh isolated rerun passed after that fix.
       Independent reviews covered HA action ownership, migration/restore authority,
       preview URL permissions, window ownership, cancellation, and IPC isolation.
 - [x] Pass strict all-target host and native-smoke Clippy. The vendored macOS

@@ -392,7 +392,8 @@ bytes respectively. Unknown fields, malformed content, missing permission, and
 messages before readiness fail that worker generation. Host API 1.8 optionally
 accepts `live_view_id`, an exact key in a startup-derived private destination map.
 It is not a URL, Tauri command, or arbitrary notification option.
-Packages using this capability must declare a compatible range such as `^1.2`.
+Ordinary notification packages require at least host API 1.2; packages using
+`live_view_id` require host API 1.8.
 
 Delivery is best effort. Each registered worker has at most 16 queued notifications,
 30 accepted notifications per minute, and 512 recent IDs remembered for ten minutes.
@@ -404,8 +405,10 @@ automatic worker restarts; process/session replacement cannot revive a queued it
 
 The native dispatcher checks the original session epoch, running process generation,
 stop signal, reaped state, and delivery age while holding the authority guard. The
-application keeps one dedicated dispatcher and one pending signal, so slow OS
-calls do not hold up the UI change-signal loop or create overlapping delivery tasks. Each started
+application keeps one dedicated dispatcher and one pending signal, preventing
+overlapping delivery tasks. Media admission precedes notification dispatch, and
+the dispatcher yields between submissions whenever media is pending. An already
+started native submission still holds authority until it returns. Each started
 dispatch checks live authentication before entering the authority guard. Actual
 native submission happens inside the guard; the callback never defers unchecked
 delivery to another application task. Linux notification-service waits are bounded
@@ -472,11 +475,24 @@ image after 12 seconds, with the same generation revocation as video.
 Host API 1.8 also supports automatic motion previews through `http_live`.
 The verified `http_video` declaration must include
 `live_preview: {query: "fps=2&height=360", max_duration_seconds: 15}`.
-This grant is separate from optional notification-click `live_view` destinations
-and cannot carry a bearer credential. A preview URL must stay within the granted
-origin/path and match its exact query. The native adapter opens an incognito
-`plugin-preview-<UUID>` webview, allows only that exact URL, denies new windows
-and application IPC, and closes it at the grant's lifetime or generation removal.
+This grant cannot carry a bearer credential. A preview URL must stay within the
+granted origin/path and match its exact query. The native adapter opens the local
+compact viewer in an incognito `plugin-preview-<UUID>` window. Only that owning
+viewer can obtain its active private image URL, close itself, or drag its window.
+The image policy allows the configured camera origin; remote document navigation,
+new windows, and general application IPC are denied. The native host closes the
+window at the grant's lifetime or generation removal.
+
+Mapped cameras instead emit `live_view` with `id`, `title`, and `live_view_id`,
+without a URL. The verified `live_view` declaration must explicitly include
+`preview_duration_seconds` (1–30; Kerberos uses 15). Native code resolves only the
+exact camera ID from the generation's encrypted `urls_setting` map. Unmapped IDs
+are omitted; declarations without a duration retain notification-click capability
+without gaining automatic preview authority. The derived preview grant permits
+only that exact configured URL and cannot authorize a download. Admission is
+independent of desktop notification permission, uses a 15-second per-camera
+cooldown, and retains the common queue, rate, episode-ID, and generation limits.
+Kerberos emits its ordinary motion notification separately from its preview.
 
 Previews share the eight-window limit but reserve no download transfer or disk
 bytes. Waiting for capacity expires after three seconds, preventing delayed motion
@@ -487,7 +503,7 @@ fresh motion previews instead of delayed end-event clips; earlier clip workers
 remain compatible with the host download path.
 
 Each worker has four pending requests, thirty admissions per minute, a ten-minute
-512-ID history, and a 45-second title cooldown. Pending requests expire after
+512-ID history, and a default 45-second title cooldown (mapped previews use the camera policy above). Pending requests expire after
 thirty seconds. The service independently bounds its queue to eight, transfers
 to two, and active/download-reserved windows to eight. It reserves up to 256 MiB
 per transfer within a 512 MiB media budget; completed smaller files release the

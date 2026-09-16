@@ -44,6 +44,7 @@ FORBIDDEN_COMMANDS = (
     "set_cover_position",
     "open_camera_video_window",
     "close_camera_video_window",
+    "get_live_preview_url",
     "close_plugin_video_window",
     "drag_plugin_video_window",
     "get_plugin_snapshot",

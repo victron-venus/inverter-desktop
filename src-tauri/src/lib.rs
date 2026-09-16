@@ -1469,14 +1469,20 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || {
                 let app = invoke.message.webview().app_handle().clone();
                 #[cfg(desktop)]
-                if plugins::live_view::is_live_window(invoke.message.webview().label())
-                    || plugins::media_windows::is_plugin_preview_label(
-                        invoke.message.webview().label(),
-                    )
-                {
+                if plugins::live_view::is_live_window(invoke.message.webview().label()) {
                     invoke
                         .resolver
                         .reject("Remote plugin pages cannot invoke application commands");
+                    return true;
+                }
+                #[cfg(desktop)]
+                if plugins::media_windows::media_id_for_label(invoke.message.webview().label())
+                    .is_some()
+                    && !plugins::media_windows::preview_command_allowed(invoke.message.command())
+                {
+                    invoke
+                        .resolver
+                        .reject("Media windows can only access their own media controls");
                     return true;
                 }
                 if !auth::public_command(invoke.message.command()) {
@@ -1491,6 +1497,7 @@ pub fn run() {
                     release_info::get_release_info,
                     plugins::bridge::get_plugin_snapshot,
                     plugins::bridge::plugin_action,
+                    plugins::bridge::get_live_preview_url,
                     plugins::bridge::close_plugin_video_window,
                     plugins::bridge::drag_plugin_video_window,
                     plugins::bridge::get_plugin_manager_snapshot,

@@ -166,6 +166,18 @@ fn main() {
                     emit(&ack);
                 }
                 contribute();
+                if mode.starts_with("configuration_mapped_live") {
+                    for (id, camera) in [
+                        ("mapped-1", "front"),
+                        ("mapped-2", "rear"),
+                        ("mapped-3", "front"),
+                        ("mapped-4", "missing"),
+                    ] {
+                        emit(&format!(
+                            r#"{{"type":"live_view","id":"{id}","title":"Private camera","live_view_id":"{camera}"}}"#
+                        ));
+                    }
+                }
                 if mode.starts_with("configuration_live") {
                     let url = if mode == "configuration_live_bad_url" {
                         "https://other.test/base/api/front?fps=2&height=360"

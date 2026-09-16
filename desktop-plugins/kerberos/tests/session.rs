@@ -19,7 +19,7 @@ fn start() -> Worker {
 }
 
 #[test]
-fn native_hub_coalesces_with_agent_and_live_click_references_stay_private() {
+fn native_hub_coalesces_with_agent_and_automatic_preview_references_stay_private() {
     let listener = listener();
     let mut worker = start();
     worker.hello();
@@ -41,10 +41,20 @@ fn native_hub_coalesces_with_agent_and_live_click_references_stay_private() {
         &serde_json::to_vec(&event).unwrap(),
         false,
     );
-    let frame = worker.frame();
-    assert_eq!(frame["type"], "notification");
-    assert_eq!(frame["live_view_id"], "front_camera");
-    assert!(!frame.to_string().contains("private"));
+    let preview = worker.frame();
+    assert_eq!(preview["type"], "live_view");
+    assert_eq!(preview["live_view_id"], "front_camera");
+    let notice = worker.frame();
+    assert_eq!(notice["type"], "notification");
+    assert_eq!(notice["body"], "Motion started");
+    assert!(notice.get("live_view_id").is_none());
+    assert_eq!(preview["id"], notice["id"]);
+    assert_eq!(preview["title"], notice["title"]);
+    for frame in [notice, preview] {
+        assert!(frame.get("url").is_none());
+        assert!(!frame.to_string().contains("private"));
+        assert!(!frame.to_string().contains("camera.invalid"));
+    }
     publish(&mut stream, TOPIC, PAYLOAD, false);
     assert!(worker
         .frames
@@ -109,11 +119,20 @@ fn reconnect_requires_resubscription_and_preserves_dedupe() {
     let listener = listener();
     let mut worker = start();
     worker.hello();
-    worker.configure(listener.local_addr().unwrap().port());
+    let mut config = configuration(listener.local_addr().unwrap().port());
+    config["configuration"]["secrets"]["camera_live_urls"] = json!(
+        r#"{"front_camera":"https://camera.invalid/front","back_camera":"https://camera.invalid/back"}"#
+    );
+    worker.configure_frame(config);
     let mut stream = subscribe(&listener, PROVIDER, TOPICS);
     worker.status("Connected");
     publish(&mut stream, TOPIC, PAYLOAD, false);
-    assert_eq!(worker.frame()["type"], "notification");
+    let preview = worker.frame();
+    assert_eq!(preview["type"], "live_view");
+    let first = worker.frame();
+    assert_eq!(first["type"], "notification");
+    assert_eq!(preview["id"], first["id"]);
+    assert_eq!(preview["live_view_id"], "front_camera");
     drop(stream);
     worker.status("Disconnected");
     worker.status("Connecting");
@@ -121,7 +140,12 @@ fn reconnect_requires_resubscription_and_preserves_dedupe() {
     worker.status("Connected");
     publish(&mut stream, TOPIC, PAYLOAD, false);
     publish(&mut stream, OTHER, PAYLOAD, false);
-    assert_eq!(worker.frame()["type"], "notification");
+    let preview = worker.frame();
+    assert_eq!(preview["type"], "live_view");
+    let next = worker.frame();
+    assert_eq!(next["type"], "notification");
+    assert_eq!(preview["id"], next["id"]);
+    assert_eq!(preview["live_view_id"], "back_camera");
     assert!(worker
         .frames
         .recv_timeout(Duration::from_millis(150))

@@ -525,9 +525,6 @@ impl PluginHost {
             })
     }
 
-    /// Deliver at most sixteen queued notifications per registered worker (128
-    /// globally). The callback runs synchronously under authority and worker
-    /// state guards: it must not reenter this host/auth or defer delivery.
     pub(crate) fn settings_choices(
         &self,
         plugin_id: &str,
@@ -553,6 +550,11 @@ impl PluginHost {
         Ok(snapshot)
     }
 
+    /// Deliver at most sixteen queued notifications per registered worker (128
+    /// globally), yielding to pending media before every submission. The callback
+    /// runs synchronously under authority and worker state guards: it must not
+    /// reenter this host/auth or defer delivery. An OS submission already entered
+    /// keeps its existing authorization and cannot be preempted here.
     pub(crate) fn dispatch_notifications(
         &self,
         mut deliver: impl FnMut(&DesktopNotification),
@@ -571,6 +573,11 @@ impl PluginHost {
                 // Release authority between submissions so a slow native
                 // notification service does not turn a batch into one lock hold.
                 let authority = self.0.authority.lock().unwrap_or_else(|e| e.into_inner());
+                // Check before taking an entry snapshot: media inspection takes
+                // the entries lock, which precedes snapshots in host lock order.
+                if self.has_pending_http_videos() {
+                    return delivered;
+                }
                 let snapshot = entry.snapshot.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(queued) = entry
                     .notifications
@@ -1760,6 +1767,32 @@ fn handle_frame(
                     body: "Motion started".into(),
                     live_view: None,
                 });
+            }
+        }
+        WorkerMessage::LiveView {
+            id,
+            title,
+            live_view_id,
+        } => {
+            let mapping = spec
+                .live_view
+                .as_ref()
+                .ok_or(Outcome::Failed("worker_live_view_unauthorized"))?;
+            let preview = mapping
+                .preview(&live_view_id)
+                .map_err(|_| Outcome::Failed("worker_live_view_preview_unauthorized"))?;
+            if let Some((url, grant)) = preview {
+                notify = entry.queue_http_video(
+                    &grant,
+                    id,
+                    url.into(),
+                    title,
+                    MediaAdmission {
+                        kind: HttpMediaKind::Video,
+                        cooldown_id: Some(live_view_id),
+                        live_preview: true,
+                    },
+                );
             }
         }
         WorkerMessage::Notification {

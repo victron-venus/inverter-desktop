@@ -169,8 +169,11 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let mut broker = Broker::new(&root).await;
-    let (service, host, epoch) = installed(&root, "kerberos", None).await;
-    let live = "https://camera.invalid/live?token=private-fixture#view";
+    let (media, mut events) = MediaService::new();
+    let (service, host, epoch) = installed(&root, "kerberos", Some(media.clone())).await;
+    // No HTTP endpoint exists here: an automatic page preview must reach Ready
+    // without downloading its private configured destination in the host.
+    let live = "http://127.0.0.1:1/live?token=private-fixture#view";
     configure(
         &service,
         KERBEROS,
@@ -190,20 +193,36 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     connection(&host, KERBEROS, "Connected").await;
     let mut notices = Vec::new();
     quiet(&host, KERBEROS, &mut notices, 0).await;
+    assert!(host.take_http_video_requests().is_empty());
     broker
         .publish_bytes("kerberos/agent/front_camera", b"", true)
         .await;
     broker
         .publish_bytes("kerberos/agent/front_camera", b"motion", false)
         .await;
+    let request = media_request(&host).await;
     count(&host, KERBEROS, &mut notices, 1).await;
-    let original = notices[0]
-        .live
-        .clone()
-        .expect("configured camera receives host-owned click grant");
-    assert_eq!(original.id, "front_camera");
-    assert_eq!(original.url.as_str(), live);
-    assert!(original.lease.is_active());
+    assert!(
+        notices[0].live.is_none(),
+        "automatic previews never depend on a notification click"
+    );
+    assert!(request.live_preview);
+    assert_eq!(request.id, notices[0].id);
+    assert_eq!(request.url, live);
+    assert_eq!(
+        request.grant.preview_duration(),
+        Some(Duration::from_secs(15))
+    );
+    let original = request.lease.clone();
+    assert!(original.is_active());
+    media.try_submit(request).unwrap();
+    let first = ready(&media, &mut events).await;
+    assert_eq!(first.live_url.as_ref().unwrap().as_str(), live);
+    assert!(first.window_label.starts_with("plugin-preview-"));
+    assert!(media
+        .read_range(&first.media_id, &first.window_label, None, false)
+        .await
+        .is_err());
     let utc = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -214,6 +233,10 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
         .await;
     count(&host, KERBEROS, &mut notices, 2).await;
     quiet(&host, KERBEROS, &mut notices, 2).await;
+    assert!(
+        host.take_http_video_requests().is_empty(),
+        "same episode and unmapped cameras cannot open extra previews"
+    );
     assert!(notices[1].live.is_none());
     assert_ne!(notices[0].id, notices[1].id);
     assert!(!serde_json::to_string(&host.snapshots())
@@ -232,8 +255,10 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
         .publish_bytes("kerberos/agent/front_camera", b"motion", false)
         .await;
     quiet(&host, KERBEROS, &mut notices, 2).await;
+    assert!(host.take_http_video_requests().is_empty());
     service.set_enabled(KERBEROS, false, epoch).await.unwrap();
-    assert!(!original.lease.is_active());
+    assert!(!original.is_active());
+    closed(&media, &mut events, &first).await;
     broker
         .publish_bytes("kerberos/agent/disabled", b"motion", false)
         .await;
@@ -243,9 +268,13 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     broker
         .publish_bytes("kerberos/agent/front_camera", b"motion", false)
         .await;
+    let request = media_request(&host).await;
     count(&host, KERBEROS, &mut notices, 3).await;
-    let resumed = notices[2].live.clone().unwrap();
-    assert_ne!(resumed.lease.instance_id(), original.lease.instance_id());
+    assert!(notices[2].live.is_none());
+    let resumed = request.lease.clone();
+    assert_ne!(resumed.instance_id(), original.instance_id());
+    media.try_submit(request).unwrap();
+    let second = ready(&media, &mut events).await;
     broker
         .publish_bytes("kerberos/agent/logout", b"motion", false)
         .await;
@@ -257,19 +286,30 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     .await
     .unwrap();
     assert!(service.session_changed(false).is_none());
-    assert!(!resumed.lease.is_active());
+    assert!(!resumed.is_active());
+    closed(&media, &mut events, &second).await;
     quiet(&host, KERBEROS, &mut notices, 3).await;
     let epoch = service.session_changed(true).unwrap();
     service.restore(epoch).await.unwrap();
     connection(&host, KERBEROS, "Connected").await;
+    broker
+        .publish_bytes("kerberos/agent/front_camera", b"motion", false)
+        .await;
+    let request = media_request(&host).await;
+    count(&host, KERBEROS, &mut notices, 4).await;
+    let restored = request.lease.clone();
+    media.try_submit(request).unwrap();
+    let third = ready(&media, &mut events).await;
     service
         .uninstall_with_settings(KERBEROS, true, epoch)
         .await
         .unwrap();
+    assert!(!restored.is_active());
+    closed(&media, &mut events, &third).await;
     broker
         .publish_bytes("kerberos/agent/uninstalled", b"motion", false)
         .await;
-    quiet(&host, KERBEROS, &mut notices, 3).await;
+    quiet(&host, KERBEROS, &mut notices, 4).await;
     assert!(host.snapshots().is_empty());
     assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
     service.close().await.unwrap();
@@ -287,7 +327,7 @@ async fn media_request(host: &PluginHost) -> QueuedHttpVideo {
         }
     })
     .await
-    .expect("installed Ring worker must request a snapshot")
+    .expect("installed camera worker must request owned media")
 }
 
 async fn ready(
@@ -295,7 +335,7 @@ async fn ready(
     events: &mut tokio::sync::mpsc::Receiver<MediaEvent>,
 ) -> ReadyMedia {
     let MediaEvent::Ready(item) = timeout(WAIT, events.recv()).await.unwrap().unwrap() else {
-        panic!("expected owned image window");
+        panic!("expected owned media window");
     };
     assert!(item.error.is_none());
     assert!(media.window_ready(&item.media_id, &item.window_label));
@@ -310,7 +350,7 @@ async fn closed(
     assert!(!media.is_window_active(&item.media_id, &item.window_label));
     let MediaEvent::Close { window_label } = timeout(WAIT, events.recv()).await.unwrap().unwrap()
     else {
-        panic!("expected revoked image window");
+        panic!("expected revoked media window");
     };
     assert_eq!(window_label, item.window_label);
     media.window_destroyed(&window_label);
@@ -387,8 +427,8 @@ async fn signed_ring_package_real_mqtt_snapshot_lifecycle() {
     service.set_enabled(RING, true, epoch).await.unwrap();
     connection(&host, RING, "Connected").await;
     let mut notices = Vec::new();
-    count(&host, RING, &mut notices, 1).await;
     let first = media_request(&host).await;
+    count(&host, RING, &mut notices, 1).await;
     assert_eq!(first.media_kind, HttpMediaKind::Png);
     assert_eq!(first.grant.cooldown(), Duration::from_secs(20));
     assert_eq!(first.grant.bearer_token(), Some(bearer.as_str()));
@@ -429,8 +469,8 @@ async fn signed_ring_package_real_mqtt_snapshot_lifecycle() {
     broker
         .publish_bytes("ring/home/camera/front/ding/state", b"ON", false)
         .await;
-    count(&host, RING, &mut notices, 2).await;
     let ding = media_request(&host).await;
+    count(&host, RING, &mut notices, 2).await;
     media.try_submit(ding).unwrap();
     assert_eq!(
         timeout(WAIT, requests.recv()).await.unwrap().unwrap(),
@@ -450,8 +490,8 @@ async fn signed_ring_package_real_mqtt_snapshot_lifecycle() {
     broker
         .publish_bytes("ring/home/camera/back/ding/state", b"1", false)
         .await;
-    count(&host, RING, &mut notices, 3).await;
     let second = media_request(&host).await;
+    count(&host, RING, &mut notices, 3).await;
     let final_lease = second.lease.clone();
     assert_ne!(lease.instance_id(), final_lease.instance_id());
     media.try_submit(second).unwrap();

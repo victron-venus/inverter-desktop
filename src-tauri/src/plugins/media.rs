@@ -66,7 +66,7 @@ impl std::fmt::Display for MediaError {
     }
 }
 
-/// Native adapter input only. Preview URLs never enter snapshots or frontend IPC.
+/// Native adapter input. Preview URLs are disclosed only to their owning local viewer.
 pub(crate) struct ReadyMedia {
     pub live_url: Option<reqwest::Url>,
     pub media_id: String,
@@ -105,6 +105,7 @@ struct Item {
     media_kind: HttpMediaKind,
     bytes: u64,
     file: Option<Arc<MediaFile>>,
+    live_url: Option<reqwest::Url>,
     retired: watch::Sender<bool>,
     cleanup_failed: bool,
 }
@@ -248,6 +249,7 @@ impl MediaService {
                         media_kind: request.media_kind,
                         bytes: 0,
                         file: None,
+                        live_url: request.live_preview.then(|| url.clone()),
                         retired,
                         cleanup_failed: false,
                     },
@@ -291,6 +293,22 @@ impl MediaService {
     pub(crate) fn is_window_active(&self, id: &str, label: &str) -> bool {
         self.window_lease(id, label)
             .is_some_and(|lease| lease.is_active())
+    }
+
+    /// The exact active viewer can bootstrap its image without publishing the
+    /// private source in routes, plugin snapshots, or caller-selected arguments.
+    pub(crate) fn live_preview_url(&self, id: &str, label: &str) -> Option<reqwest::Url> {
+        let lease = self.window_lease(id, label)?;
+        lease
+            .commit_if_active(|| {
+                let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+                let item = state.items.get(id)?;
+                (item.label == label && item.phase == Phase::Ready && !*item.retired.borrow())
+                    .then(|| item.live_url.clone())
+                    .flatten()
+            })
+            .ok()
+            .flatten()
     }
 
     /// Call again after hidden construction, immediately before native display.

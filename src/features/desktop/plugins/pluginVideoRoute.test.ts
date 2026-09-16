@@ -44,4 +44,23 @@ describe('owned plugin video route', () => {
       expect(pluginVideoRoute(`?pluginMedia=${id}&pluginMediaKind=${kind}`, label)).toBeNull()
     }
   })
+
+  it('requires an explicit live kind and exact preview owner without accepting a route URL', () => {
+    const live = `plugin-preview-${id}`
+    expect(
+      pluginVideoRoute(`?pluginMedia=${id}&pluginMediaKind=live&url=https://ignored.invalid`, live)
+    ).toEqual({ id, mediaKind: 'live', name: 'Camera', failed: false })
+    for (const kind of ['video', 'image', '']) {
+      expect(pluginVideoRoute(`?pluginMedia=${id}&pluginMediaKind=${kind}`, live)).toBeNull()
+    }
+    for (const owner of [
+      label,
+      'main',
+      `plugin-live-${id}`,
+      `plugin-preview-${id.toUpperCase()}`,
+    ]) {
+      expect(pluginVideoRoute(`?pluginMedia=${id}&pluginMediaKind=live`, owner)).toBeNull()
+    }
+    expect(pluginVideoRoute(`?pluginMedia=${id}&live=1`, live)).toBeNull()
+  })
 })

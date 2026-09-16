@@ -92,6 +92,12 @@ pub enum WorkerMessage {
         url: String,
         title: String,
     },
+    /// Automatic preview of an exact, privately configured destination.
+    LiveView {
+        id: String,
+        title: String,
+        live_view_id: String,
+    },
     Notification {
         id: String,
         title: String,
@@ -343,6 +349,8 @@ pub struct LivePreviewDeclaration {
 #[serde(deny_unknown_fields)]
 pub struct LiveViewDeclaration {
     pub urls_setting: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_duration_seconds: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -360,6 +368,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Clone, Default)]
 pub struct LiveViewGrant {
     urls: BTreeMap<String, reqwest::Url>,
+    preview_duration_seconds: Option<u16>,
 }
 
 impl std::fmt::Debug for LiveViewGrant {
@@ -386,6 +395,7 @@ impl LiveViewGrant {
         manifest: &PluginManifest,
         configuration: Option<&WorkerConfiguration>,
     ) -> Result<Option<Self>, String> {
+        manifest.validate_http_video()?;
         let Some(declaration) = &manifest.live_view else {
             return Ok(None);
         };
@@ -395,7 +405,10 @@ impl LiveViewGrant {
             .get(&declaration.urls_setting)
             .filter(|value| !value.trim().is_empty())
         else {
-            return Ok(Some(Self::default()));
+            return Ok(Some(Self {
+                preview_duration_seconds: declaration.preview_duration_seconds,
+                ..Self::default()
+            }));
         };
         if value.len() > 16 * 1024 {
             return Err("Live view configuration exceeds byte limit".into());
@@ -432,11 +445,34 @@ impl LiveViewGrant {
             }
             urls.insert(id, url);
         }
-        Ok(Some(Self { urls }))
+        Ok(Some(Self {
+            urls,
+            preview_duration_seconds: declaration.preview_duration_seconds,
+        }))
     }
 
     pub(crate) fn resolve(&self, id: &str) -> Option<reqwest::Url> {
         self.urls.get(id).cloned()
+    }
+
+    pub(crate) fn preview(
+        &self,
+        id: &str,
+    ) -> Result<Option<(reqwest::Url, HttpVideoGrant)>, String> {
+        let duration = self
+            .preview_duration_seconds
+            .ok_or("Automatic live view is not authorized")?;
+        Ok(self.resolve(id).map(|url| {
+            let grant = HttpVideoGrant {
+                base: url.clone(),
+                live_preview: None,
+                exact_preview: Some((url.clone(), duration)),
+                bearer_token: None,
+                cooldown_seconds: 15,
+                allow_query: false,
+            };
+            (url, grant)
+        }))
     }
 }
 
@@ -445,6 +481,8 @@ impl LiveViewGrant {
 pub struct HttpVideoGrant {
     base: reqwest::Url,
     live_preview: Option<LivePreviewDeclaration>,
+    /// Derived only from the private native map; never grants downloads or a prefix.
+    exact_preview: Option<(reqwest::Url, u16)>,
     bearer_token: Option<String>,
     cooldown_seconds: u16,
     allow_query: bool,
@@ -563,6 +601,7 @@ impl HttpVideoGrant {
         Ok(Some(Self {
             base: validated_video_url(base)?,
             live_preview: declaration.live_preview.clone(),
+            exact_preview: None,
             bearer_token,
             cooldown_seconds: declaration.cooldown_seconds.unwrap_or(45),
             allow_query: declaration.allow_query,
@@ -570,6 +609,9 @@ impl HttpVideoGrant {
     }
 
     pub fn validate_url(&self, value: &str) -> Result<reqwest::Url, String> {
+        if self.exact_preview.is_some() {
+            return Err("Mapped live view does not authorize downloads".into());
+        }
         let url = validated_media_url(value, self.allow_query)?;
         let prefix = self.base.path().trim_end_matches('/');
         if url.origin() != self.base.origin() || !url.path().starts_with(&format!("{prefix}/")) {
@@ -579,12 +621,22 @@ impl HttpVideoGrant {
     }
 
     pub(crate) fn preview_duration(&self) -> Option<std::time::Duration> {
+        if let Some((_, seconds)) = &self.exact_preview {
+            return Some(std::time::Duration::from_secs((*seconds).into()));
+        }
         self.live_preview
             .as_ref()
             .map(|policy| std::time::Duration::from_secs(policy.max_duration_seconds.into()))
     }
 
     pub(crate) fn validate_preview_url(&self, value: &str) -> Result<reqwest::Url, String> {
+        if let Some((url, _)) = &self.exact_preview {
+            return if value == url.as_str() {
+                Ok(url.clone())
+            } else {
+                Err("Live preview URL is outside its configured scope".into())
+            };
+        }
         let policy = self
             .live_preview
             .as_ref()
@@ -984,6 +1036,15 @@ pub fn validate_worker_message(message: &WorkerMessage) -> Result<(), String> {
             label(title, "live preview title", 128)?;
             validated_media_url(url, true)?;
         }
+        WorkerMessage::LiveView {
+            id,
+            title,
+            live_view_id,
+        } => {
+            token(id, "live preview id")?;
+            label(title, "live preview title", 128)?;
+            validate_live_id(live_view_id)?;
+        }
         WorkerMessage::Notification {
             id,
             title,
@@ -1182,6 +1243,12 @@ impl PluginManifest {
         }
         if let Some(declaration) = &self.live_view {
             self.validate_secret_setting(&declaration.urls_setting)?;
+            if declaration
+                .preview_duration_seconds
+                .is_some_and(|seconds| !(1..=30).contains(&seconds))
+            {
+                return Err("Invalid mapped live preview duration".into());
+            }
         }
         if let Some(group) = &self.group {
             token(&group.id, "plugin group")?;

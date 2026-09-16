@@ -5,9 +5,9 @@ export function pluginVideoRoute(search: string, windowLabel: string) {
   const mediaKind = params.get('pluginMediaKind') ?? 'video'
   if (
     !id ||
-    (mediaKind !== 'video' && mediaKind !== 'image') ||
+    (mediaKind !== 'video' && mediaKind !== 'image' && mediaKind !== 'live') ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) ||
-    windowLabel !== `plugin-video-${id}`
+    windowLabel !== `plugin-${mediaKind === 'live' ? 'preview' : 'video'}-${id}`
   ) {
     return null
   }

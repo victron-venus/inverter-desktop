@@ -633,6 +633,9 @@ fn forward_changes(app: tauri::AppHandle, changes: Arc<tokio::sync::Notify>) {
             {
                 break;
             }
+            // Admit automatic previews before waking the OS notification
+            // dispatcher. It also yields between submissions to later media.
+            forward_http_videos(&app);
             if app
                 .state::<DesktopPlugins>()
                 .host
@@ -642,7 +645,6 @@ fn forward_changes(app: tauri::AppHandle, changes: Arc<tokio::sync::Notify>) {
                 // dispatcher waits for the OS; UI refreshes never await it.
                 let _ = notifications.try_send(());
             }
-            forward_http_videos(&app);
             // The fixed event carries no worker data; each window rechecks its session.
             let _ = app.emit("plugin-host-update", ());
         }
@@ -679,6 +681,20 @@ fn forward_http_videos(app: &tauri::AppHandle) {
         // Admission is bounded and never waits for HTTP, disk, or native windows.
         let _ = media.try_submit(request);
     }
+}
+
+#[tauri::command]
+pub(crate) fn get_live_preview_url(window: tauri::WebviewWindow) -> Result<String, String> {
+    let label = window.label();
+    if !super::media_windows::is_plugin_preview_label(label) {
+        return Err("Only an owned preview can request its stream".into());
+    }
+    let id = super::media_windows::media_id_for_label(label)
+        .ok_or("Only an owned preview can request its stream")?;
+    media_access(window.app_handle())
+        .and_then(|media| media.live_preview_url(&id, label))
+        .map(|url| url.to_string())
+        .ok_or_else(|| "Live preview is no longer active".into())
 }
 
 #[tauri::command]

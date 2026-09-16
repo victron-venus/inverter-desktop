@@ -368,6 +368,7 @@ class MobilePluginBoundaryTests(unittest.TestCase):
     def test_plugin_media_markers_are_rejected_in_every_mobile_package_format(self):
         """Explicit media expectations catch an accidentally omitted guard marker."""
         self.assert_packaged_markers_rejected((
+            "get_live_preview_url",
             "close_plugin_video_window",
             "drag_plugin_video_window",
             "plugin-media",

@@ -910,6 +910,7 @@ async fn full_storage_keeps_eight_requests_queued_without_network_or_disk_work()
                     media_kind: HttpMediaKind::Video,
                     bytes: MAX_CLIP_BYTES,
                     file: None,
+                    live_url: None,
                     retired: watch::channel(false).0,
                     cleanup_failed: false,
                 },
@@ -1218,6 +1219,7 @@ async fn preview_needs_only_window_capacity_while_clip_transfers_and_bytes_are_f
                     media_kind: HttpMediaKind::Video,
                     bytes: MAX_CLIP_BYTES,
                     file: None,
+                    live_url: None,
                     retired: watch::channel(false).0,
                     cleanup_failed: false,
                 },
@@ -1248,6 +1250,46 @@ fn live_request(base: &str, lease: GenerationLease) -> QueuedHttpVideo {
     request.live_preview = true;
     request.url = format!("{base}/api/front?fps=2&height=360");
     request
+}
+
+#[tokio::test]
+async fn live_url_read_requires_the_exact_active_owner_and_revokes_before_native_close() {
+    let (_directory, service, mut events) = service(policy()).await;
+    let owner = lease();
+    service
+        .try_submit(live_request("http://127.0.0.1:1", owner.clone()))
+        .unwrap();
+    let first = ready(&mut events).await;
+    service
+        .try_submit(live_request("http://127.0.0.1:1", owner.clone()))
+        .unwrap();
+    let second = ready(&mut events).await;
+    assert_eq!(
+        service
+            .live_preview_url(&first.media_id, &first.window_label)
+            .unwrap()
+            .as_str(),
+        "http://127.0.0.1:1/api/front?fps=2&height=360"
+    );
+    for wrong in ["main", "config", second.window_label.as_str()] {
+        assert!(service.live_preview_url(&first.media_id, wrong).is_none());
+    }
+    service.window_destroyed(&first.window_label);
+    assert!(service
+        .live_preview_url(&first.media_id, &first.window_label)
+        .is_none());
+    owner.revoke();
+    assert!(service
+        .live_preview_url(&second.media_id, &second.window_label)
+        .is_none());
+    let MediaEvent::Close { window_label } = events.recv().await.unwrap() else {
+        panic!("expected revoked preview close")
+    };
+    assert_eq!(window_label, second.window_label);
+    assert!(service.has_owned_work());
+    service.window_destroyed(&window_label);
+    idle(&service).await;
+    service.shutdown().await.unwrap();
 }
 
 #[tokio::test]

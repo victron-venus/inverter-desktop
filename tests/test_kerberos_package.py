@@ -16,7 +16,9 @@ class KerberosPackageTests(unittest.TestCase):
             "desktop_notifications", "live_view",
         })
         self.assertNotIn("http_video", manifest)
-        self.assertEqual(manifest["live_view"], {"urls_setting": "camera_live_urls"})
+        self.assertEqual(manifest["live_view"], {
+            "urls_setting": "camera_live_urls", "preview_duration_seconds": 15,
+        })
         schema = manifest["config_schema"]
         self.assertEqual(schema["required"], ["mqtt_host"])
         fields = schema["properties"]

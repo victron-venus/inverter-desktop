@@ -87,17 +87,52 @@ The same isolated harness supports the optional automatic preview path:
 plugin-media-smoke --live-fixture-url 'http://127.0.0.1:PORT/prefix/api/front?fps=2&height=360' --evidence /absolute/new-live-evidence.json
 ```
 
-Serve a loopback MJPEG response with alternating visibly different frames. The
+Serve a loopback MJPEG response with alternating visibly different frames and
+`Access-Control-Allow-Origin: *` for the harness-only pixel probe. Ordinary camera
+viewing does not require this CORS response header. The
 harness derives an explicit preview grant with a fifteen-second lifetime and no
 bearer credential. It inspects decoded image dimensions and changing pixels by
 native evaluation, checks window placement/focus, then verifies both timed expiry
-and generation revocation. The external preview receives no IPC or frontend
-observer script. Its URL must stay exact; redirects and new windows are denied.
+and generation revocation. The local compact viewer receives only its owned source-read, close and drag IPC
+and session-status bootstrap. Its image CSP permits only the configured origin;
+remote document navigation and new windows are denied. The private URL is absent
+from the route and public snapshots.
 Preview tests are separate from downloaded H.264/image tests and use no media
 cache file. Run this mode explicitly to establish current graphical acceptance;
 merely building it or passing the pure media tests is not playback evidence.
 
 ## Recorded macOS acceptance
+
+### Shared local viewer checkpoint
+
+The shared frameless viewer passed both graphical modes using the same executable
+(SHA-256 `db663cc4c75f4346adae7d91042e6702597fc276f3c8638c5966dddd00ff4657`). Evidence
+files are `inverter-shared-live-preview-zub9nois-retry.json` and
+`inverter-shared-live-h264-zub9nois.json`; both report `passed: true`, native exit
+code 0, no failure and successful private-profile cleanup.
+
+The local live viewer decoded changing 640x360 MJPEG frames and exposed the shared
+toolbar and Close button. Two independent preview leases produced exactly stacked,
+unfocused 660x372 physical-pixel windows within the monitor work area while the
+anchor kept focus. The real Vue Close button destroyed the peer preview. The
+first preview was absent after 16.926 seconds including admission and native
+close processing under its fifteen-second grant; the other scenario closed on
+generation revocation. Pure media-service tests separately verify grant lifetime
+and retain the slot until native close acknowledgment.
+
+The same executable also passed the three-player H.264 scenario with the
+7,459,136-byte, 640x360, sixteen-second fixture: decoding and progress, actual
+`ended`, bounded range and requesting-window ownership, Vue Close, revocation,
+stacking/focus and owned-file cleanup. The disposable loopback server was stopped.
+An initial MJPEG run lost anchor focus while the preview remained unfocused;
+the unchanged binary and criteria passed on retry. That failed evidence remains
+available as `inverter-shared-live-preview-zub9nois.json`.
+
+These isolated macOS results do not establish signed-release installation,
+real household camera or OS notification behavior, or Linux/Windows graphical
+acceptance.
+
+### Initial extraction checkpoint
 
 The extraction checkpoint passed both graphical modes with the same isolated
 executable (SHA-256

@@ -43,10 +43,10 @@
       </video>
 
       <img
-        v-else-if="videoUrl && mediaKind === 'image'"
+        v-else-if="videoUrl && (mediaKind === 'image' || mediaKind === 'live')"
         class="w-full h-full object-contain bg-black"
         :src="videoUrl"
-        alt="Camera snapshot"
+        :alt="mediaKind === 'live' ? 'Live camera' : 'Camera snapshot'"
         @load="onImageLoad"
         @error="onMediaError"
       />
@@ -56,7 +56,10 @@
         class="flex-1 min-h-0 flex flex-col overflow-y-auto text-white/70 text-[13px] mt-12 px-4 pb-4 text-center"
       >
         <p class="my-auto shrink-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {{ errorMessage || 'Waiting for camera clip…' }}
+          {{
+            errorMessage ||
+            (mediaKind === 'live' ? 'Connecting to live camera…' : 'Waiting for camera clip…')
+          }}
         </p>
       </div>
     </div>
@@ -64,10 +67,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
 import { X } from '@lucide/vue'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { onMounted, onUnmounted, ref } from 'vue'
 import ErrorBoundary from '../../../components/ErrorBoundary.vue'
 import { logger } from '../../../logger'
 import { pluginVideoRoute } from './pluginVideoRoute'
@@ -75,7 +78,8 @@ import { pluginVideoRoute } from './pluginVideoRoute'
 const videoUrl = ref('')
 const cameraName = ref('Camera')
 const errorMessage = ref('')
-const mediaKind = ref<'video' | 'image'>('video')
+const mediaKind = ref<'video' | 'image' | 'live'>('video')
+let disposed = false
 let imageCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 function setName(name?: string | null) {
@@ -111,11 +115,17 @@ function showError(message: string, name?: string | null) {
 function onMediaError() {
   clearImageCloseTimer()
   errorMessage.value =
-    mediaKind.value === 'image'
-      ? 'Failed to display camera snapshot. Local file may be missing or unsupported.'
-      : 'Failed to play camera clip. Local file may be missing or unsupported.'
+    mediaKind.value === 'live'
+      ? 'Failed to display live camera preview.'
+      : mediaKind.value === 'image'
+        ? 'Failed to display camera snapshot. Local file may be missing or unsupported.'
+        : 'Failed to play camera clip. Local file may be missing or unsupported.'
   logger.warn(
-    mediaKind.value === 'image' ? 'Plugin image display failed' : 'Plugin video playback failed'
+    mediaKind.value === 'live'
+      ? 'Live camera preview failed'
+      : mediaKind.value === 'image'
+        ? 'Plugin image display failed'
+        : 'Plugin video playback failed'
   )
   videoUrl.value = ''
 }
@@ -140,7 +150,7 @@ async function dragOwnedWindow(event: MouseEvent) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   let label = ''
   try {
     label = getCurrentWindow().label
@@ -151,19 +161,40 @@ onMounted(() => {
   if (!route) showError('This video window is unavailable.')
   else if (route.failed)
     showError(
-      route.mediaKind === 'image'
-        ? 'Failed to download camera snapshot.'
-        : 'Failed to download camera clip.',
+      route.mediaKind === 'live'
+        ? 'Failed to open live camera preview.'
+        : route.mediaKind === 'image'
+          ? 'Failed to download camera snapshot.'
+          : 'Failed to download camera clip.',
       route.name
     )
   else {
     setName(route.name)
     mediaKind.value = route.mediaKind
-    videoUrl.value = convertFileSrc(route.id, 'plugin-media')
+    if (route.mediaKind === 'live') {
+      try {
+        // The host resolves only this window's active, verified grant. Source
+        // URLs never come from route parameters, snapshots, or arbitrary IDs.
+        const url = await invoke<string>('get_live_preview_url')
+        if (disposed) return
+        if (typeof url !== 'string' || !url.trim()) throw new Error('Live preview unavailable')
+        const parsed = new URL(url)
+        if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+          throw new Error('Live preview unavailable')
+        }
+        videoUrl.value = url
+      } catch {
+        if (!disposed) showError('Failed to open live camera preview.', route.name)
+      }
+    } else {
+      videoUrl.value = convertFileSrc(route.id, 'plugin-media')
+    }
   }
 })
 
 onUnmounted(() => {
+  disposed = true
+  videoUrl.value = ''
   clearImageCloseTimer()
 })
 </script>

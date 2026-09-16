@@ -4,7 +4,7 @@ use inverter_camera_common::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     time::{Duration, Instant},
 };
 
@@ -13,7 +13,12 @@ const SILENCE: Duration = Duration::from_secs(15);
 pub struct Events {
     seen: HashMap<String, Instant>,
     labels: BTreeMap<String, String>,
-    live_urls: BTreeMap<String, String>,
+    live_cameras: BTreeSet<String>,
+}
+
+struct Motion {
+    camera: String,
+    notification: Value,
 }
 
 impl Events {
@@ -21,7 +26,7 @@ impl Events {
         Ok(Self {
             seen: HashMap::new(),
             labels: labels(config.values.camera_labels.as_deref(), valid_identity)?,
-            live_urls: config.live_urls()?,
+            live_cameras: config.live_urls()?.into_keys().collect(),
         })
     }
 
@@ -32,7 +37,7 @@ impl Events {
         retained: bool,
         now: Instant,
         utc_now: u64,
-    ) -> Option<Value> {
+    ) -> Option<Motion> {
         if retained || payload.len() > MAX_PAYLOAD_BYTES {
             return None;
         }
@@ -95,12 +100,11 @@ impl Events {
             .get(&camera)
             .cloned()
             .unwrap_or_else(|| friendly_name(&camera));
-        let mut frame = json!({"type":"notification","id":format!("kerberos-{}",uuid::Uuid::new_v4()),"title":title("Kerberos", &name),"body":"Motion started"});
-        if self.live_urls.contains_key(&camera) {
-            frame["live_view_id"] = json!(camera);
-            frame["body"] = json!("Motion started. Click to view the live camera.");
-        }
-        Some(frame)
+        let notification = json!({"type":"notification","id":format!("kerberos-{}",uuid::Uuid::new_v4()),"title":title("Kerberos", &name),"body":"Motion started"});
+        Some(Motion {
+            camera,
+            notification,
+        })
     }
 }
 
@@ -134,9 +138,17 @@ impl Provider for Events {
         now: Instant,
         unix_seconds: u64,
     ) -> Vec<Value> {
-        self.motion(topic, payload, retained, now, unix_seconds)
-            .into_iter()
-            .collect()
+        let Some(motion) = self.motion(topic, payload, retained, now, unix_seconds) else {
+            return Vec::new();
+        };
+        let preview = self.live_cameras.contains(&motion.camera).then(|| {
+            json!({"type":"live_view","id":motion.notification["id"],"title":motion.notification["title"],"live_view_id":motion.camera})
+        });
+        // Admit the preview before ordinary OS notification delivery can wait
+        // for permission. Both outputs share an episode; the host owns the URL.
+        let mut frames: Vec<_> = preview.into_iter().collect();
+        frames.push(motion.notification);
+        frames
     }
 }
 
@@ -162,7 +174,8 @@ mod tests {
         let start = Instant::now();
         let first = events
             .motion("kerberos/agent/front_camera", b"motion", false, start, 1000)
-            .unwrap();
+            .unwrap()
+            .notification;
         assert_eq!(first["title"], "Kerberos Front camera motion detected");
         assert!(first.get("live_view_id").is_none());
         assert!(events
@@ -200,7 +213,8 @@ mod tests {
                 start + Duration::from_secs(57),
                 1000,
             )
-            .unwrap();
+            .unwrap()
+            .notification;
         assert_ne!(
             first["id"], second["id"],
             "host ID cache must not suppress a later episode"
@@ -314,22 +328,69 @@ mod tests {
     }
 
     #[test]
-    fn configured_exact_live_identity_is_emitted_without_private_url() {
+    fn configured_exact_live_identity_opens_automatically_without_private_url() {
         let config: Configuration=serde_json::from_value(json!({"revision":"fixture","values":{"mqtt_host":"localhost","camera_labels":r#"{"front_camera":"Entrance"}"#},"secrets":{"camera_live_urls":r#"{"front_camera":"https://camera.test/live?token=private#view"}"#}})).unwrap();
         config.validate().unwrap();
         let mut events = Events::new(&config).unwrap();
         let now = Instant::now();
-        let frame = events
-            .motion("kerberos/agent/front_camera", b"motion", false, now, 1000)
-            .unwrap();
-        assert_eq!(frame["live_view_id"], "front_camera");
-        assert_eq!(frame["title"], "Kerberos Entrance camera motion detected");
-        assert!(!frame.to_string().contains("private"));
+        let frames = events.frames("kerberos/agent/front_camera", b"motion", false, now, 1000);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[1]["type"], "notification");
+        assert!(frames[1].get("live_view_id").is_none());
+        assert_eq!(frames[1]["body"], "Motion started");
+        assert_eq!(frames[0]["type"], "live_view");
+        assert_eq!(frames[0]["live_view_id"], "front_camera");
+        assert_eq!(
+            frames[0]["title"],
+            "Kerberos Entrance camera motion detected"
+        );
+        assert_eq!(frames[1]["id"], frames[0]["id"]);
+        assert_eq!(frames[1]["title"], frames[0]["title"]);
+        assert!(!serde_json::to_string(&frames).unwrap().contains("private"));
+        let unmapped = events.frames("kerberos/agent/Front_camera", b"motion", false, now, 1000);
+        assert_eq!(unmapped.len(), 1);
+        assert_eq!(unmapped[0]["type"], "notification");
+        assert!(unmapped[0].get("live_view_id").is_none());
         assert!(events
-            .motion("kerberos/agent/Front_camera", b"motion", false, now, 1000)
+            .frames(
+                "kerberos/agent/front_camera",
+                b"motion",
+                true,
+                now + SILENCE,
+                1000
+            )
+            .is_empty());
+        let next = events.frames(
+            "kerberos/agent/front_camera",
+            b"motion",
+            false,
+            now + SILENCE,
+            1000,
+        );
+        assert_eq!(next.len(), 2);
+        assert_ne!(next[0]["id"], frames[0]["id"]);
+    }
+
+    #[test]
+    fn equal_display_labels_keep_distinct_camera_preview_identities() {
+        let config: Configuration = serde_json::from_value(json!({
+            "revision":"fixture",
+            "values":{"mqtt_host":"localhost","camera_labels":r#"{"front":"Entrance","back":"Entrance"}"#},
+            "secrets":{"camera_live_urls":r#"{"front":"https://camera.test/front?private=1","back":"https://camera.test/back?private=2"}"#}
+        })).unwrap();
+        let mut events = Events::new(&config).unwrap();
+        let now = Instant::now();
+        let front = events.frames("kerberos/agent/front", b"motion", false, now, 1000);
+        let back = events.frames("kerberos/agent/back", b"motion", false, now, 1000);
+        assert_eq!(front.len(), 2);
+        assert_eq!(back.len(), 2);
+        assert_eq!(front[0]["title"], back[0]["title"]);
+        assert_eq!(front[0]["live_view_id"], "front");
+        assert_eq!(back[0]["live_view_id"], "back");
+        assert_ne!(front[0]["id"], back[0]["id"]);
+        assert!(!serde_json::to_string(&[front, back])
             .unwrap()
-            .get("live_view_id")
-            .is_none());
+            .contains("private"));
     }
 
     #[test]

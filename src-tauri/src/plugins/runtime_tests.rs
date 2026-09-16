@@ -1833,6 +1833,84 @@ fn video_spec(mode: &str) -> WorkerSpec {
 }
 
 #[tokio::test]
+async fn pending_media_preempts_notification_batches_without_consuming_delivery() {
+    let host = PluginHost::default();
+    let media_worker = video_spec("configuration");
+    let grant = media_worker.http_video.clone().unwrap();
+    host.start(media_worker).await.unwrap();
+    ready(&host).await;
+    let media_entry = host.entry(TEST_PLUGIN).unwrap();
+
+    let mut notifier = notification_spec("notifications");
+    notifier.plugin_id = "test.notifier".into();
+    host.start(notifier).await.unwrap();
+    time::timeout(Duration::from_secs(5), async {
+        while !host.snapshots().iter().any(|snapshot| {
+            snapshot.plugin_id == "test.notifier"
+                && snapshot.state == WorkerState::Running
+                && !snapshot.contributions.is_empty()
+        }) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    host.action("test.notifier", "echo", json!({}), Duration::from_secs(2))
+        .await
+        .unwrap();
+
+    let enqueue = |id: &str| {
+        media_entry.queue_http_video(
+            &grant,
+            id.into(),
+            "https://video.test/base/fixture.mp4".into(),
+            "Camera".into(),
+            MediaAdmission {
+                kind: HttpMediaKind::Video,
+                cooldown_id: Some(id.into()),
+                live_preview: false,
+            },
+        )
+    };
+    {
+        let _authority = host.0.authority.lock().unwrap();
+        assert!(enqueue("before-delivery"));
+    }
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("media must be admitted first")),
+        0
+    );
+    assert!(host.has_pending_notifications());
+    assert_eq!(host.take_http_video_requests().len(), 1);
+
+    let mut delivered = Vec::new();
+    assert_eq!(
+        host.dispatch_notifications(|message| {
+            delivered.push(message.id.clone());
+            // Deterministically put media from the other running worker at the
+            // submission boundary, under the callback's existing authority guard.
+            assert!(enqueue("between-deliveries"));
+        }),
+        1
+    );
+    assert!(
+        host.has_pending_notifications(),
+        "yielding must retain the next notification"
+    );
+    let requests = host.take_http_video_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].id, "between-deliveries");
+    assert_eq!(
+        host.dispatch_notifications(|message| delivered.push(message.id.clone())),
+        1
+    );
+    assert_eq!(delivered, ["motion-1", "motion-2"]);
+    assert!(!host.has_pending_notifications());
+    host.shutdown().await;
+    assert!(!requests[0].lease.is_active());
+}
+
+#[tokio::test]
 async fn http_video_admission_is_private_deduplicated_and_notification_permission_scoped() {
     let host = PluginHost::default();
     let mut worker = video_spec("configuration_video");
@@ -2071,6 +2149,114 @@ async fn http_live_requires_explicit_preview_policy_and_configured_origin() {
         configured_spec("configuration_live"),
         video_spec("configuration_live"),
         live_spec("configuration_live_bad_url"),
+    ] {
+        let host = PluginHost::default();
+        host.start(worker).await.unwrap();
+        wait_for(&host, |snapshot| snapshot.state == WorkerState::Failed).await;
+        assert!(host.take_http_video_requests().is_empty());
+        assert!(!host.has_pending_notifications());
+        host.shutdown().await;
+    }
+}
+
+fn mapped_live_spec(preview: bool) -> WorkerSpec {
+    let mut worker = configured_spec("configuration_mapped_live");
+    let configuration = worker.configuration.as_mut().unwrap();
+    configuration.secrets.insert(
+        "destinations".into(),
+        json!({
+            "front":"https://private-camera.test/front?token=fixture#live",
+            "rear":"https://private-camera.test/rear?token=fixture"
+        })
+        .to_string(),
+    );
+    let mut manifest: super::super::protocol::PluginManifest = serde_json::from_value(json!({
+        "schema_version":1,"plugin_id":TEST_PLUGIN,"version":"1.0.0","host_api":"^1.8",
+        "target":"aarch64-apple-darwin","entrypoint":"worker","inventory":[],"signature":null,
+        "config_schema":{"type":"object","properties":{"destinations":{"type":"string","writeOnly":true}}},
+        "permissions":["plugin_configuration","live_view"],
+        "live_view":{"urls_setting":"destinations"}
+    })).unwrap();
+    if preview {
+        manifest
+            .live_view
+            .as_mut()
+            .unwrap()
+            .preview_duration_seconds = Some(15);
+    }
+    worker.live_view = super::super::protocol::LiveViewGrant::from_manifest_configuration(
+        &manifest,
+        worker.configuration.as_ref(),
+    )
+    .unwrap();
+    worker
+}
+
+#[tokio::test]
+async fn mapped_live_preview_is_private_notification_independent_and_camera_scoped() {
+    let host = PluginHost::default();
+    let worker = mapped_live_spec(true);
+    assert!(!worker.desktop_notifications);
+    let mapping = worker.live_view.clone().unwrap();
+    host.start(worker).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let requests = host.take_http_video_requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "equal titles are separate cameras; unknown IDs and repeated camera episodes are omitted"
+    );
+    for (request, id) in requests.iter().zip(["front", "rear"]) {
+        assert!(request.live_preview);
+        assert_eq!(request.url, mapping.resolve(id).unwrap().as_str());
+        assert!(request.grant.validate_preview_url(&request.url).is_ok());
+        assert!(request.grant.validate_url(&request.url).is_err());
+        assert_eq!(request.grant.cooldown(), Duration::from_secs(15));
+    }
+    assert!(!host.has_pending_notifications());
+    let public = serde_json::to_string(&host.snapshots()).unwrap();
+    assert!(!public.contains("private-camera") && !public.contains("fixture#live"));
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    {
+        let _authority = entry.authority.lock().unwrap();
+        for (_, instant) in &mut entry.http_videos.lock().unwrap().titles {
+            *instant -= Duration::from_secs(15);
+        }
+        let (url, grant) = mapping.preview("front").unwrap().unwrap();
+        let enqueue = |id: &str| {
+            entry.queue_http_video(
+                &grant,
+                id.into(),
+                url.to_string(),
+                "Private camera".into(),
+                MediaAdmission {
+                    kind: HttpMediaKind::Video,
+                    cooldown_id: Some("front".into()),
+                    live_preview: true,
+                },
+            )
+        };
+        assert!(
+            !enqueue("mapped-1"),
+            "expired camera cooldown cannot replay an episode ID"
+        );
+        assert!(
+            enqueue("mapped-next"),
+            "a new episode after 15 seconds is admitted"
+        );
+    }
+    host.revoke();
+    assert!(host.take_http_video_requests().is_empty());
+    assert!(requests.iter().all(|request| !request.lease.is_active()));
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn mapped_live_preview_requires_explicit_permission_and_automatic_policy() {
+    for worker in [
+        configured_spec("configuration_mapped_live"),
+        mapped_live_spec(false),
     ] {
         let host = PluginHost::default();
         host.start(worker).await.unwrap();

@@ -3,7 +3,9 @@
 use super::bridge::media_access;
 use super::media::{MediaError, MediaEvent, MediaService, ReadyMedia};
 use super::protocol::HttpMediaKind;
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use tauri::utils::config::{Csp, CspDirectiveSources};
 use tauri::{http, Manager};
 use tokio::sync::{mpsc, Semaphore};
 
@@ -11,7 +13,11 @@ const LABEL_PREFIX: &str = "plugin-video-";
 static RANGE_REQUESTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 pub(crate) fn media_id_for_label(label: &str) -> Option<String> {
-    canonical_media_id(label.strip_prefix(LABEL_PREFIX)?)
+    canonical_media_id(
+        label
+            .strip_prefix(LABEL_PREFIX)
+            .or_else(|| label.strip_prefix("plugin-preview-"))?,
+    )
 }
 
 fn canonical_media_id(value: &str) -> Option<String> {
@@ -27,7 +33,22 @@ pub(crate) fn is_plugin_preview_label(label: &str) -> bool {
 }
 
 pub(crate) fn is_plugin_video_label(label: &str) -> bool {
-    media_id_for_label(label).is_some()
+    label
+        .strip_prefix(LABEL_PREFIX)
+        .and_then(canonical_media_id)
+        .is_some()
+}
+
+/// AuthGate reads session status before mounting the viewer. All other authority
+/// belongs to these exact native-owned controls, never global application IPC.
+pub(crate) fn preview_command_allowed(command: &str) -> bool {
+    matches!(
+        command,
+        "auth_status"
+            | "get_live_preview_url"
+            | "close_plugin_video_window"
+            | "drag_plugin_video_window"
+    )
 }
 
 pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
@@ -113,7 +134,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
 }
 
 fn request_media_id(label: &str, uri: &http::Uri) -> Option<String> {
-    if uri.query().is_some() {
+    if !is_plugin_video_label(label) || uri.query().is_some() {
         return None;
     }
     let id = canonical_media_id(uri.path().strip_prefix('/')?)?;
@@ -197,13 +218,18 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     {
         return Err(());
     }
-    if let Some(url) = ready.live_url.clone() {
-        return open_preview_window(app, media, ready, url);
+    let live = ready.live_url.is_some();
+    if media_id_for_label(&ready.window_label).as_deref() != Some(ready.media_id.as_str())
+        || live != is_plugin_preview_label(&ready.window_label)
+    {
+        return Err(());
     }
     let route = format!(
         "camera-video?pluginMedia={}&pluginMediaKind={}&name={}&error={}",
         ready.media_id,
-        if ready.media_kind == HttpMediaKind::Video {
+        if live {
+            "live"
+        } else if ready.media_kind == HttpMediaKind::Video {
             "video"
         } else {
             "image"
@@ -224,6 +250,8 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
                 .and_then(|url| url.join("camera-video").ok())
         })
         .flatten();
+    let live_url = ready.live_url.clone();
+    let snapshot = ready.media_kind != HttpMediaKind::Video;
     let builder = tauri::WebviewWindowBuilder::new(
         app,
         &ready.window_label,
@@ -235,15 +263,45 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     .visible(false)
     .decorations(false)
     .focused(false)
-    .on_navigation(move |url| navigation_allowed(url, development_url.as_ref()));
+    .incognito(live)
+    .on_navigation(move |url| navigation_allowed(url, development_url.as_ref()))
+    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+    .on_web_resource_request(move |request, response| {
+        if !reqwest::Url::parse(&request.uri().to_string())
+            .is_ok_and(|url| navigation_allowed(&url, None))
+        {
+            return;
+        }
+        if let Some(csp) = response
+            .headers_mut()
+            .get_mut(http::header::CONTENT_SECURITY_POLICY)
+        {
+            let updated = if let Some(url) = live_url.as_ref() {
+                live_image_csp(csp, url)
+            } else if snapshot {
+                image_sources_csp(
+                    csp,
+                    &[
+                        "plugin-media:",
+                        "http://plugin-media.localhost",
+                        "https://plugin-media.localhost",
+                    ],
+                )
+            } else {
+                None
+            };
+            if let Some(updated) = updated {
+                *csp = updated;
+            }
+        }
+    });
     #[cfg(target_os = "macos")]
     let builder = builder
         .hidden_title(true)
         .title_bar_style(tauri::TitleBarStyle::Transparent);
-    // The explicit harness must not reuse WKWebView's persistent default store.
-    // Production setup leaves this native-only flag false, including feature builds.
+    // Live views and the explicit harness never reuse a persistent browser store.
     #[cfg(feature = "native-media-smoke")]
-    let builder = builder.incognito(super::bridge::native_media_smoke_session(app));
+    let builder = builder.incognito(live || super::bridge::native_media_smoke_session(app));
     let window = builder.build().map_err(|_| ())?;
     let event_app = app.clone();
     window.on_window_event(move |event| {
@@ -261,48 +319,42 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     Ok(())
 }
 
-fn preview_navigation_allowed(candidate: &reqwest::Url, expected: &reqwest::Url) -> bool {
-    candidate == expected
+fn live_image_csp(csp: &http::HeaderValue, url: &reqwest::Url) -> Option<http::HeaderValue> {
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    // Only a parsed origin can become an image source. Private query tokens,
+    // paths and MQTT content cannot become directives or script authority.
+    let origin = url.origin().ascii_serialization();
+    if origin.bytes().any(|byte| {
+        byte.is_ascii_whitespace() || matches!(byte, b';' | b',' | b'\'' | b'"' | b'*' | b'\\')
+    }) {
+        return None;
+    }
+    image_sources_csp(csp, &[&origin])
 }
 
-fn open_preview_window(
-    app: &tauri::AppHandle,
-    media: &MediaService,
-    ready: ReadyMedia,
-    url: reqwest::Url,
-) -> Result<(), ()> {
-    if !is_plugin_preview_label(&ready.window_label) {
-        return Err(());
-    }
-    let expected = url.clone();
-    let window = tauri::WebviewWindowBuilder::new(
-        app,
-        &ready.window_label,
-        tauri::WebviewUrl::External(url),
-    )
-    .title(format!("{} — Live", ready.title))
-    .inner_size(crate::CAMERA_VIDEO_WINDOW_W, crate::CAMERA_VIDEO_WINDOW_H)
-    .resizable(true)
-    .visible(false)
-    .focused(false)
-    .incognito(true)
-    // A remote preview receives no capabilities, new windows, or custom IPC.
-    // Redirects and navigation remain bound to the exact startup-granted URL.
-    .on_navigation(move |candidate| preview_navigation_allowed(candidate, &expected))
-    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-    .build()
-    .map_err(|_| ())?;
-    let event_app = app.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::Destroyed) {
-            crate::reflow_camera_video_windows(&event_app);
+fn image_sources_csp(csp: &http::HeaderValue, sources: &[&str]) -> Option<http::HeaderValue> {
+    let mut policy: HashMap<String, CspDirectiveSources> =
+        Csp::Policy(csp.to_str().ok()?.to_owned()).into();
+    let mut images: Vec<String> = policy
+        .get("img-src")
+        .or_else(|| policy.get("default-src"))
+        .cloned()
+        .unwrap_or_default()
+        .into();
+    images.retain(|source| source != "'none'");
+    for source in sources {
+        if !images.iter().any(|image| image == source) {
+            images.push((*source).to_owned());
         }
-    });
-    crate::apply_camera_video_window_defaults(app, &window);
-    if media_access(app).is_none() || !media.window_ready(&ready.media_id, &ready.window_label) {
-        return Err(());
     }
-    show_without_focus(&window, media, &ready.media_id)
+    policy.insert("img-src".into(), CspDirectiveSources::List(images));
+    http::HeaderValue::from_str(&Csp::from(policy).to_string()).ok()
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -367,6 +419,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn viewer_commands_allow_only_auth_bootstrap_and_owned_controls() {
+        for allowed in [
+            "auth_status",
+            "get_live_preview_url",
+            "close_plugin_video_window",
+            "drag_plugin_video_window",
+        ] {
+            assert!(preview_command_allowed(allowed));
+        }
+        for forbidden in [
+            "get_config",
+            "save_config",
+            "auth_login",
+            "auth_logout",
+            "plugin_action",
+            "get_plugin_snapshot",
+            "observe_native_media_smoke",
+        ] {
+            assert!(!preview_command_allowed(forbidden));
+        }
+    }
+
+    #[test]
+    fn owned_snapshot_sources_do_not_broaden_other_document_authority() {
+        let original = http::HeaderValue::from_static(
+            "default-src 'self'; img-src 'none'; script-src 'self'; frame-src 'none'",
+        );
+        let changed = image_sources_csp(
+            &original,
+            &[
+                "plugin-media:",
+                "http://plugin-media.localhost",
+                "https://plugin-media.localhost",
+            ],
+        )
+        .unwrap();
+        let policy: HashMap<String, CspDirectiveSources> =
+            Csp::Policy(changed.to_str().unwrap().into()).into();
+        assert_eq!(
+            Vec::<String>::from(policy["img-src"].clone()),
+            [
+                "plugin-media:",
+                "http://plugin-media.localhost",
+                "https://plugin-media.localhost"
+            ]
+        );
+        assert_eq!(
+            Vec::<String>::from(policy["script-src"].clone()),
+            ["'self'"]
+        );
+        assert_eq!(Vec::<String>::from(policy["frame-src"].clone()), ["'none'"]);
+    }
+
+    #[test]
     fn media_routes_require_the_exact_owning_window_and_canonical_id() {
         let id = "acdb88b6-453a-4f88-8d52-5b902441fe4c";
         let label = format!("plugin-video-{id}");
@@ -398,7 +504,7 @@ mod tests {
         let label = format!("plugin-preview-{id}");
         assert!(is_plugin_preview_label(&label));
         assert!(!is_plugin_video_label(&label));
-        assert!(media_id_for_label(&label).is_none());
+        assert_eq!(media_id_for_label(&label).as_deref(), Some(id));
         assert!(request_media_id(&label, &format!("/{id}").parse().unwrap()).is_none());
         for rejected in [
             format!("plugin-live-{id}"),
@@ -410,23 +516,64 @@ mod tests {
     }
 
     #[test]
-    fn preview_navigation_is_bound_to_the_exact_granted_url() {
-        let expected = "https://camera.invalid/prefix/api/front?fps=2&height=360"
-            .parse()
-            .unwrap();
-        assert!(preview_navigation_allowed(&expected, &expected));
+    fn live_image_csp_adds_only_the_exact_origin_and_preserves_other_directives() {
+        let original = http::HeaderValue::from_static(
+            "default-src 'self'; img-src 'self' data: blob:; script-src 'self' 'nonce-test'; object-src 'none'; connect-src ipc: http://ipc.localhost",
+        );
+        let url = reqwest::Url::parse(
+            "http://camera.local:5005/prefix/api/front?token=private;script-src%20*#fragment",
+        )
+        .unwrap();
+        let changed = live_image_csp(&original, &url).unwrap();
+        let before: HashMap<String, CspDirectiveSources> =
+            Csp::Policy(original.to_str().unwrap().into()).into();
+        let after: HashMap<String, CspDirectiveSources> =
+            Csp::Policy(changed.to_str().unwrap().into()).into();
+        assert_eq!(before.len(), after.len());
+        for (directive, sources) in &before {
+            if directive != "img-src" {
+                assert_eq!(after.get(directive), Some(sources));
+            }
+        }
+        assert_eq!(
+            Vec::<String>::from(after["img-src"].clone()),
+            ["'self'", "data:", "blob:", "http://camera.local:5005"]
+        );
+        assert!(!changed.to_str().unwrap().contains("private"));
+        assert!(!changed.to_str().unwrap().contains("/prefix"));
+        let repeated = live_image_csp(&changed, &url).unwrap();
+        let repeated: HashMap<String, CspDirectiveSources> =
+            Csp::Policy(repeated.to_str().unwrap().into()).into();
+        assert_eq!(repeated, after, "one origin cannot broaden on repeated use");
+    }
+
+    #[test]
+    fn live_image_csp_preserves_inherited_defaults_and_rejects_unsafe_sources() {
+        let original = http::HeaderValue::from_static("default-src 'self'; script-src 'none'");
+        let url = reqwest::Url::parse("http://[::1]:5005/api/front").unwrap();
+        let changed = live_image_csp(&original, &url).unwrap();
+        let policy: HashMap<String, CspDirectiveSources> =
+            Csp::Policy(changed.to_str().unwrap().into()).into();
+        assert_eq!(
+            Vec::<String>::from(policy["img-src"].clone()),
+            ["'self'", "http://[::1]:5005"]
+        );
+        assert_eq!(
+            Vec::<String>::from(policy["default-src"].clone()),
+            ["'self'"]
+        );
+        assert_eq!(
+            Vec::<String>::from(policy["script-src"].clone()),
+            ["'none'"]
+        );
         for value in [
-            "https://camera.invalid/prefix/api/other?fps=2&height=360",
-            "https://camera.invalid/prefix/api/front?fps=30&height=360",
-            "https://camera.invalid/prefix/api/front?fps=2&height=360#other",
-            "https://other.invalid/prefix/api/front?fps=2&height=360",
-            "tauri://localhost/config",
-            "about:blank",
+            "file:///tmp/frame.jpg",
+            "javascript:alert(1)",
+            "https://user:password@camera.local/",
+            "https://*.camera.local/",
+            "https://camera.local;img-src/",
         ] {
-            assert!(!preview_navigation_allowed(
-                &value.parse().unwrap(),
-                &expected
-            ));
+            assert!(live_image_csp(&original, &reqwest::Url::parse(value).unwrap()).is_none());
         }
     }
 
