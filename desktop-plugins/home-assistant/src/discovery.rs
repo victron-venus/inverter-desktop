@@ -337,7 +337,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .len(),
-            512
+            crate::state::MAX_TEXT_BYTES
         );
         assert_eq!(
             buffer["sensor.metric"].as_ref().unwrap()["unit"]

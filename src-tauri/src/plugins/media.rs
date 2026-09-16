@@ -1,11 +1,15 @@
-//! Native ownership of completed plugin video files and their exact windows.
+//! Native ownership of completed plugin media files and their exact windows.
 //!
 //! Initialization and shutdown run while the package-manager lifetime lease is
 //! held. The directory is a private sibling of the package store, never payload
 //! content or an addition to the global asset-protocol scope.
 
 use super::generation::GenerationLease;
-use super::http_video::{TransferPolicy, VideoError, VideoTransfer, MAX_CLIP_BYTES};
+use super::http_video::{
+    media_byte_limit, media_content_type, media_extension, TransferPolicy, VideoError,
+    VideoTransfer, MAX_CLIP_BYTES,
+};
+use super::protocol::HttpMediaKind;
 use super::runtime::QueuedHttpVideo;
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, Metadata, OpenOptions};
@@ -50,6 +54,7 @@ impl MediaError {
             Self::Transfer(VideoError::Http) => "media_http_failed",
             Self::Transfer(VideoError::Empty) => "media_empty",
             Self::Transfer(VideoError::Oversized) => "media_oversized",
+            Self::Transfer(VideoError::InvalidMedia) => "media_invalid_format",
             Self::Transfer(VideoError::Storage) => "media_storage_failed",
         }
     }
@@ -66,6 +71,7 @@ pub(crate) struct ReadyMedia {
     pub media_id: String,
     pub window_label: String,
     pub title: String,
+    pub media_kind: HttpMediaKind,
     pub error: Option<MediaError>,
 }
 
@@ -79,6 +85,7 @@ pub(crate) struct MediaRange {
     pub bytes: Vec<u8>,
     pub content_length: u64,
     pub content_range: Option<String>,
+    pub content_type: &'static str,
     _permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
@@ -93,6 +100,7 @@ struct Item {
     lease: GenerationLease,
     label: String,
     phase: Phase,
+    media_kind: HttpMediaKind,
     bytes: u64,
     file: Option<Arc<MediaFile>>,
     retired: watch::Sender<bool>,
@@ -218,6 +226,7 @@ impl MediaService {
                         lease: request.lease.clone(),
                         label,
                         phase: Phase::Queued,
+                        media_kind: request.media_kind,
                         bytes: 0,
                         file: None,
                         retired,
@@ -231,7 +240,14 @@ impl MediaService {
         let service = self.clone();
         tasks.push(tokio::spawn(async move {
             service
-                .own_item(id, request.lease, request.title, url, receiver)
+                .own_item(
+                    id,
+                    request.lease,
+                    request.title,
+                    request.media_kind,
+                    url,
+                    receiver,
+                )
                 .await;
         }));
         Ok(())
@@ -340,17 +356,18 @@ impl MediaService {
                         .filter(|item| item.phase != Phase::Queued)
                         .count();
                     let bytes: u64 = state.items.values().map(|item| item.bytes).sum();
-                    if transfers >= MAX_TRANSFERS
-                        || windows >= MAX_WINDOWS
-                        || bytes + MAX_CLIP_BYTES > MAX_MEDIA_BYTES
-                    {
-                        return false;
-                    }
                     let Some(item) = state.items.get_mut(id) else {
                         return false;
                     };
+                    let reservation = media_byte_limit(item.media_kind);
+                    if transfers >= MAX_TRANSFERS
+                        || windows >= MAX_WINDOWS
+                        || bytes + reservation > MAX_MEDIA_BYTES
+                    {
+                        return false;
+                    }
                     item.phase = Phase::Downloading;
-                    item.bytes = MAX_CLIP_BYTES;
+                    item.bytes = reservation;
                     true
                 })
                 .unwrap_or(false);
@@ -372,6 +389,7 @@ impl MediaService {
         id: String,
         lease: GenerationLease,
         title: String,
+        media_kind: HttpMediaKind,
         url: reqwest::Url,
         mut retired: watch::Receiver<bool>,
     ) {
@@ -386,7 +404,7 @@ impl MediaService {
                 state.transfer.clone().expect("initialized media client"),
             )
         };
-        let path = root.join(format!("clip-{id}.mp4"));
+        let path = root.join(format!("clip-{id}.{}", media_extension(media_kind)));
         let cleanup_failed = self.0.cleanup_failed.clone();
         let created =
             tokio::task::spawn_blocking(move || MediaFile::create(path, cleanup_failed)).await;
@@ -394,7 +412,13 @@ impl MediaService {
             Ok(Ok(file)) => {
                 let file = Arc::new(file);
                 let result = transfer
-                    .download(url, file.clone(), &lease, self.0.shutdown.subscribe())
+                    .download(
+                        url,
+                        media_kind,
+                        file.clone(),
+                        &lease,
+                        self.0.shutdown.subscribe(),
+                    )
                     .await;
                 (Some(file), result)
             }
@@ -431,6 +455,7 @@ impl MediaService {
             media_id: id.clone(),
             window_label: label.clone(),
             title,
+            media_kind,
             error: result.err().map(MediaError::Transfer),
         });
         let mut shutdown = self.0.shutdown.subscribe();
@@ -502,14 +527,18 @@ impl MediaService {
         head: bool,
     ) -> Result<MediaRange, MediaError> {
         let lease = self.window_lease(id, label).ok_or(MediaError::NotFound)?;
-        let (file, size) = lease
+        let (file, size, kind) = lease
             .commit_if_active(|| {
                 let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
                 let item = state.items.get(id)?;
                 if item.label != label || item.phase != Phase::Ready || *item.retired.borrow() {
                     return None;
                 }
-                Some((ReadOwner::new(item.file.clone()?), item.bytes))
+                Some((
+                    ReadOwner::new(item.file.clone()?),
+                    item.bytes,
+                    item.media_kind,
+                ))
             })
             .ok()
             .flatten()
@@ -520,16 +549,25 @@ impl MediaService {
                 bytes: Vec::new(),
                 content_length: size,
                 content_range: None,
+                content_type: media_content_type(kind),
                 _permit: None,
             });
         }
-        let selected = select_range(range, size)?;
+        // Images need a complete GET for <img>; the byte cap and shared read
+        // semaphore bound these responses without changing video range behavior.
+        let full_limit = if kind == HttpMediaKind::Video {
+            MAX_RANGE_BYTES as u64
+        } else {
+            media_byte_limit(kind)
+        };
+        let selected = select_range(range, size, full_limit)?;
         let Some((start, end, partial)) = selected else {
             return Ok(MediaRange {
                 status: 416,
                 bytes: Vec::new(),
                 content_length: 0,
                 content_range: Some(format!("bytes */{size}")),
+                content_type: media_content_type(kind),
                 _permit: None,
             });
         };
@@ -557,6 +595,7 @@ impl MediaService {
             content_length: bytes.len() as u64,
             bytes,
             content_range: partial.then(|| format!("bytes {start}-{end}/{size}")),
+            content_type: media_content_type(kind),
             _permit: Some(permit),
         })
     }
@@ -637,12 +676,16 @@ impl Drop for TaskDrain {
     }
 }
 
-fn select_range(range: Option<&str>, size: u64) -> Result<Option<(u64, u64, bool)>, MediaError> {
+fn select_range(
+    range: Option<&str>,
+    size: u64,
+    full_limit: u64,
+) -> Result<Option<(u64, u64, bool)>, MediaError> {
     if size == 0 {
         return Ok(None);
     }
     let Some(range) = range else {
-        return if size <= MAX_RANGE_BYTES as u64 {
+        return if size <= full_limit {
             Ok(Some((0, size - 1, false)))
         } else {
             Err(MediaError::RangeRequired)
@@ -949,7 +992,10 @@ fn recover_directory(root: &Path) -> Result<(), MediaError> {
         let name = name.to_str().ok_or(MediaError::Storage)?;
         let id = name
             .strip_prefix("clip-")
-            .and_then(|name| name.strip_suffix(".mp4"))
+            .and_then(|name| {
+                let (id, extension) = name.rsplit_once('.')?;
+                matches!(extension, "mp4" | "jpg" | "png" | "webp").then_some(id)
+            })
             .ok_or(MediaError::Storage)?;
         if Uuid::parse_str(id)
             .ok()

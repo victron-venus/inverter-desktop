@@ -143,7 +143,7 @@ impl Worker {
         assert_eq!(
             self.next(),
             json!({"type":"ready","protocol_version":1,
-            "host_api_version":"1.6.0","plugin_id":"inverter-desktop.home-assistant"})
+            "host_api_version":"1.7.0","plugin_id":"inverter-desktop.home-assistant"})
         );
         self.send(frame);
         assert_eq!(
@@ -246,7 +246,7 @@ fn assert_state_links(frame: &Value) {
 }
 
 fn hello() -> Value {
-    json!({"type":"hello","protocol_version":1,"host_api_version":"1.6.0",
+    json!({"type":"hello","protocol_version":1,"host_api_version":"1.7.0",
         "plugin_id":"inverter-desktop.home-assistant"})
 }
 
@@ -676,7 +676,7 @@ fn invalid_action_configuration_never_connects_or_acknowledges() {
         .map(|index| format!("button.b{index}"))
         .collect::<Vec<_>>()
         .join(",");
-    let watch = (0..32)
+    let watch = (0..64)
         .map(|index| format!("sensor.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -1104,7 +1104,7 @@ fn output_pressure_does_not_block_eof_or_shutdown_with_submitted_services() {
             live(&mut socket, &name, Some(value));
         }
         worker.until(|frame| {
-            item(frame, "entity-30").is_some_and(|item| item["text"] == "x".repeat(512))
+            item(frame, "entity-30").is_some_and(|item| item["text"] == "x".repeat(256))
         });
         worker.action("pressure-pending", "ha-action-0", 30000);
         let _pending = service(&fixture, "button", "button.selected");
@@ -1226,7 +1226,7 @@ fn media_invalid_domains_overlong_lists_and_combined_watch_overflow_never_connec
         .map(|index| format!("media_player.p{index}"))
         .collect::<Vec<_>>()
         .join(",");
-    let watched = (0..31)
+    let watched = (0..63)
         .map(|index| format!("sensor.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -1249,7 +1249,7 @@ fn media_invalid_domains_overlong_lists_and_combined_watch_overflow_never_connec
         assert!(worker.frames.try_iter().next().is_none());
         no_request(&fixture, Duration::ZERO);
     }
-    let watch = (0..16)
+    let watch = (0..48)
         .map(|index| format!("sensor.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -1328,7 +1328,7 @@ fn media_four_unique_players_with_duplicates_fit_maximum_combined_snapshot() {
         live(&mut socket, name, Some(value));
     }
     let bounded = worker.until(|frame| {
-        item(frame, "entity-31").is_some_and(|item| item["title"] == "🌞".repeat(32))
+        item(frame, "entity-31").is_some_and(|item| item["title"] == "🌞".repeat(16))
     });
     assert_eq!(bounded["items"].as_array().unwrap().len(), 61);
     assert!(serde_json::to_vec(&bounded).unwrap().len() + 1 < MAX_FRAME);
@@ -1818,7 +1818,7 @@ fn binary_missing_deleted_unknown_and_malformed_states_withdraw_both_commands() 
 #[test]
 fn binary_invalid_configuration_rejects_domains_counts_union_and_combined_action_budget() {
     let fixture = listener();
-    let nine = (0..9)
+    let nine = (0..17)
         .map(|index| format!("switch.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -1837,7 +1837,7 @@ fn binary_invalid_configuration_rejects_domains_counts_union_and_combined_action
     .into_iter()
     .map(|selected| binary_configuration(&fixture, "", Some(selected)))
     .collect::<Vec<_>>();
-    let watch = (0..32)
+    let watch = (0..64)
         .map(|index| format!("sensor.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -1851,7 +1851,13 @@ fn binary_invalid_configuration_rejects_domains_counts_union_and_combined_action
         .collect::<Vec<_>>()
         .join(",");
     let mut overflow = media_configuration(&fixture, "", Some(&buttons), Some(&media));
-    overflow["configuration"]["values"]["binary_entities"] = json!("switch.one,light.two");
+    overflow["configuration"]["values"]["binary_entities"] = json!((0..16)
+        .map(|i| format!("switch.overflow_{i}"))
+        .collect::<Vec<_>>()
+        .join(","));
+    overflow["configuration"]["values"]["media_player_entities"] =
+        json!("media_player.one,media_player.two,media_player.three,media_player.four");
+    overflow["configuration"]["values"]["cover_entities"] = json!("cover.one,cover.two");
     invalid.push(overflow);
     for frame in invalid {
         let mut worker = Worker::start();
@@ -1862,6 +1868,57 @@ fn binary_invalid_configuration_rejects_domains_counts_union_and_combined_action
         assert!(worker.frames.try_iter().next().is_none());
         no_request(&fixture, Duration::ZERO);
     }
+}
+
+#[test]
+fn sixty_four_reads_and_sixty_three_controls_publish_and_keep_the_last_target_actionable() {
+    let list = |domain: &str, count| {
+        (0..count)
+            .map(|index| format!("{domain}.expanded_{index}"))
+            .collect::<Vec<_>>()
+    };
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut watched = vec!["sensor.barrier".to_owned()];
+    watched.extend(list("sensor", 26));
+    let buttons = list("button", 16);
+    let media = list("media_player", 4);
+    let binary = list("switch", 16);
+    let mut config = media_configuration(
+        &fixture,
+        &watched.join(","),
+        Some(&buttons.join(",")),
+        Some(&media.join(",")),
+    );
+    config["configuration"]["values"]["binary_entities"] = json!(binary.join(","));
+    config["configuration"]["values"]["cover_entities"] = json!("cover.expanded");
+    let mut socket = initialize_configuration(&mut worker, &fixture, config);
+    let initial = connected(&mut worker, 63);
+    assert_eq!(initial["items"].as_array().unwrap().len(), 128);
+    for name in watched.iter().chain(&buttons).chain(&media).chain(&binary) {
+        let state = if binary.contains(name) {
+            "off".to_owned()
+        } else {
+            "\\\"".repeat(256)
+        };
+        let mut value = entity(name, &state);
+        value["attributes"]["friendly_name"] = json!("\\\"".repeat(64));
+        live(&mut socket, name, Some(value));
+    }
+    let frame = numeric_barrier(&mut worker, &mut socket, 2);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 128);
+    assert_eq!(actions(&frame).len(), 63);
+    assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
+    assert_eq!(
+        item(&frame, "ha-binary-15-off").unwrap()["state_id"],
+        "entity-62"
+    );
+    worker.action("last-expanded-target", "ha-binary-15-off", 5000);
+    let mut pending = exact_service(&fixture, "switch", "turn_off", &binary[15]);
+    respond(&mut pending, 200, json!([]));
+    worker.success("last-expanded-target");
+    no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
 }
 
 #[test]
@@ -1921,7 +1978,7 @@ fn binary_eight_unique_targets_and_31_mixed_actions_fit_64_bounded_contributions
         live(&mut socket, name, Some(value));
     }
     let bounded = worker.until(|frame| {
-        item(frame, "entity-31").is_some_and(|item| item["title"] == "\"".repeat(128))
+        item(frame, "entity-31").is_some_and(|item| item["title"] == "\"".repeat(64))
     });
     assert_eq!(bounded["items"].as_array().unwrap().len(), 64);
     assert!(serde_json::to_vec(&bounded).unwrap().len() + 1 < MAX_FRAME);
@@ -2314,7 +2371,7 @@ fn cover_invalid_configuration_rejects_domains_counts_union_and_reserved_action_
         config["configuration"]["values"]["cover_entities"] = selected;
         invalid.push(config);
     }
-    let watch = (0..32)
+    let watch = (0..64)
         .map(|index| format!("sensor.s{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -2329,7 +2386,13 @@ fn cover_invalid_configuration_rejects_domains_counts_union_and_reserved_action_
         Some(&buttons),
         Some("media_player.one,media_player.two"),
     );
-    overflow["configuration"]["values"]["binary_entities"] = json!("switch.one,light.two");
+    overflow["configuration"]["values"]["binary_entities"] = json!((0..16)
+        .map(|i| format!("switch.overflow_{i}"))
+        .collect::<Vec<_>>()
+        .join(","));
+    overflow["configuration"]["values"]["media_player_entities"] =
+        json!("media_player.one,media_player.two,media_player.three,media_player.four");
+    overflow["configuration"]["values"]["cover_entities"] = json!("cover.one,cover.two");
     overflow["configuration"]["values"]["cover_entities"] = json!("cover.one,cover.two");
     // Reserve all three cover commands before observing any supported_features.
     invalid.push(overflow);
@@ -2409,7 +2472,7 @@ fn cover_four_unique_targets_and_all_action_families_fit_64_bounded_contribution
         live(&mut socket, name, Some(value));
     }
     let bounded = worker.until(|frame| {
-        item(frame, "entity-31").is_some_and(|item| item["title"] == "\"".repeat(128))
+        item(frame, "entity-31").is_some_and(|item| item["title"] == "\"".repeat(64))
     });
     assert_eq!(bounded["items"].as_array().unwrap().len(), 64);
     assert!(serde_json::to_vec(&bounded).unwrap().len() + 1 < MAX_FRAME);
@@ -2560,7 +2623,7 @@ fn numeric_service(fixture: &TcpListener, domain: &str, method: &str, body: &str
 }
 
 #[test]
-fn numeric_controls_are_opt_in_and_api_16_is_required() {
+fn numeric_controls_are_opt_in_and_api_17_is_required() {
     for empty in [false, true] {
         let fixture = listener();
         let mut worker = Worker::start();
@@ -3031,9 +3094,10 @@ fn numeric_lists_enforce_domains_shared_reservations_and_watch_limits() {
         let mut frame =
             numeric_configuration(&fixture, Some(&list("number", 4)), Some(&list("cover", 4)));
         if watch_overflow {
-            frame["configuration"]["values"]["watch_entities"] = json!(list("sensor", 25));
+            frame["configuration"]["values"]["watch_entities"] = json!(list("sensor", 57));
         } else {
-            frame["configuration"]["values"]["action_entities"] = json!(list("button", 12));
+            frame["configuration"]["values"]["action_entities"] = json!(list("button", 16));
+            frame["configuration"]["values"]["binary_entities"] = json!(list("switch", 16));
             frame["configuration"]["values"]["media_player_entities"] =
                 json!(list("media_player", 4));
         }
@@ -3405,7 +3469,7 @@ fn discovery_defaults_and_full_explicit_capacity_never_request_the_collection() 
     let fixture = listener();
     let mut worker = Worker::start();
     let mut selected = vec!["sensor.barrier".to_owned()];
-    selected.extend((0..31).map(|i| format!("sensor.manual_{i}")));
+    selected.extend((0..63).map(|i| format!("sensor.manual_{i}")));
     let mut socket = initialize_configuration(
         &mut worker,
         &fixture,
@@ -3417,7 +3481,7 @@ fn discovery_defaults_and_full_explicit_capacity_never_request_the_collection() 
         Some(entity("sensor.unselected", "9")),
     );
     let frame = numeric_barrier(&mut worker, &mut socket, 2);
-    assert_eq!(frame["items"].as_array().unwrap().len(), 33);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 65);
     assert!(discovery_items(&frame).is_empty());
     no_request(&fixture, Duration::from_millis(80));
     worker.stop(false);
@@ -3566,7 +3630,7 @@ fn discovery_capacity_discards_unseen_state_and_free_slots_require_a_new_live_up
     let fixture = listener();
     let mut worker = Worker::start();
     let mut selected = vec!["sensor.barrier".to_owned()];
-    selected.extend((0..29).map(|i| format!("sensor.manual_{i}")));
+    selected.extend((0..61).map(|i| format!("sensor.manual_{i}")));
     let (mut socket, mut snapshot) = start_discovery(
         &mut worker,
         &fixture,
@@ -3601,7 +3665,7 @@ fn discovery_capacity_discards_unseen_state_and_free_slots_require_a_new_live_up
     assert_eq!(discovery_items(&added).len(), 2);
     assert_eq!(discovered(&added, "sensor.z").unwrap()["value"], 32.0);
     assert_eq!(discovered(&added, "sensor.b").unwrap()["id"], b_id);
-    assert_eq!(added["items"].as_array().unwrap().len(), 33);
+    assert_eq!(added["items"].as_array().unwrap().len(), 65);
     no_request(&fixture, Duration::from_millis(80));
     worker.stop(false);
 }
@@ -3925,7 +3989,7 @@ fn discovery_stalled_collection_shutdown_and_eof_do_not_wait_for_the_network_dea
 }
 
 #[test]
-fn discovery_and_maximum_explicit_controls_fit_the_actual_64_contribution_frame() {
+fn discovery_and_maximum_explicit_controls_fit_the_expanded_read_frame() {
     let fixture = listener();
     let mut worker = Worker::start();
     let buttons = (0..16).map(|i| format!("button.e{i}")).collect::<Vec<_>>();
@@ -3943,7 +4007,7 @@ fn discovery_and_maximum_explicit_controls_fit_the_actual_64_contribution_frame(
         value["attributes"]["friendly_name"] = json!("\\\"".repeat(128));
         live(&mut socket, name, Some(value));
     }
-    let mut states = (0..11)
+    let mut states = (0..43)
         .map(|i| {
             entity(
                 &format!("sensor.discovered_{i:02}_do_not_supply_charger"),
@@ -3957,9 +4021,9 @@ fn discovery_and_maximum_explicit_controls_fit_the_actual_64_contribution_frame(
     respond(&mut snapshot, 200, json!(states));
     discovery_status(&mut worker, "Connected; Discovery limit reached");
     let frame = numeric_barrier(&mut worker, &mut socket, 2);
-    assert_eq!(frame["items"].as_array().unwrap().len(), 64);
+    assert_eq!(frame["items"].as_array().unwrap().len(), 96);
     assert_eq!(actions(&frame).len(), 31);
-    assert_eq!(discovery_items(&frame).len(), 10);
+    assert_eq!(discovery_items(&frame).len(), 42);
     assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
     let ids = frame["items"]
         .as_array()
@@ -3967,11 +4031,11 @@ fn discovery_and_maximum_explicit_controls_fit_the_actual_64_contribution_frame(
         .iter()
         .map(|item| item["id"].as_str().unwrap())
         .collect::<HashSet<_>>();
-    assert_eq!(ids.len(), 64);
+    assert_eq!(ids.len(), 96);
     for item in discovery_items(&frame) {
         assert_eq!(item["kind"], "text");
-        assert_eq!(item["title"].as_str().unwrap().len(), 128);
-        assert_eq!(item["text"].as_str().unwrap().len(), 512);
+        assert_eq!(item["title"].as_str().unwrap().len(), 64);
+        assert_eq!(item["text"].as_str().unwrap().len(), 256);
     }
     worker.action(
         "discovery-no-service",
@@ -4382,7 +4446,7 @@ fn weather_legacy_forecasts_validate_dates_and_only_consider_the_first_five_sour
         {"datetime":"2026-09-19", "condition":"sixth-entry-must-not-appear"}
     ]);
     live(&mut socket, "weather.home", Some(value));
-    let frame = weather_text(&mut worker, "entity-1", "Condition: sunny\nForecast: 2028-02-29, Condition: cloudy\nForecast: 2026-09-16T12:00:00Z, High: 23 °C\nForecast: 2026-09-16T12:00:00.123456789+05:30, Low: 14 °C\nForecast: 2026-09-17, Condition: rainy, High: 19 °C, Low: 11 °C\nForecast: 2026-09-18, Condition: windy");
+    let frame = weather_text(&mut worker, "entity-1", "Condition: sunny\nForecast: 2028-02-29, Condition: cloudy\nForecast: 2026-09-16T12:00:00Z, High: 23 °C\nForecast: 2026-09-16T12:00:00.123456789+05:30, Low: 14 °C\nForecast: 2026-09-17, Condition: rainy, High: 19 °C, Low: 11 °C");
     assert_weather_read_only(&frame);
     assert_eq!(
         item(&frame, "entity-1").unwrap()["text"]
@@ -4390,7 +4454,7 @@ fn weather_legacy_forecasts_validate_dates_and_only_consider_the_first_five_sour
             .unwrap()
             .matches("Forecast:")
             .count(),
-        5
+        4
     );
     for (index, date) in [
         "2026-02-29",
@@ -4582,16 +4646,15 @@ fn weather_utf8_projection_fits_the_actual_64_item_frame_with_unchanged_control_
     assert!(serde_json::to_vec(&frame).unwrap().len() < MAX_FRAME);
     for index in 0..11 {
         let projected = item(&frame, &format!("entity-{index}")).unwrap();
-        assert_eq!(projected["title"].as_str().unwrap().len(), 128);
+        assert_eq!(projected["title"].as_str().unwrap().len(), 64);
         let text = projected["text"].as_str().unwrap();
-        assert!(text.len() <= 512);
+        assert!(text.len() <= 256);
         assert!(text.starts_with(&format!(
             "Condition: {condition}; Temperature: 12345678901234567890123456789012 {unit}"
         )));
-        assert!(text.contains("Forecast: 2026-09-16"));
         assert!(
-            text.ends_with(&format!("Low: 14 {unit}")),
-            "bounded projection must retain complete forecast entries"
+            !text.contains("Forecast:"),
+            "oversized forecast segments must be omitted whole"
         );
         assert!(projected.get("state_id").is_none());
     }
@@ -4928,7 +4991,7 @@ fn dishwasher_configuration_rejects_multiple_or_invalid_roles_missing_primary_an
         worker.send(dishwasher_configuration(&fixture, "", running, duration));
         worker.finish(false);
     }
-    let full = (0..32)
+    let full = (0..64)
         .map(|index| format!("sensor.e{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -5120,7 +5183,7 @@ fn dishwasher_profile_uses_existing_state_slots_and_keeps_31_controls_in_a_64_it
             .as_str()
             .unwrap()
             .len(),
-        128
+        64
     );
     assert_eq!(
         item(&frame, "entity-30").unwrap()["text"],
@@ -5386,7 +5449,7 @@ fn laundry_rejects_invalid_single_roles_conflicting_overlays_and_union_overflow(
         oversized["configuration"]["values"][field] = json!(format!("{}sensor.a", " ".repeat(121)));
         configurations.push(oversized);
     }
-    let full = (0..32)
+    let full = (0..64)
         .map(|index| format!("sensor.e{index}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -5677,7 +5740,7 @@ fn laundry_profiles_keep_the_32_state_and_31_control_budget_inside_one_64_item_f
     assert_eq!(actions(&frame).len(), 31);
     for (index, value) in [(30, washer), (31, dryer)] {
         let state = item(&frame, &format!("entity-{index}")).unwrap();
-        assert_eq!(state["title"].as_str().unwrap().len(), 128);
+        assert_eq!(state["title"].as_str().unwrap().len(), 64);
         assert_eq!(state["text"], format!("Remaining time: {value}"));
         assert!(state.get("state_id").is_none());
     }

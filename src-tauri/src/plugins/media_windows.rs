@@ -2,6 +2,7 @@
 
 use super::bridge::media_access;
 use super::media::{MediaError, MediaEvent, MediaService, ReadyMedia};
+use super::protocol::HttpMediaKind;
 use std::sync::{Arc, OnceLock};
 use tauri::{http, Manager};
 use tokio::sync::{mpsc, Semaphore};
@@ -85,7 +86,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
                 }
                 let mut response = http::Response::builder()
                     .status(result.status)
-                    .header(http::header::CONTENT_TYPE, "video/mp4")
+                    .header(http::header::CONTENT_TYPE, result.content_type)
                     .header(http::header::CONTENT_LENGTH, result.content_length)
                     .header(http::header::ACCEPT_RANGES, "bytes")
                     .header(http::header::CACHE_CONTROL, "no-store")
@@ -190,8 +191,13 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
         return Err(());
     }
     let route = format!(
-        "camera-video?pluginMedia={}&name={}&error={}",
+        "camera-video?pluginMedia={}&pluginMediaKind={}&name={}&error={}",
         ready.media_id,
+        if ready.media_kind == HttpMediaKind::Video {
+            "video"
+        } else {
+            "image"
+        },
         crate::percent_encode_query(&ready.title),
         if ready.error.is_some() {
             "download"

@@ -1863,6 +1863,8 @@ async fn http_video_rejects_missing_permission_wrong_origin_and_preconfiguration
         ("configuration_video", false),
         ("configuration_video_bad_url", true),
         ("configuration_early_video", true),
+        ("configuration_video_image", false),
+        ("configuration_video_image_bad_url", true),
     ] {
         let host = PluginHost::default();
         let worker = if permission {
@@ -1876,6 +1878,28 @@ async fn http_video_rejects_missing_permission_wrong_origin_and_preconfiguration
         assert!(!host.has_pending_notifications());
         host.shutdown().await;
     }
+}
+
+#[tokio::test]
+async fn typed_snapshot_keeps_native_scope_privacy_and_generation_revocation() {
+    let host = PluginHost::default();
+    let mut worker = video_spec("configuration_video_image");
+    worker.desktop_notifications = true;
+    host.start(worker).await.unwrap();
+    ready(&host).await;
+    action(&host, "echo").await.unwrap();
+    let requests = host.take_http_video_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].media_kind, HttpMediaKind::Jpeg);
+    assert_eq!(requests[0].lease.plugin_id(), TEST_PLUGIN);
+    assert!(requests[0].lease.is_active());
+    let snapshots = serde_json::to_string(&host.snapshots()).unwrap();
+    assert!(!snapshots.contains("video.test") && !snapshots.contains("Private snapshot"));
+    let mut notifications = Vec::new();
+    host.dispatch_notifications(|item| notifications.push(item.body.clone()));
+    assert_eq!(notifications, ["Camera snapshot available"]);
+    host.shutdown().await;
+    assert!(!requests[0].lease.is_active());
 }
 
 #[tokio::test]

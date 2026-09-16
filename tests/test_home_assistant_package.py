@@ -43,8 +43,8 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 if "windows" in target:
                     binary += ".exe"
                 self.assertEqual(manifest["plugin_id"], "inverter-desktop.home-assistant")
-                self.assertEqual(manifest["version"], "0.11.0")
-                self.assertEqual(manifest["host_api"], "^1.6")
+                self.assertEqual(manifest["version"], "0.12.0")
+                self.assertEqual(manifest["host_api"], "^1.7")
                 self.assertEqual(manifest["target"], target)
                 self.assertEqual(manifest["entrypoint"], f"bin/{binary}")
                 self.assertEqual(set(manifest["permissions"]), {
@@ -76,6 +76,7 @@ class HomeAssistantPackageTests(unittest.TestCase):
         self.assertTrue(all(field["type"] == "string" for field in fields.values()))
         self.assertEqual(fields["ha_base_url"]["maxLength"], 2048)
         self.assertEqual(fields["watch_entities"]["default"], "")
+        self.assertEqual(fields["watch_entities"]["maxLength"], 64 * 129 - 1)
         self.assertEqual(fields["action_entities"]["default"], "")
         self.assertEqual(fields["action_entities"]["maxLength"], 4096)
         self.assertNotIn("action_entities", schema["required"])

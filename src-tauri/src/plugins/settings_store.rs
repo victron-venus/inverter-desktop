@@ -4,7 +4,7 @@
 //! writes before taking the host authority lock; commit only in the original epoch.
 //! Recovery runs once after acquiring that lease, before accepting operations.
 
-use super::package::read_regular_file;
+use super::package::{read_regular_file, sha256_hex};
 use super::protocol::validate_plugin_id;
 use aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
@@ -160,7 +160,7 @@ impl SettingsStore {
         if !file_exists(&path)? {
             return Err(stale.into());
         }
-        let actual = format!("{:x}", Sha256::digest(read_private_file(&path)?));
+        let actual = sha256_hex(&read_private_file(&path)?);
         if actual != revision {
             return Err(stale.into());
         }
@@ -237,7 +237,7 @@ impl SettingsStore {
         validate_plugin_id(plugin_id).map_err(|_| "Invalid plugin settings identity")?;
         // Names such as con.example are valid plugin IDs but reserved filenames
         // on Windows. A fixed lowercase digest is portable on all target systems.
-        Ok(format!("{:x}", Sha256::digest(plugin_id.as_bytes())))
+        Ok(sha256_hex(plugin_id.as_bytes()))
     }
 
     fn record_path(&self, plugin_id: &str) -> Result<PathBuf, String> {
@@ -332,7 +332,7 @@ impl SettingsStore {
             if let Some(record_id) = name.strip_suffix(".enc") {
                 usage.inventory.push(SettingsRecord {
                     record_id: record_id.to_owned(),
-                    revision: format!("{:x}", Sha256::digest(&bytes)),
+                    revision: sha256_hex(&bytes),
                     bytes: bytes.len() as u64,
                 });
             }

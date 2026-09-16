@@ -68,7 +68,7 @@ fn unsigned_archive_removes_signatures_and_requires_an_exact_pin() {
         signature: "0".repeat(128),
     });
     let archive = build_pinned_package(input, &root).unwrap();
-    let digest = format!("{:x}", Sha256::digest(&archive));
+    let digest = sha256_hex(&archive);
     let verified = verify_pinned_archive_bytes(
         archive.clone(),
         "test.publisher.monitor",
@@ -81,7 +81,7 @@ fn unsigned_archive_removes_signatures_and_requires_an_exact_pin() {
     assert_eq!(verified.manifest().inventory.len(), 1);
     assert_eq!(
         verified.manifest().inventory[0].sha256,
-        format!("{:x}", Sha256::digest(b"test worker payload"))
+        "203c43d059c82c23164faaac235186658b156363d93e567199e84286184502c2"
     );
     assert!(verify_archive_bytes(
         archive.clone(),
@@ -151,7 +151,7 @@ fn manifest_is_first_payloads_are_sorted_and_actual_file_hashes_are_signed() {
     assert_eq!(parsed.inventory[0].size, 5);
     assert_eq!(
         parsed.inventory[0].sha256,
-        format!("{:x}", Sha256::digest(b"first"))
+        "a7937b64b8caa58f03721bb6bacf5c78cb235febe0e70b1b84cd99541461a08e"
     );
     assert_eq!(bytes, canonical_manifest_bytes(&parsed).unwrap());
     assert_eq!(parsed.signature.as_ref().unwrap().key_id, "test-key");

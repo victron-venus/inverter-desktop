@@ -3,16 +3,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use url::Url;
 
-pub const MAX_ENTITIES: usize = 32;
+pub const MAX_ENTITIES: usize = 64;
+pub const MAX_ENTITY_LIST_BYTES: usize = MAX_ENTITIES * 129 - 1;
 pub const MAX_ACTION_ENTITIES: usize = 16;
 pub const MAX_MEDIA_PLAYER_ENTITIES: usize = 4;
-pub const MAX_BINARY_ENTITIES: usize = 8;
+pub const MAX_BINARY_ENTITIES: usize = 16;
 pub const MAX_COVER_ENTITIES: usize = 4;
 pub const MAX_NUMBER_ENTITIES: usize = 4;
 pub const MAX_COVER_POSITION_ENTITIES: usize = 4;
 pub const MAX_DISCOVERY_PREFIXES: usize = 8;
 pub const MAX_DISCOVERY_PREFIX_BYTES: usize = 1024;
-pub const MAX_ACTION_BUTTONS: usize = 31;
+pub const MAX_ACTION_BUTTONS: usize = 63;
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
 // Configuration and credentials deliberately have no Debug implementation.
@@ -269,8 +270,8 @@ impl Configuration {
         if token.is_empty() || token.len() > 4096 || !token.bytes().all(|b| b.is_ascii_graphic()) {
             return Err("invalid HA token");
         }
-        let mut entities = entity_list(&self.values.watch_entities)?;
-        let action_entities = entity_list(&self.values.action_entities)?;
+        let mut entities = entity_list(&self.values.watch_entities, MAX_ENTITY_LIST_BYTES)?;
+        let action_entities = entity_list(&self.values.action_entities, 4096)?;
         if action_entities.len() > MAX_ACTION_ENTITIES
             || action_entities
                 .iter()
@@ -278,7 +279,7 @@ impl Configuration {
         {
             return Err("invalid HA action entities");
         }
-        let media_player_entities = entity_list(&self.values.media_player_entities)?;
+        let media_player_entities = entity_list(&self.values.media_player_entities, 4096)?;
         if media_player_entities.len() > MAX_MEDIA_PLAYER_ENTITIES
             || media_player_entities
                 .iter()
@@ -286,7 +287,7 @@ impl Configuration {
         {
             return Err("invalid HA media player entities");
         }
-        let binary_entities = entity_list(&self.values.binary_entities)?;
+        let binary_entities = entity_list(&self.values.binary_entities, 4096)?;
         if binary_entities.len() > MAX_BINARY_ENTITIES
             || binary_entities
                 .iter()
@@ -294,7 +295,7 @@ impl Configuration {
         {
             return Err("invalid HA binary entities");
         }
-        let cover_entities = entity_list(&self.values.cover_entities)?;
+        let cover_entities = entity_list(&self.values.cover_entities, 4096)?;
         if cover_entities.len() > MAX_COVER_ENTITIES
             || cover_entities
                 .iter()
@@ -302,7 +303,7 @@ impl Configuration {
         {
             return Err("invalid HA cover entities");
         }
-        let number_entities = entity_list(&self.values.number_entities)?;
+        let number_entities = entity_list(&self.values.number_entities, 4096)?;
         if number_entities.len() > MAX_NUMBER_ENTITIES
             || number_entities
                 .iter()
@@ -310,7 +311,7 @@ impl Configuration {
         {
             return Err("invalid HA number entities");
         }
-        let cover_position_entities = entity_list(&self.values.cover_position_entities)?;
+        let cover_position_entities = entity_list(&self.values.cover_position_entities, 4096)?;
         if cover_position_entities.len() > MAX_COVER_POSITION_ENTITIES
             || cover_position_entities
                 .iter()
@@ -514,8 +515,8 @@ pub fn matches_discovery(prefixes: &[String], entity: &str) -> bool {
     literal_entity(entity) && prefixes.iter().any(|prefix| entity.starts_with(prefix))
 }
 
-fn entity_list(value: &str) -> Result<Vec<String>, &'static str> {
-    if value.len() > 4096 {
+fn entity_list(value: &str, limit: usize) -> Result<Vec<String>, &'static str> {
+    if value.len() > limit {
         return Err("entity list is too large");
     }
     let mut seen = HashSet::new();
@@ -685,7 +686,7 @@ mod tests {
         ] {
             assert!(configuration("http://localhost", value).validate().is_err());
         }
-        let entities = (0..33)
+        let entities = (0..MAX_ENTITIES + 1)
             .map(|n| format!("sensor.e{n}"))
             .collect::<Vec<_>>()
             .join(",");
@@ -742,6 +743,53 @@ mod tests {
     }
 
     #[test]
+    fn full_length_watch_ids_fit_the_expanded_list_and_union_boundaries() {
+        let entities = (0..MAX_ENTITIES)
+            .map(|index| format!("sensor.{}_{index:02}", "x".repeat(118)))
+            .collect::<Vec<_>>();
+        assert!(entities.iter().all(|entity| entity.len() == 128));
+        let selected = entities.join(",");
+        assert_eq!(selected.len(), MAX_ENTITY_LIST_BYTES);
+        let valid = configuration("http://localhost", &selected)
+            .validate()
+            .unwrap();
+        assert_eq!(valid.entities, entities);
+        assert!(valid.actions().is_empty());
+        assert!(configuration("http://localhost", &format!("{selected} "))
+            .validate()
+            .is_err());
+        assert!(
+            configuration("http://localhost", &format!("{selected},sensor.extra"))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn full_household_selection_preserves_reads_controls_and_appliance_roles() {
+        let list = |domain: &str, count| {
+            (0..count)
+                .map(|index| format!("{domain}.e{index}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        // Fifteen home controls, four laundry actions and twenty-seven explicit
+        // appliance, EV and clamp reads fit without silently dropping targets.
+        let mut value = configuration("http://localhost", &list("sensor", 27));
+        value.values.binary_entities = list("switch", 15);
+        value.values.action_entities = list("button", 4);
+        value.values.dishwasher_running_entity = "sensor.e0".into();
+        value.values.dishwasher_duration_entity = "sensor.e1".into();
+        value.values.washer_remaining_entity = "sensor.e2".into();
+        value.values.dryer_remaining_entity = "sensor.e3".into();
+        let config = value.validate().unwrap();
+        assert_eq!(config.entities.len(), 46);
+        assert_eq!(config.actions().len(), 34);
+        assert_eq!(config.actions().last().unwrap().id, "ha-binary-14-off");
+        assert!(config.inputs().is_empty());
+    }
+
+    #[test]
     fn action_and_union_limits_are_independent() {
         let list = |domain: &str, count| {
             (0..count)
@@ -749,10 +797,10 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        let mut config = configuration("http://localhost", &list("sensor", 16));
+        let mut config = configuration("http://localhost", &list("sensor", 48));
         config.values.action_entities = list("button", 16);
-        assert_eq!(config.validate().unwrap().entities.len(), 32);
-        let mut config = configuration("http://localhost", &list("sensor", 17));
+        assert_eq!(config.validate().unwrap().entities.len(), MAX_ENTITIES);
+        let mut config = configuration("http://localhost", &list("sensor", 49));
         config.values.action_entities = list("button", 16);
         assert!(config.validate().is_err());
         let mut config = configuration("http://localhost", "");
@@ -840,7 +888,7 @@ mod tests {
         let mut config = configuration("http://localhost", "");
         config.values.media_player_entities = list("media_player", 5);
         assert!(config.validate().is_err());
-        let mut config = configuration("http://localhost", &list("sensor", 12));
+        let mut config = configuration("http://localhost", &list("sensor", 44));
         config.values.action_entities = list("button", 16);
         config.values.media_player_entities =
             format!("{},media_player.e0", list("media_player", 4));
@@ -851,7 +899,7 @@ mod tests {
             MAX_MEDIA_PLAYER_ENTITIES
         );
         assert_eq!(config.actions().len(), 28);
-        let mut config = configuration("http://localhost", &list("sensor", 13));
+        let mut config = configuration("http://localhost", &list("sensor", 45));
         config.values.action_entities = list("scene", 16);
         config.values.media_player_entities = list("media_player", 4);
         assert!(config.validate().is_err());
@@ -951,7 +999,7 @@ mod tests {
                 .join(",")
         };
         let mut config = configuration("http://localhost", "");
-        config.values.binary_entities = list("switch", 9);
+        config.values.binary_entities = list("switch", 17);
         assert!(config.validate().is_err());
         let mut config = configuration("http://localhost", "");
         config.values.binary_entities = " ".repeat(4097);
@@ -959,15 +1007,15 @@ mod tests {
 
         let mut config = configuration(
             "http://localhost",
-            &format!("{},light.e0", list("sensor", 24)),
+            &format!("{},light.e0", list("sensor", 48)),
         );
-        config.values.binary_entities = format!("{},light.e0", list("light", 8));
+        config.values.binary_entities = format!("{},light.e0", list("light", 16));
         let config = config.validate().unwrap();
         assert_eq!(config.entities.len(), MAX_ENTITIES);
         assert_eq!(config.binary_entities.len(), MAX_BINARY_ENTITIES);
-        assert_eq!(config.actions().len(), 16);
-        let mut config = configuration("http://localhost", &list("sensor", 25));
-        config.values.binary_entities = list("light", 8);
+        assert_eq!(config.actions().len(), 32);
+        let mut config = configuration("http://localhost", &list("sensor", 49));
+        config.values.binary_entities = list("light", 16);
         assert!(config.validate().is_err());
 
         let config = configuration(
@@ -1002,7 +1050,7 @@ mod tests {
                         if count <= MAX_ACTION_BUTTONS {
                             let config = config.unwrap();
                             assert_eq!(config.actions().len(), count);
-                            assert!(1 + MAX_ENTITIES + config.actions().len() <= 64);
+                            assert!(1 + MAX_ENTITIES + config.actions().len() <= 128);
                         } else {
                             assert!(
                                 binary > 0 || covers > 0,
@@ -1140,7 +1188,7 @@ mod tests {
         assert!(config.validate().is_err());
         let mut config = configuration(
             "http://localhost",
-            &format!("{},cover.e0", list("sensor", 28)),
+            &format!("{},cover.e0", list("sensor", 60)),
         );
         config.values.cover_entities = format!("{},cover.e0", list("cover", 4));
         let config = config.validate().unwrap();
@@ -1151,7 +1199,7 @@ mod tests {
             12,
             "configuration reserves all three slots per cover before any state is observed"
         );
-        let mut config = configuration("http://localhost", &list("sensor", 29));
+        let mut config = configuration("http://localhost", &list("sensor", 61));
         config.values.cover_entities = list("cover", 4);
         assert!(config.validate().is_err());
         let read_only = configuration("http://localhost", "cover.read_only")
@@ -1295,18 +1343,21 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        // Every old control total is achievable. Also exercise overlaps between
+        // Every allowed control total is achievable. Also exercise overlaps between
         // all four selected covers and independently selected positions.
-        for previous in 0..=31 {
+        for previous in 0..=MAX_ACTION_BUTTONS {
             for numbers in 0..=MAX_NUMBER_ENTITIES {
                 for positions in 0..=MAX_COVER_POSITION_ENTITIES {
                     let mut config = configuration("http://localhost", "");
                     let covers = (previous / 3).min(4);
                     let remaining = previous - 3 * covers;
                     let media = (remaining / 3).min(4);
-                    let buttons = remaining - 3 * media;
+                    let remaining = remaining - 3 * media;
+                    let binary = (remaining / 2).min(MAX_BINARY_ENTITIES);
+                    let buttons = remaining - 2 * binary;
                     config.values.cover_entities = list("cover", covers);
                     config.values.media_player_entities = list("media_player", media);
+                    config.values.binary_entities = list("switch", binary);
                     config.values.action_entities = list("button", buttons);
                     config.values.number_entities = list("number", numbers);
                     config.values.cover_position_entities = list("cover", positions);
@@ -1315,17 +1366,17 @@ mod tests {
                     if count <= MAX_ACTION_BUTTONS {
                         let config = config.unwrap();
                         assert_eq!(config.actions().len() + config.inputs().len(), count);
-                        assert!(1 + MAX_ENTITIES + count <= 64);
+                        assert!(1 + MAX_ENTITIES + count <= 128);
                     } else {
                         assert_eq!(config.err(), Some("too many HA action buttons"));
                     }
                 }
             }
         }
-        for count in [28, 29] {
+        for count in [60, 61] {
             let mut config = configuration("http://localhost", &list("sensor", count));
             config.values.number_entities = list("number", 4);
-            assert_eq!(config.validate().is_ok(), count == 28);
+            assert_eq!(config.validate().is_ok(), count == 60);
         }
     }
 
@@ -1489,14 +1540,14 @@ mod tests {
         assert_eq!(exact.len(), MAX_DISCOVERY_PREFIX_BYTES);
         assert_eq!(discovery_prefixes(&exact).unwrap(), ["sensor."]);
         assert!(discovery_prefixes(&format!("{exact} ")).is_err());
-        let selected = (0..32)
+        let selected = (0..MAX_ENTITIES)
             .map(|i| format!("sensor.e{i}"))
             .collect::<Vec<_>>()
             .join(",");
         let mut config = configuration("http://localhost", &selected);
         config.values.discovery_prefixes = "sensor.".into();
         let config = config.validate().unwrap();
-        assert_eq!(config.entities.len(), 32);
+        assert_eq!(config.entities.len(), MAX_ENTITIES);
         assert!(!config.discovery_enabled());
         assert!(!config.discovery_matches("sensor.additional"));
     }
@@ -1663,17 +1714,17 @@ mod tests {
         );
         assert_eq!(config.actions().len(), 1);
         assert!(config.inputs().is_empty());
-        let targets = (0..32)
+        let targets = (0..MAX_ENTITIES)
             .map(|index| format!("sensor.e{index}"))
             .collect::<Vec<_>>();
         let mut value = configuration("http://localhost", &targets.join(","));
         value.values.dishwasher_running_entity = "sensor.e0".into();
         value.values.dishwasher_duration_entity = "sensor.e1".into();
         assert_eq!(value.validate().unwrap().entities, targets);
-        let mut value = configuration("http://localhost", &targets[..31].join(","));
+        let mut value = configuration("http://localhost", &targets[..MAX_ENTITIES - 1].join(","));
         value.values.dishwasher_running_entity = "binary_sensor.run".into();
-        assert_eq!(value.validate().unwrap().entities.len(), 32);
-        let mut value = configuration("http://localhost", &targets[..31].join(","));
+        assert_eq!(value.validate().unwrap().entities.len(), MAX_ENTITIES);
+        let mut value = configuration("http://localhost", &targets[..MAX_ENTITIES - 1].join(","));
         value.values.dishwasher_running_entity = "binary_sensor.run".into();
         value.values.dishwasher_duration_entity = "sensor.duration".into();
         assert_eq!(value.validate().err(), Some("too many watched entities"));
@@ -1842,19 +1893,19 @@ mod tests {
     }
 
     #[test]
-    fn laundry_shares_the_existing_32_entity_capacity_and_deduplicates_selected_reads() {
-        let targets = (0..32)
+    fn laundry_shares_the_existing_entity_capacity_and_deduplicates_selected_reads() {
+        let targets = (0..MAX_ENTITIES)
             .map(|index| format!("sensor.e{index}"))
             .collect::<Vec<_>>();
         let mut value = configuration("http://localhost", &targets.join(","));
         value.values.washer_remaining_entity = "sensor.e0".into();
         value.values.dryer_remaining_entity = "sensor.e1".into();
         assert_eq!(value.validate().unwrap().entities, targets);
-        let mut value = configuration("http://localhost", &targets[..30].join(","));
+        let mut value = configuration("http://localhost", &targets[..MAX_ENTITIES - 2].join(","));
         value.values.washer_remaining_entity = "sensor.washer".into();
         value.values.dryer_remaining_entity = "sensor.dryer".into();
-        assert_eq!(value.validate().unwrap().entities.len(), 32);
-        let mut value = configuration("http://localhost", &targets[..31].join(","));
+        assert_eq!(value.validate().unwrap().entities.len(), MAX_ENTITIES);
+        let mut value = configuration("http://localhost", &targets[..MAX_ENTITIES - 1].join(","));
         value.values.washer_remaining_entity = "sensor.washer".into();
         value.values.dryer_remaining_entity = "sensor.dryer".into();
         assert_eq!(value.validate().err(), Some("too many watched entities"));

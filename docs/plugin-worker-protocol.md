@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.6.0**, independently of the application version. The
+The current host API is **1.7.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -29,7 +29,7 @@ MQTT publish contribution.
 
 The additional limits are:
 
-- At most 64 dashboard contributions in one replacement snapshot, with unique
+- At most 128 dashboard contributions in one replacement snapshot, with unique
   IDs within that worker.
 - Identifiers use ASCII letters, digits, `_`, `.`, `:`, and `-`, start with an
   ASCII letter or digit, and occupy at most 128 bytes.
@@ -64,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.6.0",
+  "host_api_version": "1.7.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -76,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.6.0",
+  "host_api_version": "1.7.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -118,7 +118,7 @@ startup deadline covers both steps. Early contributions, missing/mismatched or
 duplicate acknowledgments fail that generation. Packages without configuration
 permission receive no configuration frame and complete startup after `ready`.
 Workers must acknowledge the host API selected in `hello`; hard-coded 1.0 replies
-are incompatible with a 1.6 host. The wire protocol and manifest remain version 1.
+are incompatible with a 1.7 host. The wire protocol and manifest remain version 1.
 A configured worker should declare an API requirement such as `^1.1`.
 
 The complete configuration object is bounded to 32 KiB, in addition to the 64 KiB
@@ -175,8 +175,18 @@ the projection does not change action references or authority. HA 0.11 adds
 optional washer/dryer remaining-time profiles in existing text/status slots,
 retaining `^1.6` and the same authority, wire schema and contribution kinds.
 Existing workers with compatible
-`^1.3`, `^1.4` or `^1.5` ranges still negotiate the selected 1.6 version; Frigate
+`^1.3`, `^1.4`, `^1.5` or `^1.6` ranges still negotiate the selected 1.7 version; Frigate
 retains its existing API range and flat contributions.
+
+## Larger selected installations (host API 1.7)
+
+The host accepts up to 128 contributions while retaining the 64 KiB complete-frame
+limit and existing action, configuration, queue, and rate limits. HA 0.12 requires
+`^1.7` and supports 64 distinct selected reads, 16 binary targets, and 63 controls.
+One connection status plus 64 entity states plus 63 controls fills the snapshot.
+Counts do not override the serialized byte limit: the worker bounds its display
+strings, including JSON escaping, before publishing a complete replacement.
+This capacity does not itself migrate legacy settings or activate a second UI.
 
 ## Dashboard contributions
 
@@ -255,7 +265,7 @@ the editor through ordinary state/title updates.
 
 Workers emitting `state_id` must require host API `^1.6` or a compatible range
 excluding older hosts. Older workers can omit the field and retain their existing
-flat contributions while acknowledging the exact selected 1.6 version.
+flat contributions while acknowledging the exact selected host version.
 
 ## Bounded numeric input authority (host API 1.5)
 
@@ -353,7 +363,7 @@ outside the worker lifecycle contract. Native submission failures are not retrie
 No plugin notification IPC or worker dependency is added to Android/iOS. Core
 inverter notifications continue using their existing platform integration.
 
-## Owned HTTP video (host API 1.3)
+## Owned HTTP media (video from host API 1.3, snapshots from 1.7)
 
 A package may declare `http_video` and `plugin_configuration`, with a matching
 manifest declaration referencing one non-secret configuration field:
@@ -386,6 +396,16 @@ the configured origin and base path. The worker supplies no filesystem path,
 window route, request headers, cookies, HA token, or core settings reference.
 Downloads do not follow redirects or inherit the core HA credential lookup.
 HTTP credentials and custom headers are outside this direct-URL contract.
+
+Host API 1.7 also accepts `"media_kind": "jpeg"`, `"png"`, or `"webp"` on
+this frame. The historical `http_video` message and permission names remain for
+package compatibility. An omitted kind is video and retains its original wire
+representation. Snapshot workers must require `^1.7`; no image is inferred from
+an extension, response header, or remote title. The host checks the declared
+format against file signature bytes, uses its corresponding image MIME type,
+and rejects mismatches. SVG, HTML, and arbitrary content types are not supported.
+Snapshots have an 8 MiB limit. The owned player closes a successfully displayed
+image after 12 seconds, with the same generation revocation as video.
 
 Each worker has four pending requests, thirty admissions per minute, a ten-minute
 512-ID history, and a 45-second title cooldown. Pending requests expire after
@@ -424,7 +444,9 @@ The player receives an opaque UUID through the `plugin-media` scheme. Requests a
 bound to the exact requesting webview label and original running instance, with
 live authentication checks before and after disk reads. No global temporary asset
 scope is added. GET/HEAD support standard single byte ranges, at most 1 MiB per
-range and four owned response buffers. Full GET for larger files is rejected;
+range and four owned response buffers. Full GET for larger videos is rejected;
+images allow a bounded full GET up to their 8 MiB limit. No image request bypasses
+the original window/instance ownership checks. For video,
 native playback acceptance must establish range behavior on each supported webview.
 Core window-targeting permissions are absent: close and drag use commands that
 operate only on their native invoking window. Android/iOS include none of these

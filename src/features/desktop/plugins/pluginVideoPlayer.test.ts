@@ -45,6 +45,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
+  vi.useRealTimers()
   globalThis.history.replaceState({}, '', initialLocation)
 })
 
@@ -178,5 +179,80 @@ describe('native-owned plugin video player', () => {
     expect(native.convertFileSrc).toHaveBeenCalledTimes(1)
     expect(native.invoke).not.toHaveBeenCalled()
     expect(native.warn).toHaveBeenCalledExactlyOnceWith('Plugin video playback failed')
+  })
+
+  it('displays an owned still for twelve seconds after load and closes through its native owner', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const wrapper = await player({ pluginMedia: id, pluginMediaKind: 'image', name: 'Front' })
+    expect(native.convertFileSrc).toHaveBeenCalledExactlyOnceWith(id, 'plugin-media')
+    expect(wrapper.find('video').exists()).toBe(false)
+    expect(wrapper.get('img').attributes('src')).toBe(`plugin-media://localhost/${id}`)
+    await vi.advanceTimersByTimeAsync(12000)
+    expect(native.invoke).not.toHaveBeenCalled()
+    await wrapper.get('img').trigger('load')
+    await vi.advanceTimersByTimeAsync(6000)
+    await wrapper.get('img').trigger('load')
+    await vi.advanceTimersByTimeAsync(5999)
+    expect(native.invoke).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('close_plugin_video_window')
+    expect(native.close).not.toHaveBeenCalled()
+  })
+
+  it.each(['close', 'unmount', 'error'])(
+    'clears the owned still timer on %s without a delayed second close',
+    async (action) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const wrapper = await player({ pluginMedia: id, pluginMediaKind: 'image' })
+      await wrapper.get('img').trigger('load')
+      if (action === 'close') {
+        await wrapper.get('button[aria-label="Close"]').trigger('click')
+        expect(native.invoke).toHaveBeenCalledExactlyOnceWith('close_plugin_video_window')
+        native.invoke.mockClear()
+      } else if (action === 'unmount') {
+        wrapper.unmount()
+        mounted.splice(mounted.indexOf(wrapper), 1)
+      } else {
+        await wrapper.get('img').trigger('error')
+        expect(wrapper.find('img').exists()).toBe(false)
+        expect(wrapper.text()).toContain('Failed to display camera snapshot.')
+        expect(native.warn).toHaveBeenCalledExactlyOnceWith('Plugin image display failed')
+      }
+      await vi.advanceTimersByTimeAsync(12000)
+      expect(native.invoke).not.toHaveBeenCalled()
+      expect(native.close).not.toHaveBeenCalled()
+    }
+  )
+
+  it('rejects unknown media selectors without resolving or rendering content', async () => {
+    const wrapper = await player({ pluginMedia: id, pluginMediaKind: 'svg' })
+    expect(wrapper.text()).toContain('This video window is unavailable.')
+    expect(wrapper.find('video').exists()).toBe(false)
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(native.convertFileSrc).not.toHaveBeenCalled()
+  })
+
+  it('renders a generic image download failure without resolving an owned handle', async () => {
+    const wrapper = await player({ pluginMedia: id, pluginMediaKind: 'image', error: 'download' })
+    expect(wrapper.text()).toContain('Failed to download camera snapshot.')
+    expect(wrapper.find('video').exists()).toBe(false)
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(native.convertFileSrc).not.toHaveBeenCalled()
+    expect(native.invoke).not.toHaveBeenCalled()
+  })
+
+  it('preserves the bundled image timeout when a legacy image fails to load', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const wrapper = await player(
+      { localPath: '/private/legacy.jpg', media: 'image' },
+      'camera-video-legacy'
+    )
+    expect(native.convertFileSrc).toHaveBeenCalledExactlyOnceWith('/private/legacy.jpg')
+    await wrapper.get('img').trigger('error')
+    await vi.advanceTimersByTimeAsync(11999)
+    expect(native.close).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(native.close).toHaveBeenCalledTimes(1)
+    expect(native.invoke).not.toHaveBeenCalled()
   })
 })

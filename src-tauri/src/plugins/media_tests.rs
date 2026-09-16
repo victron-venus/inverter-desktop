@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::http_video::{MAX_CLIP_BYTES, MAX_IMAGE_BYTES};
 use crate::plugins::protocol::{HttpVideoGrant, PluginManifest, WorkerConfiguration};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -42,6 +43,7 @@ fn request(base: &str, lease: GenerationLease) -> QueuedHttpVideo {
         id: Uuid::new_v4().to_string(),
         url: format!("{base}/api/events/test/clip.mp4"),
         title: "Front camera".into(),
+        media_kind: HttpMediaKind::Video,
     }
 }
 
@@ -118,6 +120,242 @@ async fn broker(responses: Vec<Vec<u8>>) -> (String, JoinHandle<Vec<String>>) {
         requests
     });
     (format!("http://{address}"), task)
+}
+
+fn still_image(kind: HttpMediaKind) -> Vec<u8> {
+    use base64::Engine;
+    // Locally generated one-pixel raster images; no camera or remote fixture.
+    let encoded = match kind {
+        HttpMediaKind::Jpeg => "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJ/AB//Z",
+        HttpMediaKind::Png => "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mNgYGAAAAAEAAHI6uv5AAAAAElFTkSuQmCC",
+        HttpMediaKind::Webp => "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAUAmJaQAA3AA/v02aAA=",
+        HttpMediaKind::Video => panic!("expected a raster image fixture"),
+    };
+    base64::prelude::BASE64_STANDARD.decode(encoded).unwrap()
+}
+
+#[tokio::test]
+async fn typed_raster_images_have_exact_mime_and_generation_owned_files() {
+    for (kind, mime, extension) in [
+        (HttpMediaKind::Jpeg, "image/jpeg", "jpg"),
+        (HttpMediaKind::Png, "image/png", "png"),
+        (HttpMediaKind::Webp, "image/webp", "webp"),
+    ] {
+        let body = still_image(kind);
+        // An upstream generic MIME or misleading URL never chooses the served type.
+        let mut reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        ).into_bytes();
+        reply.extend_from_slice(&body);
+        let (base, server) = broker(vec![reply]).await;
+        let (directory, service, mut events) = service(policy()).await;
+        let generation = lease();
+        let mut image_request = request(&base, generation.clone());
+        image_request.media_kind = kind;
+        service.try_submit(image_request).unwrap();
+        let image = ready(&mut events).await;
+        assert_eq!(image.error, None);
+        assert_eq!(image.media_kind, kind);
+        let path = directory
+            .path()
+            .join("media")
+            .join(format!("clip-{}.{}", image.media_id, extension));
+        assert_eq!(fs::read(&path).unwrap(), body);
+        assert!(matches!(
+            service
+                .read_range(&image.media_id, "main", None, false)
+                .await,
+            Err(MediaError::NotFound)
+        ));
+        for head in [false, true] {
+            let result = service
+                .read_range(&image.media_id, &image.window_label, None, head)
+                .await
+                .unwrap();
+            assert_eq!(result.status, 200);
+            assert_eq!(result.content_type, mime);
+            assert_eq!(result.content_length, body.len() as u64);
+            assert_eq!(
+                result.bytes.as_slice(),
+                if head { &[] } else { body.as_slice() }
+            );
+        }
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].to_lowercase().contains("authorization:"));
+        generation.revoke();
+        assert!(matches!(
+            service
+                .read_range(&image.media_id, &image.window_label, None, false)
+                .await,
+            Err(MediaError::NotFound)
+        ));
+        match timeout(Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            MediaEvent::Close { window_label } => {
+                assert_eq!(window_label, image.window_label);
+                // Retirement keeps the owned file until native absence is acknowledged.
+                assert!(path.exists());
+                service.window_destroyed(&window_label);
+            }
+            MediaEvent::Ready(_) => panic!("expected generation-owned close"),
+        }
+        idle(&service).await;
+        assert!(!path.exists());
+        service.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn image_kind_mismatches_markup_and_short_signatures_are_terminal() {
+    for (kind, body) in [
+        (HttpMediaKind::Jpeg, still_image(HttpMediaKind::Png)),
+        (HttpMediaKind::Png, still_image(HttpMediaKind::Webp)),
+        (HttpMediaKind::Webp, still_image(HttpMediaKind::Jpeg)),
+        (
+            HttpMediaKind::Jpeg,
+            b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec(),
+        ),
+        (
+            HttpMediaKind::Png,
+            b"<!doctype html><script>alert(1)</script>".to_vec(),
+        ),
+        (HttpMediaKind::Webp, b"RIFF\0\0\0\0WAVE".to_vec()),
+        (HttpMediaKind::Jpeg, vec![0xff, 0xd8]),
+        (HttpMediaKind::Png, b"\x89PNG\r\n\x1a".to_vec()),
+        (HttpMediaKind::Webp, b"RIFF\0\0\0\0WEB".to_vec()),
+    ] {
+        let (base, server) = broker(vec![response("200 OK", &body)]).await;
+        let (directory, service, mut events) = service(policy()).await;
+        let mut image_request = request(&base, lease());
+        image_request.media_kind = kind;
+        service.try_submit(image_request).unwrap();
+        let image = ready(&mut events).await;
+        assert_eq!(
+            image.error,
+            Some(MediaError::Transfer(VideoError::InvalidMedia))
+        );
+        assert_eq!(server.await.unwrap().len(), 1);
+        assert_eq!(
+            fs::read_dir(directory.path().join("media"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(matches!(
+            service
+                .read_range(&image.media_id, &image.window_label, None, false)
+                .await,
+            Err(MediaError::NotFound)
+        ));
+        service.window_failed(&image.media_id);
+        idle(&service).await;
+        service.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn image_full_responses_above_video_range_limit_keep_read_permits_bounded() {
+    let mut body = still_image(HttpMediaKind::Png);
+    body.resize(MAX_RANGE_BYTES + 100, 0);
+    let (base, server) = broker(vec![response("200 OK", &body)]).await;
+    let (_directory, service, mut events) = service(policy()).await;
+    let mut image_request = request(&base, lease());
+    image_request.media_kind = HttpMediaKind::Png;
+    service.try_submit(image_request).unwrap();
+    let image = ready(&mut events).await;
+    assert_eq!(image.error, None);
+    let mut held = Vec::new();
+    for _ in 0..MAX_RANGE_READS {
+        let result = service
+            .read_range(&image.media_id, &image.window_label, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.status, 200);
+        assert_eq!(result.content_type, "image/png");
+        assert_eq!(result.bytes, body);
+        held.push(result);
+    }
+    assert!(matches!(
+        service
+            .read_range(&image.media_id, &image.window_label, None, false)
+            .await,
+        Err(MediaError::Busy)
+    ));
+    drop(held);
+    let partial = service
+        .read_range(
+            &image.media_id,
+            &image.window_label,
+            Some("bytes=0-"),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(partial.status, 206);
+    assert_eq!(partial.bytes.len(), MAX_RANGE_BYTES);
+    assert_eq!(partial.content_type, "image/png");
+    drop(partial);
+    server.await.unwrap();
+    service.window_destroyed(&image.window_label);
+    idle(&service).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn image_cap_applies_to_declared_and_streamed_bodies_independently_of_video_limit() {
+    let mut body = still_image(HttpMediaKind::Png);
+    body.resize(MAX_IMAGE_BYTES as usize + 1, 0);
+    let mut streamed = format!(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",
+        body.len()
+    )
+    .into_bytes();
+    streamed.extend_from_slice(&body);
+    streamed.extend_from_slice(b"\r\n0\r\n\r\n");
+    for reply in [
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            MAX_IMAGE_BYTES + 1
+        )
+        .into_bytes(),
+        streamed,
+    ] {
+        let (base, server) = broker(vec![reply]).await;
+        let mut limits = policy();
+        limits.read_timeout = Duration::from_secs(5);
+        limits.total_timeout = Duration::from_secs(10);
+        let (directory, service, mut events) = service(limits).await;
+        let mut image_request = request(&base, lease());
+        image_request.media_kind = HttpMediaKind::Png;
+        service.try_submit(image_request).unwrap();
+        let image = match timeout(Duration::from_secs(15), events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            MediaEvent::Ready(image) => image,
+            MediaEvent::Close { .. } => panic!("expected bounded image transfer result"),
+        };
+        assert_eq!(
+            image.error,
+            Some(MediaError::Transfer(VideoError::Oversized))
+        );
+        assert_eq!(server.await.unwrap().len(), 1);
+        assert_eq!(
+            fs::read_dir(directory.path().join("media"))
+                .unwrap()
+                .count(),
+            0
+        );
+        service.window_failed(&image.media_id);
+        idle(&service).await;
+        service.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -667,6 +905,7 @@ async fn full_storage_keeps_eight_requests_queued_without_network_or_disk_work()
                     lease: lease(),
                     label: "occupied".into(),
                     phase: Phase::Ready,
+                    media_kind: HttpMediaKind::Video,
                     bytes: MAX_CLIP_BYTES,
                     file: None,
                     retired: watch::channel(false).0,
@@ -714,14 +953,18 @@ fn ranges_reject_overflow_multiple_ranges_and_non_decimal_tokens() {
         "bytes=0-18446744073709551616",
         "items=0-2",
     ] {
-        assert_eq!(select_range(Some(range), 10).unwrap(), None, "{range}");
+        assert_eq!(
+            select_range(Some(range), 10, MAX_RANGE_BYTES as u64).unwrap(),
+            None,
+            "{range}"
+        );
     }
     assert_eq!(
-        select_range(Some("bytes=-30"), 10).unwrap(),
+        select_range(Some("bytes=-30"), 10, MAX_RANGE_BYTES as u64).unwrap(),
         Some((0, 9, true))
     );
     assert_eq!(
-        select_range(Some("bytes=4-100"), 10).unwrap(),
+        select_range(Some("bytes=4-100"), 10, MAX_RANGE_BYTES as u64).unwrap(),
         Some((4, 9, true))
     );
 }
@@ -832,7 +1075,11 @@ async fn two_transfers_hold_budget_and_revocation_cancels_third_queued_request()
 }
 
 fn orphan(directory: &Path) -> PathBuf {
-    let path = directory.join(format!("clip-{}.mp4", Uuid::new_v4()));
+    orphan_with_extension(directory, "mp4")
+}
+
+fn orphan_with_extension(directory: &Path, extension: &str) -> PathBuf {
+    let path = directory.join(format!("clip-{}.{extension}", Uuid::new_v4()));
     let mut file = private_options()
         .write(true)
         .create_new(true)
@@ -847,10 +1094,13 @@ async fn initialization_recovers_only_safe_owned_orphans_and_preserves_unknown_f
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().canonicalize().unwrap().join("media");
     recover_directory(&directory).unwrap();
-    let old = orphan(&directory);
+    let old: Vec<_> = ["mp4", "jpg", "png", "webp"]
+        .into_iter()
+        .map(|extension| orphan_with_extension(&directory, extension))
+        .collect();
     let (service, _events) = MediaService::new();
     service.initialize(directory.clone()).await.unwrap();
-    assert!(!old.exists());
+    assert!(old.iter().all(|path| !path.exists()));
     service.shutdown().await.unwrap();
     let safe = orphan(&directory);
     fs::write(directory.join("unowned.txt"), b"preserve").unwrap();
@@ -860,6 +1110,20 @@ async fn initialization_recovers_only_safe_owned_orphans_and_preserves_unknown_f
     assert!(directory.join("unowned.txt").exists());
     assert!(!blocked.has_owned_work());
     blocked.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn recovery_preserves_unsupported_image_extensions() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().canonicalize().unwrap().join("media");
+    recover_directory(&directory).unwrap();
+    let safe = orphan_with_extension(&directory, "png");
+    let unknown = orphan_with_extension(&directory, "svg");
+    let (service, _events) = MediaService::new();
+    assert!(service.initialize(directory).await.is_err());
+    assert!(safe.exists());
+    assert!(unknown.exists());
+    service.shutdown().await.unwrap();
 }
 
 #[cfg(unix)]

@@ -9,12 +9,12 @@ use std::io::{Cursor, Write};
 use std::path::{Component, Path, PathBuf};
 
 use ed25519_dalek::{Signer, SigningKey};
-use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, System, ZipWriter};
 
 use super::package::{
-    canonical_manifest_bytes, manifest_signing_payload, read_regular_file, MAX_ARCHIVE_BYTES,
+    canonical_manifest_bytes, manifest_signing_payload, read_regular_file, sha256_hex,
+    MAX_ARCHIVE_BYTES,
 };
 use super::protocol::{
     validate_package_path, InventoryEntry, PluginManifest, SignatureMetadata, MAX_MANIFEST_BYTES,
@@ -111,7 +111,7 @@ fn collect_payload(manifest: &mut PluginManifest, source_root: &Path) -> Result<
         .map(|(path, contents)| InventoryEntry {
             path: path.clone(),
             size: contents.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(contents)),
+            sha256: sha256_hex(contents),
         })
         .collect();
     manifest.validate()?;

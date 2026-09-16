@@ -212,7 +212,7 @@ fn rejects_cross_namespace_writes_and_never_quotes_secret_values_in_errors() {
             )
             .is_err());
     }
-    let secret = "unique-private".repeat(400);
+    let secret = "unique-private".repeat(MAX_STRING / "unique-private".len() + 1);
     let error = schema
         .merge(
             "archive",
@@ -263,6 +263,58 @@ fn primitive_types_enums_and_numeric_and_unicode_bounds_are_enforced() {
 }
 
 #[test]
+fn expanded_entity_lists_keep_scalar_and_complete_configuration_limits() {
+    let schema = SettingsSchema::compile(&manifest(json!({
+        "type":"object","properties": {
+            "entities":{"type":"string","maxLength":8255},
+            "notes":{"type":"string","maxLength":MAX_STRING}
+        }
+    })))
+    .unwrap();
+    let entities = (0..64)
+        .map(|index| format!("sensor.{index:02}{}", "x".repeat(119)))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(entities.len(), 8255);
+    let data = schema
+        .merge(
+            "archive",
+            &SettingsData::default(),
+            "archive:0",
+            BTreeMap::from([("entities".into(), json!(entities))]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+    let configuration = schema.configuration(&data).unwrap();
+    assert_eq!(
+        configuration.values["entities"].as_str().unwrap().len(),
+        8255
+    );
+    assert!(schema
+        .merge(
+            "archive",
+            &SettingsData::default(),
+            "archive:0",
+            BTreeMap::from([("notes".into(), json!("x".repeat(MAX_STRING + 1)))]),
+            BTreeMap::new()
+        )
+        .is_err());
+    let escaped = schema
+        .merge(
+            "archive",
+            &SettingsData::default(),
+            "archive:0",
+            BTreeMap::from([("notes".into(), json!("\n".repeat(MAX_STRING)))]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(
+        schema.configuration(&escaped).is_err(),
+        "escaping must not bypass the complete 32 KiB envelope"
+    );
+}
+
+#[test]
 fn unsupported_or_ambiguous_schemas_fail_closed() {
     let fields = [
         json!({"type":"string","writeOnly":true,"default":null}),
@@ -281,7 +333,7 @@ fn unsupported_or_ambiguous_schemas_fail_closed() {
         json!({"type":"integer","minimum":9,"maximum":2}),
         json!({"type":"string","enum":["a","a"]}),
         json!({"type":"integer","default":"bad"}),
-        json!({"type":"string","maxLength":4097}),
+        json!({"type":"string","maxLength":MAX_STRING + 1}),
     ];
     for field in fields {
         let result = SettingsSchema::compile(&manifest(

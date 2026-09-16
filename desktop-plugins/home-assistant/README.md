@@ -1,7 +1,7 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the separate desktop package
-`inverter-desktop.home-assistant`, version 0.11.0, requiring host API `^1.6`.
+`inverter-desktop.home-assistant`, version 0.12.0, requiring host API `^1.7`.
 Connection status and selected entity states are read-only by default. Optional
 sensor-prefix discovery fills unused state slots without granting actions. Explicit
 optional action lists enable fixed button presses, scene activation, media
@@ -14,7 +14,8 @@ desktop card. The worker links controls to the existing state contribution with
 `state_id`, using exact configured entity ownership. Equal friendly names do not
 merge entities. Cover transport and position controls share the same state card;
 read-only selections and discoveries remain without controls. The flat snapshot,
-stable contribution/action IDs and 32-state/31-control limits are unchanged.
+stable contribution/action IDs remain unchanged. Host API 1.7 increases capacity
+to 64 state cards and 63 controls while retaining the 64 KiB frame limit.
 Availability and capability changes withdraw or restore controls under the same
 state anchor; grouping adds no service authority and does not alter input revisions.
 An explicit read-only dishwasher profile combines its assigned running and runtime
@@ -25,10 +26,9 @@ Entity-picker UI and legacy configuration migration remain separate work.
 The existing desktop HA integration remains bundled until its remaining features
 have package parity. Android and iOS contain neither this worker nor the shared
 worker protocol library, its package metadata, or the desktop plugin manager.
-The production publisher policy remains empty, so installation is disabled in
-shipped builds. This work creates no production publisher keys and adds no
-application or worker code-signing/notarization prerequisite. Package signatures use the existing
-native archive pipeline and an externally supplied publisher key.
+Configured HTTPS downloads are verified against their exact saved SHA-256 pins.
+The manual signed-file path uses the publisher policy and a separately supplied
+publisher key. Neither path requires application or worker code signing or notarization.
 
 ## Configuration and read scope
 
@@ -46,10 +46,12 @@ the core telemetry connection.
   such as `space%20prefix` are preserved; encoded separators, dot segments,
   double escapes and control characters are rejected. HTTPS uses certificate
   verification and the matching secure WebSocket scheme. Redirects are not followed.
-- `watch_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
+- `watch_entities`: optional string, default empty, at most 8,255 UTF-8 bytes.
+  This fits 64 maximum-length IDs and their separators. The host API 1.7 scalar
+  string bound is 16 KiB; the complete configuration remains limited to 32 KiB.
   Separate entity IDs with commas or newlines. Blank entries are ignored and
   duplicate IDs count once. The ordered union with action targets and appliance roles is limited to
-  32 entities: watched IDs come first, followed by previously unseen button/scene
+  64 entities: watched IDs come first, followed by previously unseen button/scene
   targets, media-player targets, on/off targets, cover targets, number targets
   and cover-position targets, then dishwasher running/duration and washer/dryer
   remaining-time roles. New selections preserve older target indices.
@@ -75,7 +77,7 @@ the core telemetry connection.
 - `dishwasher_duration_entity`: optional string with the same single-ID format,
   empty default and 128-byte bound. Assign the entity reporting runtime since
   midnight. Requires a nonempty, different running entity. Both roles add explicit
-  watched reads and count once in the 32-entity union, but never grant controls.
+  watched reads and count once in the 64-entity union, but never grant controls.
 - `washer_remaining_entity` and `dryer_remaining_entity`: optional strings,
   default empty, each at most 128 raw UTF-8 bytes. Each assigns one literal entity
   reporting that appliance's remaining time, using the single-ID format above.
@@ -83,20 +85,20 @@ the core telemetry connection.
   differ from each other and from the dishwasher running entity: each state slot
   can have only one primary profile. They may overlap with watched/control
   selections or the dishwasher duration entity. New IDs are appended after the
-  existing dishwasher roles; the same 32-state limit applies. Leave a role empty
+  existing dishwasher roles; the same 64-state limit applies. Leave a role empty
   to disable its profile. Selection grants reads only.
 - `action_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
   Explicitly select up to 16 unique literal `button.*` or `scene.*` IDs separated
-  by commas or newlines. Targets are also watched within the total 32-entity
+  by commas or newlines. Targets are also watched within the total 64-entity
   limit. Only this list enables button/scene actions; selecting an entity for reads never does.
   Other domains and arbitrary service definitions are rejected.
 - `media_player_entities`: optional string, default empty, at most 4,096 UTF-8
   bytes. Explicitly select up to four unique literal `media_player.*` IDs separated
   by commas or newlines. Each selected player offers Play, Pause and Stop and is
-  watched within the shared 32-entity limit. This list does not alter button/scene
+  watched within the shared 64-entity limit. This list does not alter button/scene
   action indices. Watching a media player alone grants no transport actions.
 - `binary_entities`: optional string, default empty, at most 4,096 UTF-8 bytes.
-  Explicitly select up to eight unique literal `switch.*`, `input_boolean.*` or
+  Explicitly select up to sixteen unique literal `switch.*`, `input_boolean.*` or
   `light.*` IDs separated by commas or newlines. Targets are also watched. Each
   offers Turn on and Turn off while its observed state is exactly `on` or `off`.
   Other domains, generic toggle, brightness and color settings are not supported.
@@ -124,12 +126,12 @@ the core telemetry connection.
   not create a restricted server-side token. Reads and explicitly selected
   button/scene/media/on-off/cover/number actions use that token.
 
-All six action lists together may produce at most 31 controls: count one
+All six action lists together may produce at most 63 controls: count one
 per button or scene, three per media player, two per on/off target and three per
 cover, even if a selected cover supports fewer operations, and one per number
 or cover-position target. Alongside
-connection status and up to 32 state cards, this keeps each snapshot within the
-host's 64-contribution limit. Duplicate IDs count once within their list. All
+connection status and up to 64 state cards, this keeps each snapshot within the
+host's 128-contribution limit. Duplicate IDs count once within their list. All
 previously valid configurations remain within this budget when new fields are empty.
 Omitted or empty new fields also preserve the prior serialized 32 KiB
 configuration validation boundary.
@@ -187,7 +189,8 @@ unknown, unavailable, off, idle and nonfinite numeric strings are omitted.
 Other literal and finite numeric strings are kept as reported; the worker does
 not parse duration formats, append an attribute unit, infer units, convert values
 or start a countdown. Invalid duration removes only the detail, not the primary
-state. The combined text remains within the existing 512-byte limit.
+state. This one composite preserves both complete 128-byte source values plus
+its fixed labels; its worst-case encoding is included in the snapshot budget.
 
 Updates or deletion of either role refresh the composite. Each source keeps its
 own live-over-initial-REST ordering, and reconnect, disconnect or authentication
@@ -250,7 +253,7 @@ When the state already contains a legacy `attributes.forecast` array, the worker
 examines only its first five entries. It displays valid supplied date labels,
 conditions and finite high/low temperatures with the entity's explicit unit.
 Dates must be calendar-valid dates or zoned timestamps. Each complete forecast
-entry starts on a new line and is included only if it fits the 512 UTF-8 byte
+entry starts on a new line and is included only if it fits the 256 UTF-8 byte
 summary limit. Malformed fields are omitted; temperature values are kept whole
 and no extra state slots are allocated.
 Attribute-only updates replace the card, including removal of a previously
@@ -267,7 +270,7 @@ there are no added network requests, endpoints, subscriptions or service calls.
 ## Read-only sensor discovery
 
 Discovery is disabled by default. When prefixes are configured and explicit
-targets occupy fewer than 32 state slots, each authenticated connection makes
+targets occupy fewer than 64 state slots, each authenticated connection makes
 one GET `<base>/api/states`. This response contains the all-entity collection,
 not a server-filtered prefix result. The request has a 15-second deadline, a
 1 MiB response limit and at most 4,096 source items. Only matching
@@ -275,9 +278,9 @@ not a server-filtered prefix result. The request has a 15-second deadline, a
 permissions, host API version, frontend contribution kind or write capability.
 
 All explicit watched and control targets retain their ordered indices and
-priority. Discovered targets fill at most `32 - explicit target count` state
+priority. Discovered targets fill at most `64 - explicit target count` state
 slots, excluding any explicit target. Initial matches are selected in lexical
-entity-ID order. Existing limits remain 32 state cards, 31 controls and 64 total
+entity-ID order. Existing limits remain 64 state cards, 63 controls and 128 total
 contributions, with the same two concurrent service requests. A full explicit
 selection skips the collection request entirely.
 
@@ -355,11 +358,15 @@ remaining deadline, cancellation, no-retry and unknown-outcome handling describe
 above. A successful response does not establish physical playback or undo effects
 after cancellation.
 
-Without on/off, cover or numeric targets, connection status, 32 state cards, 16 button/scene actions
-and 12 media actions produce at most 61 contributions. The combined limits above
-allow up to 64 when additional controls are selected. The maximum snapshot must also
-fit the existing 64 KiB frame limit. These actions need no new host UI
-contribution, permission or protocol version.
+Without on/off, cover or numeric targets, connection status, 64 state cards, 16 button/scene actions
+and 12 media actions produce at most 93 contributions. The combined limits above
+allow up to 128 when additional controls are selected. The maximum snapshot must also
+fit the existing 64 KiB frame limit. Titles and action labels are limited to 64
+UTF-8 bytes; generic state text and complete weather summaries to 256. Control
+characters are removed, and weather segments and appliance values remain whole.
+Tests serialize maximally escaped full-capacity snapshots through the actual
+worker encoder. The increased contribution count requires host API 1.7; no new
+contribution kind or permission is needed.
 
 ## Explicit on/off controls
 

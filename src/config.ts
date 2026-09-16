@@ -22,7 +22,18 @@ export interface DesktopPluginConfig {
   [key: string]: unknown
 }
 
+/** Passive module data; core/mobile preserve payloads without interpreting them. */
+export interface ModuleConfig {
+  /** Positive 32-bit integer version of the module's payload schema. */
+  schema_version: number
+  /** Portable, non-secret JSON settings; arbitrary future payload fields are retained. */
+  values: Record<string, unknown>
+  /** Stored in encrypted local config, omitted from every portable export. */
+  secrets?: Record<string, string>
+}
+
 export interface AppConfig {
+  modules?: Record<string, ModuleConfig>
   mqtt_host: string
   mqtt_port: number
   /** TLS with certificate/hostname validation; false permits anonymous LAN MQTT only. */

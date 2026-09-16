@@ -42,7 +42,7 @@
             :value="secretChanges[field.key] ?? ''"
             :disabled="busy || secretChanges[field.key] === null"
             :required="field.required && !settings.secret_present[field.key]"
-            maxlength="4096"
+            :maxlength="inputMaxLength(field)"
             :aria-describedby="descriptionId(field)"
             @input="setSecret(field.key, ($event.target as HTMLInputElement).value)"
           />
@@ -104,7 +104,7 @@
           :step="field.type === 'integer' ? 1 : 'any'"
           :min="field.minimum ?? undefined"
           :max="field.maximum ?? undefined"
-          maxlength="4096"
+          :maxlength="inputMaxLength(field)"
           :disabled="busy"
           :required="field.required"
           :aria-describedby="descriptionId(field)"
@@ -161,6 +161,12 @@ const {
   setSecret,
   removeSecret,
 } = editor
+function inputMaxLength(field: PluginSettingsField) {
+  if (field.type !== 'string') return undefined
+  // HTML counts UTF-16 units; native schema bounds count Unicode scalars and
+  // independently cap UTF-8 at 16 KiB. Allow pairs without rejecting valid input.
+  return Math.min(16_384, (field.max_length ?? 16_384) * 2)
+}
 function fieldId(key: string) {
   return `${prefix}-${key}`
 }

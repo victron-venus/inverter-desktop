@@ -40,7 +40,7 @@
         class="w-full h-full object-contain bg-black"
         :src="videoUrl"
         @ended="closeWindow"
-        @error="onVideoError"
+        @error="onMediaError"
       >
         <track kind="captions" />
         Your browser does not support the video tag.
@@ -51,7 +51,8 @@
         class="w-full h-full object-contain bg-black"
         :src="videoUrl"
         alt="Camera snapshot"
-        @error="onVideoError"
+        @load="onImageLoad"
+        @error="onMediaError"
       />
 
       <div
@@ -88,10 +89,22 @@ function setName(name?: string | null) {
 }
 
 function clearImageCloseTimer() {
-  if (imageCloseTimer) {
+  if (imageCloseTimer !== null) {
     clearTimeout(imageCloseTimer)
     imageCloseTimer = null
   }
+}
+
+function startImageCloseTimer() {
+  // Stills have no @ended. Repeated load events must not extend their lifetime.
+  if (imageCloseTimer !== null) return
+  imageCloseTimer = setTimeout(() => {
+    void closeWindow()
+  }, 12000)
+}
+
+function onImageLoad() {
+  if (isPluginMedia.value && mediaKind.value === 'image') startImageCloseTimer()
 }
 
 function loadLocalClip(localPath: string, name?: string | null, media?: string | null) {
@@ -102,10 +115,7 @@ function loadLocalClip(localPath: string, name?: string | null, media?: string |
   videoUrl.value = convertFileSrc(localPath)
   if (mediaKind.value === 'image') {
     clearImageCloseTimer()
-    // Stills have no @ended — auto-close after a short view.
-    imageCloseTimer = setTimeout(() => {
-      void closeWindow()
-    }, 12000)
+    startImageCloseTimer()
     return
   }
   requestAnimationFrame(() => {
@@ -128,9 +138,16 @@ function showError(message: string, name?: string | null) {
   logger.warn('Camera clip error:', message)
 }
 
-function onVideoError() {
-  errorMessage.value = 'Failed to play camera clip. Local file may be missing or unsupported.'
-  if (isPluginMedia.value) logger.warn('Plugin video playback failed')
+function onMediaError() {
+  if (isPluginMedia.value) clearImageCloseTimer()
+  errorMessage.value =
+    mediaKind.value === 'image'
+      ? 'Failed to display camera snapshot. Local file may be missing or unsupported.'
+      : 'Failed to play camera clip. Local file may be missing or unsupported.'
+  if (isPluginMedia.value)
+    logger.warn(
+      mediaKind.value === 'image' ? 'Plugin image display failed' : 'Plugin video playback failed'
+    )
   else logger.warn('Camera video playback error for', videoUrl.value)
   videoUrl.value = ''
 }
@@ -187,10 +204,15 @@ onMounted(() => {
     if (!route) {
       showError('This video window is unavailable.')
     } else if (route.failed) {
-      showError('Failed to download camera clip.', route.name)
+      showError(
+        route.mediaKind === 'image'
+          ? 'Failed to download camera snapshot.'
+          : 'Failed to download camera clip.',
+        route.name
+      )
     } else {
       setName(route.name)
-      mediaKind.value = 'video'
+      mediaKind.value = route.mediaKind
       videoUrl.value = convertFileSrc(route.id, 'plugin-media')
     }
     return

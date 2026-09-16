@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.6.0";
+pub const HOST_API_VERSION: &str = "1.7.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
-pub const MAX_CONTRIBUTIONS: usize = 64;
+pub const MAX_CONTRIBUTIONS: usize = 128;
 pub const MAX_ACTION_PARAMS_BYTES: usize = 4 * 1024;
 pub const MAX_ACTION_RESULT_BYTES: usize = 16 * 1024;
 pub const MAX_ACTION_DEADLINE_MS: u64 = 60_000;
@@ -80,6 +80,8 @@ pub enum WorkerMessage {
         id: String,
         url: String,
         title: String,
+        #[serde(default, skip_serializing_if = "HttpMediaKind::is_video")]
+        media_kind: HttpMediaKind,
     },
     Notification {
         id: String,
@@ -100,6 +102,24 @@ pub enum WorkerMessage {
         name: String,
         data: Value,
     },
+}
+
+/// The historical `http_video` frame also supports explicitly typed snapshots.
+/// An omitted kind retains the original video wire representation.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpMediaKind {
+    #[default]
+    Video,
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl HttpMediaKind {
+    pub fn is_video(&self) -> bool {
+        *self == Self::Video
+    }
 }
 
 // Diagnostics never render worker data, including private media URLs/titles.
@@ -741,7 +761,7 @@ pub fn validate_worker_message(message: &WorkerMessage) -> Result<(), String> {
             token(revision, "configuration revision")?
         }
         WorkerMessage::Contributions { items } => validate_contributions(items)?,
-        WorkerMessage::HttpVideo { id, url, title } => {
+        WorkerMessage::HttpVideo { id, url, title, .. } => {
             token(id, "HTTP video id")?;
             label(title, "HTTP video title", 128)?;
             validated_video_url(url)?;
@@ -1086,6 +1106,7 @@ mod tests {
             id: "clip-1".into(),
             url: "https://private-camera.test/base/clip.mp4".into(),
             title: "Private camera".into(),
+            media_kind: HttpMediaKind::Video,
         };
         validate_worker_message(&valid).unwrap();
         assert!(!format!("{valid:?}").contains("private-camera"));
@@ -1107,9 +1128,46 @@ mod tests {
                 "Camera\n".into(),
             ),
         ] {
-            assert!(validate_worker_message(&WorkerMessage::HttpVideo { id, url, title }).is_err());
+            assert!(validate_worker_message(&WorkerMessage::HttpVideo {
+                id,
+                url,
+                title,
+                media_kind: HttpMediaKind::Video,
+            })
+            .is_err());
         }
         assert!(parse_worker_frame(br#"{"type":"http_video","id":"x","url":"https://camera.test/x","title":"Camera","headers":{}}"#).is_err());
+    }
+
+    #[test]
+    fn typed_snapshots_preserve_legacy_video_frames_and_reject_unrecognized_kinds() {
+        let legacy = json!({"type":"http_video","id":"media-1","url":"https://camera.test/snapshot","title":"Camera"});
+        let parsed = parse_worker_frame(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(matches!(
+            parsed,
+            WorkerMessage::HttpVideo {
+                media_kind: HttpMediaKind::Video,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+        for kind in ["jpeg", "png", "webp"] {
+            let mut snapshot = legacy.clone();
+            snapshot["media_kind"] = json!(kind);
+            let message = parse_worker_frame(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+            assert_eq!(serde_json::to_value(message).unwrap(), snapshot);
+        }
+        for kind in [
+            json!("svg"),
+            json!("html"),
+            json!("image"),
+            json!(null),
+            json!(1),
+        ] {
+            let mut invalid = legacy.clone();
+            invalid["media_kind"] = kind;
+            assert!(parse_worker_frame(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
     }
 
     fn manifest() -> PluginManifest {
@@ -1499,16 +1557,16 @@ mod tests {
     }
 
     #[test]
-    fn host_api_16_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
-        assert_eq!(HOST_API_VERSION, "1.6.0");
-        for requirement in ["^1.0", "^1.3", "^1.4", "^1.5", "^1.6"] {
+    fn host_api_17_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
+        assert_eq!(HOST_API_VERSION, "1.7.0");
+        for requirement in ["^1.0", "^1.3", "^1.4", "^1.5", "^1.6", "^1.7"] {
             let mut manifest = manifest();
             manifest.host_api = requirement.into();
             manifest.validate().unwrap();
         }
-        assert!(validate_versions(1, "1.6.0").is_ok());
-        assert!(validate_versions(1, "1.5.0").is_err());
-        assert!(validate_versions(2, "1.6.0").is_err());
+        assert!(validate_versions(1, "1.7.0").is_ok());
+        assert!(validate_versions(1, "1.6.0").is_err());
+        assert!(validate_versions(2, "1.7.0").is_err());
     }
 
     #[test]

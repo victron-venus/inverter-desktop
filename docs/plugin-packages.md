@@ -219,8 +219,8 @@ The separate [Home Assistant worker](../desktop-plugins/home-assistant/README.md
 uses the same package/configuration lifecycle with a bounded explicit entity list,
 an HTTP(S) base URL, and a write-only HA token. It declares only dashboard
 contributions, plugin configuration, and direct HTTP/WebSocket networking. The
-worker supplies connection status and state cards. Version 0.11 retains host API
-`^1.6` to group each selected entity's state and explicitly authorized controls
+worker supplies connection status and state cards. Version 0.12 requires host API
+`^1.7` to group each selected entity's state and explicitly authorized controls
 through validated `state_id` references. Existing IDs, parameters and numeric
 revisions retain their authority; equal friendly names do not merge entities.
 Explicitly watched weather entities project condition and a finite temperature
@@ -230,7 +230,7 @@ service authority, configuration fields, contribution kinds or state slots;
 modern forecast subscriptions remain separate work.
 Optional `dishwasher_running_entity` and `dishwasher_duration_entity` settings
 assign two distinct literal entities to a read-only profile. The duration role
-requires the running role; both are watched within the existing 32-state union.
+requires the running role; both are watched within the 64-state union.
 The running entity's existing card combines its state and literal runtime since
 midnight, with no inferred unit, conversion or countdown. The duration card remains independently visible and may have its own
 explicitly configured remaining-time profile. Either role's updates refresh the summary, while unknown or
@@ -264,8 +264,10 @@ never sends a cover Stop command. Numeric inputs use exact bounded decimal grids
 and explicit Apply; changed constraints or eligibility revoke stale submissions.
 Position writes require their own selection and reported set-position support.
 Tilt and other parameterized services remain pending.
-The combined selection permits 32 watched entities and 31 controls, bounded
-to 64 contributions. There is no generic service proxy, core MQTT
+HA 0.12 requires host API `^1.7`. The combined selection permits 64 watched
+entities, up to 16 binary targets, and 63 controls, bounded to 128 contributions
+and the unchanged 64 KiB complete-frame limit. Earlier HA packages retain their
+original limits. There is no generic service proxy, core MQTT
 access, camera authority, or inverter flag alias lookup. Explicit targets use
 individual initial REST reads. Optional `discovery_prefixes` adds read-only
 `sensor.*` and `binary_sensor.*` cards in unused slots after all explicit targets,
@@ -416,6 +418,9 @@ mutex. A lifetime OS file lock excludes another
 manager/process from the same store until owned workers have been reaped. Call
 `close().await` to complete cleanup explicitly; if process cleanup cannot be
 confirmed, the lease must remain held until the hosting process exits.
+Successful cleanup explicitly unlocks the file before closing it, so a descriptor
+temporarily inherited by an unrelated process cannot delay reopening the store.
+An unlock failure retains the lease; explicit close can be retried.
 
 The store uses an atomically created `store-v1/` ownership directory, a bounded
 `state.json` inventory, private

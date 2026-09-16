@@ -4,8 +4,8 @@ import { createI18n } from 'vue-i18n'
 import en from '../messages.en'
 import ru from '../messages.ru'
 import PluginSettingsEditor from './PluginSettingsEditor.vue'
-import { createPluginSettings } from './usePluginSettings'
 import type { PluginSettingsField, PluginSettingsSaveResult, PluginSettingsView } from './types'
+import { createPluginSettings } from './usePluginSettings'
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }))
@@ -118,7 +118,7 @@ describe('desktop plugin settings', () => {
     const host = mounted.find('input[name="host"]')
     expect(mounted.find(`label[for="${host.attributes('id')}"]`).exists()).toBe(true)
     expect(host.attributes('required')).toBeDefined()
-    expect(host.attributes('maxlength')).toBe('4096')
+    expect(host.attributes('maxlength')).toBe('512')
     expect(host.attributes('minlength')).toBeUndefined()
     expect(mounted.find('input[name="port"]').attributes('step')).toBe('1')
     expect(mounted.find('input[name="threshold"]').attributes('step')).toBe('any')
@@ -127,6 +127,31 @@ describe('desktop plugin settings', () => {
     expect((password.element as HTMLInputElement).value).toBe('')
     expect(mounted.text()).toContain('A secret is stored.')
     expect(saves()).toHaveLength(0)
+  })
+
+  it('accepts complete 64-entity fields and expanded secrets within the native scalar bound', async () => {
+    const entities = Array.from(
+      { length: 64 },
+      (_, index) => `sensor.${String(index).padStart(2, '0')}${'x'.repeat(119)}`
+    ).join(',')
+    expect(entities).toHaveLength(8255)
+    view.fields[0].max_length = 8255
+    view.fields[5].max_length = 8255
+    const mounted = await open()
+    const host = mounted.find<HTMLInputElement>('input[name="host"]')
+    const token = mounted.find<HTMLInputElement>('input[name="token"]')
+    expect(host.element.maxLength).toBe(16_384)
+    expect(token.element.maxLength).toBe(16_384)
+    expect(mounted.find<HTMLInputElement>('input[name="password"]').element.maxLength).toBe(16_384)
+    expect(mounted.find('input[name="port"]').attributes('maxlength')).toBeUndefined()
+    await host.setValue(entities)
+    await token.setValue('x'.repeat(8255))
+    expect(host.element.checkValidity()).toBe(true)
+    expect(token.element.checkValidity()).toBe(true)
+    await mounted.find('form').trigger('submit')
+    await flushPromises()
+    expect(saves()[0][1].values.host).toBe(entities)
+    expect(saves()[0][1].secretChanges.token).toBe('x'.repeat(8255))
   })
 
   it('saves ordinary primitives with the native revision and keeps unchanged secrets', async () => {
@@ -334,7 +359,7 @@ describe('desktop plugin settings', () => {
     const mounted = await open()
     await mounted.find('input[name="host"]').setValue('😀')
     await mounted.find('input[name="token"]').setValue('😀')
-    expect(mounted.find('input[name="token"]').attributes('maxlength')).toBe('4096')
+    expect(mounted.find('input[name="token"]').attributes('maxlength')).toBe('2')
     expect(mounted.find('input[name="token"]').attributes('minlength')).toBeUndefined()
     await mounted.find('form').trigger('submit')
     await flushPromises()
