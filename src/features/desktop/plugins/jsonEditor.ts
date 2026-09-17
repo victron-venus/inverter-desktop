@@ -1,7 +1,9 @@
+import { toRaw } from 'vue'
 import type { JsonEditorSchema, PluginSettingsChoices } from './types'
 export function initialJsonValue(schema: JsonEditorSchema): unknown {
-  if ('const' in schema) return structuredClone(schema.const)
-  if ('default' in schema) return structuredClone(schema.default)
+  // IPC schemas become reactive in the settings store; structuredClone rejects Vue proxies.
+  if ('const' in schema) return structuredClone(toRaw(schema.const))
+  if ('default' in schema) return structuredClone(toRaw(schema.default))
   if (schema.enum?.length) return schema.enum[0]
   if (schema.type === 'object')
     return Object.fromEntries(

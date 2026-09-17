@@ -1,10 +1,16 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
+import homeAssistantManifest from '../../../../scripts/plugins/home-assistant-manifest.json'
 import en from '../messages.en'
 import ru from '../messages.ru'
 import PluginSettingsEditor from './PluginSettingsEditor.vue'
-import type { PluginSettingsField, PluginSettingsSaveResult, PluginSettingsView } from './types'
+import type {
+  JsonEditorSchema,
+  PluginSettingsField,
+  PluginSettingsSaveResult,
+  PluginSettingsView,
+} from './types'
 import { createPluginSettings } from './usePluginSettings'
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }))
@@ -381,6 +387,63 @@ describe('desktop plugin settings', () => {
 })
 
 describe('declarative structured settings', () => {
+  it.each([false, true])(
+    'opens and edits the Home Assistant manifest layout with a saved value: %s',
+    async (hasSavedLayout) => {
+      const layout = homeAssistantManifest.config_schema.properties.dashboard_layout
+      view.plugin_id = homeAssistantManifest.plugin_id
+      view.fields = [
+        field('dashboard_layout', {
+          title: layout.title,
+          editor: { kind: 'json', schema: layout['x-editor'].schema as JsonEditorSchema },
+        }),
+      ]
+      const savedLayout = {
+        version: 1,
+        controls: [],
+        sections: { sensors: false },
+        appliances: {},
+      }
+      view.values = hasSavedLayout ? { dashboard_layout: JSON.stringify(savedLayout) } : {}
+      native.invoke.mockImplementation(async (command: string, args) => {
+        if (command === 'get_plugin_settings') return structuredClone(view)
+        if (command === 'get_plugin_settings_choices') return { revision: null, sources: {} }
+        if (command === 'save_plugin_settings')
+          return { settings: { ...view, values: args.values }, restart_error: null }
+        throw new Error(`Unexpected IPC: ${command}`)
+      })
+
+      const mounted = await open()
+      const controls = mounted
+        .findAll('fieldset')
+        .find((item) => item.find('legend').text() === 'Header and Home controls')!
+      expect(controls.exists()).toBe(true)
+      expect(saves()).toHaveLength(0)
+      await controls.get('button').trigger('click')
+      await mounted.get('input[aria-label="Stable control ID"]').setValue('porch')
+      await mounted.get('input[aria-label="Label"]').setValue('Porch')
+      await mounted.get('input[aria-label="Home Assistant entity"]').setValue('switch.porch')
+      await mounted.get('form').trigger('submit')
+      await flushPromises()
+
+      expect(JSON.parse(saves()[0][1].values.dashboard_layout)).toEqual({
+        ...(hasSavedLayout ? savedLayout : { version: 1 }),
+        controls: [
+          {
+            id: 'porch',
+            surface: 'home',
+            order: 0,
+            label: 'Porch',
+            entity: 'switch.porch',
+            icon: 'plug',
+          },
+        ],
+      })
+      expect(mounted.text()).toContain('Settings saved.')
+      expect(layout['x-editor'].schema.properties.controls.default).toEqual([])
+    }
+  )
+
   it('edits nested layout fields and exact discovered targets without exposing raw JSON', async () => {
     view.fields = [
       field('layout', {
