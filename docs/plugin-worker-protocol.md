@@ -557,6 +557,9 @@ timeout; an unresponsive hidden native bootstrap is closed after thirty seconds.
 These limits do not extend the preview grant's original lifetime. Positioning is
 resolved when the window becomes visible, and reveal does not take keyboard
 focus or move an already-visible window.
+On macOS 14 and newer, camera webviews disable WebKit's inactive suspension so
+authentication, decoding, and the startup timeout can finish while hidden. The
+native lifetime limits remain in force; this policy is scoped to camera windows.
 
 The player receives an opaque UUID through the `plugin-media` scheme. Requests are
 bound to the exact requesting webview label and original running instance, with

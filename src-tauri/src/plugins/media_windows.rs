@@ -301,7 +301,11 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     #[cfg(target_os = "macos")]
     let builder = builder
         .hidden_title(true)
-        .title_bar_style(tauri::TitleBarStyle::Transparent);
+        .title_bar_style(tauri::TitleBarStyle::Transparent)
+        // WebKit must process auth, image and timer callbacks while the window
+        // waits hidden for its first frame. The lease and bootstrap watchdog
+        // still bound the lifetime of this otherwise inactive webview.
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled);
     // Live views and the explicit harness never reuse a persistent browser store.
     #[cfg(feature = "native-media-smoke")]
     let builder = builder.incognito(live || super::bridge::native_media_smoke_session(app));

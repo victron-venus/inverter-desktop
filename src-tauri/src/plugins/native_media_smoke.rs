@@ -27,6 +27,7 @@ struct Options {
     hold: Duration,
     minimum_loading: Duration,
     expected_live_outcome: String,
+    diagnose_hidden: bool,
 }
 
 fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
@@ -37,6 +38,7 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut hold = Duration::ZERO;
     let mut minimum_loading = Duration::ZERO;
     let mut expected_live_outcome = "ready".to_owned();
+    let mut diagnose_hidden = false;
     while let Some(argument) = args.next() {
         let value = args.next().ok_or("Every option requires a value")?;
         match argument.as_str() {
@@ -66,6 +68,7 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
             {
                 expected_live_outcome = value;
             }
+            "--diagnose-hidden" if value == "true" => diagnose_hidden = true,
             _ => return Err("Unknown or repeated native media smoke option".into()),
         }
     }
@@ -77,6 +80,7 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         hold,
         minimum_loading,
         expected_live_outcome,
+        diagnose_hidden,
     };
     if !live && (minimum_loading != Duration::ZERO || result.expected_live_outcome != "ready") {
         return Err("Loading expectations require --live-fixture-url".into());
@@ -272,12 +276,24 @@ fn get_live_preview_url(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Arc<SmokeState>>,
 ) -> Result<String, String> {
+    state.check(
+        &format!("source_command_entered:{}", window.label()),
+        json!(true),
+    );
+    state.persist()?;
     state
         .sources
         .lock()
         .unwrap()
         .insert(window.label().into(), tokio::time::Instant::now());
-    super::bridge::get_live_preview_url(window)
+    let label = window.label().to_owned();
+    let result = super::bridge::get_live_preview_url(window);
+    state.check(
+        &format!("source_command_succeeded:{label}"),
+        json!(result.is_ok()),
+    );
+    state.persist()?;
+    result
 }
 
 /// Observe the real DOM while it is still hidden, then use the production show
@@ -287,6 +303,11 @@ async fn reveal_plugin_video_window(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Arc<SmokeState>>,
 ) -> Result<(), String> {
+    state.check(
+        &format!("reveal_command_entered:{}", window.label()),
+        json!(true),
+    );
+    state.persist()?;
     let visible = window
         .is_visible()
         .map_err(|_| "Cannot inspect pre-reveal visibility")?;
@@ -382,6 +403,7 @@ const READINESS_SAMPLE: &str = r#"(() => {
     pixel, patternReady,
     toolbar:!!document.querySelector('[aria-label="Camera window controls"]'),
     closeButton:!!document.querySelector('button[aria-label="Close"]'),
+    imageSourceAssigned:!!image?.getAttribute('src'), visibility:document.visibilityState,
     message:document.querySelector('p')?.textContent.trim() || ''};
 })()"#;
 
@@ -698,11 +720,14 @@ async fn exercise_live(
                     .then_some(()))
             })
             .await?;
-            let sample = evaluate(&window, READINESS_SAMPLE)
-                .await?
-                .ok_or("Cannot inspect unrevealed live fixture")?;
-            if sample["decoded"] != false {
-                return Err("Revocation fixture decoded before the loading check".into());
+            let reveal_requested = state
+                .evidence
+                .lock()
+                .unwrap()
+                .checks
+                .contains_key(&format!("reveal_command_entered:{}", window.label()));
+            if reveal_requested {
+                return Err("Stalled fixture requested reveal before revocation".into());
             }
             lease.revoke();
             until(|| {
@@ -715,31 +740,54 @@ async fn exercise_live(
             until(|| Ok((!media.has_owned_work()).then_some(()))).await?;
             state.check(
                 "revoked_while_loading_stayed_hidden",
-                json!({"sample":sample,"elapsed_seconds":started.elapsed().as_secs_f64()}),
+                json!({"reveal_requested":reveal_requested,"visible_before_revocation":false,"elapsed_seconds":started.elapsed().as_secs_f64()}),
             );
             return Ok(());
         }
-        until(|| {
-            if duplicate_during_loading
-                && app
+        let mut diagnostics = [false; 2];
+        timeout(WAIT, async {
+            loop {
+                let media_window_count = app
                     .webview_windows()
                     .values()
                     .filter(|candidate| {
                         super::media_windows::media_id_for_label(candidate.label()).is_some()
                     })
-                    .count()
-                    != 1
-            {
-                return Err("Same camera opened a second native window while loading".into());
+                    .count();
+                if duplicate_during_loading && media_window_count > 1 {
+                    state.check("duplicate_window_count", json!(media_window_count));
+                    return Err("Same camera opened a second native window while loading".into());
+                }
+                if app.get_webview_window(window.label()).is_none() {
+                    return Err(
+                        "Live preview expired without revealing media or its terminal error".into(),
+                    );
+                }
+                if window.is_visible().unwrap_or(false) {
+                    return Ok::<(), String>(());
+                }
+                for (index, seconds) in [3, 11].into_iter().enumerate() {
+                    if options.diagnose_hidden
+                        && !diagnostics[index]
+                        && started.elapsed() >= Duration::from_secs(seconds)
+                    {
+                        diagnostics[index] = true;
+                        let sample = evaluate(&window, READINESS_SAMPLE).await?;
+                        state.check(
+                            &format!("hidden_loading_at_{seconds}s:{}", window.label()),
+                            json!({
+                                "sample":sample,"media_window_count":media_window_count,
+                                "visible":window.is_visible().unwrap_or(false),
+                            }),
+                        );
+                        state.persist()?;
+                    }
+                }
+                sleep(Duration::from_millis(50)).await;
             }
-            if app.get_webview_window(window.label()).is_none() {
-                return Err(
-                    "Live preview expired without revealing media or its terminal error".into(),
-                );
-            }
-            Ok(window.is_visible().unwrap_or(false).then_some(()))
         })
-        .await?;
+        .await
+        .map_err(|_| "Timed out waiting for native live reveal")??;
         if duplicate_during_loading {
             state.check(
                 "same_camera_duplicate_while_loading_suppressed",
@@ -1078,6 +1126,7 @@ pub fn run() -> Result<(), String> {
         println!("Use a decodable video MP4 larger than one MiB, lasting 8–40 seconds (at least hold + 6 seconds). No production services or settings are opened.");
         println!("Live mode: --live-fixture-url 'http://127.0.0.1:PORT/prefix/api/front?fps=2&height=360' --evidence /absolute/new.json. Serve MJPEG with alternating distinct frames for native decoding and 15-second expiry proof.");
         println!("Live readiness proof: [--minimum-loading-ms 0..12000] [--expected-live-outcome ready|still|error|timeout|revoke-loading]. Every window must remain hidden during an isolated 750 ms AuthGate bootstrap and until its decoded media or expected terminal error.");
+        println!("Diagnostic only: --diagnose-hidden true evaluates the hidden DOM at 3s/11s and may wake a throttled webview; do not use this option as hidden-readiness acceptance.");
         return Ok(());
     }
     let options = options(arguments)?;
@@ -1119,6 +1168,7 @@ pub fn run() -> Result<(), String> {
         .canonicalize()
         .map_err(|_| "Cannot canonicalize private smoke profile")?;
     let builder = super::media_windows::register(tauri::Builder::default())
+        .append_invoke_initialization_script(format!(";{OBSERVER};"))
         .manage(state.clone())
         .invoke_handler(|invoke| {
             if super::media_windows::media_id_for_label(invoke.message.webview().label()).is_some()
@@ -1140,11 +1190,6 @@ pub fn run() -> Result<(), String> {
                 super::bridge::drag_plugin_video_window
             ];
             handler(invoke)
-        })
-        .on_page_load(|webview, _| {
-            if super::media_windows::media_id_for_label(webview.label()).is_some() {
-                let _ = webview.eval(OBSERVER);
-            }
         })
         .setup(move |app| {
             tauri::WebviewWindowBuilder::new(
