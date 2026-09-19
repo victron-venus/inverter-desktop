@@ -47,10 +47,13 @@ repos:
       - id: cargo-fmt
         name: cargo fmt
         language: system
-        entry: cargo fmt --manifest-path src-tauri/Cargo.toml --
+        entry: cargo fmt --manifest-path src-tauri/Cargo.toml
         types: [rust]
         exclude: '^src-tauri/vendor/'
-        pass_filenames: true
+        # Cargo discovers crate roots and their modules; staged paths would
+        # format those modules twice and allow overlapping pre-commit batches.
+        pass_filenames: false
+        require_serial: true
   # Use the repository's configured frontend linter; ESLint has no project config.
   - repo: local
     hooks:
