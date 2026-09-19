@@ -51,6 +51,9 @@ repos:
         types: [rust]
         exclude: '^src-tauri/vendor/'
         pass_filenames: true
+        # Every invocation also traverses the host crate, so batches must not
+        # rewrite its shared modules concurrently.
+        require_serial: true
   # Use the repository's configured frontend linter; ESLint has no project config.
   - repo: local
     hooks:
