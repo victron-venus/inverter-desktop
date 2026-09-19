@@ -5,11 +5,13 @@ use super::media::{MediaError, MediaEvent, MediaService, ReadyMedia};
 use super::protocol::HttpMediaKind;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tauri::utils::config::{Csp, CspDirectiveSources};
 use tauri::{http, Manager};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, watch, Semaphore};
 
 const LABEL_PREFIX: &str = "plugin-video-";
+const HIDDEN_WINDOW_TIMEOUT: Duration = Duration::from_secs(30);
 static RANGE_REQUESTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 pub(crate) fn media_id_for_label(label: &str) -> Option<String> {
@@ -46,6 +48,7 @@ pub(crate) fn preview_command_allowed(command: &str) -> bool {
         command,
         "auth_status"
             | "get_live_preview_url"
+            | "reveal_plugin_video_window"
             | "close_plugin_video_window"
             | "drag_plugin_video_window"
     )
@@ -304,8 +307,10 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     let builder = builder.incognito(live || super::bridge::native_media_smoke_session(app));
     let window = builder.build().map_err(|_| ())?;
     let event_app = app.clone();
+    let (destroyed, destruction) = watch::channel(false);
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Destroyed) {
+            destroyed.send_replace(true);
             crate::reflow_camera_video_windows(&event_app);
         }
     });
@@ -313,10 +318,48 @@ fn open_window(app: &tauri::AppHandle, media: &MediaService, ready: ReadyMedia) 
     if media_access(app).is_none() || !media.window_ready(&ready.media_id, &ready.window_label) {
         return Err(());
     }
-    show_without_focus(&window, media, &ready.media_id)?;
-    // Native visibility is asynchronous. A revocation after the final check
-    // still revokes media access immediately and queues destruction of this window.
+    expire_hidden_window(app, media, ready.media_id, ready.window_label, destruction);
+    // The viewer reveals its own window only after displaying media or an error.
     Ok(())
+}
+
+pub(crate) fn reveal_window(window: &tauri::WebviewWindow) -> Result<(), ()> {
+    let media_id = media_id_for_label(window.label()).ok_or(())?;
+    let media = media_access(window.app_handle()).ok_or(())?;
+    show_without_focus(window, &media, &media_id)
+}
+
+fn expire_hidden_window(
+    app: &tauri::AppHandle,
+    media: &MediaService,
+    media_id: String,
+    window_label: String,
+    mut destruction: watch::Receiver<bool>,
+) {
+    let app = app.clone();
+    let media = media.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::select! {
+            _ = destruction.wait_for(|destroyed| *destroyed) => return,
+            _ = tokio::time::sleep(HIDDEN_WINDOW_TIMEOUT) => {},
+        }
+        let event_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(window) = event_app.get_webview_window(&window_label) else {
+                return;
+            };
+            // Serialize expiry with reveal. Retire visibility authority before
+            // destruction so a delayed readiness callback cannot revive it.
+            if window.is_visible().unwrap_or(false)
+                || !media.window_closing(&media_id, &window_label)
+            {
+                return;
+            }
+            if window.destroy().is_err() {
+                media.window_cleanup_failed(&window_label);
+            }
+        });
+    });
 }
 
 fn live_image_csp(csp: &http::HeaderValue, url: &reqwest::Url) -> Option<http::HeaderValue> {
@@ -357,19 +400,6 @@ fn image_sources_csp(csp: &http::HeaderValue, sources: &[&str]) -> Option<http::
     http::HeaderValue::from_str(&Csp::from(policy).to_string()).ok()
 }
 
-#[cfg(not(target_os = "macos"))]
-fn show_without_focus(
-    window: &tauri::WebviewWindow,
-    media: &MediaService,
-    media_id: &str,
-) -> Result<(), ()> {
-    if !media.is_window_active(media_id, window.label()) {
-        return Err(());
-    }
-    window.show().map_err(|_| ())
-}
-
-#[cfg(target_os = "macos")]
 fn show_without_focus(
     window: &tauri::WebviewWindow,
     media: &MediaService,
@@ -387,13 +417,27 @@ fn show_without_focus(
     window
         .run_on_main_thread(move || {
             // A delayed UI callback cannot revive already-retired media.
-            if !media.is_window_active(&media_id, showing.label()) {
+            if media_access(showing.app_handle()).is_none()
+                || !media.is_window_active(&media_id, showing.label())
+            {
                 let _ = sent.send(Err(()));
                 return;
             }
+            if showing.is_visible().unwrap_or(false) {
+                let _ = sent.send(Ok(()));
+                return;
+            }
+            // Hidden peers do not occupy stack slots. Choose the slot only at
+            // reveal, and never reposition an already-visible, possibly dragged viewer.
+            crate::position_camera_video_stacked(showing.app_handle(), &showing);
+            #[cfg(target_os = "macos")]
             let shown = showing.set_focusable(false).and_then(|_| showing.show());
+            #[cfg(target_os = "macos")]
             let restored = showing.set_focusable(true);
+            #[cfg(target_os = "macos")]
             let _ = sent.send(shown.and(restored).map_err(|_| ()));
+            #[cfg(not(target_os = "macos"))]
+            let _ = sent.send(showing.show().map_err(|_| ()));
         })
         .map_err(|_| ())?;
     received.recv().map_err(|_| ())?
@@ -423,6 +467,7 @@ mod tests {
         for allowed in [
             "auth_status",
             "get_live_preview_url",
+            "reveal_plugin_video_window",
             "close_plugin_video_window",
             "drag_plugin_video_window",
         ] {

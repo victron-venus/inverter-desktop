@@ -49,8 +49,22 @@ const NOTIFICATION_DELIVERY_TTL: Duration = Duration::from_secs(30);
 
 const HTTP_VIDEO_QUEUE_CAPACITY: usize = 4;
 
+/// Stable camera identity for native admission only, never public snapshots.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum MediaCameraId {
+    Explicit(String),
+    HttpPreview(String),
+}
+
+#[derive(PartialEq, Eq)]
+enum MediaCooldownId {
+    Camera(MediaCameraId),
+    LegacyTitle(String),
+}
+
 /// Native ownership only: URLs/titles never enter public worker snapshots.
 pub(crate) struct QueuedHttpVideo {
+    pub camera_id: Option<MediaCameraId>,
     pub live_preview: bool,
     pub lease: GenerationLease,
     pub grant: HttpVideoGrant,
@@ -64,7 +78,7 @@ pub(crate) struct QueuedHttpVideo {
 struct HttpVideoState {
     pending: VecDeque<(QueuedHttpVideo, Instant)>,
     seen: VecDeque<(String, Instant)>,
-    titles: VecDeque<(String, Instant)>,
+    cooldowns: VecDeque<(MediaCooldownId, Instant)>,
     rate: NotificationRate,
 }
 
@@ -249,6 +263,20 @@ impl WorkerEntry {
         title: String,
         admission: MediaAdmission,
     ) -> bool {
+        let camera_id = if let Some(id) = &admission.cooldown_id {
+            Some(MediaCameraId::Explicit(id.clone()))
+        } else if admission.live_preview {
+            let Ok(mut source) = grant.validate_preview_url(&url) else {
+                return false;
+            };
+            // Frigate's validated endpoint has one stable path per camera.
+            // Query credentials and fragments never define camera identity.
+            source.set_query(None);
+            source.set_fragment(None);
+            Some(MediaCameraId::HttpPreview(source.into()))
+        } else {
+            None
+        };
         let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         if snapshot.state != WorkerState::Running
             || *self.stop.borrow()
@@ -273,20 +301,30 @@ impl WorkerEntry {
             .seen
             .retain(|(_, created)| now.duration_since(*created) < NOTIFICATION_DEDUP_TTL);
         state
-            .titles
+            .cooldowns
             .retain(|(_, created)| now.duration_since(*created) < grant.cooldown());
-        let cooldown_id = admission.cooldown_id.unwrap_or_else(|| title.clone());
+        let cooldown_id = camera_id
+            .clone()
+            .map(MediaCooldownId::Camera)
+            .unwrap_or_else(|| MediaCooldownId::LegacyTitle(title.clone()));
         state.rate.refresh();
         if state.pending.len() >= HTTP_VIDEO_QUEUE_CAPACITY
             || state.seen.len() >= NOTIFICATION_SEEN_CAPACITY
             || state.seen.iter().any(|(seen, _)| seen == &id)
-            || state.titles.iter().any(|(seen, _)| seen == &cooldown_id)
+            || state.cooldowns.iter().any(|(seen, _)| seen == &cooldown_id)
+            || camera_id.as_ref().is_some_and(|camera| {
+                state
+                    .pending
+                    .iter()
+                    .any(|(request, _)| request.camera_id.as_ref() == Some(camera))
+            })
             || state.rate.count >= NOTIFICATIONS_PER_WORKER_PER_MINUTE
         {
             return false;
         }
         state.rate.count += 1;
         let request = QueuedHttpVideo {
+            camera_id,
             live_preview: admission.live_preview,
             lease,
             grant: grant.clone(),
@@ -296,7 +334,7 @@ impl WorkerEntry {
             media_kind: admission.kind,
         };
         state.seen.push_back((request.id.clone(), now));
-        state.titles.push_back((cooldown_id, now));
+        state.cooldowns.push_back((cooldown_id, now));
         state.pending.push_back((request, now));
         true
     }

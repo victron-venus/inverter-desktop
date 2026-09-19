@@ -30,11 +30,14 @@
 
       <video
         v-if="videoUrl && mediaKind === 'video'"
+        ref="videoElement"
         autoplay
         muted
         playsinline
         class="w-full h-full object-contain bg-black"
         :src="videoUrl"
+        @loadedmetadata="startPlayback"
+        @playing="onVideoPlaying"
         @ended="closeWindow"
         @error="onMediaError"
       >
@@ -44,6 +47,7 @@
 
       <img
         v-else-if="videoUrl && (mediaKind === 'image' || mediaKind === 'live')"
+        ref="imageElement"
         class="w-full h-full object-contain bg-black"
         :src="videoUrl"
         :alt="mediaKind === 'live' ? 'Live camera' : 'Camera snapshot'"
@@ -55,7 +59,10 @@
         v-else
         class="flex-1 min-h-0 flex flex-col overflow-y-auto text-white/70 text-[13px] mt-12 px-4 pb-4 text-center"
       >
-        <p class="my-auto shrink-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <p
+          :role="errorMessage ? 'alert' : undefined"
+          class="my-auto shrink-0 whitespace-pre-wrap [overflow-wrap:anywhere]"
+        >
           {{
             errorMessage ||
             (mediaKind === 'live' ? 'Connecting to live camera…' : 'Waiting for camera clip…')
@@ -70,7 +77,7 @@
 import { X } from '@lucide/vue'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import ErrorBoundary from '../../../components/ErrorBoundary.vue'
 import { logger } from '../../../logger'
 import { pluginVideoRoute } from './pluginVideoRoute'
@@ -79,8 +86,102 @@ const videoUrl = ref('')
 const cameraName = ref('Camera')
 const errorMessage = ref('')
 const mediaKind = ref<'video' | 'image' | 'live'>('video')
+const videoElement = ref<HTMLVideoElement | null>(null)
+const imageElement = ref<HTMLImageElement | null>(null)
 let disposed = false
+let closing = false
+let ownedRoute = false
+let revealRequested = false
+let playing = false
 let imageCloseTimer: ReturnType<typeof setTimeout> | null = null
+let readyTimer: ReturnType<typeof setTimeout> | null = null
+let framePoll: ReturnType<typeof setInterval> | null = null
+let imageReadinessContext: CanvasRenderingContext2D | null = null
+
+function clearReadinessTimers() {
+  if (readyTimer !== null) clearTimeout(readyTimer)
+  if (framePoll !== null) clearInterval(framePoll)
+  readyTimer = null
+  framePoll = null
+}
+
+async function revealWindow() {
+  if (!ownedRoute || disposed || closing || revealRequested) return
+  revealRequested = true
+  clearReadinessTimers()
+  // Flush a ready frame's element or the final error message before showing the
+  // native window. Animation callbacks can be suspended while it is hidden.
+  await nextTick()
+  if (disposed || closing) return
+  try {
+    await invoke('reveal_plugin_video_window')
+    if (!disposed && !closing && !errorMessage.value && mediaKind.value === 'image') {
+      startImageCloseTimer()
+    }
+  } catch {
+    logger.warn('Cannot reveal owned plugin video window')
+    void closeWindow()
+  }
+}
+
+function checkFirstFrame() {
+  if (disposed || closing || errorMessage.value) return
+  if (mediaKind.value === 'live') {
+    // Poll too: an ongoing MJPEG response need not produce repeated load events.
+    if (hasImageFrame()) void revealWindow()
+  } else if (mediaKind.value === 'video') {
+    const video = videoElement.value
+    if (
+      playing &&
+      video &&
+      !video.paused &&
+      !video.ended &&
+      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+      video.videoWidth > 0 &&
+      video.videoHeight > 0
+    ) {
+      void revealWindow()
+    }
+  }
+}
+
+function hasImageFrame() {
+  const image = imageElement.value
+  if (!image || image.naturalWidth === 0 || image.naturalHeight === 0) return false
+  imageReadinessContext ??= document.createElement('canvas').getContext('2d')
+  try {
+    // Dimensions alone can come from a JPEG header before any pixels arrive.
+    // A pattern requires a decodable image (the first complete MJPEG part also
+    // qualifies). No drawing or pixel reads, so camera CORS is not required.
+    return imageReadinessContext?.createPattern(image, 'no-repeat') != null
+  } catch {
+    return false
+  }
+}
+
+async function startPlayback() {
+  const video = videoElement.value
+  if (!video || disposed || closing) return
+  try {
+    // Explicit muted playback also starts in a hidden WebKit window, where
+    // visibility-based autoplay may wait for the window to be shown.
+    await video.play()
+  } catch {
+    if (!disposed && !closing) onMediaError()
+  }
+}
+
+function onVideoPlaying() {
+  playing = true
+  checkFirstFrame()
+}
+
+function waitForFirstFrame() {
+  readyTimer = setTimeout(() => {
+    showError('Camera media did not become ready in time.', cameraName.value)
+  }, 10000)
+  framePoll = setInterval(checkFirstFrame, 100)
+}
 
 function setName(name?: string | null) {
   cameraName.value = name?.trim() || 'Camera'
@@ -102,7 +203,7 @@ function startImageCloseTimer() {
 }
 
 function onImageLoad() {
-  if (mediaKind.value === 'image') startImageCloseTimer()
+  if (hasImageFrame()) void revealWindow()
 }
 
 function showError(message: string, name?: string | null) {
@@ -110,6 +211,7 @@ function showError(message: string, name?: string | null) {
   setName(name)
   errorMessage.value = message
   logger.warn('Camera clip error:', message)
+  void revealWindow()
 }
 
 function onMediaError() {
@@ -128,13 +230,18 @@ function onMediaError() {
         : 'Plugin video playback failed'
   )
   videoUrl.value = ''
+  void revealWindow()
 }
 
 async function closeWindow() {
+  if (closing || disposed) return
+  closing = true
+  clearReadinessTimers()
   clearImageCloseTimer()
   try {
     await invoke('close_plugin_video_window')
   } catch {
+    closing = false
     logger.warn('Cannot close owned plugin video window')
   }
 }
@@ -158,6 +265,7 @@ onMounted(async () => {
     // Browser-only previews have no native window or plugin media authority.
   }
   const route = pluginVideoRoute(globalThis.location.search, label)
+  ownedRoute = route !== null
   if (!route) showError('This video window is unavailable.')
   else if (route.failed)
     showError(
@@ -171,12 +279,13 @@ onMounted(async () => {
   else {
     setName(route.name)
     mediaKind.value = route.mediaKind
+    waitForFirstFrame()
     if (route.mediaKind === 'live') {
       try {
         // The host resolves only this window's active, verified grant. Source
         // URLs never come from route parameters, snapshots, or arbitrary IDs.
         const url = await invoke<string>('get_live_preview_url')
-        if (disposed) return
+        if (disposed || closing || errorMessage.value) return
         if (typeof url !== 'string' || !url.trim()) throw new Error('Live preview unavailable')
         const parsed = new URL(url)
         if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
@@ -196,5 +305,6 @@ onUnmounted(() => {
   disposed = true
   videoUrl.value = ''
   clearImageCloseTimer()
+  clearReadinessTimers()
 })
 </script>

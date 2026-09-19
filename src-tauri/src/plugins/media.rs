@@ -10,7 +10,7 @@ use super::http_video::{
     VideoTransfer, MAX_CLIP_BYTES,
 };
 use super::protocol::HttpMediaKind;
-use super::runtime::QueuedHttpVideo;
+use super::runtime::{MediaCameraId, QueuedHttpVideo};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::path::{Component, Path, PathBuf};
@@ -99,6 +99,7 @@ enum Phase {
 }
 
 struct Item {
+    camera_id: Option<MediaCameraId>,
     lease: GenerationLease,
     label: String,
     phase: Phase,
@@ -224,12 +225,24 @@ impl MediaService {
             format!("plugin-video-{id}")
         };
         let (retired, receiver) = watch::channel(false);
-        request
+        let admitted = request
             .lease
             .commit_if_active(|| {
                 let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.root.is_none() {
                     return Err(MediaError::Unavailable);
+                }
+                // Keep camera ownership through queued, hidden, visible and
+                // closing phases, including revoked generations whose native
+                // window has not yet acknowledged destruction. Never replay a
+                // duplicate later when this item finally releases its slot.
+                if request.camera_id.as_ref().is_some_and(|camera| {
+                    state.items.values().any(|item| {
+                        item.lease.plugin_id() == request.lease.plugin_id()
+                            && item.camera_id.as_ref() == Some(camera)
+                    })
+                }) {
+                    return Ok(false);
                 }
                 if state
                     .items
@@ -243,6 +256,7 @@ impl MediaService {
                 state.items.insert(
                     id.clone(),
                     Item {
+                        camera_id: request.camera_id.clone(),
                         lease: request.lease.clone(),
                         label,
                         phase: Phase::Queued,
@@ -254,9 +268,12 @@ impl MediaService {
                         cleanup_failed: false,
                     },
                 );
-                Ok(())
+                Ok(true)
             })
             .map_err(|_| MediaError::Unavailable)??;
+        if !admitted {
+            return Ok(());
+        }
         tasks.retain(|task| !task.is_finished());
         let service = self.clone();
         tasks.push(tokio::spawn(async move {
@@ -311,9 +328,30 @@ impl MediaService {
             .flatten()
     }
 
-    /// Call again after hidden construction, immediately before native display.
+    /// Recheck ownership after hidden construction or before native display.
     pub(crate) fn window_ready(&self, id: &str, label: &str) -> bool {
         self.is_window_active(id, label)
+    }
+
+    /// Revoke display authority before closing an unresponsive hidden viewer.
+    /// The file and slot remain owned until native destruction is acknowledged.
+    pub(crate) fn window_closing(&self, id: &str, label: &str) -> bool {
+        let Some(lease) = self.window_lease(id, label) else {
+            return false;
+        };
+        lease
+            .commit_if_active(|| {
+                let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(item) = state.items.get_mut(id) else {
+                    return false;
+                };
+                if item.label != label || item.phase != Phase::Ready || *item.retired.borrow() {
+                    return false;
+                }
+                item.phase = Phase::Closing;
+                true
+            })
+            .unwrap_or(false)
     }
 
     fn window_lease(&self, id: &str, label: &str) -> Option<GenerationLease> {

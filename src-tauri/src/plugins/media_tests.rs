@@ -38,6 +38,7 @@ fn request(base: &str, lease: GenerationLease) -> QueuedHttpVideo {
         .unwrap()
         .unwrap();
     QueuedHttpVideo {
+        camera_id: None,
         live_preview: false,
         lease,
         grant,
@@ -736,6 +737,8 @@ async fn ranges_are_window_bound_bounded_and_revoked_immediately() {
     );
     generation.revoke();
     assert!(!service.is_window_active(&clip.media_id, &clip.window_label));
+    assert!(!service.window_ready(&clip.media_id, &clip.window_label));
+    assert!(!service.window_closing(&clip.media_id, &clip.window_label));
     assert!(matches!(
         service
             .read_range(&clip.media_id, &clip.window_label, Some("bytes=0-1"), false)
@@ -904,6 +907,7 @@ async fn full_storage_keeps_eight_requests_queued_without_network_or_disk_work()
             state.items.insert(
                 Uuid::new_v4().to_string(),
                 Item {
+                    camera_id: None,
                     lease: lease(),
                     label: "occupied".into(),
                     phase: Phase::Ready,
@@ -1213,6 +1217,7 @@ async fn preview_needs_only_window_capacity_while_clip_transfers_and_bytes_are_f
             state.items.insert(
                 Uuid::new_v4().to_string(),
                 Item {
+                    camera_id: None,
                     lease: lease(),
                     label: "occupied-clip".into(),
                     phase: Phase::Downloading,
@@ -1252,6 +1257,145 @@ fn live_request(base: &str, lease: GenerationLease) -> QueuedHttpVideo {
     request
 }
 
+fn camera_request(owner: GenerationLease, camera: MediaCameraId, event: &str) -> QueuedHttpVideo {
+    let mut request = live_request("http://127.0.0.1:1", owner);
+    request.camera_id = Some(camera);
+    request.id = event.into();
+    request
+}
+
+#[tokio::test]
+async fn same_camera_is_reserved_until_native_destruction_across_generation_changes() {
+    for camera in [
+        MediaCameraId::Explicit("front".into()),
+        MediaCameraId::HttpPreview("http://127.0.0.1:1/api/front".into()),
+    ] {
+        let (_directory, service, mut events) = service(policy()).await;
+        let owner = lease();
+        service
+            .try_submit(camera_request(owner.clone(), camera.clone(), "first"))
+            .unwrap();
+        service
+            .try_submit(camera_request(
+                owner.clone(),
+                camera.clone(),
+                "queued-repeat",
+            ))
+            .unwrap();
+        assert_eq!(service.0.state.lock().unwrap().items.len(), 1);
+        let first = ready(&mut events).await;
+        assert!(service.window_ready(&first.media_id, &first.window_label));
+        let mut repeat = camera_request(owner.clone(), camera.clone(), "hidden-repeat");
+        repeat.title = "A changed camera title".into();
+        service.try_submit(repeat).unwrap();
+        assert!(events.try_recv().is_err());
+        assert_eq!(service.0.state.lock().unwrap().items.len(), 1);
+
+        let sibling_owner = lease();
+        service
+            .try_submit(camera_request(
+                sibling_owner.clone(),
+                MediaCameraId::Explicit("other-camera".into()),
+                "sibling",
+            ))
+            .unwrap();
+        let sibling = ready(&mut events).await;
+        assert_eq!(service.0.state.lock().unwrap().items.len(), 2);
+
+        assert!(service.window_closing(&first.media_id, &first.window_label));
+        owner.revoke();
+        let MediaEvent::Close { window_label } = events.recv().await.unwrap() else {
+            panic!("expected revoked camera close")
+        };
+        assert_eq!(window_label, first.window_label);
+        let replacement_owner = lease();
+        service
+            .try_submit(camera_request(
+                replacement_owner.clone(),
+                camera.clone(),
+                "closing-repeat",
+            ))
+            .unwrap();
+        assert!(events.try_recv().is_err());
+        assert_eq!(
+            service.0.state.lock().unwrap().items.len(),
+            2,
+            "new generations cannot overlap a closing native camera window"
+        );
+        assert!(service.window_ready(&sibling.media_id, &sibling.window_label));
+
+        service.window_destroyed(&first.window_label);
+        timeout(Duration::from_secs(1), async {
+            while service
+                .0
+                .state
+                .lock()
+                .unwrap()
+                .items
+                .contains_key(&first.media_id)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        service
+            .try_submit(camera_request(replacement_owner, camera, "new-motion"))
+            .unwrap();
+        let next = ready(&mut events).await;
+        assert_ne!(next.window_label, first.window_label);
+        assert!(
+            events.try_recv().is_err(),
+            "suppressed repeats never replay"
+        );
+        service.window_destroyed(&sibling.window_label);
+        service.window_destroyed(&next.window_label);
+        idle(&service).await;
+        service.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn simultaneous_camera_events_create_one_item_and_provider_namespaces_stay_independent() {
+    let (_directory, service, mut events) = service(policy()).await;
+    let owner = lease();
+    let barrier = Arc::new(tokio::sync::Barrier::new(8));
+    let mut submissions = Vec::new();
+    for index in 0..8 {
+        let service = service.clone();
+        let owner = owner.clone();
+        let barrier = barrier.clone();
+        submissions.push(tokio::spawn(async move {
+            barrier.wait().await;
+            service.try_submit(camera_request(
+                owner,
+                MediaCameraId::Explicit("front".into()),
+                &format!("motion-{index}"),
+            ))
+        }));
+    }
+    for submission in submissions {
+        submission.await.unwrap().unwrap();
+    }
+    let first = ready(&mut events).await;
+    assert_eq!(service.0.state.lock().unwrap().items.len(), 1);
+    assert!(events.try_recv().is_err());
+
+    service
+        .try_submit(camera_request(
+            GenerationLease::new("inverter-desktop.kerberos".into(), 1, 1),
+            MediaCameraId::Explicit("front".into()),
+            "other-provider",
+        ))
+        .unwrap();
+    let second = ready(&mut events).await;
+    assert_eq!(service.0.state.lock().unwrap().items.len(), 2);
+    service.window_destroyed(&first.window_label);
+    service.window_destroyed(&second.window_label);
+    idle(&service).await;
+    service.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn live_url_read_requires_the_exact_active_owner_and_revokes_before_native_close() {
     let (_directory, service, mut events) = service(policy()).await;
@@ -1289,6 +1433,45 @@ async fn live_url_read_requires_the_exact_active_owner_and_revokes_before_native
     assert!(service.has_owned_work());
     service.window_destroyed(&window_label);
     idle(&service).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn hidden_window_expiry_revokes_reveal_without_releasing_native_ownership() {
+    let (_directory, service, mut events) = service(policy()).await;
+    let owner = lease();
+    service
+        .try_submit(live_request("http://127.0.0.1:1", owner.clone()))
+        .unwrap();
+    let hidden = ready(&mut events).await;
+    service
+        .try_submit(live_request("http://127.0.0.1:1", owner.clone()))
+        .unwrap();
+    let sibling = ready(&mut events).await;
+
+    assert!(!service.window_closing(&hidden.media_id, "main"));
+    assert!(!service.window_closing(&hidden.media_id, &sibling.window_label));
+    assert!(!service.window_closing(&sibling.media_id, &hidden.window_label));
+    assert!(service.window_ready(&hidden.media_id, &hidden.window_label));
+    assert!(service.window_closing(&hidden.media_id, &hidden.window_label));
+    assert!(!service.window_ready(&hidden.media_id, &hidden.window_label));
+    assert!(!service.window_closing(&hidden.media_id, &hidden.window_label));
+    assert!(service
+        .live_preview_url(&hidden.media_id, &hidden.window_label)
+        .is_none());
+    assert!(service.window_ready(&sibling.media_id, &sibling.window_label));
+    assert!(owner.is_active(), "expiry cannot revoke sibling media");
+    assert_eq!(
+        service.0.state.lock().unwrap().items.len(),
+        2,
+        "hidden timeout does not acknowledge native absence"
+    );
+
+    service.window_destroyed(&hidden.window_label);
+    service.window_destroyed(&sibling.window_label);
+    idle(&service).await;
+    assert!(!service.window_ready(&hidden.media_id, &hidden.window_label));
+    assert!(!service.window_closing(&hidden.media_id, &hidden.window_label));
     service.shutdown().await.unwrap();
 }
 

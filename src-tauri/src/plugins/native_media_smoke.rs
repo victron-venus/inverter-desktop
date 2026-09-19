@@ -4,10 +4,10 @@
 use super::generation::{GenerationLease, RevokeOnDrop};
 use super::media::MediaService;
 use super::protocol::{HttpMediaKind, HttpVideoGrant, PluginManifest, WorkerConfiguration};
-use super::runtime::QueuedHttpVideo;
+use super::runtime::{MediaCameraId, QueuedHttpVideo};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -25,6 +25,8 @@ struct Options {
     url: String,
     output: PathBuf,
     hold: Duration,
+    minimum_loading: Duration,
+    expected_live_outcome: String,
 }
 
 fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
@@ -33,6 +35,8 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut live = false;
     let mut output = None;
     let mut hold = Duration::ZERO;
+    let mut minimum_loading = Duration::ZERO;
+    let mut expected_live_outcome = "ready".to_owned();
     while let Some(argument) = args.next() {
         let value = args.next().ok_or("Every option requires a value")?;
         match argument.as_str() {
@@ -49,6 +53,19 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
                 }
                 hold = Duration::from_secs(seconds);
             }
+            "--minimum-loading-ms" => {
+                let millis: u64 = value.parse().map_err(|_| "Invalid loading duration")?;
+                if millis > 12_000 {
+                    return Err("Minimum loading duration must be at most 12000 ms".into());
+                }
+                minimum_loading = Duration::from_millis(millis);
+            }
+            "--expected-live-outcome"
+                if ["ready", "still", "error", "timeout", "revoke-loading"]
+                    .contains(&value.as_str()) =>
+            {
+                expected_live_outcome = value;
+            }
             _ => return Err("Unknown or repeated native media smoke option".into()),
         }
     }
@@ -58,7 +75,12 @@ fn options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
             .ok_or("--fixture-url or --live-fixture-url is required (explicit loopback media)")?,
         output: output.ok_or("--evidence is required (new JSON file)")?,
         hold,
+        minimum_loading,
+        expected_live_outcome,
     };
+    if !live && (minimum_loading != Duration::ZERO || result.expected_live_outcome != "ready") {
+        return Err("Loading expectations require --live-fixture-url".into());
+    }
     if live {
         fixture_live_grant(&result.url)?;
     } else {
@@ -154,6 +176,10 @@ struct SmokeState {
     evidence: Mutex<Evidence>,
     file: Mutex<File>,
     leases: Mutex<Vec<GenerationLease>>,
+    sources: Mutex<BTreeMap<String, tokio::time::Instant>>,
+    bootstrapped: Mutex<BTreeSet<String>>,
+    minimum_loading: Duration,
+    expected_live_outcome: String,
 }
 
 impl SmokeState {
@@ -209,9 +235,155 @@ impl SmokeState {
 
 /// This harness command never calls the normal auth/config/keychain functions.
 #[tauri::command]
-fn auth_status() -> Value {
-    json!({"enabled":false,"unlocked":true})
+async fn auth_status(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<SmokeState>>,
+) -> Result<Value, String> {
+    if !state
+        .bootstrapped
+        .lock()
+        .unwrap()
+        .insert(window.label().into())
+    {
+        return Ok(json!({"enabled":false,"unlocked":true}));
+    }
+    let before = window
+        .is_visible()
+        .map_err(|_| "Cannot inspect bootstrap visibility")?;
+    // Hold the real AuthGate boundary long enough for a visible bootstrap flash
+    // to be observed. This belongs only to this isolated executable.
+    sleep(Duration::from_millis(750)).await;
+    let after = window
+        .is_visible()
+        .map_err(|_| "Cannot inspect bootstrap visibility")?;
+    state.check(
+        &format!("hidden_bootstrap:{}", window.label()),
+        json!({"delay_ms":750,"visible_before":before,"visible_after":after}),
+    );
+    state.persist()?;
+    if before || after {
+        return Err("Camera window became visible during AuthGate bootstrap".into());
+    }
+    Ok(json!({"enabled":false,"unlocked":true}))
 }
+
+#[tauri::command]
+fn get_live_preview_url(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<SmokeState>>,
+) -> Result<String, String> {
+    state
+        .sources
+        .lock()
+        .unwrap()
+        .insert(window.label().into(), tokio::time::Instant::now());
+    super::bridge::get_live_preview_url(window)
+}
+
+/// Observe the real DOM while it is still hidden, then use the production show
+/// operation unchanged. The observer never sets a source or starts playback.
+#[tauri::command]
+async fn reveal_plugin_video_window(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<SmokeState>>,
+) -> Result<(), String> {
+    let visible = window
+        .is_visible()
+        .map_err(|_| "Cannot inspect pre-reveal visibility")?;
+    let sample = evaluate(&window, READINESS_SAMPLE)
+        .await?
+        .ok_or("Cannot inspect native media before reveal")?;
+    let live = super::media_windows::is_plugin_preview_label(window.label());
+    let elapsed = state
+        .sources
+        .lock()
+        .unwrap()
+        .get(window.label())
+        .map(tokio::time::Instant::elapsed);
+    let expected_error =
+        live && matches!(state.expected_live_outcome.as_str(), "error" | "timeout");
+    let valid = if expected_error {
+        let message = sample["message"].as_str().unwrap_or_default();
+        !sample["decoded"].as_bool().unwrap_or(false)
+            && if state.expected_live_outcome == "timeout" {
+                message.contains("Camera media did not become ready in time.")
+            } else {
+                message.contains("Failed to display live camera preview.")
+            }
+    } else {
+        sample["decoded"] == true
+            && sample["patternReady"] == true
+            && (!live
+                || sample["pixel"]
+                    .as_array()
+                    .is_some_and(|pixel| pixel.len() == 4 && pixel[3] == 255))
+    };
+    let loading_waited = !live || elapsed.is_some_and(|duration| duration >= state.minimum_loading);
+    state.check(&format!("readiness_before_reveal:{}", window.label()), json!({
+        "visible":visible,"sample":sample,"valid":valid,"minimum_loading_satisfied":loading_waited,
+        "loading_seconds":elapsed.map(|duration| duration.as_secs_f64()),
+    }));
+    state.persist()?;
+    if visible || !valid || !loading_waited {
+        return Err(
+            "Native reveal occurred before hidden, decoded media or the expected terminal error"
+                .into(),
+        );
+    }
+    let app = window.app_handle().clone();
+    let label = window.label().to_owned();
+    let anchor = app
+        .get_webview_window("smoke-anchor")
+        .ok_or("Missing focus anchor")?;
+    let anchor_before = anchor.is_focused().unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || super::bridge::reveal_plugin_video_window(window))
+        .await
+        .map_err(|_| "Native reveal task failed".to_owned())??;
+    let anchor_after = anchor.is_focused().unwrap_or(false);
+    let preview_focused = app
+        .get_webview_window(&label)
+        .ok_or("Revealed preview disappeared")?
+        .is_focused()
+        .unwrap_or(true);
+    state.check(&format!("focus_at_reveal:{label}"), json!({
+        "anchor_before":anchor_before,"anchor_after":anchor_after,"preview_focused":preview_focused,
+    }));
+    state.persist()?;
+    if preview_focused || (anchor_before && !anchor_after) {
+        return Err("Native reveal changed the focus owner".into());
+    }
+    Ok(())
+}
+
+const READINESS_SAMPLE: &str = r#"(() => {
+  const video = document.querySelector('video');
+  const image = document.images[0];
+  const width = video ? video.videoWidth : image ? image.naturalWidth : 0;
+  const height = video ? video.videoHeight : image ? image.naturalHeight : 0;
+  const decoded = width > 0 && height > 0 && (!video || (video.readyState >= 2 && !video.paused && !video.ended));
+  let pixel = null;
+  let patternReady = false;
+  if (decoded) {
+    try {
+      const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+      const context = canvas.getContext('2d');
+      patternReady = context.createPattern(image || video, 'no-repeat') !== null;
+      if (image) {
+        context.drawImage(image, 0, 0, 1, 1);
+        pixel = Array.from(context.getImageData(0,0,1,1).data);
+      }
+    } catch (_) {}
+  }
+  return {decoded, width, height, kind:video?'video':image?'image':'none',
+    readyState:video?video.readyState:null, time:video?video.currentTime:null,
+    decodedFrames:video?(video.webkitDecodedFrameCount ?? null):null,
+    presentedFrames:video?(video.getVideoPlaybackQuality?.().totalVideoFrames ?? null):null,
+    imageComplete:image?image.complete:null, imageLoadEvents:window.__nativeSmokeImageLoads || 0,
+    pixel, patternReady,
+    toolbar:!!document.querySelector('[aria-label="Camera window controls"]'),
+    closeButton:!!document.querySelector('button[aria-label="Close"]'),
+    message:document.querySelector('p')?.textContent.trim() || ''};
+})()"#;
 
 #[tauri::command]
 fn observe_native_media_smoke(
@@ -252,11 +424,24 @@ fn observe_native_media_smoke(
 
 // Observe native video events without replacing its source, playback, or controls.
 const OBSERVER: &str = r#"(() => {
-  if (window.__nativeSmokeObserver || !window.__TAURI_INTERNALS__) return;
+  if (window.__nativeSmokeObserver) return;
   window.__nativeSmokeObserver = true;
+  window.__nativeSmokeImageLoads = 0;
+  // Fixture-only CORS opt-in lets this observer read pixels from the actual
+  // production image, rather than proving a second independently loaded image.
+  // Install before AuthGate resolves and Vue creates the media element.
+  const createElement = Document.prototype.createElement;
+  Document.prototype.createElement = function(...args) {
+    const element = createElement.apply(this, args);
+    if (element instanceof HTMLImageElement) element.crossOrigin = 'anonymous';
+    return element;
+  };
+  document.addEventListener('load', event => {
+    if (event.target instanceof HTMLImageElement && event.target.isConnected) window.__nativeSmokeImageLoads++;
+  }, true);
   const sent = new Set();
   function report(video, kind) {
-    if (!(video instanceof HTMLVideoElement) || sent.has(kind)) return;
+    if (!(video instanceof HTMLVideoElement) || !window.__TAURI_INTERNALS__ || sent.has(kind)) return;
     sent.add(kind);
     void window.__TAURI_INTERNALS__.invoke('observe_native_media_smoke', {observation: {
       kind, time: Number.isFinite(video.currentTime) ? video.currentTime : null,
@@ -347,6 +532,7 @@ fn submit(
     state.leases.lock().unwrap().push(lease.clone());
     media
         .try_submit(QueuedHttpVideo {
+            camera_id: Some(MediaCameraId::Explicit(format!("clip-{sequence}"))),
             live_preview: false,
             media_kind: HttpMediaKind::Video,
             lease: lease.clone(),
@@ -390,25 +576,34 @@ fn geometry(window: &tauri::WebviewWindow) -> Result<Value, String> {
 /// Native evaluation returns structured observations directly, without granting
 /// remote pages an IPC capability or adding a production frontend route.
 async fn live_sample(window: &tauri::WebviewWindow) -> Result<Option<Value>, String> {
-    let (sent, received) = tokio::sync::oneshot::channel();
-    let sent = Mutex::new(Some(sent));
-    window.eval_with_callback(r#"(() => {
+    let value = evaluate(window, r#"(() => {
       try {
         const image = document.images[0];
         if (!image || !image.naturalWidth || !image.naturalHeight) return null;
-        if (!window.__smokeImage) {
-          const probe = new Image(); probe.crossOrigin = 'anonymous'; probe.src = image.src;
-          window.__smokeImage = probe;
-        }
-        const probe = window.__smokeImage;
-        if (!probe.naturalWidth || !probe.naturalHeight) return null;
         const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
-        const context = canvas.getContext('2d'); context.drawImage(probe, 0, 0, 1, 1);
+        const context = canvas.getContext('2d'); context.drawImage(image, 0, 0, 1, 1);
         return {toolbar:!!document.querySelector('[aria-label="Camera window controls"]'),closeButton:!!document.querySelector('button[aria-label="Close"]'),width:image.naturalWidth,height:image.naturalHeight,pixel:Array.from(context.getImageData(0,0,1,1).data)};
       } catch (_) { return null; }
-    })()"#, move |value| {
-        if let Some(sent) = sent.lock().unwrap().take() { let _ = sent.send(value); }
-    }).map_err(|_| "Cannot inspect native live image")?;
+    })()"#).await?;
+    Ok(value.filter(|value| {
+        value["width"].as_u64().is_some_and(|n| n > 0 && n <= 16384)
+            && value["height"]
+                .as_u64()
+                .is_some_and(|n| n > 0 && n <= 16384)
+            && value["pixel"].as_array().is_some_and(|p| p.len() == 4)
+    }))
+}
+
+async fn evaluate(window: &tauri::WebviewWindow, script: &str) -> Result<Option<Value>, String> {
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let sent = Mutex::new(Some(sent));
+    window
+        .eval_with_callback(script, move |value| {
+            if let Some(sent) = sent.lock().unwrap().take() {
+                let _ = sent.send(value);
+            }
+        })
+        .map_err(|_| "Cannot inspect native live image")?;
     // Wry queues pre-navigation JS strings but drops their callback until
     // didCommitNavigation. Treat that initial cancellation as not loaded yet;
     // the caller still enforces its overall bounded decoding deadline.
@@ -418,14 +613,7 @@ async fn live_sample(window: &tauri::WebviewWindow) -> Result<Option<Value>, Str
     };
     let value: Value =
         serde_json::from_str(&value).map_err(|_| "Invalid native live observation")?;
-    Ok(
-        (value["width"].as_u64().is_some_and(|n| n > 0 && n <= 16384)
-            && value["height"]
-                .as_u64()
-                .is_some_and(|n| n > 0 && n <= 16384)
-            && value["pixel"].as_array().is_some_and(|p| p.len() == 4))
-        .then_some(value),
-    )
+    Ok((!value.is_null()).then_some(value))
 }
 
 async fn exercise_live(
@@ -435,7 +623,12 @@ async fn exercise_live(
     anchor: &tauri::WebviewWindow,
     options: &Options,
 ) -> Result<(), String> {
-    for (sequence, revoke) in [(10, false), (11, true)] {
+    let scenarios = if matches!(options.expected_live_outcome.as_str(), "ready" | "still") {
+        vec![(10, false), (11, true)]
+    } else {
+        vec![(10, false)]
+    };
+    for (sequence, revoke) in scenarios {
         // Each independent scenario needs a fresh focus precondition. The user
         // may have activated another app during the preceding 15-second wait.
         anchor
@@ -453,6 +646,7 @@ async fn exercise_live(
         let started = tokio::time::Instant::now();
         media
             .try_submit(QueuedHttpVideo {
+                camera_id: Some(MediaCameraId::Explicit("front".into())),
                 live_preview: true,
                 media_kind: HttpMediaKind::Video,
                 lease: lease.clone(),
@@ -464,12 +658,94 @@ async fn exercise_live(
             .map_err(|_| "Cannot admit native live fixture")?;
         let expected_title = title;
         let window = until(|| {
-            Ok(app.webview_windows().into_values().find(|window| {
-                window.title().is_ok_and(|title| title == expected_title)
-                    && window.is_visible().unwrap_or(false)
-            }))
+            Ok(app
+                .webview_windows()
+                .into_values()
+                .find(|window| window.title().is_ok_and(|title| title == expected_title)))
         })
         .await?;
+        if window.is_visible().unwrap_or(true) {
+            return Err("Live preview was already visible during native creation".into());
+        }
+        let duplicate_during_loading = !revoke && options.expected_live_outcome == "ready";
+        if duplicate_during_loading {
+            media
+                .try_submit(QueuedHttpVideo {
+                    camera_id: Some(MediaCameraId::Explicit("front".into())),
+                    live_preview: true,
+                    media_kind: HttpMediaKind::Video,
+                    lease: lease.clone(),
+                    grant: fixture_live_grant(&options.url)?,
+                    id: "native-live-duplicate".into(),
+                    url: options.url.clone(),
+                    title: "Unexpected duplicate camera".into(),
+                })
+                .map_err(|_| "Duplicate fixture should be harmlessly coalesced")?;
+        }
+        if options.expected_live_outcome == "revoke-loading" {
+            until(|| {
+                if window.is_visible().unwrap_or(true) {
+                    return Err("Undecoded revoked fixture became visible".into());
+                }
+                Ok(state
+                    .sources
+                    .lock()
+                    .unwrap()
+                    .get(window.label())
+                    .is_some_and(|start| {
+                        start.elapsed() >= options.minimum_loading.max(Duration::from_secs(1))
+                    })
+                    .then_some(()))
+            })
+            .await?;
+            let sample = evaluate(&window, READINESS_SAMPLE)
+                .await?
+                .ok_or("Cannot inspect unrevealed live fixture")?;
+            if sample["decoded"] != false {
+                return Err("Revocation fixture decoded before the loading check".into());
+            }
+            lease.revoke();
+            until(|| {
+                Ok(app
+                    .get_webview_window(window.label())
+                    .is_none()
+                    .then_some(()))
+            })
+            .await?;
+            until(|| Ok((!media.has_owned_work()).then_some(()))).await?;
+            state.check(
+                "revoked_while_loading_stayed_hidden",
+                json!({"sample":sample,"elapsed_seconds":started.elapsed().as_secs_f64()}),
+            );
+            return Ok(());
+        }
+        until(|| {
+            if duplicate_during_loading
+                && app
+                    .webview_windows()
+                    .values()
+                    .filter(|candidate| {
+                        super::media_windows::media_id_for_label(candidate.label()).is_some()
+                    })
+                    .count()
+                    != 1
+            {
+                return Err("Same camera opened a second native window while loading".into());
+            }
+            if app.get_webview_window(window.label()).is_none() {
+                return Err(
+                    "Live preview expired without revealing media or its terminal error".into(),
+                );
+            }
+            Ok(window.is_visible().unwrap_or(false).then_some(()))
+        })
+        .await?;
+        if duplicate_during_loading {
+            state.check(
+                "same_camera_duplicate_while_loading_suppressed",
+                json!(true),
+            );
+        }
         let window_geometry = geometry(&window)?;
         let scale = window
             .scale_factor()
@@ -482,6 +758,40 @@ async fn exercise_live(
         {
             return Err("Live preview must match the frameless clip size".into());
         }
+        if !matches!(options.expected_live_outcome.as_str(), "ready" | "still") {
+            let focused =
+                anchor.is_focused().unwrap_or(false) && !window.is_focused().unwrap_or(true);
+            let sample = evaluate(&window, READINESS_SAMPLE)
+                .await?
+                .ok_or("Cannot inspect terminal live fixture")?;
+            if window.is_focused().unwrap_or(true)
+                || sample["toolbar"] != true
+                || sample["closeButton"] != true
+            {
+                return Err("Terminal live preview lost controls or anchor focus".into());
+            }
+            state.check(
+                "terminal_live_error_visible_without_focus",
+                json!({"sample":sample,"focus_preserved":focused,"geometry":window_geometry}),
+            );
+            until(|| {
+                Ok(app
+                    .get_webview_window(window.label())
+                    .is_none()
+                    .then_some(()))
+            })
+            .await?;
+            let seconds = started.elapsed().as_secs_f64();
+            if !(14.0..=25.0).contains(&seconds) {
+                return Err("Terminal error extended the live preview grant lifetime".into());
+            }
+            until(|| Ok((!media.has_owned_work()).then_some(()))).await?;
+            state.check(
+                "terminal_error_kept_15_second_expiry",
+                json!({"elapsed_seconds":seconds}),
+            );
+            return Ok(());
+        }
         let first = timeout(Duration::from_secs(5), async {
             loop {
                 if let Some(sample) = live_sample(&window).await? {
@@ -492,29 +802,36 @@ async fn exercise_live(
         })
         .await
         .map_err(|_| "MJPEG fixture never decoded an image")??;
-        let second = timeout(Duration::from_secs(5), async {
-            loop {
-                sleep(Duration::from_millis(200)).await;
-                if let Some(sample) = live_sample(&window).await? {
-                    if sample["pixel"] != first["pixel"] {
-                        break Ok::<_, String>(sample);
+        let second = if options.expected_live_outcome == "still" {
+            Value::Null
+        } else {
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    sleep(Duration::from_millis(200)).await;
+                    if let Some(sample) = live_sample(&window).await? {
+                        if sample["pixel"] != first["pixel"] {
+                            break Ok::<_, String>(sample);
+                        }
                     }
                 }
-            }
-        })
-        .await
-        .map_err(|_| "MJPEG fixture did not advance between distinct frames")??;
+            })
+            .await
+            .map_err(|_| "MJPEG fixture did not advance between distinct frames")??
+        };
         if first["toolbar"] != true || first["closeButton"] != true {
             return Err("Live preview is missing the shared camera controls".into());
         }
-        let focused = anchor.is_focused().unwrap_or(false) && !window.is_focused().unwrap_or(true);
+        let anchor_focused = anchor.is_focused().unwrap_or(false);
+        let preview_focused = window.is_focused().unwrap_or(true);
+        let focused = anchor_focused && !preview_focused;
         state.check(
             title,
             json!({"geometry":window_geometry,"first_decoded_frame":first,
-            "second_decoded_frame":second,"focus_preserved":focused}),
+            "second_decoded_frame":second,"focus_preserved":focused,
+            "anchor_focused":anchor_focused,"preview_focused":preview_focused}),
         );
         state.persist()?;
-        if !focused {
+        if preview_focused {
             return Err("Live preview stole focus from the native anchor".into());
         }
         if !revoke {
@@ -524,6 +841,7 @@ async fn exercise_live(
             let _peer_owner = RevokeOnDrop(peer_lease.clone());
             media
                 .try_submit(QueuedHttpVideo {
+                    camera_id: Some(MediaCameraId::Explicit("peer".into())),
                     live_preview: true,
                     media_kind: HttpMediaKind::Video,
                     lease: peer_lease.clone(),
@@ -554,7 +872,7 @@ async fn exercise_live(
             let peer_focus =
                 anchor.is_focused().unwrap_or(false) && !peer.is_focused().unwrap_or(true);
             state.check("independent_previews_shared_stack", json!({"first":window_geometry,"second":peer_geometry,"exact_order_and_size":stacked,"focus_preserved":peer_focus}));
-            if !stacked || !peer_focus {
+            if !stacked || peer.is_focused().unwrap_or(true) {
                 return Err("Independent previews did not share the same ordered stack".into());
             }
             // Exercise the shared Vue Close button with a live owner, not just
@@ -647,7 +965,7 @@ async fn exercise(
         json!({"first":first_geometry,"second":second_geometry,
         "non_overlapping":separated,"anchor_focus_preserved":focus_preserved}),
     );
-    if !separated || !focus_preserved {
+    if !separated || first.is_focused().unwrap_or(true) || second.is_focused().unwrap_or(true) {
         return Err("Native stacking or focus preservation failed".into());
     }
     let first_id = super::media_windows::media_id_for_label(first.label())
@@ -759,6 +1077,7 @@ pub fn run() -> Result<(), String> {
         println!("plugin-media-smoke --fixture-url http://127.0.0.1:PORT/prefix/clip.mp4 --evidence /absolute/new-evidence.json [--hold-seconds 0..30]");
         println!("Use a decodable video MP4 larger than one MiB, lasting 8–40 seconds (at least hold + 6 seconds). No production services or settings are opened.");
         println!("Live mode: --live-fixture-url 'http://127.0.0.1:PORT/prefix/api/front?fps=2&height=360' --evidence /absolute/new.json. Serve MJPEG with alternating distinct frames for native decoding and 15-second expiry proof.");
+        println!("Live readiness proof: [--minimum-loading-ms 0..12000] [--expected-live-outcome ready|still|error|timeout|revoke-loading]. Every window must remain hidden during an isolated 750 ms AuthGate bootstrap and until its decoded media or expected terminal error.");
         return Ok(());
     }
     let options = options(arguments)?;
@@ -780,6 +1099,9 @@ pub fn run() -> Result<(), String> {
         evidence: Mutex::new(Evidence { scope:"Native fixture lease; actual media service, route, Vue player and OS windows. Signed worker/MQTT are proved separately.",
             passed:false,failure:None,checks:BTreeMap::new(),observations:Vec::new() }),
         file: Mutex::new(output), leases:Mutex::new(Vec::new()),
+        sources: Mutex::new(BTreeMap::new()), minimum_loading:options.minimum_loading,
+        bootstrapped: Mutex::new(BTreeSet::new()),
+        expected_live_outcome:options.expected_live_outcome.clone(),
     });
     let mut context = tauri::generate_context!();
     context.config_mut().identifier = format!(
@@ -812,14 +1134,15 @@ pub fn run() -> Result<(), String> {
             let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
                 auth_status,
                 observe_native_media_smoke,
-                super::bridge::get_live_preview_url,
+                get_live_preview_url,
+                reveal_plugin_video_window,
                 super::bridge::close_plugin_video_window,
                 super::bridge::drag_plugin_video_window
             ];
             handler(invoke)
         })
         .on_page_load(|webview, _| {
-            if super::media_windows::is_plugin_video_label(webview.label()) {
+            if super::media_windows::media_id_for_label(webview.label()).is_some() {
                 let _ = webview.eval(OBSERVER);
             }
         })

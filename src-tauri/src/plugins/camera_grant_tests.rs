@@ -506,6 +506,7 @@ async fn bearer_is_not_forwarded_by_redirects_or_reused_by_another_plugin() {
         .unwrap();
     service
         .try_submit(QueuedHttpVideo {
+            camera_id: None,
             live_preview: false,
             lease: GenerationLease::new("inverter-desktop.ring".into(), 1, 1),
             grant: ring,
@@ -533,6 +534,7 @@ async fn bearer_is_not_forwarded_by_redirects_or_reused_by_another_plugin() {
     .unwrap();
     service
         .try_submit(QueuedHttpVideo {
+            camera_id: None,
             live_preview: false,
             lease: GenerationLease::new("inverter-desktop.frigate".into(), 1, 1),
             grant: frigate,

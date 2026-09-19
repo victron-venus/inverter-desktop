@@ -1504,6 +1504,7 @@ pub fn run() {
                     plugins::bridge::get_plugin_snapshot,
                     plugins::bridge::plugin_action,
                     plugins::bridge::get_live_preview_url,
+                    plugins::bridge::reveal_plugin_video_window,
                     plugins::bridge::close_plugin_video_window,
                     plugins::bridge::drag_plugin_video_window,
                     plugins::bridge::get_plugin_manager_snapshot,
