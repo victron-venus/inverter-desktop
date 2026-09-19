@@ -119,7 +119,8 @@ merely building it or passing the pure media tests is not playback evidence.
 to generate disposable red/blue JPEG frames. It sends multipart headers
 and JPEG metadata immediately, withholds the first frame's compressed body for
 two seconds, and keeps the response open.
-This distinguishes decoded MJPEG readiness from a completed image `load` event.
+This distinguishes a decoded first frame from early JPEG metadata or the end of
+the streaming HTTP response.
 The generated URLs and chosen port are written to the requested new JSON file:
 
 ```bash
@@ -147,7 +148,7 @@ The same server provides two bounded failure URLs. Pass `error` with
 `--expected-live-outcome error`, or `stall` with
 `--expected-live-outcome timeout --minimum-loading-ms 9000`. These runs require
 the terminal error to appear only after hidden initialization, retain controls
-and anchor focus, and close under the original fifteen-second preview lease.
+without taking focus, and close under the original fifteen-second preview lease.
 Pass `stall` with `--expected-live-outcome revoke-loading --minimum-loading-ms 1000`
 to revoke a still-hidden, undecoded preview and require complete native cleanup.
 Use a new evidence file for each invocation. `--clip /absolute/fixture.mp4` also
@@ -159,6 +160,10 @@ may throttle invisible media. The harness requires actual WKWebView decoding and
 does not make readiness depend on animation or video-frame callbacks that may
 stop in hidden windows. A failed or timed-out hidden decode is a failed run, not
 evidence that source compilation or browser unit tests establish native behavior.
+Normal acceptance installs its observer at document initialization and does not
+evaluate JavaScript in a hidden viewer before the viewer requests reveal.
+`--diagnose-hidden true` adds hidden DOM probes for troubleshooting; those probes
+may wake a suspended webview, so diagnostic runs are not readiness acceptance.
 The receipt records both the video decoder and presentation counters when the
 browser exposes them. A hidden video's presentation counter can still be zero
 with a usable current frame; successful visible playback and progress are checked
