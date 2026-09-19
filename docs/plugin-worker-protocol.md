@@ -502,6 +502,19 @@ clips and twelve-second snapshots keep their existing behavior. Frigate 0.3 emit
 fresh motion previews instead of delayed end-event clips; earlier clip workers
 remain compatible with the host download path.
 
+Automatic previews also retain a camera identity through admission and native
+window ownership. Mapped previews use the exact `live_view_id`; HTTP previews use
+the validated stream origin and path. A download carrying `cooldown_id` uses that
+explicit identity. Keys are scoped to the plugin, independently of worker
+generation and display title. A repeated camera request is dropped while its
+previous request is queued, loading, visible, or awaiting native destruction;
+it is never replayed after the original window closes. Different cameras remain
+independent, including cameras with identical display titles. Legacy downloads
+without `cooldown_id` retain their existing event/title cooldown because their
+event-specific URLs do not identify a camera. Separate providers require an
+explicit shared mapping to identify the same physical camera; equal titles do
+not establish that identity.
+
 Each worker has four pending requests, thirty admissions per minute, a ten-minute
 512-ID history, and a default 45-second title cooldown (mapped previews use the camera policy above). Pending requests expire after
 thirty seconds. The service independently bounds its queue to eight, transfers
@@ -534,6 +547,19 @@ ownership again before showing them, and waits for actual destruction acknowledg
 before releasing window slots. Failed native cleanup retains ownership and makes
 shutdown fail visibly; a subsequent quit can retry. Closing one window does not
 retire sibling media or reconnect core telemetry.
+
+Camera windows remain hidden during authentication and media startup. The local
+viewer uses its zero-argument owned reveal command only after an image is
+decodable or video playback has started with current frame data. This also
+supports the first complete part of an ongoing MJPEG response. A terminal media
+error is rendered before revealing the window. Media startup has a ten-second
+timeout; an unresponsive hidden native bootstrap is closed after thirty seconds.
+These limits do not extend the preview grant's original lifetime. Positioning is
+resolved when the window becomes visible, and reveal does not take keyboard
+focus or move an already-visible window.
+On macOS 14 and newer, camera webviews disable WebKit's inactive suspension so
+authentication, decoding, and the startup timeout can finish while hidden. The
+native lifetime limits remain in force; this policy is scoped to camera windows.
 
 The player receives an opaque UUID through the `plugin-media` scheme. Requests are
 bound to the exact requesting webview label and original running instance, with

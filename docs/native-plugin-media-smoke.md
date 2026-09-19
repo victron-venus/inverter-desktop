@@ -18,11 +18,14 @@ publisher key, package installation, or new application-signing step is required
 Use a desktop graphical session and an actual decodable MP4, larger than 1 MiB,
 lasting 8–40 seconds. Its duration must be at least the requested hold time plus
 six seconds. The hold time is optional and defaults to zero; it accepts whole
-seconds from zero through 30. Keep the desktop available while the harness
-checks focus and native windows. It must first focus its own anchor window. If
+seconds from zero through 30. The harness checks focus at each native reveal
+boundary and must first focus its own anchor window. If
 the desktop prevents that, the run reports an explicit focus-precondition failure.
 Rerun with a new evidence file and bring the Native Media Smoke anchor to the
-foreground during initialization, then let the automated checks finish.
+foreground during initialization, then let the automated checks finish. A later
+user switch to another application is recorded as an unfocused anchor; it is not
+reported as the preview stealing focus. Reveals must never focus the preview,
+and a focused anchor must remain focused immediately across the show operation.
 
 Serve only a disposable fixture directory on a loopback IP. For example, in a
 separate terminal, with the clip at `/absolute/fixture-directory/prefix/clip.mp4`:
@@ -60,7 +63,13 @@ Stop the fixture server after the test.
 
 The harness opens three players in sequence, including two simultaneously. It
 requires decoded nonzero video dimensions, metadata, and playback time advancing
-to at least 1.2 seconds. It checks native geometry, nonoverlapping windows within
+to at least 1.2 seconds. Its isolated `auth_status` holds bootstrap for 750 ms and
+requires the native window to remain hidden before and after that wait. The
+harness then observes the real media element while the native window is still
+hidden, immediately before forwarding the production reveal command. Video must
+have current decoded data, nonzero dimensions, a usable native canvas pattern,
+and active playback; the observer
+does not start playback or change the source. It checks native geometry, nonoverlapping windows within
 the monitor work area, and preservation of the focused anchor window. It also exercises
 bounded 1 MiB range responses, HEAD, and rejection of a different requesting
 window.
@@ -88,8 +97,11 @@ plugin-media-smoke --live-fixture-url 'http://127.0.0.1:PORT/prefix/api/front?fp
 ```
 
 Serve a loopback MJPEG response with alternating visibly different frames and
-`Access-Control-Allow-Origin: *` for the harness-only pixel probe. Ordinary camera
-viewing does not require this CORS response header. The
+`Access-Control-Allow-Origin: *` for the harness-only pixel probe. The isolated
+observer sets `crossorigin=anonymous` when Vue creates the image, before its
+production source is assigned. This permits reading the actual image's pixels
+without opening a separate probe stream or changing the source or playback.
+Ordinary camera viewing does not require this CORS response header. The
 harness derives an explicit preview grant with a fifteen-second lifetime and no
 bearer credential. It inspects decoded image dimensions and changing pixels by
 native evaluation, checks window placement/focus, then verifies both timed expiry
@@ -100,6 +112,62 @@ from the route and public snapshots.
 Preview tests are separate from downloaded H.264/image tests and use no media
 cache file. Run this mode explicitly to establish current graphical acceptance;
 merely building it or passing the pure media tests is not playback evidence.
+
+### Delayed first-frame and failure fixtures
+
+`scripts/native-media-fixture.py` serves only on `127.0.0.1` and requires `ffmpeg`
+to generate disposable red/blue JPEG frames. It sends multipart headers
+and JPEG metadata immediately, withholds the first frame's compressed body for
+two seconds, and keeps the response open.
+This distinguishes a decoded first frame from early JPEG metadata or the end of
+the streaming HTTP response.
+The generated URLs and chosen port are written to the requested new JSON file:
+
+```bash
+python3 scripts/native-media-fixture.py --ready-file /absolute/new-fixture.json
+```
+
+Pass its `delayed` URL to the harness with `--minimum-loading-ms 1500`. A pass
+requires the window to remain hidden during bootstrap and the delayed source,
+then prove nonzero decoded image dimensions and an opaque pixel from the actual
+image before native reveal. The receipt
+records `imageComplete` and `imageLoadEvents` before showing the window, followed
+by the existing changing-pixel, focus, Close, expiry and revocation checks.
+It also submits a second event for the same camera while the first window is
+still loading and requires exactly one native media window through reveal. A
+different camera still opens its own peer window; the original camera can open
+again after its previous window expires.
+
+The `static` URL deliberately splits an ordinary JPEG in the same way. Use it
+with `--expected-live-outcome still --minimum-loading-ms 1500` to verify that
+JPEG dimensions alone cannot reveal a window before its compressed image body.
+This scenario checks the actual decoded pixel and lifetime without requiring
+the stationary image to change colors.
+
+The same server provides two bounded failure URLs. Pass `error` with
+`--expected-live-outcome error`, or `stall` with
+`--expected-live-outcome timeout --minimum-loading-ms 9000`. These runs require
+the terminal error to appear only after hidden initialization, retain controls
+without taking focus, and close under the original fifteen-second preview lease.
+Pass `stall` with `--expected-live-outcome revoke-loading --minimum-loading-ms 1000`
+to revoke a still-hidden, undecoded preview and require complete native cleanup.
+Use a new evidence file for each invocation. `--clip /absolute/fixture.mp4` also
+serves an existing disposable H.264 fixture for the ordinary three-player test.
+Stop the fixture server with Ctrl-C afterward; it removes its temporary JPEGs.
+
+Hidden playback is a native acceptance requirement: browser autoplay policies
+may throttle invisible media. The harness requires actual WKWebView decoding and
+does not make readiness depend on animation or video-frame callbacks that may
+stop in hidden windows. A failed or timed-out hidden decode is a failed run, not
+evidence that source compilation or browser unit tests establish native behavior.
+Normal acceptance installs its observer at document initialization and does not
+evaluate JavaScript in a hidden viewer before the viewer requests reveal.
+`--diagnose-hidden true` adds hidden DOM probes for troubleshooting; those probes
+may wake a suspended webview, so diagnostic runs are not readiness acceptance.
+The receipt records both the video decoder and presentation counters when the
+browser exposes them. A hidden video's presentation counter can still be zero
+with a usable current frame; successful visible playback and progress are checked
+separately after reveal.
 
 ## Recorded macOS acceptance
 

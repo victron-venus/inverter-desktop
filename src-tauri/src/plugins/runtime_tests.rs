@@ -2132,6 +2132,10 @@ async fn http_live_admission_is_private_revocable_and_uses_motion_notification()
     assert!(request.live_preview);
     assert_eq!(request.media_kind, HttpMediaKind::Video);
     assert_eq!(request.id, "live-1");
+    assert!(matches!(
+        request.camera_id,
+        Some(MediaCameraId::HttpPreview(ref source)) if source == "https://video.test/base/api/front"
+    ));
     assert!(!serde_json::to_string(&host.snapshots())
         .unwrap()
         .contains("video.test"));
@@ -2140,6 +2144,65 @@ async fn http_live_admission_is_private_revocable_and_uses_motion_notification()
     assert_eq!(notifications, ["Motion started"]);
     host.revoke();
     assert!(!request.lease.is_active());
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn http_live_camera_admission_uses_stable_paths_and_keeps_pending_ownership() {
+    let host = PluginHost::default();
+    let worker = live_spec("configuration");
+    let grant = worker.http_video.clone().unwrap();
+    host.start(worker).await.unwrap();
+    ready(&host).await;
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let enqueue = |id: &str, camera: &str, title: &str| {
+        entry.queue_http_video(
+            &grant,
+            id.into(),
+            format!("https://video.test/base/api/{camera}?fps=2&height=360"),
+            title.into(),
+            MediaAdmission {
+                kind: HttpMediaKind::Video,
+                cooldown_id: None,
+                live_preview: true,
+            },
+        )
+    };
+    {
+        let _authority = entry.authority.lock().unwrap();
+        assert!(enqueue("front-first", "front", "Camera"));
+        assert!(!enqueue("front-repeat", "front", "Changed title"));
+        assert!(enqueue("rear-first", "rear", "Camera"));
+        for (_, created) in &mut entry.http_videos.lock().unwrap().cooldowns {
+            *created -= grant.cooldown();
+        }
+        assert!(
+            !enqueue("front-pending", "front", "Another title"),
+            "a pending camera stays reserved after its cooldown expires"
+        );
+        assert_eq!(entry.http_videos.lock().unwrap().rate.count, 2);
+    }
+    let requests = host.take_http_video_requests();
+    assert_eq!(requests.len(), 2);
+    for (request, camera) in requests.iter().zip(["front", "rear"]) {
+        assert!(matches!(
+            request.camera_id,
+            Some(MediaCameraId::HttpPreview(ref source))
+                if source == &format!("https://video.test/base/api/{camera}")
+        ));
+    }
+    {
+        let _authority = entry.authority.lock().unwrap();
+        assert!(enqueue("front-next", "front", "Camera"));
+    }
+    assert_eq!(host.take_http_video_requests().len(), 1);
+    {
+        let _authority = entry.authority.lock().unwrap();
+        assert!(
+            !enqueue("front-too-soon", "front", "Renamed camera"),
+            "draining the queue does not bypass the camera cooldown"
+        );
+    }
     host.shutdown().await;
 }
 
@@ -2209,6 +2272,10 @@ async fn mapped_live_preview_is_private_notification_independent_and_camera_scop
     );
     for (request, id) in requests.iter().zip(["front", "rear"]) {
         assert!(request.live_preview);
+        assert!(matches!(
+            request.camera_id,
+            Some(MediaCameraId::Explicit(ref camera)) if camera == id
+        ));
         assert_eq!(request.url, mapping.resolve(id).unwrap().as_str());
         assert!(request.grant.validate_preview_url(&request.url).is_ok());
         assert!(request.grant.validate_url(&request.url).is_err());
@@ -2220,7 +2287,7 @@ async fn mapped_live_preview_is_private_notification_independent_and_camera_scop
     let entry = host.entry(TEST_PLUGIN).unwrap();
     {
         let _authority = entry.authority.lock().unwrap();
-        for (_, instant) in &mut entry.http_videos.lock().unwrap().titles {
+        for (_, instant) in &mut entry.http_videos.lock().unwrap().cooldowns {
             *instant -= Duration::from_secs(15);
         }
         let (url, grant) = mapping.preview("front").unwrap().unwrap();

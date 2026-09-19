@@ -786,6 +786,12 @@ pub(crate) fn get_live_preview_url(window: tauri::WebviewWindow) -> Result<Strin
 }
 
 #[tauri::command]
+pub(crate) fn reveal_plugin_video_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    super::media_windows::reveal_window(&window)
+        .map_err(|_| "Video window is no longer available".into())
+}
+
+#[tauri::command]
 pub(crate) fn close_plugin_video_window(
     window: tauri::WebviewWindow,
     state: State<'_, DesktopPlugins>,

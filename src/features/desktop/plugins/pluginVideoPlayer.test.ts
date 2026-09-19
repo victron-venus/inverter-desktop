@@ -9,6 +9,7 @@ const native = vi.hoisted(() => ({
   close: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
+  createPattern: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -23,6 +24,14 @@ const owner = `plugin-video-${id}`
 const initialLocation = globalThis.location.href
 const mounted: VueWrapper[] = []
 
+function decodedImage(wrapper: VueWrapper) {
+  Object.defineProperties(wrapper.get('img').element, {
+    naturalWidth: { configurable: true, value: 640 },
+    naturalHeight: { configurable: true, value: 360 },
+  })
+  return wrapper.get('img')
+}
+
 async function player(params: Record<string, string>, label = owner) {
   globalThis.history.replaceState({}, '', `/camera-video?${new URLSearchParams(params)}`)
   native.getCurrentWindow.mockReturnValue({ label, close: native.close })
@@ -33,6 +42,10 @@ async function player(params: Record<string, string>, label = owner) {
 }
 
 beforeEach(() => {
+  native.createPattern.mockReset().mockReturnValue({})
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    createPattern: native.createPattern,
+  } as unknown as CanvasRenderingContext2D)
   native.invoke.mockReset().mockResolvedValue(undefined)
   native.convertFileSrc.mockReset().mockImplementation((path: string, scheme?: string) => {
     return `${scheme || 'asset'}://localhost/${path}`
@@ -46,10 +59,119 @@ beforeEach(() => {
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
   vi.useRealTimers()
+  vi.restoreAllMocks()
   globalThis.history.replaceState({}, '', initialLocation)
 })
 
 describe('native-owned plugin video player', () => {
+  it('keeps a clip hidden until playback has started with a decoded frame', async () => {
+    vi.useFakeTimers()
+    const wrapper = await player({ pluginMedia: id })
+    const video = wrapper.get('video')
+    const play = vi.spyOn(video.element, 'play').mockResolvedValue()
+    await video.trigger('loadedmetadata')
+    expect(play).toHaveBeenCalledOnce()
+    await video.trigger('loadeddata')
+    await video.trigger('canplay')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(native.invoke).not.toHaveBeenCalled()
+    Object.defineProperties(video.element, {
+      videoWidth: { value: 640 },
+      videoHeight: { value: 360 },
+      readyState: { value: HTMLMediaElement.HAVE_CURRENT_DATA },
+      paused: { value: false },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(native.invoke).not.toHaveBeenCalled()
+    await video.trigger('playing')
+    await flushPromises()
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('reveal_plugin_video_window')
+    await video.trigger('playing')
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(native.invoke).toHaveBeenCalledTimes(1)
+    play.mockRestore()
+  })
+
+  it('reveals ongoing MJPEG on its first decoded frame without waiting for load', async () => {
+    vi.useFakeTimers()
+    native.invoke.mockResolvedValue('https://camera.invalid/live')
+    const wrapper = await player(
+      { pluginMedia: id, pluginMediaKind: 'live' },
+      `plugin-preview-${id}`
+    )
+    await vi.advanceTimersByTimeAsync(500)
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('get_live_preview_url')
+    decodedImage(wrapper)
+    expect(wrapper.get('img').element.complete).toBe(false)
+    native.createPattern.mockReturnValue(null)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('get_live_preview_url')
+    native.createPattern.mockReturnValue({})
+    await vi.advanceTimersByTimeAsync(100)
+    expect(native.invoke).toHaveBeenLastCalledWith('reveal_plugin_video_window')
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(native.invoke).toHaveBeenCalledTimes(2)
+    expect(native.warn).not.toHaveBeenCalled()
+  })
+
+  it('shows a rendered timeout and ignores a late live URL', async () => {
+    vi.useFakeTimers()
+    let resolveUrl: (url: string) => void = () => {}
+    native.invoke.mockImplementation((command) =>
+      command === 'get_live_preview_url'
+        ? new Promise<string>((resolve) => {
+            resolveUrl = resolve
+          })
+        : Promise.resolve()
+    )
+    const wrapper = await player(
+      { pluginMedia: id, pluginMediaKind: 'live' },
+      `plugin-preview-${id}`
+    )
+    await vi.advanceTimersByTimeAsync(9999)
+    expect(native.invoke).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(wrapper.get('[role="alert"]').text()).toBe('Camera media did not become ready in time.')
+    expect(native.invoke).toHaveBeenLastCalledWith('reveal_plugin_video_window')
+    resolveUrl('https://private.invalid/live?secret=private')
+    await flushPromises()
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(wrapper.html()).not.toContain('private')
+    expect(native.invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['close', 'unmount'])('never reveals a pending frame after %s', async (action) => {
+    vi.useFakeTimers()
+    const wrapper = await player({ pluginMedia: id, pluginMediaKind: 'image' })
+    const image = decodedImage(wrapper)
+    if (action === 'close') await wrapper.get('button[aria-label="Close"]').trigger('click')
+    else {
+      wrapper.unmount()
+      mounted.splice(mounted.indexOf(wrapper), 1)
+    }
+    native.invoke.mockClear()
+    await image.trigger('load')
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(native.invoke).not.toHaveBeenCalled()
+  })
+
+  it('closes through the owner if native reveal is rejected', async () => {
+    const wrapper = await player({ pluginMedia: id, pluginMediaKind: 'image' })
+    native.invoke.mockImplementation((command) =>
+      command === 'reveal_plugin_video_window'
+        ? Promise.reject(new Error('private reason'))
+        : Promise.resolve()
+    )
+    await decodedImage(wrapper).trigger('load')
+    await flushPromises()
+    expect(native.invoke.mock.calls).toEqual([
+      ['reveal_plugin_video_window'],
+      ['close_plugin_video_window'],
+    ])
+    expect(native.warn).toHaveBeenCalledExactlyOnceWith('Cannot reveal owned plugin video window')
+    expect(wrapper.html()).not.toContain('private reason')
+  })
+
   it('loads a live stream only through its zero-argument owner command and leaves lifetime native', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     native.invoke.mockResolvedValue('https://camera.invalid/api/front?token=private')
@@ -65,11 +187,14 @@ describe('native-owned plugin video player', () => {
     expect(wrapper.get('img').attributes('alt')).toBe('Live camera')
     expect(wrapper.find('iframe').exists()).toBe(false)
     expect(wrapper.find('video').exists()).toBe(false)
-    await wrapper.get('img').trigger('load')
+    await decodedImage(wrapper).trigger('load')
+    await flushPromises()
     await vi.advanceTimersByTimeAsync(12000)
-    await wrapper.get('img').trigger('load')
+    await decodedImage(wrapper).trigger('load')
+    await flushPromises()
     await vi.advanceTimersByTimeAsync(15000)
-    expect(native.invoke).toHaveBeenCalledTimes(1)
+    expect(native.invoke).toHaveBeenCalledTimes(2)
+    expect(native.invoke).toHaveBeenCalledWith('reveal_plugin_video_window')
     await wrapper.get('button[aria-label="Close"]').trigger('click')
     expect(native.invoke).toHaveBeenLastCalledWith('close_plugin_video_window')
     expect(native.warn).not.toHaveBeenCalled()
@@ -123,13 +248,14 @@ describe('native-owned plugin video player', () => {
       { pluginMedia: id, pluginMediaKind: 'live' },
       `plugin-preview-${id}`
     )
-    await wrapper.get('img').trigger('load')
+    await decodedImage(wrapper).trigger('load')
+    await flushPromises()
     await wrapper.get('img').trigger('error')
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.html()).not.toContain('private')
     expect(native.warn).toHaveBeenCalledExactlyOnceWith('Live camera preview failed')
     await vi.advanceTimersByTimeAsync(15000)
-    expect(native.invoke).toHaveBeenCalledTimes(1)
+    expect(native.invoke).toHaveBeenCalledTimes(2)
   })
 
   it('resolves only the opaque handle and plays inline and muted despite legacy URL fields', async () => {
@@ -210,6 +336,10 @@ describe('native-owned plugin video player', () => {
     expect(native.close).not.toHaveBeenCalled()
     expect(native.warn).toHaveBeenCalledExactlyOnceWith('Cannot close owned plugin video window')
     expect(wrapper.html()).not.toContain('private.invalid')
+    native.invoke.mockResolvedValue(undefined)
+    await wrapper.get('button[aria-label="Close"]').trigger('click')
+    expect(native.invoke).toHaveBeenCalledTimes(2)
+    expect(native.invoke).toHaveBeenLastCalledWith('close_plugin_video_window')
   })
 
   it('uses only the owned drag command for the title strip and no generic drag region', async () => {
@@ -243,7 +373,7 @@ describe('native-owned plugin video player', () => {
     expect(wrapper.find('video').exists()).toBe(false)
     expect(wrapper.find('img').exists()).toBe(false)
     expect(native.convertFileSrc).not.toHaveBeenCalled()
-    expect(native.invoke).not.toHaveBeenCalled()
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('reveal_plugin_video_window')
     expect(wrapper.html()).not.toContain('private.invalid')
     expect(wrapper.html()).not.toContain('private-token')
     expect(native.warn).toHaveBeenCalledExactlyOnceWith(
@@ -259,7 +389,7 @@ describe('native-owned plugin video player', () => {
     expect(wrapper.find('video').exists()).toBe(false)
     expect(wrapper.text()).toContain('Failed to play camera clip.')
     expect(native.convertFileSrc).toHaveBeenCalledTimes(1)
-    expect(native.invoke).not.toHaveBeenCalled()
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('reveal_plugin_video_window')
     expect(native.warn).toHaveBeenCalledExactlyOnceWith('Plugin video playback failed')
   })
 
@@ -269,15 +399,18 @@ describe('native-owned plugin video player', () => {
     expect(native.convertFileSrc).toHaveBeenCalledExactlyOnceWith(id, 'plugin-media')
     expect(wrapper.find('video').exists()).toBe(false)
     expect(wrapper.get('img').attributes('src')).toBe(`plugin-media://localhost/${id}`)
-    await vi.advanceTimersByTimeAsync(12000)
+    await vi.advanceTimersByTimeAsync(500)
     expect(native.invoke).not.toHaveBeenCalled()
-    await wrapper.get('img').trigger('load')
+    await decodedImage(wrapper).trigger('load')
+    await flushPromises()
     await vi.advanceTimersByTimeAsync(6000)
-    await wrapper.get('img').trigger('load')
+    await decodedImage(wrapper).trigger('load')
+    await flushPromises()
     await vi.advanceTimersByTimeAsync(5999)
-    expect(native.invoke).not.toHaveBeenCalled()
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('reveal_plugin_video_window')
     await vi.advanceTimersByTimeAsync(1)
-    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('close_plugin_video_window')
+    expect(native.invoke).toHaveBeenCalledTimes(2)
+    expect(native.invoke).toHaveBeenLastCalledWith('close_plugin_video_window')
     expect(native.close).not.toHaveBeenCalled()
   })
 
@@ -286,7 +419,10 @@ describe('native-owned plugin video player', () => {
     async (action) => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       const wrapper = await player({ pluginMedia: id, pluginMediaKind: 'image' })
-      await wrapper.get('img').trigger('load')
+      await decodedImage(wrapper).trigger('load')
+      await flushPromises()
+      expect(native.invoke).toHaveBeenCalledExactlyOnceWith('reveal_plugin_video_window')
+      native.invoke.mockClear()
       if (action === 'close') {
         await wrapper.get('button[aria-label="Close"]').trigger('click')
         expect(native.invoke).toHaveBeenCalledExactlyOnceWith('close_plugin_video_window')
@@ -320,7 +456,7 @@ describe('native-owned plugin video player', () => {
     expect(wrapper.find('video').exists()).toBe(false)
     expect(wrapper.find('img').exists()).toBe(false)
     expect(native.convertFileSrc).not.toHaveBeenCalled()
-    expect(native.invoke).not.toHaveBeenCalled()
+    expect(native.invoke).toHaveBeenCalledExactlyOnceWith('reveal_plugin_video_window')
   })
 
   it('rejects legacy local file routes after provider extraction', async () => {
