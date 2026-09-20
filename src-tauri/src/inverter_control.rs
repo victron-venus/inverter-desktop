@@ -31,6 +31,24 @@ pub(crate) fn is_flag(entity_or_key: &str) -> bool {
     flag_key(entity_or_key).is_some()
 }
 
+/// Shared dashboard v1: an invalid observation is unknown, never confirmed off.
+pub(crate) fn control_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(v) => Some(*v),
+        Value::Number(v) => match v.as_f64() {
+            Some(0.0) => Some(false),
+            Some(1.0) => Some(true),
+            _ => None,
+        },
+        Value::String(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "true" | "on" | "1" => Some(true),
+            "false" | "off" | "0" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Canonicalize legacy toggle IDs at the MQTT boundary. An explicit state is
 /// authoritative; otherwise preserve Desktop's absolute on/off command based
 /// on the last received flag value (initially off when not yet published).
@@ -69,6 +87,43 @@ pub(crate) fn prepare_command(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn shared_dashboard_contract_v1() {
+        use sha2::{Digest, Sha256};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/dashboard");
+        let lock: Value =
+            serde_json::from_slice(&std::fs::read(root.join("contract-lock.json")).unwrap())
+                .unwrap();
+        for (name, digest) in lock["sha256"].as_object().unwrap() {
+            let bytes = std::fs::read(root.join("v1").join(name)).unwrap();
+            assert_eq!(
+                Sha256::digest(bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+                digest.as_str().unwrap()
+            );
+        }
+        let fixtures: Value =
+            serde_json::from_slice(&std::fs::read(root.join("v1/fixtures.json")).unwrap()).unwrap();
+        for case in fixtures["key_cases"].as_array().unwrap() {
+            assert_eq!(
+                flag_key(case["input"].as_str().unwrap()),
+                case["expected"].as_str()
+            );
+        }
+        for case in fixtures["boolean_cases"].as_array().unwrap() {
+            assert_eq!(control_bool(&case["input"]), case["expected"].as_bool());
+        }
+        for case in fixtures["commands"].as_array().unwrap() {
+            let mut payload = case["payload"].clone();
+            prepare_command("toggle", &mut payload, |_| {
+                panic!("absolute commands never read stale state")
+            });
+            assert_eq!(payload, case["payload"]);
+        }
+    }
 
     #[test]
     fn known_flags_accept_only_canonical_keys_and_legacy_aliases() {

@@ -22,3 +22,6 @@ src/assets/
 /docs/release-workflow.md
 /docs/VERSIONING.md
 /RELEASING.md
+
+# Shared contract snapshots retain their canonical SHA-256 bytes.
+/contracts/dashboard/v1/
