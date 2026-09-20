@@ -26,20 +26,6 @@ enum Action {
     },
 }
 
-fn flag_value(value: &Value) -> Option<bool> {
-    match value {
-        Value::Bool(value) => Some(*value),
-        Value::Number(value) if value.as_i64() == Some(0) => Some(false),
-        Value::Number(value) if value.as_i64() == Some(1) => Some(true),
-        Value::String(value) => match value.trim().to_ascii_lowercase().as_str() {
-            "on" | "true" | "1" => Some(true),
-            "off" | "false" | "0" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 pub(crate) fn water_payload(payload: &Value) -> Result<(&str, u8), String> {
     let invalid =
         || "Water control requires pump or valve and an integer mode (0, 1 or 2)".to_string();
@@ -76,7 +62,7 @@ fn parse(action: &str, payload: Value, water: GatewayInstances) -> Result<Action
                 .to_string();
             let state = object
                 .get("state")
-                .map(|value| flag_value(value).ok_or_else(invalid))
+                .map(|value| inverter_control::control_bool(value).ok_or_else(invalid))
                 .transpose()?;
             Ok(Action::Toggle { entity, state })
         }

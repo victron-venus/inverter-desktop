@@ -2550,7 +2550,18 @@ impl MqttClient {
 
         // Map coercions
         if let Some(map) = raw.booleans {
-            new_state.booleans = Some(map.into_iter().map(|(k, v)| (k, coerce_bool(&v))).collect());
+            new_state.booleans = Some(
+                map.into_iter()
+                    .filter_map(|(key, value)| {
+                        crate::inverter_control::control_bool(&value).map(|flag| {
+                            let canonical = crate::inverter_control::flag_key(&key)
+                                .unwrap_or(&key)
+                                .to_owned();
+                            (canonical, flag)
+                        })
+                    })
+                    .collect(),
+            );
         }
         merge_opt!(features, raw.features);
 
