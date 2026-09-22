@@ -136,6 +136,7 @@ jobs:
           name: inverter-dashboard-ios-v${{ steps.version.outputs.version }}
           path: inverter-dashboard-ios.ipa
 
+    timeout-minutes: 30
   android:
     runs-on: ubuntu-latest
     env:
@@ -219,3 +220,4 @@ jobs:
           path: |
             src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
             src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
+    timeout-minutes: 30

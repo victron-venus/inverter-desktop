@@ -6,7 +6,8 @@
     "mobile.yml",
     "codeql.yml",
     "cargo-audit.yml",
-    "cargo-deny.yml"
+    "cargo-deny.yml",
+    "dependency-review.yml"
   ],
   "artifact_pattern": "release-assets*",
   "local_checks": [
@@ -28,7 +29,10 @@
     "Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.",
     "Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; updates are installed manually using the Download updates menu."
   ],
-  "version_companions": ["package.json", "src-tauri/tauri.conf.json"],
+  "version_companions": [
+    "package.json",
+    "src-tauri/tauri.conf.json"
+  ],
   "repository": "victron-venus/inverter-desktop",
   "mode": "release",
   "default_branch": "main",
@@ -82,5 +86,6 @@
     "ANDROID_KEYSTORE_PASSWORD",
     "ANDROID_KEY_ALIAS",
     "ANDROID_KEY_PASSWORD"
-  ]
+  ],
+  "single_entry_ci": true
 }

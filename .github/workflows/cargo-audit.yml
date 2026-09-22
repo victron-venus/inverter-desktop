@@ -2,19 +2,6 @@ name: Cargo Audit
 
 on:
   workflow_call: {}
-  push:
-    branches: [main]
-    paths:
-      - 'src-tauri/Cargo.toml'
-      - 'src-tauri/Cargo.lock'
-      - 'desktop-plugins/**/Cargo.toml'
-      - 'desktop-plugins/**/Cargo.lock'
-  pull_request:
-    branches: [main]
-  schedule:
-    # Run weekly on Mondays at 08:00 UTC to catch newly published advisories.
-    - cron: '0 8 * * 1'
-
 permissions:
   contents: read
 
@@ -112,3 +99,4 @@ jobs:
       - name: Skip (no Cargo changes)
         if: steps.changed.outputs.any_changed != 'true'
         run: echo "No Cargo changes — audit skipped"
+    timeout-minutes: 30

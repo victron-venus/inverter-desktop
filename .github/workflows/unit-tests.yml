@@ -2,10 +2,6 @@ name: Unit Tests
 
 on:
   workflow_call: {}
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -33,3 +29,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm test
+    timeout-minutes: 30
