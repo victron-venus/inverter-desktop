@@ -2,13 +2,6 @@ name: Cargo Security Audit
 
 on:
   workflow_call: {}
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  schedule:
-    - cron: '0 6 * * 1' # Weekly on Mondays at 6:00 AM UTC
-
 permissions:
   contents: read
   security-events: write
