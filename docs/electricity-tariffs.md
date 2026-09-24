@@ -1,7 +1,7 @@
 # Electricity tariff editor
 
 Open **Set tariff** in the daily statistics strip. The Univer spreadsheet is
-loaded only when the editor opens. Fill the week with an off-peak price, then
+loaded only when the editor opens. Select a schedule, fill its week with an off-peak price, then
 paste or edit peak prices. Rows are 30-minute periods, Monday through Sunday,
 in the tariff's IANA time zone (including DST). Prices are currency units per
 kWh, not cents. Explicit zero and negative prices are supported; blank, text,
@@ -16,8 +16,30 @@ For a flat tariff, daily grid kWh produces an explicitly approximate energy cost
 For time-of-use tariffs, the strip shows the current rate; a daily cost needs
 interval consumption and is deliberately unavailable from a daily total alone.
 The former hard-coded USD 0.31/kWh estimate has been removed. Taxes, fixed fees,
-demand charges, seasonal schedules and consumption tiers are outside this weekly
-energy-rate model. The editor does not invent any initial rate.
+demand charges and consumption tiers are outside this energy-rate model. The editor does not invent any initial rate.
+
+## Seasons and billing periods
+
+A version 2 tariff contains a default weekly `rates` grid and a `seasons` array.
+Each season has a `name`, distinct calendar `months` (1–12) and its own complete
+48×7 `rates` grid. Months may not overlap. Months without an override use the
+default grid. The editor opens the schedule active now; switching schedules
+commits any cell being edited before showing the other grid. Import and export
+retain all schedules, including those not currently visible. Season definitions
+are supplied by JSON import; the editor edits their weekly prices.
+
+An optional `billingDay` (integer 1–31) starts the billing period in the tariff's
+time zone. For example, day 17 on September 24 displays September 17–October 16.
+Short months clamp days 29–31 to the last calendar day without shifting later
+months. This is the period start, not the payment due date. Season prices still
+switch at local midnight on the first of their months, even mid-billing-period.
+The displayed period is not a calculated invoice: time-of-use totals require
+interval consumption. Billing dates alone cannot reconstruct that consumption.
+
+Legacy version 1 weekly files and stored plans remain readable and migrate to
+version 2 without assuming a billing date. The storage key remains unchanged.
+Old app versions reject version 2 instead of silently treating seasonal prices
+as year-round prices. Update the receiving app before importing a new export.
 
 ## Emporia import
 
@@ -53,5 +75,6 @@ The browser stores a plan per origin; desktop additionally scopes storage by
 portal ID (falling back to gateway or MQTT host). No cloud synchronization runs.
 
 Validation covers rates, missing data, source metadata, separate scopes, storage
-failure and local-time/DST selection. Run the existing frontend build and test
+failure, season changes, pending-cell preservation, short-month billing boundaries
+and local-time/DST selection. Run the existing frontend build and test
 commands after changing the mirrored files.

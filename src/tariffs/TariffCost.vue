@@ -11,6 +11,12 @@
       :title="'Time-of-use daily cost needs interval consumption; today’s total alone is insufficient.'"
       >{{ rateNow }} {{ plan.currency }}/kWh now</span
     >
+    <span
+      v-if="period"
+      :title="`Billing period in ${plan?.timeZone}; energy invoice total requires interval data.`"
+    >
+      Billing period: {{ period.start }} – {{ period.end }}
+    </span>
     <span v-if="error" role="alert">{{ error }}</span>
     <TariffEditor
       v-if="editorOpen && !readOnly"
@@ -23,7 +29,7 @@
 </template>
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { currentRate, estimateDailyCost, type TariffPlan } from './model'
+import { billingPeriod, currentRate, estimateDailyCost, type TariffPlan } from './model'
 import { loadTariff, tariffKey } from './storage'
 const props = withDefaults(
   defineProps<{ kwh?: number; tariffScope: string; readOnly?: boolean }>(),
@@ -63,6 +69,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('storage', changed)
   if (timer) clearInterval(timer)
 })
+const period = computed(() => (plan.value ? billingPeriod(plan.value, now.value) : null))
 const cost = computed(() => estimateDailyCost(plan.value, props.kwh))
 const rateNow = computed(() => (plan.value ? currentRate(plan.value, now.value).toFixed(4) : ''))
 const money = (value: number) =>
