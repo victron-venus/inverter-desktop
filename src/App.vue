@@ -28,7 +28,12 @@
       <div
         class="dashboard-content flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1.5 scrollbar-hide min-h-0"
       >
-        <DailyStats v-if="appConfig?.show_daily_stats !== false" />
+        <DailyStats
+          v-if="appConfig?.show_daily_stats !== false"
+          :tariffScope="
+            appConfig?.portal_id || appConfig?.gateway_url || appConfig?.mqtt_host || 'dashboard'
+          "
+        />
 
         <NotificationBanner />
 
