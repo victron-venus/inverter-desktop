@@ -21,8 +21,11 @@ loading or enabling a module. Desktop and mobile use the same persistence format
 ```
 
 `schema_version` is a positive 32-bit integer that versions the module's payload,
-not the application or plugin package. Core does not interpret a module ID,
-payload fields, or a future schema version. `values` must be a JSON object and
+not the application or plugin package. Unknown module IDs, payload fields and future schema versions are retained
+without interpretation. The built-in `victron.energy-tariff` namespace is
+interpreted by the frontend tariff editor; its version 1 `values.plan` contains
+a validated tariff version 2 object or null to inherit the controller tariff.
+See [electricity tariffs](electricity-tariffs.md). `values` must be a JSON object and
 retains nested unknown fields. `secrets` is an optional string map. Unknown fields
 outside these three envelope fields are rejected because core cannot classify
 them as safe for a portable export. Debug output contains only the version and

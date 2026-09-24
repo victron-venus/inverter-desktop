@@ -82,6 +82,7 @@ export interface InverterState {
   /** Cerbo acload instance id → CustomName/ProductName (stable; loads stay id-keyed). */
   load_names?: Record<string, string>
   ui_config?: {
+    electricity_tariff?: unknown
     home_buttons?: DashboardControl[]
     header_toggles?: DashboardControl[]
   }

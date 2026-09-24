@@ -21,7 +21,12 @@
       <span class="font-semibold text-main tabular">{{ grid }}kWh</span>
     </div>
 
-    <TariffCost :kwh="ds.grid_kwh" :tariff-scope="tariffScope" :readOnly="readOnly" />
+    <TariffCost
+      :kwh="ds.grid_kwh"
+      :tariff-scope="tariffScope"
+      :readOnly="readOnly"
+      :configured-tariff="configuredTariff ?? state.ui_config?.electricity_tariff"
+    />
 
     <div v-if="hasBattery" class="daily-stat-group flex items-center gap-1.5 flex-1 min-w-fit">
       <div v-if="hasSolar || hasGrid" class="soft-divider"></div>
@@ -54,10 +59,13 @@ import { state } from '../composables/useInverterState'
 
 import TariffCost from '../tariffs/TariffCost.vue'
 
-withDefaults(defineProps<{ tariffScope?: string; readOnly?: boolean }>(), {
-  tariffScope: 'dashboard',
-  readOnly: false,
-})
+withDefaults(
+  defineProps<{ tariffScope?: string; readOnly?: boolean; configuredTariff?: unknown }>(),
+  {
+    tariffScope: 'dashboard',
+    readOnly: false,
+  }
+)
 
 const ds = computed(() => state.value.daily_stats || {})
 const fc = computed(() => state.value.solar_forecast || {})

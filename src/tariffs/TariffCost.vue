@@ -17,11 +17,13 @@
     >
       Billing period: {{ period.start }} – {{ period.end }}
     </span>
+    <span v-if="plan">{{ localPlan ? 'Local tariff' : 'Installation tariff' }}</span>
     <span v-if="error" role="alert">{{ error }}</span>
     <TariffEditor
       v-if="editorOpen && !readOnly"
       :plan="plan"
       :tariff-scope="tariffScope"
+      :clear-label="configuredTariff ? 'Use installation tariff' : 'Clear local tariff'"
       @saved="saved"
       @close="editorOpen = false"
     />
@@ -29,24 +31,48 @@
 </template>
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { billingPeriod, currentRate, estimateDailyCost, type TariffPlan } from './model'
+import {
+  billingPeriod,
+  currentRate,
+  estimateDailyCost,
+  validatePlan,
+  type TariffPlan,
+} from './model'
 import { loadTariff, tariffKey } from './storage'
 const props = withDefaults(
-  defineProps<{ kwh?: number; tariffScope: string; readOnly?: boolean }>(),
+  defineProps<{
+    kwh?: number
+    tariffScope: string
+    readOnly?: boolean
+    configuredTariff?: unknown
+  }>(),
   {
     readOnly: false,
   }
 )
 const TariffEditor = defineAsyncComponent(() => import('./TariffEditor.vue'))
 const editorOpen = ref(false)
-const plan = ref<TariffPlan | null>(null)
-const error = ref('')
+const localPlan = ref<TariffPlan | null>(null)
+const loadError = ref('')
+const configured = computed(() => {
+  if (props.configuredTariff == null) return { plan: null, error: '' }
+  try {
+    return { plan: validatePlan(props.configuredTariff), error: '' }
+  } catch {
+    return {
+      plan: null,
+      error: 'The installation tariff is invalid. Correct its configuration or set a local tariff.',
+    }
+  }
+})
+const plan = computed(() => localPlan.value ?? (loadError.value ? null : configured.value.plan))
+const error = computed(() => loadError.value || (localPlan.value ? '' : configured.value.error))
 const now = ref(new Date())
 let timer: ReturnType<typeof setInterval> | undefined
 function load() {
   const result = loadTariff(props.tariffScope)
-  plan.value = result.plan
-  error.value = result.error
+  localPlan.value = result.plan
+  loadError.value = result.error
 }
 watch(
   () => props.tariffScope,
@@ -78,8 +104,8 @@ const money = (value: number) =>
     currency: plan.value?.currency ?? 'USD',
   }).format(value)
 function saved(value: TariffPlan | null) {
-  plan.value = value
-  error.value = ''
+  localPlan.value = value
+  loadError.value = ''
   editorOpen.value = false
 }
 </script>

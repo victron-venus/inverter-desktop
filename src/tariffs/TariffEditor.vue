@@ -10,8 +10,12 @@
         <div>
           <h2 id="tariff-title">Electricity tariff</h2>
           <p>
-            Seasonal energy prices per kWh. Saved for this dashboard on this device; Emporia stays
-            unchanged.
+            Seasonal energy prices per kWh.
+            {{
+              persist
+                ? 'Saved for this dashboard on this device.'
+                : 'Apply to the configuration draft, then save the configuration.'
+            }}
           </p>
         </div>
         <button type="button" aria-label="Close tariff editor" @click="emit('close')">Close</button>
@@ -47,7 +51,29 @@
           Billing days 29–31 use the last day of shorter months. Leave the day blank if unknown.
         </p>
       </div>
+      <div v-if="selectedSeason >= 0" class="tariff-season-details">
+        <label
+          >Season name<input
+            v-model="draft.seasons[selectedSeason].name"
+            maxlength="80"
+            :disabled="busy"
+        /></label>
+        <fieldset :disabled="busy">
+          <legend>Calendar months</legend>
+          <label v-for="(month, index) in MONTHS" :key="month">
+            <input
+              v-model="draft.seasons[selectedSeason].months"
+              type="checkbox"
+              :value="index + 1"
+            />{{ month }}
+          </label>
+        </fieldset>
+        <button type="button" :disabled="busy" @click="removeSeason">Remove this season</button>
+      </div>
       <div class="tariff-actions">
+        <button type="button" :disabled="busy || draft.seasons.length >= 12" @click="addSeason">
+          Add season
+        </button>
         <label
           >Flat price / kWh<input v-model="flat" type="number" step="any" placeholder="0.31"
         /></label>
@@ -79,10 +105,10 @@
       </p>
       <p v-if="error" role="alert" class="tariff-error">{{ error }}</p>
       <footer>
-        <button v-if="plan" type="button" @click="clear">Clear local tariff</button
+        <button v-if="plan" type="button" @click="clear">{{ clearLabel }}</button
         ><button type="button" @click="emit('close')">Cancel</button
         ><button type="button" class="tariff-save" :disabled="busy" @click="save">
-          {{ busy ? 'Working…' : 'Save tariff' }}
+          {{ busy ? 'Working…' : persist ? 'Save tariff' : 'Apply tariff' }}
         </button>
       </footer>
     </div>
@@ -104,7 +130,15 @@ import {
 } from './model'
 import { clearTariff, saveTariff } from './storage'
 
-const props = defineProps<{ plan: TariffPlan | null; tariffScope: string }>()
+const props = withDefaults(
+  defineProps<{
+    plan: TariffPlan | null
+    tariffScope?: string
+    persist?: boolean
+    clearLabel?: string
+  }>(),
+  { tariffScope: 'dashboard', persist: true, clearLabel: 'Clear local tariff' }
+)
 const emit = defineEmits<{ close: []; saved: [plan: TariffPlan | null] }>()
 const draft = ref<TariffDraft>(props.plan ? JSON.parse(JSON.stringify(props.plan)) : newDraft())
 const dialog = ref<HTMLDialogElement | null>(null)
@@ -158,6 +192,32 @@ const fail = (cause: unknown) => {
   error.value = cause instanceof Error ? cause.message : 'The tariff could not be read.'
 }
 
+async function addSeason() {
+  if (busy.value || draft.value.seasons.length >= 12) return
+  busy.value = true
+  try {
+    await captureSheet()
+    draft.value.seasons.push({
+      name: 'New season',
+      months: [],
+      rates: draft.value.rates.map((row) => [...row]),
+    })
+    selectedSeason.value = draft.value.seasons.length - 1
+    sheetVersion.value++
+    error.value = ''
+  } catch (cause) {
+    fail(cause)
+  } finally {
+    busy.value = false
+  }
+}
+function removeSeason() {
+  if (busy.value || selectedSeason.value < 0) return
+  draft.value.seasons.splice(selectedSeason.value, 1)
+  selectedSeason.value = -1
+  sheetVersion.value++
+  error.value = ''
+}
 function fill() {
   if (busy.value) return
   if (!String(flat.value).trim() || !Number.isFinite(Number(flat.value))) {
@@ -203,7 +263,7 @@ async function save() {
   busy.value = true
   try {
     const plan = await readPlan()
-    saveTariff(props.tariffScope, plan)
+    if (props.persist) saveTariff(props.tariffScope, plan)
     emit('saved', plan)
   } catch (cause) {
     fail(cause)
@@ -214,7 +274,7 @@ async function save() {
 function clear() {
   if (busy.value) return
   try {
-    clearTariff(props.tariffScope)
+    if (props.persist) clearTariff(props.tariffScope)
     emit('saved', null)
   } catch (cause) {
     fail(cause)
@@ -305,6 +365,19 @@ async function exportFile() {
 }
 .tariff-schedule p {
   font-size: 12px;
+}
+.tariff-season-details {
+  margin: 12px 0;
+}
+.tariff-season-details fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+.tariff-season-details fieldset label {
+  flex-direction: row;
+  align-items: center;
 }
 .tariff-actions {
   display: flex;
