@@ -17,7 +17,7 @@ export interface TariffDraft extends Omit<TariffPlan, 'rates'> {
 }
 
 export function rateGrid(value: number | null = null): RateGrid {
-  return Array.from({ length: SLOTS }, () => Array(7).fill(value))
+  return Array.from({ length: SLOTS }, () => new Array(7).fill(value))
 }
 
 export function slotLabel(slot: number): string {
@@ -113,14 +113,14 @@ export function importTariff(value: unknown): { draft: TariffDraft; message: str
   }
   // Validate metadata independently of an intentionally incomplete schedule.
   validatePlan({ ...draft, rates: rateGrid(0) })
-  return {
-    draft,
-    message: reference
-      ? `Emporia utility plan ${reference}: its time-of-use schedule is not included in the available device properties. Copy the rates from the Emporia app before saving.`
-      : rate === null
-        ? 'Emporia did not supply an energy rate. Enter the rates before saving.'
-        : 'Imported the Emporia flat energy rate (cents converted to currency/kWh). Review it before saving.',
+  let message =
+    'Imported the Emporia flat energy rate (cents converted to currency/kWh). Review it before saving.'
+  if (reference) {
+    message = `Emporia utility plan ${reference}: its time-of-use schedule is not included in the available device properties. Copy the rates from the Emporia app before saving.`
+  } else if (rate === null) {
+    message = 'Emporia did not supply an energy rate. Enter the rates before saving.'
   }
+  return { draft, message }
 }
 
 export function flatRate(plan: TariffPlan): number | null {

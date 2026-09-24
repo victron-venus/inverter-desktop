@@ -31,7 +31,7 @@
         /></label>
         <button type="button" @click="exportFile">Export tariff</button>
       </div>
-      <p v-if="message" class="tariff-note" role="status">{{ message }}</p>
+      <output v-if="message" class="tariff-note">{{ message }}</output>
       <p v-if="draft.source === 'emporia'">
         Source: Emporia{{ draft.reference ? ` · utility plan ${draft.reference}` : '' }}. Review the
         imported copy against the app.
@@ -191,7 +191,8 @@ async function exportFile() {
   font-weight: 650;
   margin: 0;
 }
-.tariff-content p {
+.tariff-content p,
+.tariff-content output {
   margin: 8px 0;
   color: #b9c4d2;
 }
@@ -238,6 +239,7 @@ async function exportFile() {
   font-size: 12px;
 }
 .tariff-note {
+  display: block;
   padding: 10px;
   background: #273649;
 }
