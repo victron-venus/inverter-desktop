@@ -10,7 +10,7 @@
         <div>
           <h2 id="tariff-title">Electricity tariff</h2>
           <p>
-            Weekly energy prices per kWh. Saved for this dashboard on this device; Emporia stays
+            Seasonal energy prices per kWh. Saved for this dashboard on this device; Emporia stays
             unchanged.
           </p>
         </div>
@@ -20,16 +20,46 @@
         <label>Name<input v-model="draft.name" maxlength="120" /></label>
         <label>Currency<input v-model="draft.currency" maxlength="3" placeholder="USD" /></label>
         <label>Time zone<input v-model="draft.timeZone" placeholder="America/Los_Angeles" /></label>
+        <label
+          >Billing period starts on day
+          <input
+            v-model="billingDay"
+            type="number"
+            min="1"
+            max="31"
+            step="1"
+            placeholder="Not set"
+          />
+        </label>
+      </div>
+      <div class="tariff-schedule">
+        <label
+          >Schedule
+          <select :value="selectedSeason" :disabled="busy" @change="switchSeason">
+            <option :value="-1">{{ defaultLabel }}</option>
+            <option v-for="(season, index) in draft.seasons" :key="index" :value="index">
+              {{ season.name }} · {{ season.months.map((month) => MONTHS[month - 1]).join(', ') }}
+            </option>
+          </select>
+        </label>
+        <p>
+          Seasons follow calendar months in the tariff time zone, independently of the billing date.
+          Billing days 29–31 use the last day of shorter months. Leave the day blank if unknown.
+        </p>
       </div>
       <div class="tariff-actions">
         <label
           >Flat price / kWh<input v-model="flat" type="number" step="any" placeholder="0.31"
         /></label>
-        <button type="button" @click="fill">Fill entire week</button>
+        <button type="button" :disabled="busy" @click="fill">Fill selected week</button>
         <label class="file-button"
-          >Import tariff<input type="file" accept=".json,application/json" @change="importFile"
+          >Import tariff<input
+            type="file"
+            accept=".json,application/json"
+            :disabled="busy"
+            @change="importFile"
         /></label>
-        <button type="button" @click="exportFile">Export tariff</button>
+        <button type="button" :disabled="busy" @click="exportFile">Export tariff</button>
       </div>
       <output v-if="message" class="tariff-note">{{ message }}</output>
       <p v-if="draft.source === 'emporia'">
@@ -41,30 +71,34 @@
         prices into the grid or fill the week, then adjust peak periods. All cells need a price;
         zero is allowed.
       </p>
-      <TariffSheet :key="sheetVersion" ref="sheet" :rates="draft.rates" @error="error = $event" />
+      <TariffSheet :key="sheetVersion" ref="sheet" :rates="selectedRates" @error="error = $event" />
       <p class="tariff-help">
-        This estimate covers energy charges only. Seasonal rates, tiers, demand charges, fixed fees
-        and taxes are not included. Daily time-of-use cost needs interval consumption data.
+        This estimate covers energy charges only. Tiers, demand charges, fixed fees and taxes are
+        not included. The billing date sets the period, not an invoice total. Daily time-of-use cost
+        needs interval consumption data.
       </p>
       <p v-if="error" role="alert" class="tariff-error">{{ error }}</p>
       <footer>
         <button v-if="plan" type="button" @click="clear">Clear local tariff</button
         ><button type="button" @click="emit('close')">Cancel</button
         ><button type="button" class="tariff-save" :disabled="busy" @click="save">
-          {{ busy ? 'Saving…' : 'Save tariff' }}
+          {{ busy ? 'Working…' : 'Save tariff' }}
         </button>
       </footer>
     </div>
   </dialog>
 </template>
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import TariffSheet from './TariffSheet.vue'
 import {
+  activeSeasonIndex,
+  MONTHS,
   importTariff,
   newDraft,
   rateGrid,
   validatePlan,
+  type RateGrid,
   type TariffDraft,
   type TariffPlan,
 } from './model'
@@ -79,6 +113,44 @@ const sheetVersion = ref(0)
 const error = ref('')
 const message = ref('')
 const flat = ref('')
+const billingDay = ref<string | number>(draft.value.billingDay ?? '')
+const selectedSeason = ref(activeSeasonIndex(draft.value))
+const selectedRates = computed(() =>
+  selectedSeason.value === -1 ? draft.value.rates : draft.value.seasons[selectedSeason.value].rates
+)
+const defaultLabel = computed(() => {
+  const months = MONTHS.filter(
+    (_, index) => !draft.value.seasons.some((s) => s.months.includes(index + 1))
+  )
+  return draft.value.seasons.length === 0
+    ? 'All year'
+    : `Default · ${months.join(', ') || 'no active months'}`
+})
+function setRates(rates: RateGrid) {
+  if (selectedSeason.value === -1) draft.value.rates = rates
+  else draft.value.seasons[selectedSeason.value].rates = rates
+}
+async function captureSheet() {
+  if (!sheet.value) throw new Error('The spreadsheet is still loading.')
+  setRates(await sheet.value.getRates())
+}
+async function switchSeason(event: Event) {
+  const select = event.target as HTMLSelectElement
+  const next = Number(select.value)
+  select.value = String(selectedSeason.value)
+  if (busy.value) return
+  busy.value = true
+  try {
+    await captureSheet()
+    selectedSeason.value = next
+    sheetVersion.value++
+    error.value = ''
+  } catch (cause) {
+    fail(cause)
+  } finally {
+    busy.value = false
+  }
+}
 const busy = ref(false)
 onMounted(() => dialog.value?.showModal())
 onBeforeUnmount(() => dialog.value?.close())
@@ -87,22 +159,27 @@ const fail = (cause: unknown) => {
 }
 
 function fill() {
+  if (busy.value) return
   if (!String(flat.value).trim() || !Number.isFinite(Number(flat.value))) {
     error.value = 'Enter a numeric flat price first.'
     return
   }
-  draft.value.rates = rateGrid(Number(flat.value))
+  setRates(rateGrid(Number(flat.value)))
   sheetVersion.value++
   error.value = ''
 }
 async function importFile(event: Event) {
   const input = event.target as HTMLInputElement
+  if (busy.value) return
+  busy.value = true
   try {
     const file = input.files?.[0]
     if (!file) return
     if (file.size > 100_000) throw new Error('Choose a tariff JSON file smaller than 100 KB.')
     const result = importTariff(JSON.parse(await file.text()))
     draft.value = result.draft
+    billingDay.value = result.draft.billingDay ?? ''
+    selectedSeason.value = activeSeasonIndex(result.draft)
     message.value = result.message
     sheetVersion.value++
     error.value = ''
@@ -110,17 +187,19 @@ async function importFile(event: Event) {
     fail(cause)
   } finally {
     input.value = ''
+    busy.value = false
   }
 }
 async function readPlan() {
-  if (!sheet.value) throw new Error('The spreadsheet is still loading.')
+  await captureSheet()
   return validatePlan({
     ...draft.value,
     currency: draft.value.currency.toUpperCase(),
-    rates: await sheet.value.getRates(),
+    billingDay: String(billingDay.value).trim() === '' ? undefined : Number(billingDay.value),
   })
 }
 async function save() {
+  if (busy.value) return
   busy.value = true
   try {
     const plan = await readPlan()
@@ -133,6 +212,7 @@ async function save() {
   }
 }
 function clear() {
+  if (busy.value) return
   try {
     clearTariff(props.tariffScope)
     emit('saved', null)
@@ -141,6 +221,8 @@ function clear() {
   }
 }
 async function exportFile() {
+  if (busy.value) return
+  busy.value = true
   try {
     const plan = await readPlan()
     const url = URL.createObjectURL(
@@ -154,6 +236,8 @@ async function exportFile() {
     error.value = ''
   } catch (cause) {
     fail(cause)
+  } finally {
+    busy.value = false
   }
 }
 </script>
@@ -198,7 +282,7 @@ async function exportFile() {
 }
 .tariff-fields {
   display: grid;
-  grid-template-columns: 2fr 1fr 2fr;
+  grid-template-columns: 2fr 1fr 2fr 1fr;
   gap: 12px;
   margin: 16px 0;
 }
@@ -207,13 +291,20 @@ async function exportFile() {
   flex-direction: column;
   gap: 4px;
 }
-.tariff-content input {
+.tariff-content input,
+.tariff-content select {
   min-width: 0;
   background: #242e3c;
   color: #f5f7fa;
   padding: 8px;
   border: 1px solid #64748b;
   border-radius: 5px;
+}
+.tariff-schedule {
+  margin: 12px 0;
+}
+.tariff-schedule p {
+  font-size: 12px;
 }
 .tariff-actions {
   display: flex;
