@@ -642,3 +642,8 @@ For issues specific to:
 ## Privacy
 
 Read the [privacy policy](docs/privacy-policy.md) for information about local settings, configured services and your choices. Privacy and support contact: [alvit.work@gmail.com](mailto:alvit.work@gmail.com).
+
+## Electricity tariffs
+
+The daily strip includes a weekly Univer tariff editor with Emporia reference
+import and local persistence. See [tariff editing](docs/electricity-tariffs.md).
