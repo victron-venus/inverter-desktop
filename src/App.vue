@@ -29,6 +29,7 @@
         class="dashboard-content flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1.5 scrollbar-hide min-h-0"
       >
         <DailyStats
+          :configured-tariff="configurationTariff(appConfig)"
           v-if="appConfig?.show_daily_stats !== false"
           :tariffScope="
             appConfig?.portal_id || appConfig?.gateway_url || appConfig?.mqtt_host || 'dashboard'
@@ -173,6 +174,7 @@ import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
 import { getAppConfig, needsSetup } from './config'
 import type { AppConfig } from './config'
+import { configurationTariff } from './configurationTariff'
 import { logger } from './logger'
 import { coerceBoolean } from './utils'
 

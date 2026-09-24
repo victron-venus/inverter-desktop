@@ -7,7 +7,7 @@ in the tariff's IANA time zone (including DST). Prices are currency units per
 kWh, not cents. Explicit zero and negative prices are supported; blank, text,
 non-finite and formula cells are rejected. Keep day and time labels unchanged.
 
-Save applies a validated copy to this dashboard on this device. Cancel discards
+In the dashboard editor, Save applies a validated local override to this dashboard on this device. Cancel discards
 the draft. Clear local tariff removes the saved copy. JSON export/import lets
 another browser or installation reuse the plan. This feature does not update
 Emporia or control the inverter. Public dashboards do not expose editing.
@@ -25,8 +25,10 @@ Each season has a `name`, distinct calendar `months` (1–12) and its own comple
 48×7 `rates` grid. Months may not overlap. Months without an override use the
 default grid. The editor opens the schedule active now; switching schedules
 commits any cell being edited before showing the other grid. Import and export
-retain all schedules, including those not currently visible. Season definitions
-are supplied by JSON import; the editor edits their weekly prices.
+retain all schedules, including those not currently visible. Use **Add season** to create a schedule, enter its name and select calendar
+months. Edit its weekly prices or fill the selected week. **Remove this season**
+removes only that draft override; the default schedule then covers those months.
+All seasons must have nonoverlapping months before saving.
 
 An optional `billingDay` (integer 1–31) starts the billing period in the tariff's
 time zone. For example, day 17 on September 24 displays September 17–October 16.
@@ -40,6 +42,26 @@ Legacy version 1 weekly files and stored plans remain readable and migrate to
 version 2 without assuming a billing date. The storage key remains unchanged.
 Old app versions reject version 2 instead of silently treating seasonal prices
 as year-round prices. Update the receiving app before importing a new export.
+
+## Installation defaults and configuration backups
+
+The editor also consumes a tariff provisioned through inverter-control's
+SetupHelper or deployment configuration. A local dashboard override takes
+priority. **Use installation tariff** removes that override and resumes the
+installation default, including future controller updates. Invalid installation
+data is shown as an error and is never silently priced as zero.
+
+Desktop/mobile first-run setup and **Configuration → Electricity tariff** can
+store a plan in the application configuration. **Apply tariff** changes only the
+draft; **Save & Continue** or Configuration **Save** persists it. This copy is
+included in normal portable configuration backups. Priority is local dashboard
+override, application configuration, then controller tariff. **Use controller
+tariff** clears the application-level plan. Local browser overrides still need
+their separate tariff export when moving devices.
+
+See the English [installation, manual entry and deployment guide](https://github.com/victron-venus/inverter-control/blob/main/docs/electricity-tariffs.md)
+for the interactive SetupHelper wizard, compact period files, `TARIFF_FILE`,
+validation, persistent paths and managed desktop configuration fragments.
 
 ## Emporia import
 
@@ -71,7 +93,7 @@ plan without a utility plan ID, cents are converted to currency/kWh explicitly.
 which currently own separate frontend builds. Univer OSS packages are pinned to
 1.0.0; no paid import/export or server plugin is required. The heavy editor is a
 separate lazy chunk. JSON is the exchange format; XLSX is not part of this feature.
-The browser stores a plan per origin; desktop additionally scopes storage by
+The browser stores local overrides per origin; desktop additionally scopes them by
 portal ID (falling back to gateway or MQTT host). No cloud synchronization runs.
 
 Validation covers rates, missing data, source metadata, separate scopes, storage

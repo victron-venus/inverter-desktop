@@ -163,6 +163,8 @@
               </div>
             </div>
 
+            <TariffConfiguration v-if="activeTab === 'tariff'" v-model="installationTariff" />
+
             <!-- HTTPS inverter-gateway, with optional Cloudflare Access -->
             <div v-if="activeTab === 'gateway'" class="flex flex-col gap-4">
               <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
@@ -749,6 +751,8 @@ import {
 } from '@features'
 import { useConfigForm } from './composables/useConfigForm'
 import type { AppConfig } from './config'
+import TariffConfiguration from './components/TariffConfiguration.vue'
+import { configurationTariff, setConfigurationTariff } from './configurationTariff'
 import { gatewayConfigError } from './connectionPolicy'
 
 const {
@@ -762,6 +766,11 @@ const {
   resetToDefaults,
   clearMessage,
 } = useConfigForm()
+const installationTariff = computed({
+  get: () => configurationTariff(config),
+  set: (plan) =>
+    setConfigurationTariff(config, plan as import('./tariffs/model').TariffPlan | null),
+})
 const featureConfig = computed({
   get: () => config,
   set: (updated: AppConfig) => {
@@ -835,6 +844,7 @@ const sections = computed(() => [
   })),
   { id: 'entities', label: 'UI Controls', icon: Layout },
   { id: 'sections', label: 'Sections', icon: Eye },
+  { id: 'tariff', label: 'Electricity tariff', icon: Settings },
   { id: 'backup', label: 'Backup', icon: Archive },
 ])
 

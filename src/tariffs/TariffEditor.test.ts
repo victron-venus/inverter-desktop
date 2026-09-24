@@ -86,3 +86,26 @@ it('rejects a fractional billing day and allows clearing a previously configured
   expect(loadTariff('editor-site').plan?.billingDay).toBeUndefined()
   wrapper.unmount()
 })
+
+it('creates a manual season and applies a configuration draft without writing local storage', async () => {
+  const base = validatePlan({
+    ...newDraft(),
+    rates: rateGrid(0.3),
+    timeZone: 'America/Los_Angeles',
+  })
+  const wrapper = mount(TariffEditor, { props: { plan: base, persist: false } })
+  const add = wrapper.findAll('button').find((button) => button.text() === 'Add season')!
+  await add.trigger('click')
+  await flushPromises()
+  await wrapper.get('input[maxlength="80"]').setValue('Summer')
+  await wrapper.get('input[type="checkbox"][value="6"]').setValue(true)
+  sheetState.edits = rateGrid(0.5)
+  await wrapper.get('.tariff-save').trigger('click')
+  await flushPromises()
+  expect(wrapper.emitted('saved')?.[0]?.[0]).toMatchObject({
+    seasons: [{ name: 'Summer', months: [6], rates: rateGrid(0.5) }],
+    rates: rateGrid(0.3),
+  })
+  expect(localStorage.setItem).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
