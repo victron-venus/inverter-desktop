@@ -100,3 +100,21 @@ Validation covers rates, missing data, source metadata, separate scopes, storage
 failure, season changes, pending-cell preservation, short-month billing boundaries
 and local-time/DST selection. Run the existing frontend build and test
 commands after changing the mirrored files.
+
+## Measured interval energy cost
+
+Open **Interval energy cost** beside the dashboard tariff button. Import measured
+grid-import CSV or JSON to calculate energy charges for a selected local date or
+billing period. The shared calculator applies seasonal/weekday prices and DST,
+reports missing duration, and excludes intervals crossing a price or date boundary
+without inventing their within-interval consumption. A partial subtotal is visibly
+marked and never presented as a full bill. See the [complete import format, provider
+data preparation, limits and coverage guide](https://github.com/victron-venus/inverter-dashboard-vue/blob/main/docs/electricity-tariffs.md#measured-interval-energy-cost).
+
+Readings stay in local browser/webview storage, scoped to the dashboard installation.
+Import replaces that installation’s history; invalid input and storage failures
+preserve the previous copy. They are not included in configuration backups, tariff
+exports or controller uploads. Keep original exports for durable archival. Emporia
+currently has no gross-import chart-history source in its upstream API client;
+net mains energy and sampled grid power are not accepted substitutes. Automatic
+history synchronization is not provided.

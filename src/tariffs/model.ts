@@ -115,7 +115,11 @@ export function validatePlan(value: unknown): TariffPlan {
       })
       .sort((a, b) => a - b)
     try {
-      return { name: season.name.trim(), months, rates: validateRates(season.rates) }
+      return {
+        name: season.name.trim(),
+        months,
+        rates: validateRates(season.rates),
+      }
     } catch (cause) {
       throw new Error(
         `${season.name}: ${cause instanceof Error ? cause.message : 'Invalid rates.'}`
@@ -149,7 +153,10 @@ export function validatePlan(value: unknown): TariffPlan {
 }
 
 // Import only sanitized tariff data, never credentials or a raw account dump.
-export function importTariff(value: unknown): { draft: TariffDraft; message: string } {
+export function importTariff(value: unknown): {
+  draft: TariffDraft
+  message: string
+} {
   const data = object(value)
   if (data.type !== 'emporia-tariff-reference')
     return {
@@ -192,17 +199,24 @@ export function flatRate(plan: TariffPlan): number | null {
     ? first
     : null
 }
+const localFormatters = new Map<string, Intl.DateTimeFormat>()
 function localParts(timeZone: string, at: Date) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    weekday: 'long',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(at)
+  let formatter = localFormatters.get(timeZone)
+  if (!formatter) {
+    if (localFormatters.size > 10) localFormatters.clear()
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      weekday: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+    localFormatters.set(timeZone, formatter)
+  }
+  const parts = formatter.formatToParts(at)
   return (name: string) => parts.find((part) => part.type === name)?.value ?? ''
 }
 export function activeSeasonIndex(plan: TariffDraft, at = new Date()): number {
@@ -239,7 +253,10 @@ export function billingPeriod(
     )
   const offset = today >= boundary(0) ? 0 : -1
   const date = (value: number) => new Date(value).toISOString().slice(0, 10)
-  return { start: date(boundary(offset)), end: date(boundary(offset + 1) - 86_400_000) }
+  return {
+    start: date(boundary(offset)),
+    end: date(boundary(offset + 1) - 86_400_000),
+  }
 }
 export function estimateDailyCost(plan: TariffPlan | null, kwh: unknown): number | null {
   if (!plan || typeof kwh !== 'number' || !Number.isFinite(kwh) || kwh < 0) return null

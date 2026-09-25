@@ -1,5 +1,5 @@
 <template>
-  <span class="tariff-cost">
+  <div class="tariff-cost">
     <span v-if="cost !== null" :title="'Estimated energy cost; excludes taxes and other charges'"
       >≈ {{ money(cost) }}</span
     >
@@ -18,6 +18,20 @@
       Billing period: {{ period.start }} – {{ period.end }}
     </span>
     <span v-if="plan">{{ localPlan ? 'Local tariff' : 'Installation tariff' }}</span>
+    <button
+      v-if="plan && !readOnly"
+      type="button"
+      class="tariff-open"
+      @click="intervalsOpen = true"
+    >
+      Interval energy cost
+    </button>
+    <IntervalEnergy
+      v-if="plan && intervalsOpen && !readOnly"
+      :plan="plan"
+      :tariff-scope="tariffScope"
+      @close="intervalsOpen = false"
+    />
     <span v-if="error" role="alert">{{ error }}</span>
     <TariffEditor
       v-if="editorOpen && !readOnly"
@@ -27,7 +41,7 @@
       @saved="saved"
       @close="editorOpen = false"
     />
-  </span>
+  </div>
 </template>
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue'
@@ -41,7 +55,7 @@ import {
 import { loadTariff, tariffKey } from './storage'
 const props = withDefaults(
   defineProps<{
-    kwh?: number
+    kwh?: number | null
     tariffScope: string
     readOnly?: boolean
     configuredTariff?: unknown
@@ -52,6 +66,8 @@ const props = withDefaults(
 )
 const TariffEditor = defineAsyncComponent(() => import('./TariffEditor.vue'))
 const editorOpen = ref(false)
+const intervalsOpen = ref(false)
+const IntervalEnergy = defineAsyncComponent(() => import('./IntervalEnergy.vue'))
 const localPlan = ref<TariffPlan | null>(null)
 const loadError = ref('')
 const configured = computed(() => {
@@ -78,6 +94,7 @@ watch(
   () => props.tariffScope,
   () => {
     editorOpen.value = false
+    intervalsOpen.value = false
     load()
   },
   { immediate: true }
