@@ -90,7 +90,7 @@ export interface InverterState {
     produced_today?: number
     produced_yesterday?: number
     produced_dollars?: number
-    grid_kwh?: number
+    grid_kwh?: number | null
     battery_in?: number
     battery_out?: number
     battery_in_yesterday?: number
