@@ -83,9 +83,14 @@ impl Worker {
             .expect("worker response")
     }
     pub fn status(&self, value: &str) {
+        let title = format!("{} MQTT", self.title);
         assert_eq!(
             self.frame(),
-            json!({"type":"contributions","items":[{"kind":"status","id":"connection","title":format!("{} MQTT",self.title),"value":value,"tone":match value { "Connected"=>"success","Disconnected"=>"warning",_=>"neutral" }}]})
+            json!({
+                "type":"contributions",
+                "items":[{"kind":"status","id":"connection","title":title,"value":value,"tone":match value { "Connected"=>"success","Disconnected"=>"warning",_=>"neutral" }}],
+                "presentation":[{"kind":"connection","id":format!("{}-mqtt",self.provider),"title":title,"connected":value=="Connected"}]
+            })
         );
     }
     pub fn exit(&mut self, success: bool) {

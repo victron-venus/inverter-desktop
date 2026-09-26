@@ -11,6 +11,14 @@ presentation contract. They do not append generic flat entity panels. Background
 workers, camera notifications, and owned media remain independent of dashboard
 rendering. An absent package contributes no provider UI or connection.
 
+Frigate, Kerberos, and Ring publish separate MQTT connection indicators. Each
+indicator becomes connected only after the broker accepts that worker's topic
+subscriptions and goes offline while reconnecting. These indicators also cover
+workers using the former HA MQTT broker settings; Home Assistant's own indicator
+reports its separate API connection. To receive worker fixes, select the plugin
+archive URL and checksum from the new release as well as updating the app.
+`build-local.sh` only builds and installs the host app, leaving plugin pins intact.
+
 Configured downloads can use unsigned packages and need no publisher or app
 signing keys. The embedded publisher policy is currently empty, so manual package
 selection remains unavailable. HA and camera provider implementations are separate

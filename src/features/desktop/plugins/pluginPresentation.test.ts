@@ -261,6 +261,46 @@ describe('compact installed-package presentation', () => {
     await flushPromises()
     expect(native.invoke.mock.calls.some(([command]) => command === 'plugin_action')).toBe(false)
   })
+  it.each(['Frigate', 'Kerberos', 'Ring'])(
+    'tracks %s MQTT subscription, reconnect, and worker removal in the status bar',
+    async (provider) => {
+      const title = `${provider} MQTT`
+      const connection = {
+        kind: 'connection' as const,
+        id: `${provider.toLowerCase()}-mqtt`,
+        title,
+        connected: false,
+      }
+      plugins = [
+        {
+          ...snapshot,
+          plugin_id: `inverter-desktop.${provider.toLowerCase()}`,
+          contributions: [],
+          presentation: [connection],
+        },
+      ]
+      await context.dashboard.refresh()
+      const wrapper = mount(PluginConnectionStatus, {
+        global: { provide: { [pluginPresentationKey as symbol]: context } },
+      })
+      wrappers.push(wrapper)
+      expect(wrapper.text()).toBe(title)
+      expect(wrapper.find('.status-dot-on').exists()).toBe(false)
+      for (const connected of [true, false, true]) {
+        connection.connected = connected
+        await context.dashboard.refresh()
+        expect(wrapper.text()).toBe(title)
+        expect(wrapper.find('.status-dot-on').exists()).toBe(connected)
+      }
+      plugins[0].state = 'failed'
+      await context.dashboard.refresh()
+      expect(wrapper.find('.status-dot-on').exists()).toBe(false)
+      plugins = []
+      await context.dashboard.refresh()
+      expect(wrapper.find('.status-dot').exists()).toBe(false)
+      expect(wrapper.text()).toBe('')
+    }
+  )
   it('rejects a slider release when its authority changed during dragging', async () => {
     const wrapper = mount(PluginNumberSlider, {
       props: { input, disabled: false, pending: false, failed: false },

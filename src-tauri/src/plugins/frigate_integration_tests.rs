@@ -6,6 +6,7 @@
 use super::application::PackageApplication;
 use super::package::{PublisherTrust, TrustStore};
 use super::packaging::{build_package, write_package_atomic};
+use super::presentation::Presentation;
 use super::protocol::{DashboardContribution, PluginManifest};
 use super::runtime::{PluginHost, WorkerState};
 use ed25519_dalek::SigningKey;
@@ -182,6 +183,11 @@ async fn wait_connection(host: &PluginHost, expected: &str) {
                     && snapshot.contributions.iter().any(|item| {
                         matches!(item, DashboardContribution::Status { id, value, .. }
                             if id == "connection" && value == expected)
+                    })
+                    && snapshot.presentation.iter().any(|item| {
+                        matches!(item, Presentation::Connection { id, title, connected }
+                            if id == "frigate-mqtt" && title == "Frigate MQTT"
+                                && *connected == (expected == "Connected"))
                     })
             });
             if found {

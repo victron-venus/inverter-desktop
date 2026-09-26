@@ -6,6 +6,7 @@ use super::frigate_integration_tests::{required_file, Broker};
 use super::media::{MediaEvent, MediaService, ReadyMedia};
 use super::package::{PublisherTrust, TrustStore};
 use super::packaging::{build_package, write_package_atomic};
+use super::presentation::Presentation;
 use super::protocol::{DashboardContribution, HttpMediaKind, PluginManifest};
 use super::runtime::{LiveViewRequest, PluginHost, QueuedHttpVideo, WorkerState};
 use ed25519_dalek::SigningKey;
@@ -122,12 +123,29 @@ async fn configure(
 }
 
 async fn connection(host: &PluginHost, plugin: &str, expected: &str) {
-    timeout(WAIT,async {
+    let provider = plugin.strip_prefix("inverter-desktop.").unwrap();
+    let connection_id = format!("{provider}-mqtt");
+    timeout(WAIT, async {
         loop {
-            if host.snapshots().iter().any(|s|s.plugin_id==plugin&&s.state==WorkerState::Running&&s.contributions.iter().any(|item|matches!(item,DashboardContribution::Status{id,value,..} if id=="connection"&&value==expected))) {break;}
+            if host.snapshots().iter().any(|snapshot| {
+                snapshot.plugin_id == plugin
+                    && snapshot.state == WorkerState::Running
+                    && snapshot.contributions.iter().any(|item| {
+                        matches!(item, DashboardContribution::Status { id, value, .. }
+                            if id == "connection" && value == expected)
+                    })
+                    && snapshot.presentation.iter().any(|item| {
+                        matches!(item, Presentation::Connection { id, connected, .. }
+                            if id == &connection_id && *connected == (expected == "Connected"))
+                    })
+            }) {
+                break;
+            }
             sleep(Duration::from_millis(25)).await;
         }
-    }).await.expect("installed camera worker must report broker state");
+    })
+    .await
+    .expect("installed camera worker must report broker state and connection presentation");
 }
 
 struct Notice {

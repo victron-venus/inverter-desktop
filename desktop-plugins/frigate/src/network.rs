@@ -37,7 +37,13 @@ impl NotificationBudget {
 }
 
 async fn status(output: &Output, value: &str, tone: &str) -> Result<(), &'static str> {
-    output.send(json!({"type":"contributions","items":[{"kind":"status","id":"connection","title":"Frigate MQTT","value":value,"tone":tone}]})).await
+    output
+        .send(json!({
+            "type":"contributions",
+            "items":[{"kind":"status","id":"connection","title":"Frigate MQTT","value":value,"tone":tone}],
+            "presentation":[{"kind":"connection","id":"frigate-mqtt","title":"Frigate MQTT","connected":value=="Connected"}]
+        }))
+        .await
 }
 
 fn tls_transport() -> Result<Transport, &'static str> {

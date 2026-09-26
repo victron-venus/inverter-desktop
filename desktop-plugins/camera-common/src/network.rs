@@ -33,8 +33,21 @@ impl NotificationBudget {
     }
 }
 
-async fn status(output: &Output, title: &str, value: &str, tone: &str) -> Result<(), &'static str> {
-    output.send(json!({"type":"contributions","items":[{"kind":"status","id":"connection","title":title,"value":value,"tone":tone}]})).await
+async fn status(
+    output: &Output,
+    provider: &str,
+    title: &str,
+    value: &str,
+    tone: &str,
+) -> Result<(), &'static str> {
+    let id = format!("{provider}-mqtt");
+    output
+        .send(json!({
+            "type":"contributions",
+            "items":[{"kind":"status","id":"connection","title":title,"value":value,"tone":tone}],
+            "presentation":[{"kind":"connection","id":id,"title":title,"connected":value=="Connected"}]
+        }))
+        .await
 }
 
 fn tls_transport() -> Result<Transport, &'static str> {
@@ -99,7 +112,7 @@ pub async fn run<P: Provider>(
     let mut notification_budget = NotificationBudget::default();
     let mut backoff = Duration::from_secs(1);
     loop {
-        status(output, &title, "Connecting", "neutral").await?;
+        status(output, config.provider, &title, "Connecting", "neutral").await?;
         let (client, mut eventloop) = AsyncClient::builder(options(&config, transport.clone()))
             .capacity(4)
             .build();
@@ -149,7 +162,7 @@ pub async fn run<P: Provider>(
                     }
                     connected = true;
                     backoff = Duration::from_secs(1);
-                    status(output, &title, "Connected", "success").await?;
+                    status(output, config.provider, &title, "Connected", "success").await?;
                 }
                 Ok(Event::Incoming(Incoming::Publish(message))) if connected => {
                     let Ok(topic) = std::str::from_utf8(&message.topic) else {
@@ -190,7 +203,7 @@ pub async fn run<P: Provider>(
         // packets. Each retry opens a clean session and subscribes again.
         drop(client);
         drop(eventloop);
-        status(output, &title, "Disconnected", "warning").await?;
+        status(output, config.provider, &title, "Disconnected", "warning").await?;
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
     }

@@ -81,7 +81,11 @@ impl Worker {
     fn status(&self, value: &str) {
         assert_eq!(
             self.frame(),
-            json!({"type":"contributions","items":[{"kind":"status","id":"connection","title":"Frigate MQTT","value":value,"tone":match value { "Connected"=>"success","Disconnected"=>"warning",_=>"neutral" }}]})
+            json!({
+                "type":"contributions",
+                "items":[{"kind":"status","id":"connection","title":"Frigate MQTT","value":value,"tone":match value { "Connected"=>"success","Disconnected"=>"warning",_=>"neutral" }}],
+                "presentation":[{"kind":"connection","id":"frigate-mqtt","title":"Frigate MQTT","connected":value=="Connected"}]
+            })
         );
     }
     fn exit(&mut self, success: bool) {
