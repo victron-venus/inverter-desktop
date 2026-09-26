@@ -109,3 +109,32 @@ it('creates a manual season and applies a configuration draft without writing lo
   expect(localStorage.setItem).not.toHaveBeenCalled()
   wrapper.unmount()
 })
+
+it.each([
+  {
+    persist: true,
+    savePlan: undefined,
+    caption: 'Saved for this dashboard on this device.',
+    button: 'Save tariff',
+  },
+  {
+    persist: false,
+    savePlan: undefined,
+    caption: 'Apply to the configuration draft, then save the configuration.',
+    button: 'Apply tariff',
+  },
+  {
+    persist: false,
+    savePlan: async () => {},
+    caption: 'Saved on the controller and shared by all connected dashboards.',
+    button: 'Save to controller',
+  },
+])(
+  'preserves legacy persistence captions when no destination is supplied: $button',
+  ({ persist, savePlan, caption, button }) => {
+    const wrapper = mount(TariffEditor, { props: { plan: tariff(), persist, savePlan } })
+    expect(wrapper.text()).toContain(caption)
+    expect(wrapper.get('.tariff-save').text()).toBe(button)
+    wrapper.unmount()
+  }
+)

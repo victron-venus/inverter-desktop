@@ -30,9 +30,7 @@
       >
         <DailyStats
           v-if="visibleSections.show_daily_stats"
-          :tariffScope="
-            appConfig?.portal_id || appConfig?.gateway_url || appConfig?.mqtt_host || 'dashboard'
-          "
+          :tariff-scope="tariffScope(appConfig)"
         />
 
         <NotificationBanner />
@@ -147,6 +145,7 @@ import BatterySolarPanel from './components/BatterySolarPanel.vue'
 import ChartPanel from './components/ChartPanel.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DailyStats from './components/DailyStats.vue'
+import { tariffScope } from './tariffs/scope'
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import LoadsTable from './components/LoadsTable.vue'
 import NotificationBanner from './components/NotificationBanner.vue'

@@ -6,8 +6,10 @@ application-configuration plans no longer override it automatically. Public
 read-only dashboards display the controller tariff and expose no editing.
 
 In an updated desktop/mobile app, **Configuration → Electricity tariff** edits
-the shared plan immediately on inverter-control. The dashboard's **Set tariff**
-or **Edit tariff** opens the same editor when the controller supports writes.
+the shared plan immediately on inverter-control. Tariff editing, choosing a local
+plan and the interval energy viewer all live in Configuration. The dashboard
+contains only the estimated cost (when available) and current rate; hover for
+the source, billing period and calculation details.
 Saving waits for a matching controller acknowledgement after atomic persistence;
 a stale revision, validation failure or disk error leaves the previous plan intact.
 Both direct MQTT and the updated authenticated inverter-gateway transport support
@@ -15,11 +17,13 @@ this command. A disconnected/older controller cannot claim successful saving.
 The web dashboard displays the shared plan; use the application or controller's
 installation tools to edit it.
 
-Choose **Use a local tariff on this device** explicitly for a standalone local
-copy. That choice is scoped to the current view and returns to the controller
-on reload or installation change. Existing local data is preserved for export
-and import; it is never silently uploaded to the controller. **Use controller
-tariff** returns to the shared plan. Tariff editing never changes inverter control
+In Configuration, choose **Use a local tariff on this device** explicitly for a
+standalone local copy. The choice persists across window closures and app restarts,
+separately for each installation on this device. A different installation defaults
+to its controller until a local choice is explicitly saved there. Existing local
+data is preserved for export and import; it is never silently uploaded to the
+controller. **Use controller tariff** returns to the shared plan without deleting
+the saved local copy. Tariff editing never changes inverter control
 flags, charging policy or Emporia settings.
 
 The Univer spreadsheet loads only when opened. Rows are half-hour periods,
@@ -103,13 +107,20 @@ plan without a utility plan ID, cents are converted to currency/kWh explicitly.
 
 ## Implementation
 
-The tariff model, spreadsheet and display components are mirrored between
-inverter-dashboard-vue and inverter-desktop. Native controller transport lives
+The tariff model and spreadsheet are shared with inverter-dashboard-vue; native
+application settings and the compact dashboard presentation are maintained here. Native controller transport lives
 only in the desktop/mobile build. Univer OSS packages are pinned to
 1.0.0; no paid import/export or server plugin is required. The heavy editor is a
 separate lazy chunk. JSON is the exchange format; XLSX is not part of this feature.
 The browser stores local overrides per origin; desktop additionally scopes them by
-portal ID (falling back to gateway or MQTT host). No cloud synchronization runs.
+portal ID (falling back to gateway or MQTT host). Settings use the saved connection
+profile, not unsaved edits to the configuration form. Local mode and price edits
+synchronize between this app's main and Configuration windows through native
+events as well as browser storage events. Native events carry only the installation
+scope and cause a fresh read; delayed notifications cannot replay old prices or
+undo a removal. They
+remain outside portable configuration backups and controller uploads. No cloud
+synchronization runs.
 
 Validation covers rates, missing data, source metadata, separate scopes, storage
 failure, season changes, pending-cell preservation, short-month billing boundaries
@@ -118,7 +129,7 @@ commands after changing the mirrored files.
 
 ## Measured interval energy cost
 
-Open **Interval energy cost** beside the dashboard tariff button. Import measured
+Open **Configuration → Electricity tariff → Interval energy cost**. Import measured
 grid-import CSV or JSON to calculate energy charges for a selected local date or
 billing period. The shared calculator applies seasonal/weekday prices and DST,
 reports missing duration, and excludes intervals crossing a price or date boundary

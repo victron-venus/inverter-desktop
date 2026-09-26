@@ -71,6 +71,7 @@ beforeEach(() => {
   native.invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === 'auth_status') return { unlocked }
     if (command === 'get_plugin_snapshot') return structuredClone(currentSnapshot)
+    if (command === 'get_config') return {}
     return undefined
   })
   native.listen.mockReset().mockImplementation(async (name: string, callback: () => void) => {
@@ -381,7 +382,7 @@ describe('desktop worker dashboard', () => {
     const value = dashboard()
     await Promise.all([value.start(), value.start()])
     await value.start()
-    expect(native.listen).toHaveBeenCalledTimes(2)
+    expect(native.listen).toHaveBeenCalledTimes(4)
     currentSnapshot = []
     registeredCallback('plugin-host-update')()
     await flushPromises()
@@ -504,7 +505,7 @@ describe('desktop worker dashboard', () => {
     registeredCallback('auth-state-changed')()
     await flushPromises()
     expect(value.plugins.value).toHaveLength(1)
-    expect(native.listen).toHaveBeenCalledTimes(2)
+    expect(native.listen).toHaveBeenCalledTimes(4)
   })
 
   it('discards an old authentication result after a later logout', async () => {
@@ -556,7 +557,7 @@ describe('desktop worker dashboard', () => {
     pending.resolve(lateStop)
     await oldStartup
     expect(lateStop).toHaveBeenCalledOnce()
-    expect(native.listen).toHaveBeenCalledTimes(3)
+    expect(native.listen).toHaveBeenCalledTimes(5)
     expect(value.plugins.value).toHaveLength(1)
     currentSnapshot = []
     registeredCallback('plugin-host-update')()

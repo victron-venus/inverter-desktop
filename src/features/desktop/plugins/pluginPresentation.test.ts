@@ -1,5 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { toRaw } from 'vue'
 import { appConfig, resetInverterState, state } from '../../../composables/useInverterState'
 import { useDashboardControls } from '../../../composables/useDashboardControls'
 import { defaultConfig } from '../../../config'
@@ -135,6 +136,7 @@ beforeEach(async () => {
   wrappers = []
   native.invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === 'auth_status') return { unlocked: true }
+    if (command === 'get_config') return structuredClone(toRaw(appConfig.value))
     if (command === 'get_plugin_snapshot') return structuredClone(plugins)
   })
   native.listen.mockReset().mockImplementation(async (name: string, callback: () => void) => {
@@ -285,12 +287,12 @@ describe('compact installed-package presentation', () => {
         global: { provide: { [pluginPresentationKey as symbol]: context } },
       })
       wrappers.push(wrapper)
-      expect(wrapper.text()).toBe(title)
+      expect(wrapper.text()).toBe('HA MQTT')
       expect(wrapper.find('.status-dot-on').exists()).toBe(false)
       for (const connected of [true, false, true]) {
         connection.connected = connected
         await context.dashboard.refresh()
-        expect(wrapper.text()).toBe(title)
+        expect(wrapper.text()).toBe('HA MQTT')
         expect(wrapper.find('.status-dot-on').exists()).toBe(connected)
       }
       plugins[0].state = 'failed'
@@ -302,6 +304,35 @@ describe('compact installed-package presentation', () => {
       expect(wrapper.text()).toBe('')
     }
   )
+  it('updates an open shared MQTT tooltip when a participating worker loses its projection', async () => {
+    plugins = ['frigate', 'kerberos'].map((provider) => ({
+      ...snapshot,
+      plugin_id: `inverter-desktop.${provider}`,
+      contributions: [],
+      presentation: [
+        {
+          kind: 'connection' as const,
+          id: `${provider}-mqtt`,
+          title: `${provider} MQTT`,
+          connected: true,
+        },
+      ],
+    }))
+    await context.dashboard.refresh()
+    const wrapper = mount(PluginConnectionStatus, {
+      global: { provide: { [pluginPresentationKey as symbol]: context } },
+    })
+    wrappers.push(wrapper)
+    expect(wrapper.findAll('.status-dot')).toHaveLength(1)
+    await wrapper.get('section').trigger('mouseenter')
+    expect(document.body.textContent).toContain('Kerberos MQTT: Connected')
+    plugins[1].state = 'failed'
+    plugins[1].presentation = []
+    await context.dashboard.refresh()
+    expect(wrapper.find('.status-dot-on').exists()).toBe(false)
+    expect(document.body.textContent).toContain('Kerberos MQTT: Unavailable')
+    expect(document.body.textContent).not.toContain('Kerberos MQTT: Connected')
+  })
   it('rejects a slider release when its authority changed during dragging', async () => {
     const wrapper = mount(PluginNumberSlider, {
       props: { input, disabled: false, pending: false, failed: false },
