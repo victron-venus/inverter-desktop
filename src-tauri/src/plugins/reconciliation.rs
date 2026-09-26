@@ -17,6 +17,7 @@ pub(crate) struct ConfiguredStatus {
     plugin_id: String,
     version: String,
     enabled: bool,
+    local: bool,
     declaration_revision: String,
     state: String,
     error: Option<String>,
@@ -81,6 +82,7 @@ impl PackageApplication {
                             plugin_id: declaration.plugin_id.clone(),
                             version: declaration.version.clone(),
                             enabled: declaration.enabled,
+                            local: false,
                             declaration_revision: declaration_revision(declaration),
                             state: "pending".into(),
                             error: None,
@@ -283,8 +285,45 @@ impl PackageApplication {
             if let Some(error) = &details.error {
                 return Err(format!("Installed plugin requires repair: {error}"));
             }
-            if details.record.active.version == declaration.version
-                && details.record.active.sha256 == artifact.sha256
+        }
+        let local = if details.is_some() {
+            let root = self
+                .0
+                .local_build_root
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            root.map(|root| {
+                super::super::local_builds::selected(&root, &self.0.target, id, &artifact.sha256)
+            })
+            .transpose()?
+            .flatten()
+        } else {
+            None
+        };
+        let version = local
+            .as_ref()
+            .map_or(&declaration.version, |archive| &archive.package.version);
+        let digest = local
+            .as_ref()
+            .map_or(&artifact.sha256, |archive| &archive.package.sha256);
+        self.0.host.commit_in_epoch(epoch, || {
+            if let Some(status) = self
+                .0
+                .reconciliation
+                .desired
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .statuses
+                .get_mut(id)
+            {
+                status.local = local.is_some();
+                status.version = version.clone();
+            }
+            Ok(())
+        })?;
+        if let Some(details) = &details {
+            if details.record.active.version == *version && details.record.active.sha256 == *digest
             {
                 if !declaration.enabled {
                     return Ok(());
@@ -305,21 +344,20 @@ impl PackageApplication {
         self.configured_status(id, epoch, "downloading", None);
         // Dropping a revoked download cancels its response/body stream. No
         // installer lock or partially staged package exists during this wait.
-        let bytes = self
-            .await_current(epoch, download(artifact.url.clone()))
-            .await?;
+        let bytes = match &local {
+            Some(archive) => archive.read()?,
+            None => {
+                self.await_current(epoch, download(artifact.url.clone()))
+                    .await?
+            }
+        };
         self.check_epoch(epoch)?;
-        let expected = declaration.clone();
+        let expected_id = id.clone();
+        let version = version.clone();
         let target = self.0.target.clone();
-        let digest = artifact.sha256.clone();
+        let digest = digest.clone();
         let package = tokio::task::spawn_blocking(move || {
-            verify_pinned_archive_bytes(
-                bytes,
-                &expected.plugin_id,
-                &expected.version,
-                &target,
-                &digest,
-            )
+            verify_pinned_archive_bytes(bytes, &expected_id, &version, &target, &digest)
         })
         .await
         .map_err(|_| "Plugin archive validation task failed")??;

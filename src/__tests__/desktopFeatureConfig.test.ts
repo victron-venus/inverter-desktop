@@ -50,7 +50,7 @@ describe('desktop optional integrations', () => {
     await wrapper.get('button[title="Save changes"]').trigger('click')
     await flushPromises()
     expect(native.invoke).toHaveBeenCalledWith('save_config', {
-      config: expect.objectContaining({ ...initial, header_toggles_config: [] }),
+      config: expect.objectContaining(initial),
     })
     expect(
       native.invoke.mock.calls.some(([command]) =>

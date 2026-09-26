@@ -1,6 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { appConfig, resetInverterState } from '../../../composables/useInverterState'
+import { appConfig, resetInverterState, state } from '../../../composables/useInverterState'
 import { useDashboardControls } from '../../../composables/useDashboardControls'
 import { defaultConfig } from '../../../config'
 import PluginCompactPanels from './PluginCompactPanels.vue'
@@ -187,17 +187,18 @@ describe('compact installed-package presentation', () => {
     await context.dashboard.refresh()
     expect(mountPanels().text()).toBe('')
   })
-  it('retains original mixed positions including disabled legacy entries and never sends plugin controls through core IPC', async () => {
+  it('merges controller and plugin ordering and never sends plugin controls through core IPC', async () => {
     if (!appConfig.value) throw new Error('Missing config')
-    appConfig.value.header_toggles_config = [
+    state.value.ui_config = {}
+    state.value.ui_config.header_toggles = [
       { id: 'charge', label: 'Charge', entity: 'only_charging' },
       { id: 'external', label: 'Old room', entity: 'light.room' },
       { id: 'feed', label: 'Feed', entity: 'no_feed' },
     ]
-    appConfig.value.ha_entities = [
-      { id: 'disabled', label: 'Hidden', entity: 'light.hidden', domain: 'light', enabled: false },
-      { id: 'external', label: 'Room', entity: 'light.room', domain: 'light', enabled: true },
-      { id: 'feed', label: 'Feed', entity: 'no_feed', domain: 'inverter_control', enabled: true },
+    state.value.ui_config.home_buttons = [
+      { id: 'empty', label: 'Unknown', entity: 'light.unknown' },
+      { id: 'external', label: 'Room', entity: 'light.room' },
+      { id: 'feed', label: 'Feed', entity: 'no_feed' },
     ]
     const core = useDashboardControls(undefined, false)
     expect(
@@ -261,6 +262,46 @@ describe('compact installed-package presentation', () => {
     await flushPromises()
     expect(native.invoke.mock.calls.some(([command]) => command === 'plugin_action')).toBe(false)
   })
+  it.each(['Frigate', 'Kerberos', 'Ring'])(
+    'tracks %s MQTT subscription, reconnect, and worker removal in the status bar',
+    async (provider) => {
+      const title = `${provider} MQTT`
+      const connection = {
+        kind: 'connection' as const,
+        id: `${provider.toLowerCase()}-mqtt`,
+        title,
+        connected: false,
+      }
+      plugins = [
+        {
+          ...snapshot,
+          plugin_id: `inverter-desktop.${provider.toLowerCase()}`,
+          contributions: [],
+          presentation: [connection],
+        },
+      ]
+      await context.dashboard.refresh()
+      const wrapper = mount(PluginConnectionStatus, {
+        global: { provide: { [pluginPresentationKey as symbol]: context } },
+      })
+      wrappers.push(wrapper)
+      expect(wrapper.text()).toBe(title)
+      expect(wrapper.find('.status-dot-on').exists()).toBe(false)
+      for (const connected of [true, false, true]) {
+        connection.connected = connected
+        await context.dashboard.refresh()
+        expect(wrapper.text()).toBe(title)
+        expect(wrapper.find('.status-dot-on').exists()).toBe(connected)
+      }
+      plugins[0].state = 'failed'
+      await context.dashboard.refresh()
+      expect(wrapper.find('.status-dot-on').exists()).toBe(false)
+      plugins = []
+      await context.dashboard.refresh()
+      expect(wrapper.find('.status-dot').exists()).toBe(false)
+      expect(wrapper.text()).toBe('')
+    }
+  )
   it('rejects a slider release when its authority changed during dragging', async () => {
     const wrapper = mount(PluginNumberSlider, {
       props: { input, disabled: false, pending: false, failed: false },

@@ -1788,24 +1788,17 @@ fn handle_frame(
                 .map_err(|_| Outcome::Failed("worker_http_live_url_invalid"))?;
             notify = entry.queue_http_video(
                 grant,
-                id.clone(),
+                id,
                 url,
-                title.clone(),
+                title,
                 MediaAdmission {
                     kind: HttpMediaKind::Video,
                     cooldown_id: None,
                     live_preview: true,
                 },
             );
-            if notify && spec.desktop_notifications {
-                entry.queue_notification(DesktopNotification {
-                    plugin_id: spec.plugin_id.clone(),
-                    id,
-                    title,
-                    body: "Motion started".into(),
-                    live_view: None,
-                });
-            }
+            // The automatic preview already announces motion. A native toast
+            // for the same event would cover the camera window.
         }
         WorkerMessage::LiveView {
             id,

@@ -6,6 +6,7 @@ use super::frigate_integration_tests::{required_file, Broker};
 use super::media::{MediaEvent, MediaService, ReadyMedia};
 use super::package::{PublisherTrust, TrustStore};
 use super::packaging::{build_package, write_package_atomic};
+use super::presentation::Presentation;
 use super::protocol::{DashboardContribution, HttpMediaKind, PluginManifest};
 use super::runtime::{LiveViewRequest, PluginHost, QueuedHttpVideo, WorkerState};
 use ed25519_dalek::SigningKey;
@@ -122,12 +123,29 @@ async fn configure(
 }
 
 async fn connection(host: &PluginHost, plugin: &str, expected: &str) {
-    timeout(WAIT,async {
+    let provider = plugin.strip_prefix("inverter-desktop.").unwrap();
+    let connection_id = format!("{provider}-mqtt");
+    timeout(WAIT, async {
         loop {
-            if host.snapshots().iter().any(|s|s.plugin_id==plugin&&s.state==WorkerState::Running&&s.contributions.iter().any(|item|matches!(item,DashboardContribution::Status{id,value,..} if id=="connection"&&value==expected))) {break;}
+            if host.snapshots().iter().any(|snapshot| {
+                snapshot.plugin_id == plugin
+                    && snapshot.state == WorkerState::Running
+                    && snapshot.contributions.iter().any(|item| {
+                        matches!(item, DashboardContribution::Status { id, value, .. }
+                            if id == "connection" && value == expected)
+                    })
+                    && snapshot.presentation.iter().any(|item| {
+                        matches!(item, Presentation::Connection { id, connected, .. }
+                            if id == &connection_id && *connected == (expected == "Connected"))
+                    })
+            }) {
+                break;
+            }
             sleep(Duration::from_millis(25)).await;
         }
-    }).await.expect("installed camera worker must report broker state");
+    })
+    .await
+    .expect("installed camera worker must report broker state and connection presentation");
 }
 
 struct Notice {
@@ -201,13 +219,9 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
         .publish_bytes("kerberos/agent/front_camera", b"motion", false)
         .await;
     let request = media_request(&host).await;
-    count(&host, KERBEROS, &mut notices, 1).await;
-    assert!(
-        notices[0].live.is_none(),
-        "automatic previews never depend on a notification click"
-    );
+    quiet(&host, KERBEROS, &mut notices, 0).await;
     assert!(request.live_preview);
-    assert_eq!(request.id, notices[0].id);
+    let preview_id = request.id.clone();
     assert_eq!(request.url, live);
     assert_eq!(
         request.grant.preview_duration(),
@@ -231,14 +245,14 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     broker
         .publish_bytes("kerberos/agent/back_camera", b"motion", false)
         .await;
-    count(&host, KERBEROS, &mut notices, 2).await;
-    quiet(&host, KERBEROS, &mut notices, 2).await;
+    count(&host, KERBEROS, &mut notices, 1).await;
+    quiet(&host, KERBEROS, &mut notices, 1).await;
     assert!(
         host.take_http_video_requests().is_empty(),
         "same episode and unmapped cameras cannot open extra previews"
     );
-    assert!(notices[1].live.is_none());
-    assert_ne!(notices[0].id, notices[1].id);
+    assert!(notices[0].live.is_none());
+    assert_ne!(preview_id, notices[0].id);
     assert!(!serde_json::to_string(&host.snapshots())
         .unwrap()
         .contains("private-fixture"));
@@ -254,7 +268,7 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     broker
         .publish_bytes("kerberos/agent/front_camera", b"motion", false)
         .await;
-    quiet(&host, KERBEROS, &mut notices, 2).await;
+    quiet(&host, KERBEROS, &mut notices, 1).await;
     assert!(host.take_http_video_requests().is_empty());
     service.set_enabled(KERBEROS, false, epoch).await.unwrap();
     assert!(!original.is_active());
@@ -262,15 +276,14 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     broker
         .publish_bytes("kerberos/agent/disabled", b"motion", false)
         .await;
-    quiet(&host, KERBEROS, &mut notices, 2).await;
+    quiet(&host, KERBEROS, &mut notices, 1).await;
     service.set_enabled(KERBEROS, true, epoch).await.unwrap();
     connection(&host, KERBEROS, "Connected").await;
     broker
         .publish_bytes("kerberos/agent/front_camera", b"motion", false)
         .await;
     let request = media_request(&host).await;
-    count(&host, KERBEROS, &mut notices, 3).await;
-    assert!(notices[2].live.is_none());
+    quiet(&host, KERBEROS, &mut notices, 1).await;
     let resumed = request.lease.clone();
     assert_ne!(resumed.instance_id(), original.instance_id());
     media.try_submit(request).unwrap();
@@ -288,7 +301,7 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     assert!(service.session_changed(false).is_none());
     assert!(!resumed.is_active());
     closed(&media, &mut events, &second).await;
-    quiet(&host, KERBEROS, &mut notices, 3).await;
+    quiet(&host, KERBEROS, &mut notices, 1).await;
     let epoch = service.session_changed(true).unwrap();
     service.restore(epoch).await.unwrap();
     connection(&host, KERBEROS, "Connected").await;
@@ -296,7 +309,7 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
         .publish_bytes("kerberos/agent/front_camera", b"motion", false)
         .await;
     let request = media_request(&host).await;
-    count(&host, KERBEROS, &mut notices, 4).await;
+    quiet(&host, KERBEROS, &mut notices, 1).await;
     let restored = request.lease.clone();
     media.try_submit(request).unwrap();
     let third = ready(&media, &mut events).await;
@@ -309,7 +322,7 @@ async fn signed_kerberos_package_real_mqtt_lifecycle() {
     broker
         .publish_bytes("kerberos/agent/uninstalled", b"motion", false)
         .await;
-    quiet(&host, KERBEROS, &mut notices, 4).await;
+    quiet(&host, KERBEROS, &mut notices, 1).await;
     assert!(host.snapshots().is_empty());
     assert!(service.snapshot(epoch).await.unwrap().plugins.is_empty());
     service.close().await.unwrap();

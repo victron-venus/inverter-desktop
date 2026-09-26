@@ -11,6 +11,45 @@ presentation contract. They do not append generic flat entity panels. Background
 workers, camera notifications, and owned media remain independent of dashboard
 rendering. An absent package contributes no provider UI or connection.
 
+Frigate, Kerberos, and Ring publish separate MQTT connection indicators. Each
+indicator becomes connected only after the broker accepts that worker's topic
+subscriptions and goes offline while reconnecting. These indicators also cover
+workers using the former HA MQTT broker settings; Home Assistant's own indicator
+reports its separate API connection. To receive worker fixes, select the plugin
+archive URL and checksum from the new release as well as updating the app.
+`build-local.sh` builds all four `.idplugin` archives and SHA-256 files before
+building and installing the host app. Run `python3 scripts/build-local-plugins.py`
+to compile and package only the workers (Python 3.11+ and Rust required). Each
+successful run creates a complete new artifact directory under
+`target/local-plugins/<native-target>/`; its path is printed with the result.
+Failed builds never replace a previous successful artifact set. For shell callers,
+`--print-path` writes only that directory to stdout; compiler/packager diagnostics
+go to stderr. The script does not accept an arbitrary output file path.
+
+On macOS, add `--install` to build and install into the existing application, or
+use `--install --artifacts /absolute/path/to/artifacts` to reuse a completed build.
+`build-local.sh` installs the new host and then activates its matching workers.
+Only previously installed plugins are updated; enabled/disabled intent, settings,
+secrets and configured release pins are preserved. The app must include local-build
+support and be unlocked. The script restarts it and verifies installed archive
+hashes; unsupported/locked apps time out and the previous selection is restored.
+
+The explicit same-account `local-plugin-overrides.json` selection and immutable
+archives reside in the application's data directory, outside encrypted settings.
+The native host verifies the exact ID/version/target/SHA-256 and uses its existing
+transactional installer. This is a trusted native developer operation, not a
+webview installation API. Configuration → Plugins labels local builds. Repeated
+builds retain the original release baseline; a newly configured release hash takes
+precedence over an older override. Run `python3 scripts/build-local-plugins.py
+--restore-release` to remove the local selection and restore configured release
+packages without compiling. For a published beta, install its app and update the
+required URLs/checksums from `desktop-plugins-<target>.json` in your configuration
+backup. Local archive sets remain available for inspection after restoration.
+
+Automatic Frigate and Kerberos motion previews do not show a duplicate system
+notification over the video. Cameras without a configured preview continue to
+send ordinary motion notifications.
+
 Configured downloads can use unsigned packages and need no publisher or app
 signing keys. The embedded publisher policy is currently empty, so manual package
 selection remains unavailable. HA and camera provider implementations are separate
@@ -219,8 +258,8 @@ files, missing files, or incorrect lengths/digests is rejected.
 ## Frigate worker package
 
 The separately built [Frigate worker](../desktop-plugins/frigate/README.md)
-uses an independent MQTT connection, native motion notifications, and automatic
-fifteen-second previews for fresh motion events. Older clip workers remain
+uses an independent MQTT connection and automatic fifteen-second previews for
+fresh motion events, with native notifications for motion without a preview. Older clip workers remain
 supported by the native download path. [Kerberos](../desktop-plugins/kerberos/README.md) and
 [Ring](../desktop-plugins/ring/README.md) have separate package identities,
 configuration, topic filters, cooldowns, and lifecycle. All camera packages join

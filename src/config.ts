@@ -75,7 +75,7 @@ export interface AppConfig {
   ev_instance?: number
   ha_consumption_clamps?: string[]
   ha_generation_clamps?: string[]
-  /** Optional presentation override; MQTT ui_config.header_toggles remains the daemon default. */
+  /** Passive migration data for installed Home Assistant plugins; never overrides controller UI. */
   header_toggles_config?: DashboardControl[]
   color_scheme?: string | null
   portal_id?: string | null
@@ -109,7 +109,6 @@ export interface AppConfig {
   show_ha_media?: boolean
   show_ha_scenes?: boolean
   show_ha_weather?: boolean
-  show_console?: boolean
   auto_start?: boolean
   auth_enabled?: boolean
   auth_username?: string | null
@@ -135,18 +134,13 @@ export interface AppConfig {
 const SHOW_DEFAULTS = {
   show_batteries: true,
   show_solar_production: true,
-  show_active_loads: true,
-  show_daily_stats: true,
+  show_active_loads: false,
+  show_daily_stats: false,
   show_ev: true,
-  show_home_section: true,
-  show_header_toggles: true,
-  show_console: true,
+  show_home_section: false,
+  show_header_toggles: false,
   show_advanced_settings: false,
   auto_start: false,
-  auth_enabled: false,
-  auth_username: null,
-  auth_password: null,
-  auth_biometric: false,
 } as const
 
 const defaultConfig: AppConfig = {
@@ -155,7 +149,6 @@ const defaultConfig: AppConfig = {
   mqtt_tls: false,
   mqtt_login: null,
   mqtt_password: null,
-  header_toggles_config: undefined,
   color_scheme: 'dark',
   portal_id: null,
 
@@ -169,12 +162,36 @@ const defaultConfig: AppConfig = {
   ...featureDefaultConfig,
 }
 
+export const sectionKeys = [
+  'show_batteries',
+  'show_solar_production',
+  'show_active_loads',
+  'show_daily_stats',
+  'show_ev',
+  'show_home_section',
+  'show_header_toggles',
+] as const
+
+/** Older stores used null/missing for visible sections. Native migrates these too. */
+export function normalizeConfig(stored: AppConfig): AppConfig {
+  const normalized = { ...defaultConfig, ...stored }
+  for (const key of sectionKeys) normalized[key] = stored[key] ?? true
+  return normalized
+}
+
+/** Initial rendering and settings use the same explicit section defaults. */
+export function sectionVisibility(config: AppConfig | null | undefined) {
+  return Object.fromEntries(
+    sectionKeys.map((key) => [key, config?.[key] ?? defaultConfig[key]])
+  ) as Record<(typeof sectionKeys)[number], boolean>
+}
+
 let config: AppConfig = defaultConfig
 
 export async function getAppConfig(): Promise<AppConfig> {
   try {
     const fetched = await invoke<AppConfig>('get_config')
-    config = { ...defaultConfig, ...fetched }
+    config = normalizeConfig(fetched)
     return config
   } catch (e) {
     logger.error('Failed to load config', e)

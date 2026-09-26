@@ -91,7 +91,11 @@ beforeEach(() => {
     command === 'get_config' ? structuredClone(config) : command === 'get_state' ? {} : undefined
   )
   appConfig.value = { ...defaultConfig, ...structuredClone(config) }
-  state.value = { booleans: { no_feed: true }, ui_config: {}, features: { ha: true } }
+  state.value = {
+    booleans: { no_feed: true },
+    ui_config: { header_toggles: [{ id: 'limit', label: 'Export limit', entity: 'no_feed' }] },
+    features: { ha: true },
+  }
 })
 
 describe('mobile build feature boundary', () => {

@@ -398,7 +398,6 @@ const config = {
 ### Subscribed (incoming data)
 
 - `inverter/state` - JSON with current system state
-- `inverter/console` - Console log messages
 - `N/<portal>/tank/+/Level` - Tank level % (dbus-pump on the Cerbo GX)
 - `N/<portal>/pump/+/State` - Pump/valve startstop state (dbus-pump)
 - `N/<portal>/ev/+/Soc` - EV vehicle battery % (dbus-ev on the Cerbo GX)
@@ -461,10 +460,18 @@ flowchart LR
 Home Assistant is an optional parallel consumer that exposes MQTT switches.
 HA entities do not supply inverter flag state or execute these commands.
 
-Desktop keeps a fallback button list for older daemons without metadata. A saved
-nonempty `header_toggles_config` overrides the published labels/order; an empty
-local list uses the daemon defaults. See [control ownership](docs/mqtt-control-ownership.md)
+Desktop displays the controls published by inverter-control; local control editors,
+overrides and the built-in fallback list have been removed. Home Assistant controls
+are configured in the installed HA plugin. See [control ownership](docs/mqtt-control-ownership.md)
 for source files, wire compatibility, HA switch configuration and validation.
+
+Section visibility is explicit in Configuration → Sections. New installations show
+Batteries, Solar Production and EV; Active Loads, Daily Stats, Home Buttons and
+Header Controls start hidden. Existing missing/null preferences are migrated to
+visible, preserving the previous layout, and explicit false values stay hidden.
+The obsolete Console display and its MQTT subscription have been removed. The
+Authentication editor is no longer in Sections; existing app locks and native
+session protections are preserved.
 
 ### Published (commands)
 
@@ -645,10 +652,8 @@ Read the [privacy policy](docs/privacy-policy.md) for information about local se
 
 ## Electricity tariffs
 
-The daily strip includes a weekly Univer tariff editor with Emporia reference
-import and local persistence. See [tariff editing](docs/electricity-tariffs.md).
-
-Tariffs can also be entered during SetupHelper configuration or first-run desktop
-setup and provisioned with deployment files. Seasons and billing start dates
-survive configuration backups and updates. See [installation defaults and tariff
-configuration](docs/electricity-tariffs.md#installation-defaults-and-configuration-backups).
+The controller stores the shared electricity tariff. The daily strip reads that
+plan, and Configuration → Electricity tariff edits it after controller confirmation.
+Seasons, weekly rates and billing dates survive controller updates. A local plan
+can be selected explicitly for this device; it never silently replaces the shared
+plan. See [tariff editing and migration](docs/electricity-tariffs.md).

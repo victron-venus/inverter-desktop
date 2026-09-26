@@ -200,7 +200,7 @@ async fn edited_encrypted_settings_export_and_restore_replace_only_the_installed
     let installed = service.export_modules(epoch).await.unwrap();
     source.modules.extend(installed.clone());
     let mut backup = crate::config_backup::redacted(&source).unwrap();
-    backup["show_console"] = json!(false);
+    backup["show_batteries"] = json!(false);
     let content = backup.to_string();
     assert!(!content.contains("fixture-secret"));
     assert!(!content.contains("obsolete-shadow-secret"));
@@ -215,7 +215,7 @@ async fn edited_encrypted_settings_export_and_restore_replace_only_the_installed
         })
         .await
         .unwrap();
-    assert_eq!(restored.show_console, Some(false));
+    assert_eq!(restored.show_batteries, Some(false));
     assert_eq!(restored.modules[PLUGIN], installed[PLUGIN]);
     assert!(restored.modules[PLUGIN].secrets.is_empty());
     assert_eq!(restored.modules["example.future"], retained);

@@ -165,10 +165,10 @@ mod tests {
             ..FullConfig::default()
         };
         let original = serde_json::to_value(&config).unwrap()["desktop_plugins"].clone();
-        config.show_console = Some(false);
+        config.show_batteries = Some(false);
         let decoded: FullConfig =
             serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
-        assert_eq!(decoded.show_console, Some(false));
+        assert_eq!(decoded.show_batteries, Some(false));
         assert_eq!(
             serde_json::to_value(&decoded).unwrap()["desktop_plugins"],
             original

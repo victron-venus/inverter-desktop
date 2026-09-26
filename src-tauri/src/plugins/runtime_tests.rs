@@ -2119,7 +2119,7 @@ fn live_spec(mode: &str) -> WorkerSpec {
 }
 
 #[tokio::test]
-async fn http_live_admission_is_private_revocable_and_uses_motion_notification() {
+async fn http_live_admission_is_private_revocable_and_never_overlays_a_notification() {
     let host = PluginHost::default();
     let mut worker = live_spec("configuration_live");
     worker.desktop_notifications = true;
@@ -2139,9 +2139,11 @@ async fn http_live_admission_is_private_revocable_and_uses_motion_notification()
     assert!(!serde_json::to_string(&host.snapshots())
         .unwrap()
         .contains("video.test"));
-    let mut notifications = Vec::new();
-    host.dispatch_notifications(|item| notifications.push(item.body.clone()));
-    assert_eq!(notifications, ["Motion started"]);
+    assert!(!host.has_pending_notifications());
+    assert_eq!(
+        host.dispatch_notifications(|_| panic!("preview must not emit a duplicate toast")),
+        0
+    );
     host.revoke();
     assert!(!request.lease.is_active());
     host.shutdown().await;

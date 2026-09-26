@@ -2,20 +2,13 @@
 import { defineComponent, ref, type Component } from 'vue'
 import type { AppConfig } from '../config'
 import type { ControlState, DashboardControl } from '../inverterControl'
-export { default as HeaderControlsEditor } from '../components/HeaderTogglesEditor.vue'
-export { default as ControlTargetInput } from './CoreControlInput.vue'
-export { useCoreControlsConfig as useConfigControls } from './coreControlsConfig'
 const Empty = defineComponent({ inheritAttrs: false, setup: () => () => null })
 export const DashboardFeaturePanels = Empty
 export const DashboardFeatureActions = Empty
 export const DashboardFeatureStatus = Empty
 export const DashboardConnectionStatus = Empty
-export const FeatureConfigSection = Empty
 export const FeaturePluginManager = Empty
 export const featurePluginManagerTabId = undefined
-export const FeatureSectionVisibility = Empty
-export const FeatureControlsEditor = Empty
-export const FeatureDiscoveryDialog = Empty
 export const FeatureSetup = Empty
 export const featureConfigSections: Array<{
   id: string

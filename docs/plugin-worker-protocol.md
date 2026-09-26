@@ -481,7 +481,8 @@ compact viewer in an incognito `plugin-preview-<UUID>` window. Only that owning
 viewer can obtain its active private image URL, close itself, or drag its window.
 The image policy allows the configured camera origin; remote document navigation,
 new windows, and general application IPC are denied. The native host closes the
-window at the grant's lifetime or generation removal.
+window at the grant's lifetime or generation removal. Automatic previews do not
+synthesize desktop notifications, so a motion toast cannot cover the video.
 
 Mapped cameras instead emit `live_view` with `id`, `title`, and `live_view_id`,
 without a URL. The verified `live_view` declaration must explicitly include
@@ -492,7 +493,8 @@ without gaining automatic preview authority. The derived preview grant permits
 only that exact configured URL and cannot authorize a download. Admission is
 independent of desktop notification permission, uses a 15-second per-camera
 cooldown, and retains the common queue, rate, episode-ID, and generation limits.
-Kerberos emits its ordinary motion notification separately from its preview.
+Kerberos emits a preview for a mapped camera, or an ordinary motion notification
+when that camera has no configured preview. It never emits both for one event.
 
 Previews share the eight-window limit but reserve no download transfer or disk
 bytes. Waiting for capacity expires after three seconds, preventing delayed motion

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "$0")"
 
 APP_NAME="Inverter Desktop"
 BUNDLE_DIR="src-tauri/target/release/bundle"
@@ -36,6 +37,10 @@ else
 fi
 
 echo ""
+echo "===> Building desktop plugin artifacts..."
+PLUGIN_ARTIFACTS=$(python3 scripts/build-local-plugins.py --print-path)
+
+echo ""
 echo "===> Building Tauri application..."
 # This script installs the macOS app directly; disk images are release artifacts.
 pnpm run tauri build --bundles app --verbose
@@ -62,10 +67,13 @@ else
 fi
 
 echo ""
+echo "===> Installing the matching local plugin artifacts..."
+python3 scripts/build-local-plugins.py --install --artifacts "$PLUGIN_ARTIFACTS"
+
+echo ""
 echo "========================================"
 echo "  Build complete!"
 echo "  App:  /Applications/${APP_NAME}.app"
 echo "========================================"
 
-open -a "${APP_NAME}"
 date

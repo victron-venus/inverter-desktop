@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConfigForm } from '../composables/useConfigForm'
-import { useCoreControlsConfig } from '../features/coreControlsConfig'
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke }))
@@ -66,74 +65,23 @@ beforeEach(() => {
   )
 })
 
-describe('mobile control configuration roundtrip', () => {
-  it('edits visible inverter controls while preserving hidden controls and their opaque fields', async () => {
-    const form = useConfigForm()
-    const controls = useCoreControlsConfig()
-    controls.loadFromConfig(await form.loadConfig())
-    expect(controls.headerTogglesList.value.map((entry) => entry.entity)).toEqual([
-      'no_feed',
-      'charge_battery',
-    ])
-    controls.headerTogglesList.value[0].label = 'Export limit'
-    controls.moveToggleUp(1)
-    const edits = controls.getSavedControls()
-    expect(await form.saveConfig(edits.home, edits.header, edits.editableHeader)).toBe(true)
-    const written = invoke.mock.calls.find(([command]) => command === 'save_config')?.[1].config
-    expect(written.header_toggles_config).toEqual([
-      saved.header_toggles_config[2],
-      saved.header_toggles_config[1],
-      { ...saved.header_toggles_config[0], label: 'Export limit', entity: 'no_feed' },
-    ])
-    expect(written.ha_entities).toEqual(saved.ha_entities)
-    expect(written.ha_url).toBe(saved.ha_url)
-    expect(written.desktop_plugins).toEqual(saved.desktop_plugins)
-    expect(written.modules).toEqual(saved.modules)
-  })
-
-  it('resets visible controls without deleting hidden desktop definitions', async () => {
-    const form = useConfigForm()
-    const controls = useCoreControlsConfig()
-    controls.loadFromConfig(await form.loadConfig())
-    controls.headerTogglesList.value = []
-    controls.haEntitiesList.value = []
-    const edits = controls.getSavedControls()
-    expect(await form.saveConfig(edits.home, edits.header, edits.editableHeader)).toBe(true)
-    const written = invoke.mock.calls.find(([command]) => command === 'save_config')?.[1].config
-    expect(written.header_toggles_config).toEqual([saved.header_toggles_config[1]])
-    expect(written.ha_entities).toEqual([saved.ha_entities[0]])
-    expect(written.desktop_plugins).toEqual(saved.desktop_plugins)
-    expect(written.modules).toEqual(saved.modules)
-  })
-
-  it('keeps unknown module data through a mobile core reset and later save', async () => {
-    const form = useConfigForm()
-    await form.loadConfig()
-    form.config.mqtt_host = 'ChangedCerbo'
-    form.resetToDefaults()
-    expect(form.config.mqtt_host).toBe('Cerbo')
-    expect(form.config.modules).toEqual(saved.modules)
-    expect(await form.saveConfig(saved.ha_entities, saved.header_toggles_config, [])).toBe(true)
-    const written = invoke.mock.calls.find(([command]) => command === 'save_config')?.[1].config
-    expect(written.modules).toEqual(saved.modules)
-    expect(invoke.mock.calls.map(([command]) => command)).toEqual(['get_config', 'save_config'])
-  })
-  it('reserves hidden IDs for presets and automatically named controls', async () => {
-    const form = useConfigForm()
-    const controls = useCoreControlsConfig()
-    const loaded = await form.loadConfig()
-    loaded.header_toggles_config = [{ id: 'no_feed', label: 'Hidden', entity: 'switch.no_feed' }]
-    controls.loadFromConfig(loaded)
-    controls.addHeaderToggle({ id: 'no_feed', label: 'Export limit', entity: 'no_feed' })
-    expect(controls.headerTogglesList.value[0].id).toBe('no_feed_2')
-    controls.addHeaderToggle({ id: '', label: 'Another limit', entity: 'no_feed' })
-    const edits = controls.getSavedControls()
-    expect(await form.saveConfig(edits.home, edits.header, edits.editableHeader)).toBe(true)
-    const written = invoke.mock.calls.find(([command]) => command === 'save_config')?.[1].config
-    expect(written.header_toggles_config.map((entry: { id: string }) => entry.id)).toEqual([
-      'no_feed',
-      'no_feed_2',
-      'no_feed_3',
-    ])
-  })
+describe('passive legacy control data', () => {
+  it.each([false, true])(
+    'preserves migration data, opaque fields and installed packages on core save (reset=%s)',
+    async (reset) => {
+      const form = useConfigForm()
+      await form.loadConfig()
+      form.config.mqtt_host = 'ChangedCerbo'
+      if (reset) form.resetToDefaults()
+      expect(await form.saveConfig()).toBe(true)
+      const written = invoke.mock.calls.find(([command]) => command === 'save_config')?.[1].config
+      expect(written.mqtt_host).toBe(reset ? 'Cerbo' : 'ChangedCerbo')
+      expect(written.header_toggles_config).toEqual(saved.header_toggles_config)
+      expect(written.ha_entities).toEqual(saved.ha_entities)
+      expect(written.ha_url).toBe(saved.ha_url)
+      expect(written.desktop_plugins).toEqual(saved.desktop_plugins)
+      expect(written.modules).toEqual(saved.modules)
+      expect(invoke.mock.calls.map(([command]) => command)).toEqual(['get_config', 'save_config'])
+    }
+  )
 })

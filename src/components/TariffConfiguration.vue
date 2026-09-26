@@ -1,60 +1,86 @@
 <template>
   <section aria-label="Electricity tariff" class="flex flex-col gap-2 text-[12px]">
-    <h2 class="classic-section-title">Electricity tariff (optional)</h2>
+    <h2 class="classic-section-title">Controller electricity tariff</h2>
     <p>
-      Enter energy prices, seasonal months, a time zone and the billing period start day. This
-      tariff is included in configuration backups. Without one, the dashboard uses the tariff
-      supplied by inverter-control. A local dashboard override takes priority.
+      The controller stores energy prices, seasons and billing dates for every connected dashboard.
+      Saving here takes effect immediately on the controller.
     </p>
-    <p v-if="plan">
-      {{ plan.name }} · {{ plan.currency }} · {{ plan.timeZone }}
-      {{ plan.billingDay ? ` · Billing starts on day ${plan.billingDay}` : '' }}
-    </p>
+    <p v-if="plan">{{ plan.name }} · {{ plan.currency }} · {{ plan.timeZone }}</p>
+    <p v-else>No controller tariff is configured.</p>
+    <p v-if="!writable">Connect to an updated inverter-control to edit the shared tariff.</p>
     <p v-if="error" role="alert">{{ error }}</p>
-    <button type="button" class="classic-input" @click="editorOpen = true">
-      {{ plan ? 'Edit configuration tariff' : 'Set configuration tariff' }}
-    </button>
-    <button
-      v-if="modelValue != null"
-      type="button"
-      class="classic-input"
-      @click="emit('update:modelValue', null)"
-    >
-      Use controller tariff
+    <button type="button" class="classic-input" :disabled="!writable" @click="openEditor">
+      {{ plan ? 'Edit controller tariff' : 'Set controller tariff' }}
     </button>
     <TariffEditor
       v-if="editorOpen"
       :plan="plan"
       :persist="false"
-      clear-label="Use controller tariff"
-      @saved="apply"
+      :save-plan="save"
+      clear-label="Clear controller tariff"
+      @saved="saved"
       @close="editorOpen = false"
     />
   </section>
 </template>
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref } from 'vue'
 import { validatePlan, type TariffPlan } from '../tariffs/model'
-const props = defineProps<{ modelValue?: unknown }>()
-const emit = defineEmits<{ 'update:modelValue': [value: TariffPlan | null] }>()
+import {
+  readControllerTariff,
+  saveControllerTariff,
+  type ControllerTariff,
+} from '../tariffs/controller'
+
 const TariffEditor = defineAsyncComponent(() => import('../tariffs/TariffEditor.vue'))
+const controller = ref<ControllerTariff>({ plan: null })
 const editorOpen = ref(false)
-const parsed = computed(() => {
-  if (props.modelValue == null) return { plan: null, error: '' }
+const error = ref('')
+const revision = ref('')
+let mounted = true
+let timer: ReturnType<typeof setTimeout> | undefined
+const plan = computed(() => {
   try {
-    return { plan: validatePlan(props.modelValue), error: '' }
+    return controller.value.plan == null ? null : validatePlan(controller.value.plan)
   } catch {
-    return {
-      plan: null,
-      error:
-        'This configuration tariff is invalid or newer than this app. It will not be applied. Import or enter a supported tariff to replace it.',
-    }
+    return null
   }
 })
-const plan = computed(() => parsed.value.plan)
-const error = computed(() => parsed.value.error)
-function apply(value: TariffPlan | null) {
-  emit('update:modelValue', value)
+const writable = computed(
+  () => controller.value.status?.writable === true && !!controller.value.status?.revision
+)
+async function refresh() {
+  try {
+    const value = await readControllerTariff()
+    if (!mounted) return
+    if (value.plan != null) validatePlan(value.plan)
+    controller.value = value
+    error.value = ''
+  } catch (cause) {
+    if (mounted) {
+      error.value = String(cause)
+      controller.value = { ...controller.value, status: undefined }
+    }
+  }
+}
+async function poll() {
+  if (!editorOpen.value) await refresh()
+  if (mounted) timer = setTimeout(poll, 2000)
+}
+function openEditor() {
+  revision.value = controller.value.status?.revision ?? ''
+  editorOpen.value = true
+}
+async function save(value: TariffPlan | null) {
+  await saveControllerTariff(value, revision.value)
+  await refresh()
+}
+function saved() {
   editorOpen.value = false
 }
+onMounted(poll)
+onBeforeUnmount(() => {
+  mounted = false
+  clearTimeout(timer)
+})
 </script>

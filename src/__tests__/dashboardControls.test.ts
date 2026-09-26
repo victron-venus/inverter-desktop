@@ -10,7 +10,6 @@ import {
 } from '../composables/useInverterState'
 import { defaultConfig } from '../config'
 import {
-  DEFAULT_INVERTER_CONTROLS,
   INVERTER_CONTROL_FLAGS,
   inverterControlFlagKey,
   mqttControlState,
@@ -48,23 +47,30 @@ describe('inverter-control presentation without HA', () => {
     expect(boundary.invoke).not.toHaveBeenCalled()
   })
 
-  it('keeps an explicit empty daemon list and uses defaults only for older metadata', () => {
+  it('waits for daemon controls and keeps an explicit empty daemon list', () => {
     const controls = useDashboardControls()
-    expect(controls.headerControls.value).toEqual(DEFAULT_INVERTER_CONTROLS)
+    expect(controls.headerControls.value).toEqual([])
     applyInverterState({ ui_config: { header_toggles: [] } })
     expect(controls.headerControls.value).toEqual([])
   })
 
-  it('preserves saved order/labels and normalizes legacy targets without mutating config', () => {
+  it('uses daemon labels/order and ignores stale saved overrides', () => {
     currentConfig().header_toggles_config = [
       { id: 'custom', label: 'Saved label', entity: 'input_boolean.only_charging' },
     ]
-    applyInverterState({ booleans: { only_charging: true } })
+    applyInverterState({
+      booleans: { only_charging: true },
+      ui_config: {
+        header_toggles: [
+          { id: 'custom', label: 'Controller label', entity: 'input_boolean.only_charging' },
+        ],
+      },
+    })
     const adapter = vi.fn(() => 'off' as const)
     const controls = useDashboardControls(adapter)
     expect(controls.headerControls.value[0]).toEqual({
       id: 'custom',
-      label: 'Saved label',
+      label: 'Controller label',
       entity: 'only_charging',
     })
     expect(controls.headerControlStates.value.custom).toBe('on')
@@ -73,9 +79,11 @@ describe('inverter-control presentation without HA', () => {
   })
 
   it('keeps actual HA switches in the optional adapter even when their id resembles a flag', () => {
-    currentConfig().header_toggles_config = [
-      { id: 'no_feed', label: 'HA relay', entity: 'switch.no_feed' },
-    ]
+    applyInverterState({
+      ui_config: {
+        header_toggles: [{ id: 'no_feed', label: 'HA relay', entity: 'switch.no_feed' }],
+      },
+    })
     const adapter = vi.fn(() => 'unavailable' as const)
     const controls = useDashboardControls(adapter)
     expect(controls.headerControlStates.value.no_feed).toBe('unavailable')
@@ -87,7 +95,7 @@ describe('inverter-control presentation without HA', () => {
   })
 
   it('uses the same authoritative MQTT flag for a control placed in Home', () => {
-    currentConfig().ha_entities = [
+    const published = [
       {
         id: 'custom',
         label: 'Limit',
@@ -96,7 +104,11 @@ describe('inverter-control presentation without HA', () => {
         enabled: true,
       },
     ]
-    state.value = { booleans: { no_feed: true, home_custom: false } }
+    currentConfig().ha_entities = []
+    state.value = {
+      booleans: { no_feed: true, home_custom: false },
+      ui_config: { home_buttons: published },
+    }
     const controls = useDashboardControls()
     expect(controls.homeButtonStates.value.custom).toBe('on')
     expect(controls.homeButtons.value[0].entity).toBe('no_feed')
@@ -117,6 +129,11 @@ describe('inverter-control presentation without HA', () => {
   })
 
   it('sends the displayed bare flag to the core dispatcher when clicked', async () => {
+    applyInverterState({
+      ui_config: {
+        header_toggles: [{ id: 'only_charging', label: 'ONLY CHARGING', entity: 'only_charging' }],
+      },
+    })
     const controls = useDashboardControls()
     const wrapper = mount(AppHeader, {
       props: {

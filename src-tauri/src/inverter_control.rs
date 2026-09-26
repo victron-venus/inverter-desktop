@@ -31,6 +31,40 @@ pub(crate) fn is_flag(entity_or_key: &str) -> bool {
     flag_key(entity_or_key).is_some()
 }
 
+/// The controller owns complete tariff validation; transports enforce a bounded,
+/// correlated command envelope and never accept a path or an arbitrary MQTT topic.
+pub(crate) fn validate_tariff_command(body: &Value) -> Result<(), String> {
+    let valid = body.as_object().is_some_and(|object| object.len() == 3)
+        && body
+            .get("request_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| {
+                !id.is_empty()
+                    && id.len() <= 128
+                    && id.bytes().all(|b| {
+                        b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-')
+                    })
+            })
+        && body
+            .get("revision")
+            .and_then(Value::as_str)
+            .is_some_and(|revision| {
+                revision.len() == 64
+                    && revision
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            })
+        && body
+            .get("plan")
+            .is_some_and(|plan| plan.is_null() || plan.is_object())
+        && body.to_string().len() <= 100_000;
+    if valid {
+        Ok(())
+    } else {
+        Err("Invalid controller tariff command".into())
+    }
+}
+
 /// Shared dashboard v1: an invalid observation is unknown, never confirmed off.
 pub(crate) fn control_bool(value: &Value) -> Option<bool> {
     match value {
@@ -87,6 +121,29 @@ pub(crate) fn prepare_command(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tariff_envelopes_and_ui_fields_survive_native_transports() {
+        let valid = json!({"request_id":"abc-123", "revision":"a".repeat(64), "plan":null});
+        assert!(validate_tariff_command(&valid).is_ok());
+        for invalid in [
+            json!({}),
+            json!({"request_id":"../topic", "revision":"a".repeat(64), "plan":null}),
+            json!({"request_id":"id", "revision":"a".repeat(64), "plan":[], "path":"/tmp/file"}),
+            json!({"request_id":"id", "revision":"bad", "plan":null}),
+        ] {
+            assert!(validate_tariff_command(&invalid).is_err());
+        }
+        let ui = json!({"electricity_tariff":{"version":2,"name":"Seasonal tariff"},
+            "electricity_tariff_status":{"writable":true,"revision":"a".repeat(64)}});
+        let native: crate::mqtt::UiConfig = serde_json::from_value(ui.clone()).unwrap();
+        let serialized = serde_json::to_value(native).unwrap();
+        assert_eq!(serialized["electricity_tariff"], ui["electricity_tariff"]);
+        assert_eq!(
+            serialized["electricity_tariff_status"],
+            ui["electricity_tariff_status"]
+        );
+    }
 
     #[test]
     fn shared_dashboard_contract_v1() {

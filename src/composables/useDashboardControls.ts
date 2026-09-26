@@ -3,23 +3,19 @@ import { computed } from 'vue'
 import {
   type ControlState,
   type DashboardControl,
-  DEFAULT_INVERTER_CONTROLS,
   isInverterControlFlag,
   mqttControlState,
   normalizeControlTarget,
 } from '../inverterControl'
-import { appConfig, state } from './useInverterState'
+import { state } from './useInverterState'
 
-/** Preserve source order, including opaque external entries, when rendering core controls. */
+/** Presentation is owned by inverter-control; local legacy definitions are migration data only. */
 export function dashboardControlSource(surface: 'header' | 'home'): DashboardControl[] {
-  if (surface === 'header') {
-    const configured = appConfig.value?.header_toggles_config
-    return configured?.length
-      ? configured
-      : (state.value.ui_config?.header_toggles ?? DEFAULT_INVERTER_CONTROLS)
-  }
-  const configured = appConfig.value?.ha_entities
-  return configured?.length ? configured : (state.value.ui_config?.home_buttons ?? [])
+  return (
+    (surface === 'header'
+      ? state.value.ui_config?.header_toggles
+      : state.value.ui_config?.home_buttons) ?? []
+  )
 }
 
 /** Optional home-device adapter; inverter controls never consult it. */

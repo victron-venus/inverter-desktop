@@ -127,6 +127,7 @@ enum StoreStatus {
 
 struct ApplicationInner {
     reconciliation: Reconciliation,
+    local_build_root: Mutex<Option<PathBuf>>,
     settings_seed: Mutex<Option<SettingsSeedProvider>>,
     migration_waiting: AtomicBool,
     host: PluginHost,
@@ -167,6 +168,7 @@ impl PackageApplication {
     ) -> Self {
         Self(Arc::new(ApplicationInner {
             reconciliation: Reconciliation::default(),
+            local_build_root: Mutex::new(None),
             settings_seed: Mutex::new(None),
             migration_waiting: AtomicBool::new(false),
             host,
@@ -226,6 +228,11 @@ impl PackageApplication {
             let root = root?;
             let trust = trust?;
             let parent = root.parent().ok_or("Invalid plugin store parent")?;
+            *self
+                .0
+                .local_build_root
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(parent.to_owned());
             let media_root = parent.join("desktop-plugin-media");
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             let settings = SettingsStore::new(root.clone(), key);

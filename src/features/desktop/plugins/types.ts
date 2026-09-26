@@ -148,6 +148,7 @@ export interface PluginManagerSnapshot {
     version: string
     declaration_revision: string
     enabled: boolean
+    local?: boolean
     state: 'pending' | 'downloading' | 'installing' | 'ready' | 'disabled' | 'failed'
     error: string | null
   }>

@@ -25,7 +25,10 @@
       :kwh="ds.grid_kwh"
       :tariff-scope="tariffScope"
       :readOnly="readOnly"
-      :configured-tariff="configuredTariff ?? state.ui_config?.electricity_tariff"
+      :configured-tariff="state.ui_config?.electricity_tariff"
+      :save-plan="saveControllerPlan"
+      :controller-revision="state.ui_config?.electricity_tariff_status?.revision"
+      :controller-writable="state.ui_config?.electricity_tariff_status?.writable === true"
     />
 
     <div v-if="hasBattery" class="daily-stat-group flex items-center gap-1.5 flex-1 min-w-fit">
@@ -58,14 +61,17 @@ import { Zap, Battery as BatteryIcon } from '@lucide/vue'
 import { state } from '../composables/useInverterState'
 
 import TariffCost from '../tariffs/TariffCost.vue'
+import { saveControllerTariff } from '../tariffs/controller'
+import type { TariffPlan } from '../tariffs/model'
 
-withDefaults(
-  defineProps<{ tariffScope?: string; readOnly?: boolean; configuredTariff?: unknown }>(),
-  {
-    tariffScope: 'dashboard',
-    readOnly: false,
-  }
-)
+function saveControllerPlan(plan: TariffPlan | null, revision: string) {
+  return saveControllerTariff(plan, revision)
+}
+
+withDefaults(defineProps<{ tariffScope?: string; readOnly?: boolean }>(), {
+  tariffScope: 'dashboard',
+  readOnly: false,
+})
 
 const ds = computed(() => state.value.daily_stats || {})
 const fc = computed(() => state.value.solar_forecast || {})

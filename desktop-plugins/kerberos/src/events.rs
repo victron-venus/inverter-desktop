@@ -141,14 +141,15 @@ impl Provider for Events {
         let Some(motion) = self.motion(topic, payload, retained, now, unix_seconds) else {
             return Vec::new();
         };
-        let preview = self.live_cameras.contains(&motion.camera).then(|| {
-            json!({"type":"live_view","id":motion.notification["id"],"title":motion.notification["title"],"live_view_id":motion.camera})
-        });
-        // Admit the preview before ordinary OS notification delivery can wait
-        // for permission. Both outputs share an episode; the host owns the URL.
-        let mut frames: Vec<_> = preview.into_iter().collect();
-        frames.push(motion.notification);
-        frames
+        if self.live_cameras.contains(&motion.camera) {
+            // The host owns the URL and opens the preview automatically. Do not
+            // cover that window with a second announcement of the same motion.
+            vec![
+                json!({"type":"live_view","id":motion.notification["id"],"title":motion.notification["title"],"live_view_id":motion.camera}),
+            ]
+        } else {
+            vec![motion.notification]
+        }
     }
 }
 
@@ -334,18 +335,13 @@ mod tests {
         let mut events = Events::new(&config).unwrap();
         let now = Instant::now();
         let frames = events.frames("kerberos/agent/front_camera", b"motion", false, now, 1000);
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[1]["type"], "notification");
-        assert!(frames[1].get("live_view_id").is_none());
-        assert_eq!(frames[1]["body"], "Motion started");
+        assert_eq!(frames.len(), 1, "preview must not emit a duplicate toast");
         assert_eq!(frames[0]["type"], "live_view");
         assert_eq!(frames[0]["live_view_id"], "front_camera");
         assert_eq!(
             frames[0]["title"],
             "Kerberos Entrance camera motion detected"
         );
-        assert_eq!(frames[1]["id"], frames[0]["id"]);
-        assert_eq!(frames[1]["title"], frames[0]["title"]);
         assert!(!serde_json::to_string(&frames).unwrap().contains("private"));
         let unmapped = events.frames("kerberos/agent/Front_camera", b"motion", false, now, 1000);
         assert_eq!(unmapped.len(), 1);
@@ -367,7 +363,7 @@ mod tests {
             now + SILENCE,
             1000,
         );
-        assert_eq!(next.len(), 2);
+        assert_eq!(next.len(), 1);
         assert_ne!(next[0]["id"], frames[0]["id"]);
     }
 
@@ -382,8 +378,8 @@ mod tests {
         let now = Instant::now();
         let front = events.frames("kerberos/agent/front", b"motion", false, now, 1000);
         let back = events.frames("kerberos/agent/back", b"motion", false, now, 1000);
-        assert_eq!(front.len(), 2);
-        assert_eq!(back.len(), 2);
+        assert_eq!(front.len(), 1);
+        assert_eq!(back.len(), 1);
         assert_eq!(front[0]["title"], back[0]["title"]);
         assert_eq!(front[0]["live_view_id"], "front");
         assert_eq!(back[0]["live_view_id"], "back");

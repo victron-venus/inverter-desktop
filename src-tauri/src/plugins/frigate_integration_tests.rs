@@ -6,6 +6,7 @@
 use super::application::PackageApplication;
 use super::package::{PublisherTrust, TrustStore};
 use super::packaging::{build_package, write_package_atomic};
+use super::presentation::Presentation;
 use super::protocol::{DashboardContribution, PluginManifest};
 use super::runtime::{PluginHost, WorkerState};
 use ed25519_dalek::SigningKey;
@@ -182,6 +183,11 @@ async fn wait_connection(host: &PluginHost, expected: &str) {
                     && snapshot.contributions.iter().any(|item| {
                         matches!(item, DashboardContribution::Status { id, value, .. }
                             if id == "connection" && value == expected)
+                    })
+                    && snapshot.presentation.iter().any(|item| {
+                        matches!(item, Presentation::Connection { id, title, connected }
+                            if id == "frigate-mqtt" && title == "Frigate MQTT"
+                                && *connected == (expected == "Connected"))
                     })
             });
             if found {
@@ -666,8 +672,7 @@ async fn signed_frigate_package_real_mqtt_live_lifecycle() {
     let mut notices = Vec::new();
     broker.publish(TOPIC, motion("first live", "front")).await;
     let first_lease = submit_live(&host, &media).await;
-    expect_count(&host, &mut notices, 1).await;
-    assert_eq!(notices[0].body, "Motion started");
+    expect_quiet(&host, &mut notices, 0).await;
     let first = windows.next_ready().await;
     assert_eq!(
         first.live_url.as_ref().unwrap().as_str(),
@@ -681,7 +686,7 @@ async fn signed_frigate_package_real_mqtt_live_lifecycle() {
     broker
         .publish(TOPIC, completed_motion("first live", "front"))
         .await;
-    expect_quiet(&host, &mut notices, 1).await;
+    expect_quiet(&host, &mut notices, 0).await;
     assert!(
         host.take_http_video_requests().is_empty(),
         "end event cannot download or open a second clip on host 1.8"
@@ -699,7 +704,7 @@ async fn signed_frigate_package_real_mqtt_live_lifecycle() {
     let second_lease = submit_live(&host, &media).await;
     assert_ne!(first_lease.instance_id(), second_lease.instance_id());
     let second = windows.next_ready().await;
-    expect_count(&host, &mut notices, 2).await;
+    expect_quiet(&host, &mut notices, 0).await;
     service.set_enabled(PLUGIN, false, epoch).await.unwrap();
     assert!(!second_lease.is_active());
     assert!(!media.is_window_active(&second.media_id, &second.window_label));
@@ -712,7 +717,7 @@ async fn signed_frigate_package_real_mqtt_live_lifecycle() {
     broker.publish(NEXT_TOPIC, motion("logout", "garage")).await;
     let logout_lease = submit_live(&host, &media).await;
     let logout_preview = windows.next_ready().await;
-    expect_count(&host, &mut notices, 3).await;
+    expect_quiet(&host, &mut notices, 0).await;
     assert!(service.session_changed(false).is_none());
     assert!(!logout_lease.is_active());
     assert!(!media.is_window_active(&logout_preview.media_id, &logout_preview.window_label));
@@ -726,7 +731,7 @@ async fn signed_frigate_package_real_mqtt_live_lifecycle() {
     broker.publish(NEXT_TOPIC, motion("final", "side")).await;
     let final_lease = submit_live(&host, &media).await;
     let final_preview = windows.next_ready().await;
-    expect_count(&host, &mut notices, 4).await;
+    expect_quiet(&host, &mut notices, 0).await;
     service
         .uninstall_with_settings(PLUGIN, true, epoch)
         .await

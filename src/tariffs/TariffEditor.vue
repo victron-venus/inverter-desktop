@@ -3,7 +3,7 @@
     ref="dialog"
     class="tariff-dialog"
     aria-labelledby="tariff-title"
-    @cancel.prevent="emit('close')"
+    @cancel.prevent="!busy && emit('close')"
   >
     <div class="tariff-content">
       <header>
@@ -12,13 +12,22 @@
           <p>
             Seasonal energy prices per kWh.
             {{
-              persist
-                ? 'Saved for this dashboard on this device.'
-                : 'Apply to the configuration draft, then save the configuration.'
+              savePlan
+                ? 'Saved on the controller and shared by all connected dashboards.'
+                : persist
+                  ? 'Saved for this dashboard on this device.'
+                  : 'Apply to the configuration draft, then save the configuration.'
             }}
           </p>
         </div>
-        <button type="button" aria-label="Close tariff editor" @click="emit('close')">Close</button>
+        <button
+          type="button"
+          aria-label="Close tariff editor"
+          :disabled="busy"
+          @click="emit('close')"
+        >
+          Close
+        </button>
       </header>
       <div class="tariff-fields">
         <label>Name<input v-model="draft.name" maxlength="120" /></label>
@@ -75,7 +84,7 @@
           Add season
         </button>
         <label
-          >Flat price / kWh<input v-model="flat" type="number" step="any" placeholder="0.31"
+          >Flat price / kWh<input v-model="flat" type="number" step="any" placeholder="Enter price"
         /></label>
         <button type="button" :disabled="busy" @click="fill">Fill selected week</button>
         <label class="file-button"
@@ -105,10 +114,18 @@
       </p>
       <p v-if="error" role="alert" class="tariff-error">{{ error }}</p>
       <footer>
-        <button v-if="plan" type="button" @click="clear">{{ clearLabel }}</button
-        ><button type="button" @click="emit('close')">Cancel</button
+        <button v-if="plan" type="button" :disabled="busy" @click="clear">{{ clearLabel }}</button
+        ><button type="button" :disabled="busy" @click="emit('close')">Cancel</button
         ><button type="button" class="tariff-save" :disabled="busy" @click="save">
-          {{ busy ? 'Working…' : persist ? 'Save tariff' : 'Apply tariff' }}
+          {{
+            busy
+              ? 'Working…'
+              : savePlan
+                ? 'Save to controller'
+                : persist
+                  ? 'Save tariff'
+                  : 'Apply tariff'
+          }}
         </button>
       </footer>
     </div>
@@ -136,6 +153,7 @@ const props = withDefaults(
     tariffScope?: string
     persist?: boolean
     clearLabel?: string
+    savePlan?: (plan: TariffPlan | null) => Promise<void>
   }>(),
   { tariffScope: 'dashboard', persist: true, clearLabel: 'Clear local tariff' }
 )
@@ -263,7 +281,8 @@ async function save() {
   busy.value = true
   try {
     const plan = await readPlan()
-    if (props.persist) saveTariff(props.tariffScope, plan)
+    if (props.savePlan) await props.savePlan(plan)
+    else if (props.persist) saveTariff(props.tariffScope, plan)
     emit('saved', plan)
   } catch (cause) {
     fail(cause)
@@ -271,13 +290,17 @@ async function save() {
     busy.value = false
   }
 }
-function clear() {
+async function clear() {
   if (busy.value) return
+  busy.value = true
   try {
-    if (props.persist) clearTariff(props.tariffScope)
+    if (props.savePlan) await props.savePlan(null)
+    else if (props.persist) clearTariff(props.tariffScope)
     emit('saved', null)
   } catch (cause) {
     fail(cause)
+  } finally {
+    busy.value = false
   }
 }
 async function exportFile() {

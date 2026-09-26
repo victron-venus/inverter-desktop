@@ -44,22 +44,19 @@ fn native_hub_coalesces_with_agent_and_automatic_preview_references_stay_private
     let preview = worker.frame();
     assert_eq!(preview["type"], "live_view");
     assert_eq!(preview["live_view_id"], "front_camera");
-    let notice = worker.frame();
-    assert_eq!(notice["type"], "notification");
-    assert_eq!(notice["body"], "Motion started");
-    assert!(notice.get("live_view_id").is_none());
-    assert_eq!(preview["id"], notice["id"]);
-    assert_eq!(preview["title"], notice["title"]);
-    for frame in [notice, preview] {
-        assert!(frame.get("url").is_none());
-        assert!(!frame.to_string().contains("private"));
-        assert!(!frame.to_string().contains("camera.invalid"));
-    }
+    assert!(preview.get("url").is_none());
+    assert!(!preview.to_string().contains("private"));
+    assert!(!preview.to_string().contains("camera.invalid"));
     publish(&mut stream, TOPIC, PAYLOAD, false);
     assert!(worker
         .frames
         .recv_timeout(Duration::from_millis(150))
         .is_err());
+    publish(&mut stream, OTHER, PAYLOAD, false);
+    let notice = worker.frame();
+    assert_eq!(notice["type"], "notification");
+    assert_eq!(notice["body"], "Motion started");
+    assert_ne!(notice["id"], preview["id"]);
     worker.shutdown();
 }
 
@@ -129,9 +126,7 @@ fn reconnect_requires_resubscription_and_preserves_dedupe() {
     publish(&mut stream, TOPIC, PAYLOAD, false);
     let preview = worker.frame();
     assert_eq!(preview["type"], "live_view");
-    let first = worker.frame();
-    assert_eq!(first["type"], "notification");
-    assert_eq!(preview["id"], first["id"]);
+    let first_id = preview["id"].clone();
     assert_eq!(preview["live_view_id"], "front_camera");
     drop(stream);
     worker.status("Disconnected");
@@ -142,9 +137,7 @@ fn reconnect_requires_resubscription_and_preserves_dedupe() {
     publish(&mut stream, OTHER, PAYLOAD, false);
     let preview = worker.frame();
     assert_eq!(preview["type"], "live_view");
-    let next = worker.frame();
-    assert_eq!(next["type"], "notification");
-    assert_eq!(preview["id"], next["id"]);
+    assert_ne!(preview["id"], first_id);
     assert_eq!(preview["live_view_id"], "back_camera");
     assert!(worker
         .frames
