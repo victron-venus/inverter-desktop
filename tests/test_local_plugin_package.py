@@ -1,6 +1,9 @@
 """Local packaging uses real staging with simulated compiler output."""
 
+import contextlib
+import copy
 import hashlib
+import io
 import importlib.util
 import json
 import subprocess
@@ -100,6 +103,45 @@ class LocalPluginPackageTests(unittest.TestCase):
                 local.build_plugins(self.root, "--config=unexpected")
             command.assert_not_called()
 
+    def test_print_path_returns_one_complete_artifact_directory_without_a_result_file(self):
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['build-local-plugins.py', '--print-path']), \
+                patch.object(local, 'ROOT', self.root), \
+                patch.object(local, 'compiler_host', return_value=self.target), \
+                patch.object(local, 'run', side_effect=self.simulate), \
+                contextlib.redirect_stdout(output):
+            local.main()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        destination = Path(lines[0])
+        self.assertTrue(destination.is_relative_to(self.root / 'target/local-plugins' / self.target))
+        self.assertEqual(len(local.read_artifacts(destination, self.target)), 4)
+        self.assertEqual(set(self.root.iterdir()), {
+            self.root / 'desktop-plugins', self.root / 'src-tauri', self.root / 'target'})
+
+    def test_build_command_stdout_is_routed_to_diagnostics(self):
+        diagnostics = self.root / 'diagnostics.txt'
+        captured = io.StringIO()
+        with diagnostics.open('w+', encoding='utf-8') as stream, \
+                contextlib.redirect_stderr(stream), contextlib.redirect_stdout(captured):
+            local.run(self.root, [sys.executable, '-c', "print('compiler output')"])
+        self.assertEqual(captured.getvalue(), '')
+        self.assertEqual(diagnostics.read_text().strip(), 'compiler output')
+
+    def test_arbitrary_output_path_is_rejected_before_any_build_or_write(self):
+        protected = self.root / 'protected.txt'
+        protected.write_text('must stay unchanged', encoding='utf-8')
+        for argument in [str(protected), str(self.root / 'child/../protected.txt')]:
+            with self.subTest(argument=argument), \
+                    patch.object(sys, 'argv', ['build-local-plugins.py', '--output-path', argument]), \
+                    patch.object(local, 'compiler_host') as compiler, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    local.main()
+                self.assertEqual(error.exception.code, 2)
+                compiler.assert_not_called()
+                self.assertEqual(protected.read_text(), 'must stay unchanged')
+
     def app_data(self, inventory):
         app = self.root / 'app-data'
         (app / 'plugins').mkdir(parents=True)
@@ -131,6 +173,38 @@ class LocalPluginPackageTests(unittest.TestCase):
         local.stage_install(artifacts, app, self.target)
         self.assertTrue(all(p['baseline_sha256'] == 'a' * 64
                             for p in local.read_json(app / local.SELECTION)['packages']))
+
+    def test_malformed_inventory_never_changes_an_existing_selection(self):
+        artifacts = self.build()
+        manifest = artifacts / 'local-plugin-artifacts.json'
+        inventory = local.read_json(manifest)
+        app = self.app_data(inventory)
+        local.stage_install(artifacts, app, self.target)
+        before = (app / local.SELECTION).read_bytes()
+        builds = set((app / 'local-plugin-builds').iterdir())
+        mutations = [
+            [],
+            {**inventory, 'packages': {}},
+            {**inventory, 'target': '../another-target'},
+            {**inventory, 'packages': inventory['packages'][:-1]},
+            {**inventory, 'packages': [inventory['packages'][0]] * 4},
+        ]
+        for field, value in [('version', '../escape'), ('version', '１.２.３'),
+                             ('version', 1), ('sha256', ['a' * 64]),
+                             ('file', '../../protected.txt'), ('plugin_id', '../plugin')]:
+            mutated = copy.deepcopy(inventory)
+            mutated['packages'][0][field] = value
+            mutations.append(mutated)
+        malformed = copy.deepcopy(inventory)
+        malformed['packages'][0] = None
+        mutations.append(malformed)
+        for mutated in mutations:
+            with self.subTest(inventory=mutated):
+                manifest.write_text(json.dumps(mutated), encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    local.stage_install(artifacts, app, self.target)
+                self.assertEqual((app / local.SELECTION).read_bytes(), before)
+                self.assertEqual(set((app / 'local-plugin-builds').iterdir()), builds)
 
     def test_bad_archive_does_not_replace_selection_and_failed_activation_restores_it(self):
         artifacts = self.build()

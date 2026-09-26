@@ -122,7 +122,7 @@ struct FullConfig {
     ha_ev_clamp_entity: Option<String>,
     // Live power tiles prefer Cerbo GX MQTT (system/vebus/shunt/acload/MPPT/PV/EV/water).
     // Daemon inverter/state still supplies: daily_stats, solar_forecast, booleans,
-    // features, ess_mode, versions, dry_run, ui_config, console, HA connectivity flags.
+    // features, ess_mode, versions, dry_run, ui_config, HA connectivity flags.
     // HA entities cover washer/dryer/dishwasher (not merged from daemon).
     // Optional HA CT clamps if you prefer HA meters over Victron D-Bus:
     ha_consumption_clamps: Option<Vec<String>>,
@@ -154,15 +154,43 @@ struct FullConfig {
     camera_live_urls: std::collections::BTreeMap<String, String>,
     camera_enabled: bool,
     show_advanced_settings: Option<bool>,
+    #[serde(
+        default = "legacy_section_visible",
+        deserialize_with = "deserialize_section_visibility"
+    )]
     show_batteries: Option<bool>,
+    #[serde(
+        default = "legacy_section_visible",
+        deserialize_with = "deserialize_section_visibility"
+    )]
     show_solar_production: Option<bool>,
+    #[serde(
+        default = "legacy_section_visible",
+        deserialize_with = "deserialize_section_visibility"
+    )]
     show_active_loads: Option<bool>,
+    #[serde(
+        default = "legacy_section_visible",
+        deserialize_with = "deserialize_section_visibility"
+    )]
     show_daily_stats: Option<bool>,
+    #[serde(
+        default = "legacy_section_visible",
+        deserialize_with = "deserialize_section_visibility"
+    )]
     show_ev: Option<bool>,
     show_washer: Option<bool>,
     show_dryer: Option<bool>,
     show_dishwasher: Option<bool>,
+    #[serde(
+        default = "legacy_section_visible",
+        deserialize_with = "deserialize_section_visibility"
+    )]
     show_home_section: Option<bool>,
+    #[serde(
+        default = "legacy_section_visible",
+        deserialize_with = "deserialize_section_visibility"
+    )]
     show_header_toggles: Option<bool>,
     show_ha_sensors: Option<bool>,
     show_ha_numbers: Option<bool>,
@@ -170,7 +198,6 @@ struct FullConfig {
     show_ha_media: Option<bool>,
     show_ha_scenes: Option<bool>,
     show_ha_weather: Option<bool>,
-    show_console: Option<bool>,
     ha_appliance_entities: Option<std::collections::HashMap<String, String>>,
     auto_start: Option<bool>,
     auth_enabled: Option<bool>,
@@ -193,6 +220,21 @@ struct FullConfig {
     /// First-run setup wizard completed. Missing in older configs → migrated in get_config.
     #[serde(default)]
     setup_completed: bool,
+}
+
+// A missing/null field in an existing store used to display the section. Preserve
+// that layout while FullConfig::default applies the leaner first-run defaults.
+fn legacy_section_visible() -> Option<bool> {
+    Some(true)
+}
+
+fn deserialize_section_visibility<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(
+        Option::<bool>::deserialize(deserializer)?.unwrap_or(true),
+    ))
 }
 
 fn default_evcharger_instance() -> Option<u32> {
@@ -253,21 +295,20 @@ impl Default for FullConfig {
             show_advanced_settings: Some(false),
             show_batteries: Some(true),
             show_solar_production: Some(true),
-            show_active_loads: Some(true),
-            show_daily_stats: Some(true),
+            show_active_loads: Some(false),
+            show_daily_stats: Some(false),
             show_ev: Some(true),
             show_washer: Some(true),
             show_dryer: Some(true),
             show_dishwasher: Some(true),
-            show_home_section: Some(true),
-            show_header_toggles: Some(true),
+            show_home_section: Some(false),
+            show_header_toggles: Some(false),
             show_ha_sensors: Some(true),
             show_ha_numbers: Some(true),
             show_ha_covers: Some(true),
             show_ha_media: Some(true),
             show_ha_scenes: Some(true),
             show_ha_weather: Some(true),
-            show_console: Some(true),
             ha_appliance_entities: None,
             auto_start: Some(false),
             auth_enabled: Some(false),
@@ -420,6 +461,9 @@ async fn perform_action(
     gateway_client: State<'_, GatewayState>,
 ) -> Result<(), String> {
     info!("perform_action: action={}", action);
+    if action == "electricity_tariff" {
+        inverter_control::validate_tariff_command(&payload)?;
+    }
 
     // Water writes remain on the GX /Mode control plane through the active
     // transport. Validate before integer conversion; malformed input must not
@@ -1916,6 +1960,39 @@ pub fn run() {
 mod dashboard_control_config_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn new_installation_visibility_defaults_differ_from_legacy_null_values() {
+        let keys = [
+            "show_batteries",
+            "show_solar_production",
+            "show_active_loads",
+            "show_daily_stats",
+            "show_ev",
+            "show_home_section",
+            "show_header_toggles",
+        ];
+        let defaults = serde_json::to_value(FullConfig::default()).unwrap();
+        for key in keys {
+            assert_eq!(
+                defaults[key],
+                matches!(key, "show_batteries" | "show_solar_production" | "show_ev")
+            );
+            for legacy in [serde_json::Value::Null, json!(false), json!(true)] {
+                let mut saved = defaults.clone();
+                saved[key] = legacy.clone();
+                let decoded: FullConfig = serde_json::from_value(saved).unwrap();
+                assert_eq!(
+                    serde_json::to_value(decoded).unwrap()[key],
+                    legacy != json!(false)
+                );
+            }
+            let mut saved = defaults.clone();
+            saved.as_object_mut().unwrap().remove(key);
+            let decoded: FullConfig = serde_json::from_value(saved).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap()[key], true);
+        }
+    }
 
     fn roundtrip_controls(state_key: Option<&str>) -> serde_json::Value {
         let mut config = serde_json::to_value(FullConfig::default()).unwrap();

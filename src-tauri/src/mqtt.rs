@@ -22,7 +22,6 @@ const KEEPALIVE_INTERVAL_SECS: u64 = 45;
 /// acload (3512a15) that became 11 > 10 and froze the loop right after
 /// "Discovered Cerbo portal ID" — UI stuck at all zeros, no state emits.
 const MQTT_QUEUE_CAPACITY: usize = 64;
-const CONSOLE_MAX_LINES: usize = 50;
 /// Calm MQTT reconnect delay (seconds): 5 → 10 → 20 → 40 → 60 cap.
 pub fn mqtt_reconnect_delay_secs(attempt: u32) -> u64 {
     let shift = attempt.min(4);
@@ -278,7 +277,6 @@ pub struct InverterState {
     pub dryer_time: Option<u64>,
     pub dryer_power: Option<bool>,
     pub latest_version: Option<String>,
-    pub console: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -348,7 +346,6 @@ struct RawInverterState {
     // water from Cerbo tank/pump handlers; appliances from HA entities only.
     // Ignoring them in JSON prevents daemon zeros from being tempting to merge.
     latest_version: Option<String>,
-    console: Option<Vec<String>>,
 }
 
 fn deserialize_grid_backup<'de, D>(
@@ -741,6 +738,8 @@ impl CerboDevices {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UiConfig {
+    pub electricity_tariff: Option<serde_json::Value>,
+    pub electricity_tariff_status: Option<serde_json::Value>,
     pub loads: Option<LoadsConfig>,
     pub home_buttons: Option<Vec<HomeButton>>,
     pub header_toggles: Option<Vec<HeaderToggle>>,
@@ -1471,6 +1470,8 @@ impl MqttClient {
         // stale broker session cannot kick this client off the broker.
         let client_id = format!("{}-{:06x}", client_id, rand::random::<u32>() & 0xFF_FFFF);
         let mut mqttoptions = MqttOptions::new(&client_id, (host.to_string(), port));
+        // A complete seasonal tariff can approach 100 KB, in addition to telemetry.
+        mqttoptions.set_max_packet_size(1024 * 1024, 128 * 1024);
         mqttoptions.set_transport(transport);
         mqttoptions.set_keep_alive(keepalive_secs as u16);
 
@@ -1493,7 +1494,6 @@ impl MqttClient {
         // Subscribe to topics using QoS 1 (AtLeastOnce)
         client.subscribe("inverter/state", QoS::AtLeastOnce)?;
         client.subscribe("inverter/setpoint_override", QoS::AtLeastOnce)?;
-        client.subscribe("inverter/console", QoS::AtLeastOnce)?;
         client.subscribe("inverter/notifications", QoS::AtLeastOnce)?;
         // Portal ID advertised by inverter-control (retained) - lets the app
         // find the N/<portal>/... water/alarms topics with no manual config.
@@ -1796,20 +1796,6 @@ impl MqttClient {
                 cerbo_devices,
                 app_handle,
             );
-        } else if topic == "inverter/console" {
-            let snapshot = {
-                let mut guard = match state.lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
-                };
-                let console = guard.console.get_or_insert_with(Vec::new);
-                console.push(payload.to_string());
-                if console.len() > CONSOLE_MAX_LINES {
-                    console.remove(0);
-                }
-                guard.clone()
-            };
-            emitter.emit(app_handle, &snapshot, false);
         } else if topic.starts_with("N/") && Self::parse_device_topic(topic).is_some() {
             // Directly discovered GX device value (battery/solarcharger).
             if let Some((kind, inst, path)) = Self::parse_device_topic(topic) {
@@ -2587,16 +2573,6 @@ impl MqttClient {
         // Otherwise apply_cerbo_to_state owns mppt_total / solar_total.
         if !cerbo_owns_chargers {
             new_state.mppt_total = new_state.mppt_individual.as_ref().map(|v| v.iter().sum());
-        }
-
-        // Console: append new lines, cap at max
-        if let Some(new_lines) = raw.console {
-            let console = new_state.console.get_or_insert_with(Vec::new);
-            console.extend(new_lines);
-            if console.len() > CONSOLE_MAX_LINES {
-                let drain = console.len() - CONSOLE_MAX_LINES;
-                console.drain(..drain);
-            }
         }
 
         // GX-discovered devices win over daemon arrays (see

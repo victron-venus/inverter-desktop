@@ -3,7 +3,13 @@
     <span v-if="cost !== null" :title="'Estimated energy cost; excludes taxes and other charges'"
       >≈ {{ money(cost) }}</span
     >
-    <button v-if="!readOnly" type="button" class="tariff-open" @click="editorOpen = true">
+    <button
+      v-if="!readOnly && (localMode || controllerWritable)"
+      type="button"
+      class="tariff-open"
+      :disabled="!localMode && !controllerWritable"
+      @click="openEditor"
+    >
       {{ plan ? 'Edit tariff' : 'Set tariff' }}
     </button>
     <span
@@ -17,7 +23,13 @@
     >
       Billing period: {{ period.start }} – {{ period.end }}
     </span>
-    <span v-if="plan">{{ localPlan ? 'Local tariff' : 'Installation tariff' }}</span>
+    <span v-if="plan">{{
+      localMode ? 'Local tariff · this device only' : 'Controller tariff'
+    }}</span>
+    <button v-if="!readOnly" type="button" class="tariff-open" @click="localMode = !localMode">
+      {{ localMode ? 'Use controller tariff' : 'Use a local tariff on this device' }}
+    </button>
+    <span v-if="!plan && !localMode">No controller tariff configured</span>
     <button
       v-if="plan && !readOnly"
       type="button"
@@ -37,7 +49,9 @@
       v-if="editorOpen && !readOnly"
       :plan="plan"
       :tariff-scope="tariffScope"
-      :clear-label="configuredTariff ? 'Use installation tariff' : 'Clear local tariff'"
+      :persist="localMode"
+      :save-plan="localMode ? undefined : saveRemote"
+      :clear-label="localMode ? 'Clear local tariff' : 'Clear controller tariff'"
       @saved="saved"
       @close="editorOpen = false"
     />
@@ -59,6 +73,9 @@ const props = withDefaults(
     tariffScope: string
     readOnly?: boolean
     configuredTariff?: unknown
+    controllerWritable?: boolean
+    controllerRevision?: string
+    savePlan?: (plan: TariffPlan | null, revision: string) => Promise<void>
   }>(),
   {
     readOnly: false,
@@ -66,6 +83,8 @@ const props = withDefaults(
 )
 const TariffEditor = defineAsyncComponent(() => import('./TariffEditor.vue'))
 const editorOpen = ref(false)
+const localMode = ref(false)
+const editorRevision = ref('')
 const intervalsOpen = ref(false)
 const IntervalEnergy = defineAsyncComponent(() => import('./IntervalEnergy.vue'))
 const localPlan = ref<TariffPlan | null>(null)
@@ -77,12 +96,12 @@ const configured = computed(() => {
   } catch {
     return {
       plan: null,
-      error: 'The installation tariff is invalid. Correct its configuration or set a local tariff.',
+      error: 'The controller tariff is invalid. Correct its configuration.',
     }
   }
 })
-const plan = computed(() => localPlan.value ?? (loadError.value ? null : configured.value.plan))
-const error = computed(() => loadError.value || (localPlan.value ? '' : configured.value.error))
+const plan = computed(() => (localMode.value ? localPlan.value : configured.value.plan))
+const error = computed(() => (localMode.value ? loadError.value : configured.value.error))
 const now = ref(new Date())
 let timer: ReturnType<typeof setInterval> | undefined
 function load() {
@@ -95,6 +114,7 @@ watch(
   () => {
     editorOpen.value = false
     intervalsOpen.value = false
+    localMode.value = false
     load()
   },
   { immediate: true }
@@ -121,9 +141,18 @@ const money = (value: number) =>
     currency: plan.value?.currency ?? 'USD',
   }).format(value)
 function saved(value: TariffPlan | null) {
-  localPlan.value = value
+  if (localMode.value) localPlan.value = value
   loadError.value = ''
   editorOpen.value = false
+}
+function openEditor() {
+  editorRevision.value = props.controllerRevision ?? ''
+  editorOpen.value = true
+}
+async function saveRemote(value: TariffPlan | null) {
+  if (!props.savePlan || !editorRevision.value)
+    throw new Error('Controller tariff editing is unavailable')
+  await props.savePlan(value, editorRevision.value)
 }
 </script>
 <style scoped>

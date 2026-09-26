@@ -18,18 +18,17 @@ flowchart LR
 ## State, presentation and commands
 
 The daemon publishes flag state in `inverter/state.booleans`, and its control
-descriptors in `ui_config.header_toggles`. The latter is an additive field;
-older daemons without this metadata use Desktop's compatibility list. Desktop
-does not require HA credentials, entity discovery or a running HA session to
-show and operate these controls.
+descriptors in `ui_config.header_toggles`. Desktop shows that published metadata;
+missing or explicitly empty lists produce no core buttons. Desktop does not
+require HA credentials, entity discovery or a running HA session to show and
+operate these controls.
 
-Presentation precedence is a nonempty saved `header_toggles_config`, then the
-daemon list, then the compatibility list. An explicit empty daemon list remains
-empty. Configuring a different button id or label does not change the flag's
-authoritative state key. Controls placed in Home retain the same MQTT ownership,
-including when the HA package is absent or disabled. Custom HA controls belong
-to the separately installed HA worker. Its one-time native migration can use
-saved controls or the actual daemon metadata; when daemon defaults are needed,
+Local header overrides, the hardcoded fallback list and the UI Controls editor
+have been removed. Header Controls in Sections only controls visibility. Controls
+published in `ui_config.home_buttons` retain the same MQTT ownership, including
+when the HA package is absent or disabled. Custom HA controls are configured in
+the separately installed HA worker. Its one-time native migration can use saved
+legacy controls or actual daemon metadata; when daemon defaults are needed,
 handover waits for that metadata instead of inventing a replacement layout.
 
 For example, Desktop renders `{ "id": "export", "label": "NO FEED", "entity":
@@ -53,15 +52,13 @@ camera implementation. See [the platform build boundary](desktop-features-and-mo
 
 ## Code boundaries
 
-- `src/inverterControl.ts`: neutral flag keys, compatibility presentation,
-  legacy target normalization and MQTT state lookup.
+- `src/inverterControl.ts`: neutral flag keys, legacy target normalization
+  and MQTT state lookup.
 - `src/composables/useDashboardControls.ts`: presentation composition, optional
   home-state interface and core action dispatch. Core flag state always comes
   from MQTT; the desktop entry point disables legacy non-core controls.
-- `src/features/coreControlsConfig.ts`: core control editing on every platform, preserving
-  opaque desktop control definitions when settings are saved.
 - `src/features/desktop/plugins/presentation.ts`: generic composition of installed
-  package contributions and core controls, retaining their saved positions.
+  package contributions and core controls, retaining their published positions.
 - `desktop-plugins/home-assistant/src/`: separately packaged HA connections,
   explicit household actions, and compact dashboard declarations.
 - `src-tauri/src/plugins/legacy_migration.rs`: native legacy settings handover
@@ -73,9 +70,10 @@ camera implementation. See [the platform build boundary](desktop-features-and-mo
   commands and ownership classification.
 - `src-tauri/src/app_visibility.rs`: core window visibility and event coalescing.
 
-Persisted keys `ha_entities`, `header_toggles_config` and `show_header_toggles`
-remain unchanged for compatibility. The historical `ha_entities` key can contain
-Home controls; its name does not decide the transport. Core command names and
+Persisted keys `ha_entities` and `header_toggles_config` remain passive migration
+data for the HA package and survive core settings saves and resets. They no longer
+override controller presentation. `show_header_toggles` remains the visibility
+preference. The historical `ha_entities` key name does not decide the transport. Core command names and
 MQTT topics remain stable. Removed legacy HA commands are replaced by the
 generic installed-package action boundary. See [package installation and
 configuration restoration](plugin-packages.md).

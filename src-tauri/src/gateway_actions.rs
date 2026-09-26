@@ -19,6 +19,7 @@ enum Action {
     },
     DryRun(bool),
     EssMode,
+    ElectricityTariff(Value),
     WaterMode {
         instance: Option<u32>,
         valve: bool,
@@ -72,6 +73,10 @@ fn parse(action: &str, payload: Value, water: GatewayInstances) -> Result<Action
             .map(Action::DryRun)
             .ok_or_else(invalid),
         "ess_mode" if object.is_empty() => Ok(Action::EssMode),
+        "electricity_tariff" => {
+            inverter_control::validate_tariff_command(&payload)?;
+            Ok(Action::ElectricityTariff(payload))
+        }
         "water_mode" => {
             let (which, mode) = water_payload(&payload)?;
             let instance = if which == "valve" {
@@ -118,6 +123,33 @@ where
         }
         Action::DryRun(value) => ("dry_run", json!({"value":value})),
         Action::EssMode => ("ess_mode", json!({})),
+        Action::ElectricityTariff(body) => {
+            let snap = snapshot().await?;
+            if snap
+                .capabilities
+                .get("electricity_tariff")
+                .and_then(Value::as_bool)
+                != Some(true)
+            {
+                return Err("Update inverter-gateway to edit the controller tariff".into());
+            }
+            if snap
+                .inverter
+                .as_ref()
+                .and_then(|inverter| {
+                    inverter
+                        .get("ui_config")
+                        .and_then(|ui| ui.pointer("/electricity_tariff_status/writable"))
+                })
+                .and_then(Value::as_bool)
+                != Some(true)
+            {
+                return Err(
+                    "The controller does not support tariff editing or is unavailable".into(),
+                );
+            }
+            ("electricity_tariff", body)
+        }
         Action::WaterMode {
             instance,
             valve,

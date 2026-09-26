@@ -22,7 +22,9 @@ building and installing the host app. Run `python3 scripts/build-local-plugins.p
 to compile and package only the workers (Python 3.11+ and Rust required). Each
 successful run creates a complete new artifact directory under
 `target/local-plugins/<native-target>/`; its path is printed with the result.
-Failed builds never replace a previous successful artifact set.
+Failed builds never replace a previous successful artifact set. For shell callers,
+`--print-path` writes only that directory to stdout; compiler/packager diagnostics
+go to stderr. The script does not accept an arbitrary output file path.
 
 On macOS, add `--install` to build and install into the existing application, or
 use `--install --artifacts /absolute/path/to/artifacts` to reuse a completed build.

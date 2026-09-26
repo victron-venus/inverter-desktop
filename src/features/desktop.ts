@@ -11,16 +11,9 @@ export { default as DashboardFeaturePanels } from './desktop/plugins/PluginCompa
 export { default as DashboardFeatureActions } from './desktop/plugins/PluginGroupActions.vue'
 export { default as DashboardFeatureStatus } from './desktop/plugins/PluginConnectionStatus.vue'
 export { default as FeaturePluginManager } from './desktop/plugins/PluginManager.vue'
-export { default as HeaderControlsEditor } from '../components/HeaderTogglesEditor.vue'
-export { default as ControlTargetInput } from './CoreControlInput.vue'
-export { useCoreControlsConfig as useConfigControls } from './coreControlsConfig'
 export { featureDefaultConfig } from './desktop/defaultConfig'
 const Empty = defineComponent({ inheritAttrs: false, setup: () => () => null })
 export const DashboardConnectionStatus = Empty
-export const FeatureConfigSection = Empty
-export const FeatureSectionVisibility = Empty
-export { default as FeatureControlsEditor } from './CoreHomeControlsEditor.vue'
-export const FeatureDiscoveryDialog = Empty
 export const FeatureSetup = Empty
 export const featureConfigSections = [
   { id: 'plugins', label: '', labelKey: 'plugins.manager.title', icon: Puzzle },

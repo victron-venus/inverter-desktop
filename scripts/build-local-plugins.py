@@ -41,7 +41,7 @@ def compiler_host(root):
 
 def run(root, arguments):
     """Compile or package without executing a worker."""
-    subprocess.run([str(argument) for argument in arguments], cwd=root, check=True)
+    subprocess.run([str(argument) for argument in arguments], cwd=root, check=True, stdout=sys.stderr)
 
 
 def build_plugins(root, target):
@@ -125,47 +125,92 @@ def atomic_write(path, data):
         Path(temporary).unlink(missing_ok=True)
 
 
+def artifact_identity(package, target):
+    """Derive a safe basename from the built-in ID, ASCII version and target."""
+    if not isinstance(package, dict):
+        raise ValueError('Invalid local plugin record')
+    identity, version, digest = (package.get(k) for k in ('plugin_id', 'version', 'sha256'))
+    allowed = {f'inverter-desktop.{name}' for name in plugin_package.PLUGINS}
+    if not all(isinstance(value, str) for value in (identity, version, digest)):
+        raise ValueError('Invalid local plugin identity or digest')
+    valid_version = re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][\dA-Za-z.-]+)?', version, re.ASCII)
+    if identity not in allowed or not valid_version or not re.fullmatch(r'[a-f0-9]{64}', digest):
+        raise ValueError('Invalid local plugin identity or digest')
+    name = f'{identity}-{version}-{target}.idplugin'
+    if package.get('file') != name:
+        raise ValueError('Invalid local archive filename')
+    return identity, name, digest
+
+
+def read_archive(artifacts, name, digest):
+    """Read only the validated regular archive with the exact published hash."""
+    archive = artifacts / name
+    plugin_package.checked_path(archive)
+    if not archive.is_file() or archive.stat().st_size > 64 * 1024 * 1024 or archive.stat().st_nlink != 1:
+        raise ValueError('Invalid local archive file')
+    content = archive.read_bytes()
+    if hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError(f'Local archive checksum mismatch: {name}')
+    return content
+
+
+def read_artifacts(artifacts, target):
+    """Validate the complete native inventory, including uninstalled packages."""
+    if target not in plugin_package.TARGETS:
+        raise ValueError('Local plugins require a supported desktop target')
+    inventory = read_json(artifacts / 'local-plugin-artifacts.json')
+    if not isinstance(inventory, dict) or inventory.get('target') != target:
+        raise ValueError('Artifacts must target this Mac')
+    packages = inventory.get('packages')
+    if not isinstance(packages, list) or len(packages) != len(plugin_package.PLUGINS):
+        raise ValueError('Artifacts must contain all four plugins for this Mac')
+    validated, seen = [], set()
+    for package in packages:
+        identity, name, digest = artifact_identity(package, target)
+        if identity in seen:
+            raise ValueError('Duplicate local plugin identity')
+        seen.add(identity)
+        validated.append((package, read_archive(artifacts, name, digest)))
+    return validated
+
+
+def release_baseline(identity, record, previous):
+    """Keep the original release pin when replacing a previous local selection."""
+    active = record['active']
+    if not active.get('archive_pin'):
+        raise ValueError(f'{identity} is not a configuration-managed pinned package')
+    baseline = active['sha256']
+    old = previous.get(identity)
+    if old and old['sha256'] == baseline:
+        baseline = old['baseline_sha256']
+    if not isinstance(baseline, str) or not re.fullmatch(r'[a-f0-9]{64}', baseline):
+        raise ValueError('Invalid installed archive digest')
+    return baseline
+
+
+def selected_packages(archives, records, previous):
+    """Do not install new plugins or change the app's enabled/disabled intent."""
+    old_packages = {p['plugin_id']: p for p in previous['packages']} if previous else {}
+    packages, data = [], {}
+    for package, content in archives:
+        identity = package['plugin_id']
+        if identity not in records:
+            continue
+        baseline = release_baseline(identity, records[identity], old_packages)
+        packages.append({**package, 'baseline_sha256': baseline})
+        data[package['file']] = content
+    if not packages:
+        raise ValueError('No matching plugins are installed; configure them in the app first')
+    return packages, data
+
+
 def stage_install(artifacts, app_data, target):
     """Validate everything before atomically selecting an immutable local set."""
-    inventory = read_json(artifacts / 'local-plugin-artifacts.json')
-    if inventory.get('target') != target or len(inventory.get('packages', [])) != 4:
-        raise ValueError('Artifacts must contain all four plugins for this Mac')
+    archives = read_artifacts(artifacts, target)
     records = installed(app_data)
     selection = app_data / SELECTION
     previous = read_json(selection) if selection.exists() else None
-    old_packages = {p['plugin_id']: p for p in previous['packages']} if previous else {}
-    allowed = {f'inverter-desktop.{name}' for name in plugin_package.PLUGINS}
-    packages, data, seen = [], {}, set()
-    for package in inventory['packages']:
-        identity, version, digest = (package.get(k, '') for k in ('plugin_id', 'version', 'sha256'))
-        name = f'{identity}-{version}-{target}.idplugin'
-        if (identity not in allowed or identity in seen
-                or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?', version)
-                or package.get('file') != name or not re.fullmatch(r'[a-f0-9]{64}', digest)):
-            raise ValueError('Invalid local plugin identity or digest')
-        seen.add(identity)
-        archive = artifacts / name
-        plugin_package.checked_path(archive)
-        if not archive.is_file() or archive.stat().st_size > 64 * 1024 * 1024 or archive.stat().st_nlink != 1:
-            raise ValueError('Invalid local archive file')
-        content = archive.read_bytes()
-        if hashlib.sha256(content).hexdigest() != digest:
-            raise ValueError(f'Local archive checksum mismatch: {identity}')
-        if identity not in records:
-            continue
-        active = records[identity]['active']
-        if not active.get('archive_pin'):
-            raise ValueError(f'{identity} is not a configuration-managed pinned package')
-        baseline = active['sha256']
-        old = old_packages.get(identity)
-        if old and old['sha256'] == baseline:
-            baseline = old['baseline_sha256']
-        if not re.fullmatch(r'[a-f0-9]{64}', baseline):
-            raise ValueError('Invalid installed archive digest')
-        packages.append({**package, 'baseline_sha256': baseline})
-        data[name] = content
-    if not packages:
-        raise ValueError('No matching plugins are installed; configure them in the app first')
+    packages, data = selected_packages(archives, records, previous)
     builds = app_data / 'local-plugin-builds'
     builds.mkdir(mode=0o700, exist_ok=True)
     plugin_package.checked_path(builds)
@@ -263,7 +308,7 @@ def main():
     modes.add_argument('--install', action='store_true', help='Install into the existing macOS app after building')
     modes.add_argument('--restore-release', action='store_true', help='Restore saved release pins without compiling')
     parser.add_argument('--artifacts', type=Path, help='Reuse a previously built artifact directory with --install')
-    parser.add_argument('--output-path', type=Path, help='Write the built artifact directory path for build-local.sh')
+    modes.add_argument('--print-path', action='store_true', help='Print only the built directory on stdout (build diagnostics use stderr)')
     args = parser.parse_args()
     if args.artifacts and not args.install:
         parser.error('--artifacts requires --install')
@@ -278,8 +323,9 @@ def main():
             install_macos(None, app_data, target, restore=True)
             return
         destination = args.artifacts.absolute() if args.artifacts else build_plugins(ROOT, target)
-        if args.output_path:
-            args.output_path.write_text(str(destination) + '\n', encoding='utf-8')
+        if args.print_path:
+            print(destination, flush=True)
+            return
         print(f'Local plugin artifacts: {destination}', flush=True)
         if args.install:
             install_macos(destination, app_data, target)

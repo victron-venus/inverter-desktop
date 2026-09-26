@@ -20,11 +20,11 @@ afterEach(() => {
 })
 const tariff = (rate: number) =>
   validatePlan({ ...newDraft(), rates: rateGrid(rate), billingDay: 17 })
-it('uses a late installation tariff, updates it, and keeps a scoped local override authoritative', async () => {
+it('uses the controller tariff by default and requires an explicit local choice', async () => {
   const wrapper = mount(TariffCost, { props: { tariffScope: 'site', kwh: 10 } })
   expect(wrapper.text()).not.toContain('Billing period')
   await wrapper.setProps({ configuredTariff: tariff(0.2) })
-  expect(wrapper.text()).toContain('Installation tariff')
+  expect(wrapper.text()).toContain('Controller tariff')
   expect(wrapper.text()).toContain('2026-09-17 – 2026-10-16')
   expect(wrapper.text()).toContain('2.00')
   await wrapper.setProps({ configuredTariff: tariff(0.4) })
@@ -32,6 +32,11 @@ it('uses a late installation tariff, updates it, and keeps a scoped local overri
   saveTariff('site', tariff(0.3))
   window.dispatchEvent(new StorageEvent('storage', { key: tariffKey('site') }))
   await flushPromises()
+  expect(wrapper.text()).toContain('4.00')
+  await wrapper
+    .findAll('button')
+    .find((button) => button.text().includes('Use a local tariff'))!
+    .trigger('click')
   expect(wrapper.text()).toContain('Local tariff')
   expect(wrapper.text()).toContain('3.00')
   await wrapper.setProps({ configuredTariff: tariff(0.5) })
@@ -39,20 +44,24 @@ it('uses a late installation tariff, updates it, and keeps a scoped local overri
   clearTariff('site')
   window.dispatchEvent(new StorageEvent('storage', { key: tariffKey('site') }))
   await flushPromises()
+  await wrapper
+    .findAll('button')
+    .find((button) => button.text().includes('Use controller tariff'))!
+    .trigger('click')
   expect(wrapper.text()).toContain('5.00')
   await wrapper.setProps({ tariffScope: 'other-site', configuredTariff: undefined })
   expect(wrapper.text()).not.toContain('Billing period')
   wrapper.unmount()
 })
-it('rejects malformed installation data and allows a valid local override', async () => {
+it('keeps malformed controller data visible and ignores local overrides in read-only mode', async () => {
   const wrapper = mount(TariffCost, {
     props: { tariffScope: 'site', configuredTariff: {}, readOnly: true },
   })
-  expect(wrapper.get('[role="alert"]').text()).toContain('installation tariff is invalid')
+  expect(wrapper.get('[role="alert"]').text()).toContain('controller tariff is invalid')
   expect(wrapper.find('button').exists()).toBe(false)
   saveTariff('site', tariff(0.2))
   window.dispatchEvent(new StorageEvent('storage', { key: tariffKey('site') }))
   await flushPromises()
-  expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  expect(wrapper.find('[role="alert"]').exists()).toBe(true)
   wrapper.unmount()
 })

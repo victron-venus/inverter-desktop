@@ -96,6 +96,43 @@ afterEach(async () => {
 })
 
 describe('mobile dashboard startup configuration lifecycle', () => {
+  it('applies saved section visibility to the dashboard and responds to later saves', async () => {
+    const app = mountApp()
+    await flushPromises()
+    expect(app.find('daily-stats-stub').exists()).toBe(false)
+    expect(app.find('loads-table-stub').exists()).toBe(false)
+    expect(app.findComponent({ name: 'BatterySolarPanel' }).props()).toMatchObject({
+      showBatteries: true,
+      showSolar: true,
+    })
+    expect(app.findComponent({ name: 'SidePanel' }).props()).toMatchObject({
+      showEv: true,
+      showHomeSection: false,
+    })
+    expect(app.findComponent({ name: 'AppHeader' }).props('showHeaderToggles')).toBe(false)
+    boundary.getConfig.mockResolvedValue({
+      ...configured('old-cerbo'),
+      show_daily_stats: true,
+      show_active_loads: true,
+      show_home_section: true,
+      show_header_toggles: true,
+      show_batteries: false,
+      show_solar_production: false,
+      show_ev: false,
+    })
+    emitSaved()
+    await flushPromises()
+    expect(app.find('daily-stats-stub').exists()).toBe(true)
+    expect(app.find('loads-table-stub').exists()).toBe(true)
+    expect(app.find('battery-solar-panel-stub').exists()).toBe(false)
+    expect(app.findComponent({ name: 'SidePanel' }).props()).toMatchObject({
+      showEv: false,
+      showHomeSection: true,
+    })
+    expect(app.findComponent({ name: 'AppHeader' }).props('showHeaderToggles')).toBe(true)
+    expect(app.find('console-log-stub').exists()).toBe(false)
+  })
+
   it('applies a save during the initial MQTT probe and ignores that older probe result', async () => {
     const probe = deferred<void>()
     const oldConfig = {

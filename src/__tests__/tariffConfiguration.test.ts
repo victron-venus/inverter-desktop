@@ -24,7 +24,7 @@ it('keeps a configured tariff and unrelated module fields through load, reset an
   await form.loadConfig()
   form.resetToDefaults()
   expect(configurationTariff(form.config)).toEqual(plan())
-  expect(await form.saveConfig([], [])).toBe(true)
+  expect(await form.saveConfig()).toBe(true)
   const saved = native.invoke.mock.calls.find(([name]) => name === 'save_config')?.[1].config
   expect(saved.modules.other.values.keep).toBe(42)
   expect(saved.modules[TARIFF_MODULE].values.plan.billingDay).toBe(17)
@@ -32,31 +32,34 @@ it('keeps a configured tariff and unrelated module fields through load, reset an
   expect(configurationTariff(form.config)).toBeNull()
   expect(form.config.modules?.other.values.keep).toBe(42)
 })
-it('stores the first-run tariff with the connection configuration', async () => {
+it('keeps tariff ownership on the controller during first-run setup', async () => {
   native.invoke
     .mockReset()
     .mockImplementation(async (name) => (name === 'get_config' ? { ...defaultConfig } : undefined))
   const wrapper = mount(SetupWizard)
   await flushPromises()
-  wrapper.getComponent(TariffConfiguration).vm.$emit('update:modelValue', plan())
-  await flushPromises()
+  expect(wrapper.findComponent(TariffConfiguration).exists()).toBe(false)
+  expect(wrapper.text()).toContain('Electricity prices come from inverter-control')
   const save = wrapper
     .findAll('button')
     .find((button) => button.text().includes('Save & Continue'))!
   await save.trigger('click')
   await flushPromises()
   const saved = native.invoke.mock.calls.find(([name]) => name === 'save_config')?.[1].config
-  expect(saved.modules[TARIFF_MODULE].values.plan).toEqual(plan())
+  expect(saved.modules?.[TARIFF_MODULE]).toBeUndefined()
   expect(saved.setup_completed).toBe(true)
   wrapper.unmount()
 })
-it('keeps unsupported module data visible as invalid rather than silently applying it', () => {
+it('preserves unsupported legacy module data without using it as the controller tariff', async () => {
   const config = {
     ...defaultConfig,
     modules: { [TARIFF_MODULE]: { schema_version: 7, values: { plan: plan() } } },
   }
-  const wrapper = mount(TariffConfiguration, { props: { modelValue: configurationTariff(config) } })
-  expect(wrapper.get('[role="alert"]').text()).toContain('invalid or newer')
+  native.invoke.mockReset().mockResolvedValue({ ui_config: {} })
+  const wrapper = mount(TariffConfiguration)
+  await flushPromises()
+  expect(wrapper.text()).toContain('No controller tariff is configured')
+  expect(wrapper.get('button').attributes('disabled')).toBeDefined()
   expect(config.modules[TARIFF_MODULE].schema_version).toBe(7)
   wrapper.unmount()
 })

@@ -181,11 +181,11 @@ mod tests {
             modules: original.clone(),
             ..FullConfig::default()
         };
-        config.show_console = Some(false);
+        config.show_batteries = Some(false);
         let decoded: FullConfig =
             serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
         assert_eq!(decoded.modules, original);
-        assert_eq!(decoded.show_console, Some(false));
+        assert_eq!(decoded.show_batteries, Some(false));
     }
 
     #[test]
@@ -208,10 +208,10 @@ mod tests {
             edited.modules["example.future"].values,
             current.modules["example.future"].values
         );
-        edited.show_console = Some(false);
+        edited.show_batteries = Some(false);
         edited.modules = merge_for_save(edited.modules, &current.modules).unwrap();
         assert_eq!(edited.modules, current.modules);
-        assert_eq!(edited.show_console, Some(false));
+        assert_eq!(edited.show_batteries, Some(false));
     }
 
     #[test]
@@ -373,7 +373,7 @@ mod tests {
         let mut export_source = current.clone();
         export_source.modules.extend(installed.clone());
         let mut backup = crate::config_backup::redacted(&export_source).unwrap();
-        backup["show_console"] = json!(false);
+        backup["show_batteries"] = json!(false);
         let content = backup.to_string();
         assert!(
             crate::config_backup::restore(&content, &current).is_err(),
@@ -388,7 +388,7 @@ mod tests {
             restored.modules["example.offline"],
             current.modules["example.offline"]
         );
-        assert_eq!(restored.show_console, Some(false));
+        assert_eq!(restored.show_batteries, Some(false));
         assert_eq!(
             restored.modules["example.uninstalled"],
             current.modules["example.uninstalled"]

@@ -1,6 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { appConfig, resetInverterState } from '../../../composables/useInverterState'
+import { appConfig, resetInverterState, state } from '../../../composables/useInverterState'
 import { useDashboardControls } from '../../../composables/useDashboardControls'
 import { defaultConfig } from '../../../config'
 import PluginCompactPanels from './PluginCompactPanels.vue'
@@ -187,17 +187,18 @@ describe('compact installed-package presentation', () => {
     await context.dashboard.refresh()
     expect(mountPanels().text()).toBe('')
   })
-  it('retains original mixed positions including disabled legacy entries and never sends plugin controls through core IPC', async () => {
+  it('merges controller and plugin ordering and never sends plugin controls through core IPC', async () => {
     if (!appConfig.value) throw new Error('Missing config')
-    appConfig.value.header_toggles_config = [
+    state.value.ui_config = {}
+    state.value.ui_config.header_toggles = [
       { id: 'charge', label: 'Charge', entity: 'only_charging' },
       { id: 'external', label: 'Old room', entity: 'light.room' },
       { id: 'feed', label: 'Feed', entity: 'no_feed' },
     ]
-    appConfig.value.ha_entities = [
-      { id: 'disabled', label: 'Hidden', entity: 'light.hidden', domain: 'light', enabled: false },
-      { id: 'external', label: 'Room', entity: 'light.room', domain: 'light', enabled: true },
-      { id: 'feed', label: 'Feed', entity: 'no_feed', domain: 'inverter_control', enabled: true },
+    state.value.ui_config.home_buttons = [
+      { id: 'empty', label: 'Unknown', entity: 'light.unknown' },
+      { id: 'external', label: 'Room', entity: 'light.room' },
+      { id: 'feed', label: 'Feed', entity: 'no_feed' },
     ]
     const core = useDashboardControls(undefined, false)
     expect(

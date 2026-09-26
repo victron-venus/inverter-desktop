@@ -83,6 +83,12 @@ export interface InverterState {
   load_names?: Record<string, string>
   ui_config?: {
     electricity_tariff?: unknown
+    electricity_tariff_status?: {
+      writable?: boolean
+      revision?: string
+      request_id?: string
+      error?: string | null
+    }
     home_buttons?: DashboardControl[]
     header_toggles?: DashboardControl[]
   }
@@ -105,7 +111,6 @@ export interface InverterState {
     tomorrow_kwh?: number
   }
   latest_version?: string
-  console?: string[]
   /** Water system, fed by dbus-pump via Cerbo GX MQTT */
   water_level?: number | null
   water_valve?: boolean | null
@@ -306,7 +311,6 @@ export function applyInverterState(
           'discovered_water_ev',
           'ev_present',
           'evcharger_present',
-          'console',
         ].includes(key)
       )
         continue

@@ -202,7 +202,10 @@
         </div>
 
         <FeatureSetup v-else v-model:config="featureConfig" />
-        <TariffConfiguration v-model="installationTariff" class="mt-4" />
+        <p class="mt-4 text-[12px]">
+          Electricity prices come from inverter-control. After connecting, open Electricity tariff
+          in Settings to configure the shared plan.
+        </p>
       </div>
 
       <div
@@ -224,8 +227,6 @@ import { Settings } from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
 import { computed, onMounted, reactive, ref } from 'vue'
 import type { AppConfig } from '../config'
-import TariffConfiguration from './TariffConfiguration.vue'
-import { configurationTariff, setConfigurationTariff } from '../configurationTariff'
 import { defaultConfig } from '../config'
 import { gatewayConfigError } from '../connectionPolicy'
 import { logger } from '../logger'
@@ -239,11 +240,6 @@ const emit = defineEmits<{
 const activeTab = ref<'main' | 'advanced'>('main')
 const connectionMode = ref<'mqtt' | 'igw'>('mqtt')
 const config = reactive<AppConfig>({ ...defaultConfig })
-const installationTariff = computed({
-  get: () => configurationTariff(config),
-  set: (plan) =>
-    setConfigurationTariff(config, plan as import('../tariffs/model').TariffPlan | null),
-})
 const featureConfig = computed({
   get: () => config,
   set: (updated: AppConfig) => {

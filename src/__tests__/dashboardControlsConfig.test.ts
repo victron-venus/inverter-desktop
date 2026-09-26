@@ -1,12 +1,8 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Config from '../Config.vue'
-import HeaderTogglesEditor from '../components/HeaderTogglesEditor.vue'
 import { useConfigForm } from '../composables/useConfigForm'
-import { isDashboardControlTarget } from '../dashboardControlTarget'
-import { useCoreControlsConfig as useDashboardControlsConfig } from '../features/coreControlsConfig'
-import { defaultConfig } from '../config'
-import { DEFAULT_INVERTER_CONTROLS, INVERTER_CONTROL_FLAGS } from '../inverterControl'
+import { defaultConfig, getAppConfig, sectionKeys, sectionVisibility } from '../config'
 
 const boundary = vi.hoisted(() => ({ invoke: vi.fn(), emit: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: boundary.invoke }))
@@ -33,136 +29,115 @@ afterEach(() => {
   wrapper = undefined
 })
 
-describe('Dashboard control configuration', () => {
-  it.each(INVERTER_CONTROL_FLAGS)('accepts native flag %s and saved HA aliases', (flag) => {
-    expect(isDashboardControlTarget(flag)).toBe(true)
-    expect(isDashboardControlTarget(`input_boolean.${flag}`)).toBe(true)
-    expect(isDashboardControlTarget(`switch.${flag}`)).toBe(true)
-  })
+describe('Section configuration', () => {
+  const defaults = {
+    show_batteries: true,
+    show_solar_production: true,
+    show_active_loads: false,
+    show_daily_stats: false,
+    show_ev: true,
+    show_home_section: false,
+    show_header_toggles: false,
+  }
+  const labels = [
+    'Batteries',
+    'Solar Production',
+    'Active Loads',
+    'Daily Stats',
+    'EV',
+    'Home Buttons',
+    'config.headerToggles',
+  ]
 
-  it('accepts custom HA entities and rejects malformed or unknown bare targets', () => {
-    expect(isDashboardControlTarget('switch.garage')).toBe(true)
-    expect(isDashboardControlTarget('input_boolean.vacation_mode')).toBe(true)
-    for (const target of ['', 'garage', 'only_charging ', 'switch.', 'x.y.no_feed', 'switch.a b']) {
-      expect(isDashboardControlTarget(target)).toBe(false)
-    }
-  })
+  function checkbox(label: string) {
+    const field = wrapper?.findAll('label').find((entry) => entry.text().trim() === label)
+    if (!field) throw new Error(`Missing checkbox: ${label}`)
+    return field.get('input[type="checkbox"]')
+  }
 
-  it('preserves saved aliases and state keys, and clones added inverter presets', () => {
-    const manager = useDashboardControlsConfig()
-    const saved = {
-      id: 'custom_charging_id',
-      label: 'Charge',
-      entity: 'input_boolean.only_charging',
-      state_key: 'only_charging',
-    }
-    manager.loadFromConfig({ ...defaultConfig, header_toggles_config: [saved] })
-    expect(manager.headerTogglesList.value).toEqual([{ ...saved, entity: 'only_charging' }])
-    manager.addHeaderToggle(DEFAULT_INVERTER_CONTROLS[1])
-    manager.headerTogglesList.value[1].label = 'Custom label'
-    expect(DEFAULT_INVERTER_CONTROLS[1].label).not.toBe('Custom label')
-  })
-
-  it('adds an inverter preset without reusing an existing custom HA control id', () => {
-    const manager = useDashboardControlsConfig()
-    manager.loadFromConfig({
-      ...defaultConfig,
-      header_toggles_config: [
-        { id: 'no_feed', label: 'Garage', entity: 'switch.garage' },
-        { id: 'no_feed_2', label: 'Porch', entity: 'switch.porch' },
-      ],
-    })
-    manager.addHeaderToggle(
-      DEFAULT_INVERTER_CONTROLS.find((control) => control.entity === 'no_feed')
-    )
-    expect(manager.headerTogglesList.value).toEqual([
-      { id: 'no_feed_3', label: 'NO FEED', entity: 'no_feed' },
-    ])
-  })
-
-  it('preserves opaque optional controls without discovery while editing core controls', () => {
-    const manager = useDashboardControlsConfig()
-    const external = {
-      id: 'room',
-      label: 'Room',
-      entity: 'light.room',
-      domain: 'light',
-      enabled: true,
-    }
-    manager.loadFromConfig({ ...defaultConfig, ha_entities: [external] })
-    expect(manager.haEntitiesList.value).toEqual([])
-    manager.addHomeControl()
-    manager.haEntitiesList.value[0] = {
-      id: 'charge',
-      label: 'Charge',
-      entity: 'only_charging',
-      domain: 'inverter_control',
-      enabled: true,
-    }
-    expect(manager.getSavedControls().home).toEqual([external, manager.haEntitiesList.value[0]])
-    expect(boundary.invoke).not.toHaveBeenCalled()
-  })
-
-  it('offers all native flags and treats a saved HA alias as an existing inverter control', () => {
-    wrapper = mount(HeaderTogglesEditor, {
-      props: {
-        headerTogglesList: [
-          { id: 'old', label: 'Charging', entity: 'input_boolean.only_charging' },
-        ],
-        discoveredEntities: [],
-      },
-    })
-    expect(wrapper.findAll('button[data-control]')).toHaveLength(7)
-    expect(wrapper.get('button[data-control="only_charging"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('button[data-control="no_feed"]').attributes('disabled')).toBeUndefined()
-  })
-
-  it('configures and saves native flags without HA credentials or discovery', async () => {
+  async function openSections() {
     wrapper = mount(Config)
     await flushPromises()
-    const tab = wrapper.findAll('button').find((button) => button.text() === 'UI Controls')
-    expect(tab).toBeDefined()
-    if (!tab) throw new Error('UI Controls tab was not rendered')
+    const tab = wrapper.findAll('button').find((button) => button.text() === 'Sections')
+    if (!tab) throw new Error('Missing Sections tab')
     await tab.trigger('click')
-    for (const flag of INVERTER_CONTROL_FLAGS) {
-      await wrapper.get(`button[data-control="${flag}"]`).trigger('click')
-    }
-    await wrapper.get('button[title="Save changes"]').trigger('click')
-    await flushPromises()
-    expect(boundary.invoke).toHaveBeenCalledWith('save_config', {
-      config: expect.objectContaining({
-        ha_url: '',
-        ha_longlived_token: '',
-        header_toggles_config: DEFAULT_INVERTER_CONTROLS,
-      }),
+  }
+
+  it('uses the requested first-run defaults in the form and dashboard', async () => {
+    await openSections()
+    expect(sectionVisibility(defaultConfig)).toEqual(defaults)
+    expect(sectionVisibility(null)).toEqual(defaults)
+    sectionKeys.forEach((key, index) => {
+      expect((checkbox(labels[index]).element as HTMLInputElement).checked).toBe(defaults[key])
     })
-    expect(boundary.invoke.mock.calls.some(([command]) => command === 'discover_ha_entities')).toBe(
-      false
+    expect(wrapper?.text()).not.toContain('Console')
+    expect(wrapper?.text()).not.toContain('Authentication')
+    expect(wrapper?.find('#auth_username').exists()).toBe(false)
+    expect(wrapper?.findAll('button').some((button) => button.text() === 'UI Controls')).toBe(false)
+  })
+
+  it.each([null, undefined])(
+    'migrates %s section values to the visible legacy layout consistently',
+    async (legacy) => {
+      const saved = {
+        ...defaultConfig,
+        ...Object.fromEntries(sectionKeys.map((key) => [key, legacy])),
+      }
+      boundary.invoke.mockImplementation(async (command) => (command === 'get_config' ? saved : {}))
+      const dashboard = await getAppConfig()
+      await openSections()
+      sectionKeys.forEach((key, index) => {
+        expect(dashboard[key]).toBe(true)
+        expect((checkbox(labels[index]).element as HTMLInputElement).checked).toBe(true)
+      })
+      await wrapper?.get('button[title="Save changes"]').trigger('click')
+      await flushPromises()
+      const written = boundary.invoke.mock.calls.find(([command]) => command === 'save_config')?.[1]
+        .config
+      expect(sectionVisibility(written)).toEqual(
+        Object.fromEntries(sectionKeys.map((key) => [key, true]))
+      )
+    }
+  )
+
+  it('honors explicit section choices through a save and a fresh dashboard read', async () => {
+    let saved = { ...defaultConfig }
+    boundary.invoke.mockImplementation(async (command, args) => {
+      if (command === 'get_config') return structuredClone(saved)
+      if (command === 'save_config') saved = JSON.parse(JSON.stringify(args.config))
+      return {}
+    })
+    await openSections()
+    for (const label of labels) await checkbox(label).setValue(false)
+    await wrapper?.get('button[title="Save changes"]').trigger('click')
+    await flushPromises()
+    expect(sectionVisibility(await getAppConfig())).toEqual(
+      Object.fromEntries(sectionKeys.map((key) => [key, false]))
+    )
+    for (const label of labels) await checkbox(label).setValue(true)
+    await wrapper?.get('button[title="Save changes"]').trigger('click')
+    await flushPromises()
+    expect(sectionVisibility(await getAppConfig())).toEqual(
+      Object.fromEntries(sectionKeys.map((key) => [key, true]))
     )
   })
 
-  it('blocks an invalid target before saving without changing valid legacy records', async () => {
+  it('preserves existing app authentication and passive migration data on reset and save', async () => {
+    const saved = {
+      ...defaultConfig,
+      auth_enabled: true,
+      auth_biometric: true,
+      auth_username: 'existing',
+      header_toggles_config: [{ id: 'room', label: 'Room', entity: 'light.room' }],
+      ha_entities: [
+        { id: 'room', label: 'Room', entity: 'light.room', domain: 'light', enabled: true },
+      ],
+    }
+    boundary.invoke.mockImplementation(async (command) => (command === 'get_config' ? saved : {}))
     const form = useConfigForm()
     await form.loadConfig()
-    expect(await form.saveConfig([], [{ id: '', label: 'Invalid', entity: 'unknown_flag' }])).toBe(
-      false
-    )
-    expect(form.message.value).toContain('Invalid header control target')
-    expect(boundary.invoke).not.toHaveBeenCalledWith('save_config', expect.anything())
-    const controls = [
-      {
-        id: 'legacy',
-        label: 'Charge',
-        entity: 'input_boolean.only_charging',
-        state_key: 'only_charging',
-      },
-      { id: '', label: 'Garage', entity: 'switch.garage' },
-    ]
-    expect(await form.saveConfig([], controls)).toBe(true)
-    expect(form.config.header_toggles_config).toEqual([
-      controls[0],
-      { id: 'switch_garage', label: 'Garage', entity: 'switch.garage' },
-    ])
-    expect(form.config.header_toggles_config?.[0]).toHaveProperty('state_key', 'only_charging')
+    form.resetToDefaults()
+    expect(await form.saveConfig()).toBe(true)
+    expect(form.config).toMatchObject(saved)
   })
 })

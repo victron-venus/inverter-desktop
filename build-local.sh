@@ -38,10 +38,7 @@ fi
 
 echo ""
 echo "===> Building desktop plugin artifacts..."
-PLUGIN_RESULT=$(mktemp)
-trap 'rm -f "$PLUGIN_RESULT"' EXIT
-python3 scripts/build-local-plugins.py --output-path "$PLUGIN_RESULT"
-PLUGIN_ARTIFACTS=$(cat "$PLUGIN_RESULT")
+PLUGIN_ARTIFACTS=$(python3 scripts/build-local-plugins.py --print-path)
 
 echo ""
 echo "===> Building Tauri application..."

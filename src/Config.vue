@@ -163,7 +163,7 @@
               </div>
             </div>
 
-            <TariffConfiguration v-if="activeTab === 'tariff'" v-model="installationTariff" />
+            <TariffConfiguration v-if="activeTab === 'tariff'" />
 
             <!-- HTTPS inverter-gateway, with optional Cloudflare Access -->
             <div v-if="activeTab === 'gateway'" class="flex flex-col gap-4">
@@ -265,11 +265,6 @@
               </div>
             </div>
 
-            <FeatureConfigSection
-              v-if="activeTab === 'integrations'"
-              v-model:config="featureConfig"
-              :controls="controls"
-            />
             <FeaturePluginManager v-if="activeTab === featurePluginManagerTabId" />
             <div v-if="activeTab === 'devices'" class="flex flex-col gap-4">
               <!-- Cerbo Water & EV (MQTT instance discovery) -->
@@ -557,19 +552,6 @@
                   }}</span>
                 </label>
 
-                <label
-                  class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
-                >
-                  <input
-                    type="checkbox"
-                    v-model="config.show_console"
-                    class="rounded border-slate-300 text-accent focus:ring-accent"
-                  />
-                  <span class="text-[11px] font-bold text-main">Console</span>
-                </label>
-
-                <FeatureSectionVisibility v-model:config="featureConfig" />
-
                 <!-- App Settings -->
                 <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
                   <h3 class="classic-subsection-title">App Settings</h3>
@@ -584,63 +566,6 @@
                     />
                     <span class="text-[11px] font-bold text-main"> Launch at system startup </span>
                   </label>
-                </div>
-
-                <!-- Authentication -->
-                <div class="flex flex-col gap-2 p-3 classic-inset !rounded-lg !p-3">
-                  <h3 class="classic-subsection-title">Authentication</h3>
-                  <label
-                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="config.auth_enabled"
-                      @change="config.auth_enabled = ($event.target as HTMLInputElement).checked"
-                      class="rounded border-slate-300 text-accent focus:ring-accent"
-                    />
-                    <span class="text-[11px] font-bold text-main"> Enable authentication </span>
-                  </label>
-                  <div v-if="config.auth_enabled" class="flex flex-col gap-2 mt-1">
-                    <div class="flex flex-col gap-1">
-                      <label for="auth_username" class="text-[10px] font-medium text-slate-500"
-                        >Username</label
-                      >
-                      <input
-                        id="auth_username"
-                        type="text"
-                        v-model="config.auth_username"
-                        placeholder="Enter username"
-                        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-main"
-                      />
-                    </div>
-                    <div class="flex flex-col gap-1">
-                      <label for="auth_password" class="text-[10px] font-medium text-slate-500"
-                        >Password</label
-                      >
-                      <input
-                        id="auth_password"
-                        type="password"
-                        v-model="config.auth_password"
-                        placeholder="Enter password"
-                        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-[#1a1a1a] px-2 py-1 text-[11px] text-main"
-                      />
-                    </div>
-                    <label
-                      class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1c1c1e] cursor-pointer group hover:border-accent/40 transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        :checked="config.auth_biometric"
-                        @change="
-                          config.auth_biometric = ($event.target as HTMLInputElement).checked
-                        "
-                        class="rounded border-slate-300 text-accent focus:ring-accent"
-                      />
-                      <span class="text-[11px] font-bold text-main">
-                        Allow biometric authentication (Touch ID / Windows Hello)
-                      </span>
-                    </label>
-                  </div>
                 </div>
               </div>
             </div>
@@ -665,30 +590,9 @@
                 </UiButton>
               </div>
             </div>
-
-            <!-- Entities Section -->
-            <div v-if="activeTab === 'entities'" class="flex flex-col gap-6">
-              <header class="border-b border-black/[0.06] dark:border-white/[0.07] pb-2">
-                <h2 class="classic-section-title">UI Controls</h2>
-              </header>
-
-              <HeaderControlsEditor
-                :headerTogglesList="headerTogglesList"
-                :discoveredEntities="controls.discoveredEntities.value"
-                @add="addHeaderToggle"
-                @remove="removeHeaderToggle"
-                @move-up="moveToggleUp"
-                @move-down="moveToggleDown"
-                @focus-entity="controls.refreshSuggestions(config)"
-              />
-
-              <FeatureControlsEditor :config="config" :controls="controls" />
-            </div>
           </div>
         </div>
       </div>
-
-      <FeatureDiscoveryDialog :controls="controls" />
 
       <div class="px-3 py-2 shrink-0"><PrivacyLink /></div>
 
@@ -727,7 +631,6 @@ import {
   Cloud,
   Download,
   Eye,
-  Layout,
   RotateCcw,
   Save,
   Settings,
@@ -736,23 +639,15 @@ import {
   X,
 } from '@lucide/vue'
 import {
-  HeaderControlsEditor,
-  FeatureConfigSection,
   FeaturePluginManager,
   featurePluginManagerTabId,
-  FeatureSectionVisibility,
-  FeatureControlsEditor,
-  FeatureDiscoveryDialog,
   featureConfigSections,
-  useConfigControls,
   prepareFeatureConfig,
   subscribeFeatureConfig,
   isMobileApp,
 } from '@features'
 import { useConfigForm } from './composables/useConfigForm'
-import type { AppConfig } from './config'
 import TariffConfiguration from './components/TariffConfiguration.vue'
-import { configurationTariff, setConfigurationTariff } from './configurationTariff'
 import { gatewayConfigError } from './connectionPolicy'
 
 const {
@@ -766,28 +661,6 @@ const {
   resetToDefaults,
   clearMessage,
 } = useConfigForm()
-const installationTariff = computed({
-  get: () => configurationTariff(config),
-  set: (plan) =>
-    setConfigurationTariff(config, plan as import('./tariffs/model').TariffPlan | null),
-})
-const featureConfig = computed({
-  get: () => config,
-  set: (updated: AppConfig) => {
-    Object.assign(config, updated)
-  },
-})
-const controls = useConfigControls()
-const {
-  haEntitiesList,
-  headerTogglesList,
-  loadFromConfig,
-  addHeaderToggle,
-  removeHeaderToggle,
-  moveToggleUp,
-  moveToggleDown,
-} = controls
-
 const activeTab = ref('mqtt')
 
 type DiscoveredInst = {
@@ -842,7 +715,6 @@ const sections = computed(() => [
     ...section,
     label: section.labelKey ? $t(section.labelKey) : section.label,
   })),
-  { id: 'entities', label: 'UI Controls', icon: Layout },
   { id: 'sections', label: 'Sections', icon: Eye },
   { id: 'tariff', label: 'Electricity tariff', icon: Settings },
   { id: 'backup', label: 'Backup', icon: Archive },
@@ -904,9 +776,7 @@ async function handleSave() {
     return
   }
   prepareFeatureConfig(config)
-  const savedControls = controls.getSavedControls()
-  if (!(await saveConfig(savedControls.home, savedControls.header, savedControls.editableHeader)))
-    return
+  if (!(await saveConfig())) return
   // Apply auto-start setting
   if (!isMobileApp) {
     try {
@@ -944,7 +814,6 @@ async function handleRestore() {
     const done = await invoke<boolean>('restore_config')
     if (done) {
       const cfg = await loadConfig()
-      loadFromConfig(cfg)
       try {
         const stop = await subscribeFeatureConfig(config, () => !disposed)
         if (disposed) {
@@ -999,8 +868,6 @@ async function handleClose() {
 function handleReset() {
   if (confirm('Reset all settings to defaults?')) {
     resetToDefaults()
-    haEntitiesList.value = []
-    headerTogglesList.value = []
   }
 }
 
@@ -1042,7 +909,6 @@ onMounted(async () => {
     globalThis.addEventListener('keydown', handleKeyDown)
     const cfg = await loadConfig()
     if (disposed) return
-    loadFromConfig(cfg)
     try {
       const stop = await subscribeFeatureConfig(config, () => !disposed)
       if (disposed) {

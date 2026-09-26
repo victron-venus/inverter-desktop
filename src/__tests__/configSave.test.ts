@@ -40,10 +40,10 @@ describe('Configuration save result', () => {
     expect((await getAppConfig()).modules).toEqual(modules)
     const form = useConfigForm()
     await form.loadConfig()
-    form.config.show_console = false
+    form.config.show_batteries = false
     form.resetToDefaults()
     expect(form.config.modules).toEqual(modules)
-    expect(await form.saveConfig([], [])).toBe(true)
+    expect(await form.saveConfig()).toBe(true)
     const written = boundary.invoke.mock.calls.find(([name]) => name === 'save_config')?.[1].config
     expect(written.modules).toEqual(modules)
     expect(boundary.invoke.mock.calls.map(([name]) => name)).toEqual([
@@ -70,11 +70,11 @@ describe('Configuration save result', () => {
     boundary.invoke.mockRejectedValueOnce(new Error('Read denied'))
     await expect(form.loadConfig()).rejects.toThrow('Read denied')
     expect(form.configLoaded.value).toBe(false)
-    expect(await form.saveConfig([], [])).toBe(false)
+    expect(await form.saveConfig()).toBe(false)
     expect(boundary.invoke).not.toHaveBeenCalledWith('save_config', expect.anything())
     await form.loadConfig()
     expect(form.configLoaded.value).toBe(true)
-    expect(await form.saveConfig([], [])).toBe(true)
+    expect(await form.saveConfig()).toBe(true)
   })
 
   it('keeps the write error visible and does not publish settings or change autostart', async () => {

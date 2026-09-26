@@ -15,7 +15,7 @@
           :headerControls="headerControls"
           :controlStates="headerControlStates"
           :isDark="isDark"
-          :showHeaderToggles="appConfig?.show_header_toggles !== false"
+          :showHeaderToggles="visibleSections.show_header_toggles"
           @send="send"
           @toggle-theme="toggleTheme"
           @open-config="openConfig"
@@ -29,8 +29,7 @@
         class="dashboard-content flex-1 overflow-y-auto pr-0.5 flex flex-col gap-1.5 scrollbar-hide min-h-0"
       >
         <DailyStats
-          :configured-tariff="configurationTariff(appConfig)"
-          v-if="appConfig?.show_daily_stats !== false"
+          v-if="visibleSections.show_daily_stats"
           :tariffScope="
             appConfig?.portal_id || appConfig?.gateway_url || appConfig?.mqtt_host || 'dashboard'
           "
@@ -67,7 +66,7 @@
           </div>
           <div class="dashboard-side md:col-span-4">
             <SidePanel
-              :showEv="appConfig?.show_ev !== false"
+              :showEv="visibleSections.show_ev"
               :evSectionVisible="evSectionVisible"
               :carSoc="evSoc"
               :carChargingPower="evChargingKw != null ? evChargingKw * 1000 : null"
@@ -83,7 +82,7 @@
               :controlsConnected="controlsConnected"
               :getControlLabel="features.getControlLabel"
               :getControlIcon="features.getControlIcon"
-              :showHomeSection="appConfig?.show_home_section !== false"
+              :showHomeSection="visibleSections.show_home_section"
               @send="send"
             >
               <DashboardFeaturePanels @send="send" />
@@ -92,14 +91,14 @@
         </div>
 
         <BatterySolarPanel
-          v-if="appConfig?.show_batteries !== false || appConfig?.show_solar_production !== false"
+          v-if="visibleSections.show_batteries || visibleSections.show_solar_production"
           :batteries="batteries"
           :solarSources="solarSources"
-          :showBatteries="appConfig?.show_batteries !== false"
-          :showSolar="appConfig?.show_solar_production !== false"
+          :showBatteries="visibleSections.show_batteries"
+          :showSolar="visibleSections.show_solar_production"
         />
 
-        <LoadsTable v-if="appConfig?.show_active_loads !== false" :loads="acloads" />
+        <LoadsTable v-if="visibleSections.show_active_loads" :loads="acloads" />
       </div>
 
       <!-- Bottom Status Bar: Classic dot layout -->
@@ -113,8 +112,6 @@
         <template #leading><DashboardFeatureStatus /></template>
         <template #connections><DashboardConnectionStatus /></template>
       </StatusBar>
-
-      <ConsoleLog v-if="appConfig?.show_console !== false" :lines="state.console || []" />
 
       <ContextMenu
         :show="contextMenu.show"
@@ -148,7 +145,6 @@ import AppHeader from './components/AppHeader.vue'
 import SetupWizard from './components/SetupWizard.vue'
 import BatterySolarPanel from './components/BatterySolarPanel.vue'
 import ChartPanel from './components/ChartPanel.vue'
-import ConsoleLog from './components/ConsoleLog.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DailyStats from './components/DailyStats.vue'
 import ErrorBoundary from './components/ErrorBoundary.vue'
@@ -172,9 +168,8 @@ import { useInverterVisibility } from './composables/useInverterVisibility'
 import { useMQTTState } from './composables/useMQTTState'
 import { initSystemNotifications } from './composables/useSystemNotifications'
 import { useTheme } from './composables/useTheme'
-import { getAppConfig, needsSetup } from './config'
+import { getAppConfig, needsSetup, sectionVisibility } from './config'
 import type { AppConfig } from './config'
-import { configurationTariff } from './configurationTariff'
 import { logger } from './logger'
 import { coerceBoolean } from './utils'
 
@@ -187,6 +182,7 @@ const {
   ensureNotificationPermission,
   cleanup: cleanupConnection,
 } = useConnection()
+const visibleSections = computed(() => sectionVisibility(appConfig.value))
 const features = useDashboardFeatures()
 const { controlsConnected } = features
 const coreControls = useDashboardControls(features.getControlState, features.allowHomeControls)
