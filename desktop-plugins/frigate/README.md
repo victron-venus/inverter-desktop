@@ -2,9 +2,9 @@
 
 `inverter-frigate-worker` is the optional desktop package
 `inverter-desktop.frigate`, version 0.3.0, requiring host API `^1.8`. It opens its
-own MQTT connection, emits connection status, sends motion-start notifications,
-and requests a 15-second live preview when a direct Frigate HTTP address is
-configured. It belongs to the generic **Cameras** plugin group, so the dashboard
+own MQTT connection, emits connection status, and requests a 15-second live
+preview when a direct Frigate HTTP address is configured. Motion without a
+preview sends an ordinary notification. It belongs to the generic **Cameras** plugin group, so the dashboard
 group control changes only installed camera packages and their saved desired state.
 
 It contains no Tauri, core MQTT client, HA client, inverter controls or frontend
@@ -70,7 +70,7 @@ the origin or URL structure. Percent signs, separators, controls, and exact
 The package's explicit `http_video.live_preview` grant fixes this query and a
 15-second maximum duration. Worker frames cannot override either value.
 
-The native host owns the preview and its motion notification. It opens the
+The native host owns the preview and does not overlay a duplicate motion notification. It opens the
 low-rate MJPEG stream in a separate incognito window, permits navigation only to
 the exact scoped URL, denies application IPC and new windows, and closes it after
 15 seconds or earlier on worker revocation. Preview admission expires after three

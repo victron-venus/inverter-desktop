@@ -19,6 +19,10 @@ reports its separate API connection. To receive worker fixes, select the plugin
 archive URL and checksum from the new release as well as updating the app.
 `build-local.sh` only builds and installs the host app, leaving plugin pins intact.
 
+Automatic Frigate and Kerberos motion previews do not show a duplicate system
+notification over the video. Cameras without a configured preview continue to
+send ordinary motion notifications.
+
 Configured downloads can use unsigned packages and need no publisher or app
 signing keys. The embedded publisher policy is currently empty, so manual package
 selection remains unavailable. HA and camera provider implementations are separate
@@ -227,8 +231,8 @@ files, missing files, or incorrect lengths/digests is rejected.
 ## Frigate worker package
 
 The separately built [Frigate worker](../desktop-plugins/frigate/README.md)
-uses an independent MQTT connection, native motion notifications, and automatic
-fifteen-second previews for fresh motion events. Older clip workers remain
+uses an independent MQTT connection and automatic fifteen-second previews for
+fresh motion events, with native notifications for motion without a preview. Older clip workers remain
 supported by the native download path. [Kerberos](../desktop-plugins/kerberos/README.md) and
 [Ring](../desktop-plugins/ring/README.md) have separate package identities,
 configuration, topic filters, cooldowns, and lifecycle. All camera packages join
