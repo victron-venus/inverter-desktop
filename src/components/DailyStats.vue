@@ -1,6 +1,6 @@
 <template>
   <div
-    class="daily-stats classic-card px-2 py-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-main"
+    class="daily-stats classic-card shrink-0 px-2 py-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium leading-tight text-main"
   >
     <div v-if="hasSolar" class="daily-stat-group flex items-center gap-1.5 mr-0.5">
       <span class="text-solar font-semibold flex items-center gap-1 tabular">☀️ {{ prod }}kWh</span>

@@ -57,12 +57,36 @@ values in a full snapshot must supply its own timestamps to establish sensor age
 
 ## Configuration and credential migration
 
-Configuration remains AES-256-GCM encrypted. Desktop keys move from `config.key`
-to the platform credential store. The legacy file is removed only after the exact
-key is written and read back successfully. Android stores a random configuration
-key wrapped by AndroidKeyStore; iOS stores it in the installation's Keychain
-entry. Mobile files encrypted with the historical shared key are read solely for
-migration and immediately re-encrypted with the new random key.
+Configuration and plugin settings retain their existing AES-256-GCM formats.
+On macOS the installation key is read first from `config.key` in the application
+data directory. This preserves the established behavior across ad-hoc-signed
+application replacements: a valid file avoids even constructing a Keychain entry.
+If the cache is absent, the existing Keychain entry is read once and the same
+32-byte key is cached. That first migration may require macOS authorization;
+subsequent launches reuse the file. The Keychain entry is left unchanged, and
+updates no longer delete `config.key`.
+
+The macOS cache contains the base64-encoded key, not a second encrypted copy.
+Its security boundary is the operating system account: it must be a regular,
+owner-owned, single-link file with exactly `0600` permissions. Reads are bounded
+and inspect the opened descriptor before and after reading. Directory traversal
+uses inspected descriptors, rejects symlinks and untrusted writable parents, and
+creation uses a private temporary file, fsync and an exclusive atomic rename.
+Concurrent launches adopt the already-published valid key without overwriting it.
+An invalid/inaccessible cache is an error, never a reason to replace it or fall
+back to a different key. If Keychain has no entry, a fresh key is generated only
+when neither encrypted configuration nor retained/pending plugin settings exist.
+Malformed or inaccessible existing storage also prevents that initialization.
+Keep the original key with a protected installation backup: a settings export
+cannot recover it. These file protections do not defend against another process
+already running as the same OS user, or privileged access.
+
+Linux and Windows retain platform credential storage, including migration from
+`config.key` with removal only after the exact key is written and read back.
+Android stores a random configuration key wrapped by AndroidKeyStore; iOS stores
+it in the installation's Keychain entry. Mobile files encrypted with the
+historical shared key are read solely for migration and immediately re-encrypted
+with the new random key. Their key providers are unchanged by the macOS cache.
 
 Unavailable credential storage and invalid/decryption-failed configuration are
 errors, not an invitation to replace saved settings with defaults. A failed save

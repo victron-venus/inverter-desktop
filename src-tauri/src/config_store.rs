@@ -11,6 +11,9 @@ use tauri_plugin_store::StoreExt;
 
 static ENCRYPTION_KEY_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+mod macos_key;
+
 #[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
 fn decode_key(value: &str) -> Result<Vec<u8>, String> {
     let key = general_purpose::STANDARD
@@ -22,7 +25,23 @@ fn decode_key(value: &str) -> Result<Vec<u8>, String> {
     Ok(key)
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(target_os = "macos")]
+fn platform_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // Constructing/accessing Keychain is deliberately inside the fallback:
+    // a valid file cache must survive an ad-hoc-signed app replacement unaided.
+    macos_key::load_or_create(&directory, || {
+        let entry = keyring::Entry::new("inverter-desktop", "victron")
+            .map_err(|_| "macOS Keychain is unavailable")?;
+        match entry.get_password() {
+            Ok(value) => decode_key(&value).map(Some),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("Cannot read the existing encryption key from macOS Keychain".into()),
+        }
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn platform_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
     let path = app
         .path()
@@ -48,7 +67,10 @@ fn platform_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
 
 /// Keep the old file until the credential store has read back the identical key.
 /// An unavailable store is an explicit error, never a new key or plaintext fallback.
-#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
+#[cfg(any(
+    test,
+    not(any(target_os = "macos", target_os = "android", target_os = "ios"))
+))]
 fn migrate_or_create_key(
     path: &std::path::Path,
     mut read: impl FnMut() -> Result<Option<Vec<u8>>, String>,
