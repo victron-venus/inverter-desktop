@@ -17,7 +17,18 @@ subscriptions and goes offline while reconnecting. These indicators also cover
 workers using the former HA MQTT broker settings; Home Assistant's own indicator
 reports its separate API connection. To receive worker fixes, select the plugin
 archive URL and checksum from the new release as well as updating the app.
-`build-local.sh` only builds and installs the host app, leaving plugin pins intact.
+`build-local.sh` builds all four `.idplugin` archives and SHA-256 files before
+building and installing the host app. Run `python3 scripts/build-local-plugins.py`
+to compile and package only the workers (Python 3.11+ and Rust required). Each
+successful run creates a complete new artifact directory under
+`target/local-plugins/<native-target>/`; its path is printed with the result.
+Failed builds never replace a previous successful artifact set.
+
+Local compilation preserves installed plugin pins and encrypted settings. These
+unsigned packages use the same verified packaging format as release artifacts;
+they are not automatically selected by the installed application. To install a
+published beta, use its app bundle and update the required archive URLs/checksums
+from its `desktop-plugins-<target>.json` fragment in your configuration backup.
 
 Automatic Frigate and Kerberos motion previews do not show a duplicate system
 notification over the video. Cameras without a configured preview continue to

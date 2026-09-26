@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "$0")"
 
 APP_NAME="Inverter Desktop"
 BUNDLE_DIR="src-tauri/target/release/bundle"
@@ -34,6 +35,10 @@ else
   echo "===> Installing dependencies (frozen lockfile)..."
   pnpm install --frozen-lockfile
 fi
+
+echo ""
+echo "===> Building desktop plugin artifacts..."
+python3 scripts/build-local-plugins.py
 
 echo ""
 echo "===> Building Tauri application..."
