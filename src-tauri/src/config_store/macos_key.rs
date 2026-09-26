@@ -347,13 +347,19 @@ pub(super) fn load_or_create(
     if let Some(key) = keychain? {
         return persist_key(&directory, &key);
     }
-    if has_encrypted_data(&directory)? {
-        // A concurrent winner can also save ciphertext during this inspection.
-        return read_key(&directory)?.ok_or("Existing encrypted settings have no available key; restore config.key or the original macOS Keychain entry".into());
+    // Keep the storage-presence decision separate from returned key material.
+    match has_encrypted_data(&directory) {
+        Ok(true) => {
+            // A concurrent winner can save ciphertext during this inspection.
+            read_key(&directory)?.ok_or("Existing encrypted settings have no available key; restore config.key or the original macOS Keychain entry".into())
+        }
+        Ok(false) => {
+            let mut key = [0u8; 32];
+            rand::rng().fill(&mut key);
+            persist_key(&directory, &key)
+        }
+        Err(error) => Err(error),
     }
-    let mut key = [0u8; 32];
-    rand::rng().fill(&mut key);
-    persist_key(&directory, &key)
 }
 
 #[cfg(test)]
