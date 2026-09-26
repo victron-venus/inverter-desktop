@@ -12,9 +12,9 @@
           <p>
             Seasonal energy prices per kWh.
             {{
-              savePlan
+              destination === 'controller'
                 ? 'Saved on the controller and shared by all connected dashboards.'
-                : persist
+                : destination === 'local'
                   ? 'Saved for this dashboard on this device.'
                   : 'Apply to the configuration draft, then save the configuration.'
             }}
@@ -120,9 +120,9 @@
           {{
             busy
               ? 'Working…'
-              : savePlan
+              : destination === 'controller'
                 ? 'Save to controller'
-                : persist
+                : destination === 'local'
                   ? 'Save tariff'
                   : 'Apply tariff'
           }}
@@ -152,10 +152,16 @@ const props = withDefaults(
     plan: TariffPlan | null
     tariffScope?: string
     persist?: boolean
+    /** Caption destination; a save callback can persist locally or on the controller. */
+    destination?: 'controller' | 'local' | 'draft'
     clearLabel?: string
     savePlan?: (plan: TariffPlan | null) => Promise<void>
   }>(),
   { tariffScope: 'dashboard', persist: true, clearLabel: 'Clear local tariff' }
+)
+// Preserve existing callers while allowing native local persistence through savePlan.
+const destination = computed(
+  () => props.destination ?? (props.savePlan ? 'controller' : props.persist ? 'local' : 'draft')
 )
 const emit = defineEmits<{ close: []; saved: [plan: TariffPlan | null] }>()
 const draft = ref<TariffDraft>(props.plan ? JSON.parse(JSON.stringify(props.plan)) : newDraft())

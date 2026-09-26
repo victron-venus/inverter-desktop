@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import DailyStats from '../components/DailyStats.vue'
+import { newDraft, rateGrid, validatePlan } from '../tariffs/model'
 import { state } from '../composables/useInverterState'
 
 vi.mock('../composables/useInverterState', () => ({
@@ -9,6 +10,23 @@ vi.mock('../composables/useInverterState', () => ({
 }))
 
 describe('DailyStats', () => {
+  it('keeps a writable controller tariff informational on the dashboard', () => {
+    ;(state as ReturnType<typeof ref>).value = {
+      daily_stats: { grid_kwh: 10 },
+      ui_config: {
+        electricity_tariff: validatePlan({ ...newDraft(), rates: rateGrid(0.2) }),
+        electricity_tariff_status: { writable: true, revision: 'revision' },
+      },
+    }
+    const wrapper = mount(DailyStats)
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(wrapper.text()).toContain('2.00')
+    expect(wrapper.text()).toContain('0.2000 USD/kWh')
+    expect(wrapper.text()).not.toMatch(
+      /Edit tariff|Set tariff|Interval energy|Use .*tariff|Billing period|Controller tariff/
+    )
+    wrapper.unmount()
+  })
   it('breakdown parts add up to the headline total', async () => {
     ;(state as ReturnType<typeof ref>).value = {
       daily_stats: {
@@ -26,5 +44,6 @@ describe('DailyStats', () => {
     // forecast comes from top-level state.solar_forecast
     expect(text).toContain('[13.4]')
     expect(text).toContain('[8.9]')
+    wrapper.unmount()
   })
 })

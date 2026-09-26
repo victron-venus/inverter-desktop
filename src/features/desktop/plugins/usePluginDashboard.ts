@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { ref } from 'vue'
+import type { DesktopPluginConfig } from '../../../config'
 import { numberInputAcceptsValue, sameNumberInputAuthority, validNumberInput } from './numberInput'
 import type { ActionContribution, NumberInputContribution, PluginSnapshot } from './types'
 
@@ -39,12 +40,16 @@ function numberInputKey(
 export function createPluginDashboard() {
   const plugins = ref<PluginSnapshot[]>([])
   const unavailable = ref(false)
+  const configuredPlugins = ref<DesktopPluginConfig[] | null>(null)
+  const configurationUnavailable = ref(true)
   const pendingActions = ref(new Set<string>())
   const failedActions = ref(new Set<string>())
   let active = false
   let authenticated = false
   let generation = 0
   let lifecycle = 0
+  let configurationRevision = 0
+  let configurationEventsAvailable = false
   let refreshRequested = false
   let refreshing: Promise<void> | undefined
   const operations = new Map<string, { pluginId: string; instanceId: string }>()
@@ -54,6 +59,9 @@ export function createPluginDashboard() {
   function clear() {
     plugins.value = []
     unavailable.value = false
+    configuredPlugins.value = null
+    configurationUnavailable.value = true
+    configurationRevision += 1
     pendingActions.value = new Set()
     failedActions.value = new Set()
     operations.clear()
@@ -62,6 +70,58 @@ export function createPluginDashboard() {
 
   function current(session: number) {
     return active && authenticated && session === generation
+  }
+
+  function applyConfiguration(payload: unknown, missingAllowed = false) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+      throw new Error('Plugin configuration unavailable')
+    const declarations = (payload as { desktop_plugins?: unknown }).desktop_plugins
+    if (declarations === undefined && missingAllowed) {
+      configuredPlugins.value = []
+    } else {
+      if (
+        !Array.isArray(declarations) ||
+        declarations.some(
+          (entry) =>
+            !entry ||
+            typeof entry !== 'object' ||
+            Array.isArray(entry) ||
+            typeof entry.plugin_id !== 'string' ||
+            !entry.plugin_id.trim() ||
+            (entry.enabled !== undefined && typeof entry.enabled !== 'boolean')
+        )
+      )
+        throw new Error('Plugin configuration unavailable')
+      configuredPlugins.value = structuredClone(declarations)
+    }
+    configurationUnavailable.value = !configurationEventsAvailable
+  }
+
+  async function readConfiguration(session: number) {
+    if (!current(session)) return
+    const revision = ++configurationRevision
+    configurationUnavailable.value = true
+    try {
+      const configuration = await invoke('get_config')
+      if (!current(session) || revision !== configurationRevision) return
+      // A valid older configuration can omit the optional plugin list.
+      applyConfiguration(configuration, true)
+    } catch {
+      if (!current(session) || revision !== configurationRevision) return
+      // Known intent remains visible, but cannot make stale connections green.
+      configurationUnavailable.value = true
+    }
+  }
+
+  function configurationChanged(payload: unknown) {
+    if (!current(generation)) return
+    // Events are newer than an in-flight get_config, including its failure.
+    configurationRevision += 1
+    try {
+      applyConfiguration(payload)
+    } catch {
+      configurationUnavailable.value = true
+    }
   }
 
   async function readSnapshot(session: number) {
@@ -120,15 +180,19 @@ export function createPluginDashboard() {
       const status = await invoke<{ unlocked: boolean }>('auth_status')
       if (!active || current !== generation) return
       authenticated = status.unlocked === true
-      await refresh()
+      await Promise.all([refresh(), readConfiguration(current)])
     } catch {
       // AuthGate presents authentication failures. Contributions remain hidden.
     }
   }
 
-  async function subscribe(name: string, handler: () => void, lifetime: number) {
-    const stop = await listen(name, () => {
-      if (active && lifetime === lifecycle) handler()
+  async function subscribe<T = unknown>(
+    name: string,
+    handler: (payload: T) => void,
+    lifetime: number
+  ) {
+    const stop = await listen<T>(name, (event) => {
+      if (active && lifetime === lifecycle) handler(event?.payload)
     })
     if (active && lifetime === lifecycle) listeners.push(stop)
     else stop()
@@ -137,6 +201,7 @@ export function createPluginDashboard() {
   function stop() {
     active = false
     authenticated = false
+    configurationEventsAvailable = false
     lifecycle += 1
     generation += 1
     for (const unlisten of listeners) unlisten()
@@ -155,6 +220,17 @@ export function createPluginDashboard() {
         await subscribe('auth-state-changed', () => void refreshSession(), lifetime)
         if (!active || lifetime !== lifecycle) return
         await subscribe('plugin-host-update', () => void refresh(), lifetime)
+        if (!active || lifetime !== lifecycle) return
+        try {
+          await subscribe('plugin-configuration-changed', configurationChanged, lifetime)
+          if (!active || lifetime !== lifecycle) return
+          await subscribe('config-saved', () => void readConfiguration(generation), lifetime)
+          if (!active || lifetime !== lifecycle) return
+          configurationEventsAvailable = true
+        } catch {
+          // Configuration indicators must not change action authorization.
+          if (active && lifetime === lifecycle) configurationEventsAvailable = false
+        }
         if (active && lifetime === lifecycle) await refreshSession()
       } catch {
         if (active && lifetime === lifecycle) stop()
@@ -252,6 +328,8 @@ export function createPluginDashboard() {
   return {
     plugins,
     unavailable,
+    configuredPlugins,
+    configurationUnavailable,
     pendingActions,
     failedActions,
     start,

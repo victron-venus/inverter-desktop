@@ -8,7 +8,7 @@ import SetupWizard from '../components/SetupWizard.vue'
 import TariffConfiguration from '../components/TariffConfiguration.vue'
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }))
-vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke, isTauri: () => false }))
 const plan = () => validatePlan({ ...newDraft(), rates: rateGrid(0.3), billingDay: 17 })
 
 it('keeps a configured tariff and unrelated module fields through load, reset and save', async () => {
@@ -55,7 +55,11 @@ it('preserves unsupported legacy module data without using it as the controller 
     ...defaultConfig,
     modules: { [TARIFF_MODULE]: { schema_version: 7, values: { plan: plan() } } },
   }
-  native.invoke.mockReset().mockResolvedValue({ ui_config: {} })
+  native.invoke
+    .mockReset()
+    .mockImplementation(async (name) =>
+      name === 'get_config' ? structuredClone(config) : { ui_config: {} }
+    )
   const wrapper = mount(TariffConfiguration)
   await flushPromises()
   expect(wrapper.text()).toContain('No controller tariff is configured')

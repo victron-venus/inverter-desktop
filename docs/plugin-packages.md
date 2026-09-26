@@ -9,13 +9,16 @@ Installed plugins may contribute compact header/Home controls, accordion groups,
 appliance summaries, weather, and connection indicators through a validated
 presentation contract. They do not append generic flat entity panels. Background
 workers, camera notifications, and owned media remain independent of dashboard
-rendering. An absent package contributes no provider UI or connection.
+rendering. A package that is neither configured nor installed contributes no provider UI or connection.
 
-Frigate, Kerberos, and Ring publish separate MQTT connection indicators. Each
-indicator becomes connected only after the broker accepts that worker's topic
-subscriptions and goes offline while reconnecting. These indicators also cover
-workers using the former HA MQTT broker settings; Home Assistant's own indicator
-reports its separate API connection. To receive worker fixes, select the plugin
+Frigate, Kerberos, and Ring each own an independent MQTT client and publish its
+subscription health. The status bar summarizes enabled camera workers in one
+**HA MQTT** indicator, green only when every participant is connected. Its tooltip
+lists each worker; failed, restarting, missing configured workers and stale host
+or configuration reads keep it offline. Explicitly disabled workers are excluded.
+Each worker becomes connected only after the broker accepts its topic subscriptions.
+This also covers workers using the former HA MQTT broker settings. **HA** reports
+Home Assistant's separate REST/WebSocket connection. To receive worker fixes, select the plugin
 archive URL and checksum from the new release as well as updating the app.
 `build-local.sh` builds all four `.idplugin` archives and SHA-256 files before
 building and installing the host app. Run `python3 scripts/build-local-plugins.py`
