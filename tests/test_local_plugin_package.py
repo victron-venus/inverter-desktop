@@ -100,6 +100,82 @@ class LocalPluginPackageTests(unittest.TestCase):
                 local.build_plugins(self.root, "--config=unexpected")
             command.assert_not_called()
 
+    def app_data(self, inventory):
+        app = self.root / 'app-data'
+        (app / 'plugins').mkdir(parents=True)
+        records = {p['plugin_id']: {'active': {'sha256': 'a' * 64, 'archive_pin': True},
+                                    'enabled': False}
+                   for p in inventory['packages'] if p['plugin_id'] != 'inverter-desktop.ring'}
+        (app / 'plugins/state.json').write_text(json.dumps({'schema_version': 1, 'plugins': records}))
+        (app / 'config.json').write_bytes(b'encrypted configuration')
+        (app / 'plugins/settings.enc').write_bytes(b'encrypted credentials')
+        return app
+
+    def test_install_selects_only_existing_packages_preserves_state_and_release_baseline(self):
+        artifacts = self.build()
+        inventory = local.read_json(artifacts / 'local-plugin-artifacts.json')
+        app = self.app_data(inventory)
+        before = {p: p.read_bytes() for p in app.rglob('*') if p.is_file()}
+        expected = local.stage_install(artifacts, app, self.target)
+        self.assertEqual(len(expected), 3)
+        value = local.read_json(app / local.SELECTION)
+        for package in value['packages']:
+            self.assertEqual(package['baseline_sha256'], 'a' * 64)
+            archive = app / 'local-plugin-builds' / value['build'] / package['file']
+            self.assertEqual(hashlib.sha256(archive.read_bytes()).hexdigest(), package['sha256'])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        state = local.read_json(app / 'plugins/state.json')
+        for identity, digest in expected.items():
+            state['plugins'][identity]['active']['sha256'] = digest
+        (app / 'plugins/state.json').write_text(json.dumps(state))
+        local.stage_install(artifacts, app, self.target)
+        self.assertTrue(all(p['baseline_sha256'] == 'a' * 64
+                            for p in local.read_json(app / local.SELECTION)['packages']))
+
+    def test_bad_archive_does_not_replace_selection_and_failed_activation_restores_it(self):
+        artifacts = self.build()
+        inventory = local.read_json(artifacts / 'local-plugin-artifacts.json')
+        app = self.app_data(inventory)
+        local.stage_install(artifacts, app, self.target)
+        previous = (app / local.SELECTION).read_bytes()
+        with patch.object(local, 'restart_app') as restart, \
+                patch.object(local, 'wait_installed', side_effect=ValueError('not activated')):
+            with self.assertRaisesRegex(ValueError, 'not activated'):
+                local.install_plugins(artifacts, app, self.target)
+            self.assertEqual(restart.call_count, 2)
+        self.assertEqual((app / local.SELECTION).read_bytes(), previous)
+        (artifacts / inventory['packages'][-1]['file']).write_bytes(b'corrupt')
+        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            local.stage_install(artifacts, app, self.target)
+        self.assertEqual((app / local.SELECTION).read_bytes(), previous)
+
+    def test_restore_release_waits_for_original_pins(self):
+        artifacts = self.build()
+        inventory = local.read_json(artifacts / 'local-plugin-artifacts.json')
+        app = self.app_data(inventory)
+        selected = local.stage_install(artifacts, app, self.target)
+        state = local.read_json(app / 'plugins/state.json')
+        for identity, digest in selected.items():
+            state['plugins'][identity]['active']['sha256'] = digest
+        (app / 'plugins/state.json').write_text(json.dumps(state))
+        with patch.object(local, 'restart_app'), patch.object(local, 'wait_installed') as wait:
+            local.install_plugins(None, app, self.target, restore=True)
+        wait.assert_called_once_with(app, {identity: 'a' * 64 for identity in selected})
+        self.assertFalse((app / local.SELECTION).exists())
+
+    @unittest.skipIf(sys.platform == 'win32', 'macOS installer uses POSIX file locks')
+    def test_installer_creates_lock_and_rejects_concurrent_invocations(self):
+        import fcntl
+        app = self.root / 'lock-app'
+        app.mkdir()
+        with patch.object(local, 'install_plugins') as install:
+            local.install_macos(None, app, self.target, restore=True)
+        install.assert_called_once_with(None, app, self.target, True)
+        with (app / '.local-plugin-install.lock').open('rb') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(ValueError, 'in progress'):
+                local.install_macos(None, app, self.target, restore=True)
+
 
 if __name__ == "__main__":
     unittest.main()

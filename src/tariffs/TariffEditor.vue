@@ -75,7 +75,7 @@
           Add season
         </button>
         <label
-          >Flat price / kWh<input v-model="flat" type="number" step="any" placeholder="0.31"
+          >Flat price / kWh<input v-model="flat" type="number" step="any" placeholder="Enter price"
         /></label>
         <button type="button" :disabled="busy" @click="fill">Fill selected week</button>
         <label class="file-button"

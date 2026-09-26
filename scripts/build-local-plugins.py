@@ -3,14 +3,21 @@
 
 No release plan, network publication or signing key is needed. Artifacts are
 published to a new local directory only when every worker packages successfully.
-This builds packages; installed plugin pins and encrypted settings are unchanged.
+Use --install on macOS to update already installed plugins in the desktop app.
+Release pins and encrypted settings are preserved; --restore-release undoes the
+local selection. The app must include local-build support and be unlocked.
 """
 
 import argparse
 import hashlib
 import json
+import os
+import re
+import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import tomllib
 import uuid
 from pathlib import Path
@@ -18,6 +25,8 @@ from pathlib import Path
 from plugins import plugin_package
 
 ROOT = Path(__file__).resolve().parents[1]
+APP = Path('/Applications/Inverter Desktop.app')
+SELECTION = 'local-plugin-overrides.json'
 
 
 def compiler_host(root):
@@ -89,18 +98,195 @@ def build_plugins(root, target):
     return destination
 
 
+def read_json(path):
+    plugin_package.checked_path(path)
+    if not path.is_file() or path.stat().st_size > 1024 * 1024 or path.stat().st_nlink != 1:
+        raise ValueError('Expected a bounded regular JSON file')
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+def installed(app_data):
+    state = read_json(app_data / 'plugins/state.json')
+    if state.get('schema_version') != 1 or not isinstance(state.get('plugins'), dict):
+        raise ValueError('Unsupported installed plugin inventory')
+    return state['plugins']
+
+
+def atomic_write(path, data):
+    plugin_package.checked_path(path.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix='.local-plugins-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'wb') as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def stage_install(artifacts, app_data, target):
+    """Validate everything before atomically selecting an immutable local set."""
+    inventory = read_json(artifacts / 'local-plugin-artifacts.json')
+    if inventory.get('target') != target or len(inventory.get('packages', [])) != 4:
+        raise ValueError('Artifacts must contain all four plugins for this Mac')
+    records = installed(app_data)
+    selection = app_data / SELECTION
+    previous = read_json(selection) if selection.exists() else None
+    old_packages = {p['plugin_id']: p for p in previous['packages']} if previous else {}
+    allowed = {f'inverter-desktop.{name}' for name in plugin_package.PLUGINS}
+    packages, data, seen = [], {}, set()
+    for package in inventory['packages']:
+        identity, version, digest = (package.get(k, '') for k in ('plugin_id', 'version', 'sha256'))
+        name = f'{identity}-{version}-{target}.idplugin'
+        if (identity not in allowed or identity in seen
+                or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?', version)
+                or package.get('file') != name or not re.fullmatch(r'[a-f0-9]{64}', digest)):
+            raise ValueError('Invalid local plugin identity or digest')
+        seen.add(identity)
+        archive = artifacts / name
+        plugin_package.checked_path(archive)
+        if not archive.is_file() or archive.stat().st_size > 64 * 1024 * 1024 or archive.stat().st_nlink != 1:
+            raise ValueError('Invalid local archive file')
+        content = archive.read_bytes()
+        if hashlib.sha256(content).hexdigest() != digest:
+            raise ValueError(f'Local archive checksum mismatch: {identity}')
+        if identity not in records:
+            continue
+        active = records[identity]['active']
+        if not active.get('archive_pin'):
+            raise ValueError(f'{identity} is not a configuration-managed pinned package')
+        baseline = active['sha256']
+        old = old_packages.get(identity)
+        if old and old['sha256'] == baseline:
+            baseline = old['baseline_sha256']
+        if not re.fullmatch(r'[a-f0-9]{64}', baseline):
+            raise ValueError('Invalid installed archive digest')
+        packages.append({**package, 'baseline_sha256': baseline})
+        data[name] = content
+    if not packages:
+        raise ValueError('No matching plugins are installed; configure them in the app first')
+    builds = app_data / 'local-plugin-builds'
+    builds.mkdir(mode=0o700, exist_ok=True)
+    plugin_package.checked_path(builds)
+    build = uuid.uuid4().hex
+    destination = builds / build
+    destination.mkdir(mode=0o700)
+    try:
+        for name, content in data.items():
+            atomic_write(destination / name, content)
+        value = {'schema_version': 1, 'target': target, 'build': build, 'packages': packages}
+        atomic_write(selection, (json.dumps(value, indent=2) + '\n').encode())
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
+    return {p['plugin_id']: p['sha256'] for p in packages}
+
+
+def restart_app():
+    """Only target the installed app's executable, never unrelated dev builds."""
+    executable = str(APP / 'Contents/MacOS/inverter-dashboard')
+    pattern = '^' + re.escape(executable) + '( |$)'
+    result = subprocess.run(['pkill', '-TERM', '-f', pattern], check=False)
+    if result.returncode not in (0, 1):
+        raise ValueError('Could not stop the installed desktop app')
+    deadline = time.monotonic() + 15
+    while subprocess.run(['pgrep', '-f', pattern], stdout=subprocess.DEVNULL, check=False).returncode == 0:
+        if time.monotonic() >= deadline:
+            raise ValueError('Desktop app did not stop; close it and retry')
+        time.sleep(0.25)
+    subprocess.run(['open', str(APP)], check=True)
+
+
+def wait_installed(app_data, expected, timeout=90):
+    deadline = time.monotonic() + timeout
+    while True:
+        records = installed(app_data)
+        if all(records.get(identity, {}).get('active', {}).get('sha256') == digest
+               for identity, digest in expected.items()):
+            return
+        if time.monotonic() >= deadline:
+            raise ValueError('App did not activate the selected packages. Unlock the updated app and check Configuration > Plugins')
+        time.sleep(1)
+
+
+def install_plugins(artifacts, app_data, target, restore=False):
+    selection = app_data / SELECTION
+    if selection.exists():
+        read_json(selection)
+    previous = selection.read_bytes() if selection.exists() else None
+    if restore:
+        if previous is None:
+            print('No local plugin selection is active.')
+            return
+        value = read_json(selection)
+        records = installed(app_data)
+        expected = {p['plugin_id']: p['baseline_sha256'] for p in value['packages']
+                    if records.get(p['plugin_id'], {}).get('active', {}).get('sha256') == p['sha256']}
+        selection.unlink()
+    else:
+        expected = stage_install(artifacts, app_data, target)
+    try:
+        print('Restarting Inverter Desktop; unlock it if prompted.', flush=True)
+        restart_app()
+        wait_installed(app_data, expected)
+    except BaseException:
+        if previous is None:
+            selection.unlink(missing_ok=True)
+        else:
+            atomic_write(selection, previous)
+        restart_app()
+        raise
+    print('Verified installed plugin hashes: ' + ', '.join(sorted(expected)))
+
+
+def install_macos(artifacts, app_data, target, restore=False):
+    """Serialize script-driven selections without locking the app's own store."""
+    import fcntl
+    lock = app_data / '.local-plugin-install.lock'
+    plugin_package.checked_path(app_data)
+    if os.path.lexists(lock):
+        plugin_package.checked_path(lock)
+    descriptor = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'r+b') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError('Another local plugin installation is in progress') from error
+        install_plugins(artifacts, app_data, target, restore)
+
+
 def main():
     """Build the current checkout's workers for the native desktop target."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--install', action='store_true', help='Install into the existing macOS app after building')
+    modes.add_argument('--restore-release', action='store_true', help='Restore saved release pins without compiling')
+    parser.add_argument('--artifacts', type=Path, help='Reuse a previously built artifact directory with --install')
+    parser.add_argument('--output-path', type=Path, help='Write the built artifact directory path for build-local.sh')
+    args = parser.parse_args()
+    if args.artifacts and not args.install:
+        parser.error('--artifacts requires --install')
     try:
-        destination = build_plugins(ROOT, compiler_host(ROOT))
+        target = compiler_host(ROOT)
+        if args.install or args.restore_release:
+            if sys.platform != 'darwin' or not APP.is_dir():
+                raise ValueError('Installation requires /Applications/Inverter Desktop.app on macOS')
+            app_data = Path.home() / 'Library/Application Support/com.alvit.inverter-dashboard'
+            plugin_package.checked_path(app_data)
+        if args.restore_release:
+            install_macos(None, app_data, target, restore=True)
+            return
+        destination = args.artifacts.absolute() if args.artifacts else build_plugins(ROOT, target)
+        if args.output_path:
+            args.output_path.write_text(str(destination) + '\n', encoding='utf-8')
+        print(f'Local plugin artifacts: {destination}', flush=True)
+        if args.install:
+            install_macos(destination, app_data, target)
+        else:
+            print('Built all four packages. Add --install to activate them in the macOS app.')
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        parser.exit(1, f"Cannot build local plugins: {error}\n")
-    print(f"Local plugin artifacts: {destination}")
-    print("Built all four .idplugin archives and SHA-256 checksums.")
-    print("Installed plugin pins are unchanged. To install a published build, import")
-    print("its matching desktop-plugins fragment in your configuration backup.")
+        parser.exit(1, f"Cannot prepare local plugins: {error}\n")
 
 
 if __name__ == "__main__":

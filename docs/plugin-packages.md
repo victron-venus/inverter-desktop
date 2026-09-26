@@ -24,11 +24,25 @@ successful run creates a complete new artifact directory under
 `target/local-plugins/<native-target>/`; its path is printed with the result.
 Failed builds never replace a previous successful artifact set.
 
-Local compilation preserves installed plugin pins and encrypted settings. These
-unsigned packages use the same verified packaging format as release artifacts;
-they are not automatically selected by the installed application. To install a
-published beta, use its app bundle and update the required archive URLs/checksums
-from its `desktop-plugins-<target>.json` fragment in your configuration backup.
+On macOS, add `--install` to build and install into the existing application, or
+use `--install --artifacts /absolute/path/to/artifacts` to reuse a completed build.
+`build-local.sh` installs the new host and then activates its matching workers.
+Only previously installed plugins are updated; enabled/disabled intent, settings,
+secrets and configured release pins are preserved. The app must include local-build
+support and be unlocked. The script restarts it and verifies installed archive
+hashes; unsupported/locked apps time out and the previous selection is restored.
+
+The explicit same-account `local-plugin-overrides.json` selection and immutable
+archives reside in the application's data directory, outside encrypted settings.
+The native host verifies the exact ID/version/target/SHA-256 and uses its existing
+transactional installer. This is a trusted native developer operation, not a
+webview installation API. Configuration → Plugins labels local builds. Repeated
+builds retain the original release baseline; a newly configured release hash takes
+precedence over an older override. Run `python3 scripts/build-local-plugins.py
+--restore-release` to remove the local selection and restore configured release
+packages without compiling. For a published beta, install its app and update the
+required URLs/checksums from `desktop-plugins-<target>.json` in your configuration
+backup. Local archive sets remain available for inspection after restoration.
 
 Automatic Frigate and Kerberos motion previews do not show a duplicate system
 notification over the video. Cameras without a configured preview continue to

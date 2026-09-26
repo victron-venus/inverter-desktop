@@ -38,6 +38,9 @@
           class="text-[12px] min-w-0"
         >
           <p class="break-words">{{ plugin.plugin_id }} · {{ plugin.version }}</p>
+          <p v-if="plugin.local" class="text-[11px] text-muted">
+            {{ $t('plugins.manager.localBuild') }}
+          </p>
           <output class="text-[11px] text-muted">{{
             $t(`plugins.manager.restoreState.${plugin.state}`)
           }}</output>

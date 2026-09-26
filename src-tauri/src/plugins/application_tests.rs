@@ -389,6 +389,101 @@ async fn configured_same_version_rebuild_replaces_exact_bytes_and_then_restores_
 }
 
 #[tokio::test]
+async fn local_builds_verify_replace_restore_and_yield_to_new_release_pins() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (release, release_bytes) = declared_package(&root, "1.0.0", None);
+    let (local, local_bytes) = declared_package_revision(&root, "1.0.0", None, Some("local build"));
+    let (new_release, new_bytes) =
+        declared_package_revision(&root, "1.0.0", None, Some("next release"));
+    let (service, host, epoch) =
+        configured_application(&root, vec![release.clone()], settings_test_key()).await;
+    let requests = AtomicUsize::new(0);
+    reconcile_bytes(&service, epoch, &release_bytes, &requests).await;
+    wait_configured_worker(&host).await;
+    let target = env!("INVERTER_DESKTOP_TARGET");
+    let build = "a".repeat(32);
+    let file = format!("{PLUGIN}-1.0.0-{target}.idplugin");
+    let archives = root.join("local-plugin-builds").join(&build);
+    fs::create_dir_all(&archives).unwrap();
+    let selection = root.join("local-plugin-overrides.json");
+    fs::write(
+        &selection,
+        serde_json::to_vec(&json!({
+            "schema_version":1, "target":target, "build":build,
+            "packages":[{"plugin_id":PLUGIN, "version":"1.0.0", "file":file,
+                "sha256":local.artifacts[target].sha256,
+                "baseline_sha256":release.artifacts[target].sha256}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(archives.join(&file), b"corrupt local archive").unwrap();
+    reconcile_bytes(&service, epoch, b"no network", &requests).await;
+    assert_eq!(configured_status(&service, epoch).await["state"], "failed");
+    assert_eq!(
+        service.manager().unwrap().list().await.unwrap()[0]
+            .active
+            .sha256,
+        sha256_hex(&release_bytes)
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    fs::write(archives.join(&file), &local_bytes).unwrap();
+    reconcile_bytes(&service, epoch, b"no network", &requests).await;
+    wait_configured_worker(&host).await;
+    assert_eq!(configured_status(&service, epoch).await["local"], true);
+    assert_eq!(
+        service.manager().unwrap().list().await.unwrap()[0]
+            .active
+            .sha256,
+        sha256_hex(&local_bytes)
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    // Explicit removal restores the saved release, without changing its declaration.
+    let selected = fs::read(&selection).unwrap();
+    fs::remove_file(&selection).unwrap();
+    reconcile_bytes(&service, epoch, &release_bytes, &requests).await;
+    assert_eq!(configured_status(&service, epoch).await["local"], false);
+    assert_eq!(
+        service.manager().unwrap().list().await.unwrap()[0]
+            .active
+            .sha256,
+        sha256_hex(&release_bytes)
+    );
+
+    // A later published pin takes precedence even if the developer file remains.
+    fs::write(&selection, &selected).unwrap();
+    let epoch = service
+        .session_configured(true, Ok(vec![new_release]))
+        .unwrap();
+    reconcile_bytes(&service, epoch, &new_bytes, &requests).await;
+    assert_eq!(configured_status(&service, epoch).await["local"], false);
+    assert_eq!(
+        service.manager().unwrap().list().await.unwrap()[0]
+            .active
+            .sha256,
+        sha256_hex(&new_bytes)
+    );
+
+    // Local installation retains disabled intent and never starts a disabled worker.
+    let mut disabled = release;
+    disabled.enabled = false;
+    let epoch = service
+        .session_configured(true, Ok(vec![disabled]))
+        .unwrap();
+    reconcile_bytes(&service, epoch, b"no network", &requests).await;
+    let installed = service.manager().unwrap().list().await.unwrap().remove(0);
+    assert!(!installed.enabled);
+    assert_eq!(installed.active.sha256, sha256_hex(&local_bytes));
+    assert!(!host
+        .snapshots()
+        .iter()
+        .any(|snapshot| snapshot.state == WorkerState::Running));
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn configured_downloads_are_dropped_on_logout_replacement_and_shutdown() {
     struct DownloadGuard(Arc<AtomicBool>);
     impl Drop for DownloadGuard {

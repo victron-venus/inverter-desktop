@@ -38,7 +38,10 @@ fi
 
 echo ""
 echo "===> Building desktop plugin artifacts..."
-python3 scripts/build-local-plugins.py
+PLUGIN_RESULT=$(mktemp)
+trap 'rm -f "$PLUGIN_RESULT"' EXIT
+python3 scripts/build-local-plugins.py --output-path "$PLUGIN_RESULT"
+PLUGIN_ARTIFACTS=$(cat "$PLUGIN_RESULT")
 
 echo ""
 echo "===> Building Tauri application..."
@@ -67,10 +70,13 @@ else
 fi
 
 echo ""
+echo "===> Installing the matching local plugin artifacts..."
+python3 scripts/build-local-plugins.py --install --artifacts "$PLUGIN_ARTIFACTS"
+
+echo ""
 echo "========================================"
 echo "  Build complete!"
 echo "  App:  /Applications/${APP_NAME}.app"
 echo "========================================"
 
-open -a "${APP_NAME}"
 date

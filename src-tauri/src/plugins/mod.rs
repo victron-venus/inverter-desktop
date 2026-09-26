@@ -12,6 +12,7 @@ pub(crate) mod generation;
 mod http_video;
 pub mod installer;
 pub(crate) mod live_view;
+mod local_builds;
 pub(crate) mod media;
 pub(crate) mod media_windows;
 #[cfg(feature = "native-media-smoke")]
