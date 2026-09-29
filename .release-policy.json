@@ -79,7 +79,7 @@
       }
     ],
     "build_number_floor": 2005042,
-    "toolkit_revision": "b1379701745de1aefebddb60e674a68a81289da9"
+    "toolkit_revision": "73daa871b253a389c03c371713767ac41871d40e"
   },
   "build_secrets": [
     "ANDROID_KEYSTORE_BASE64",
@@ -87,6 +87,5 @@
     "ANDROID_KEY_ALIAS",
     "ANDROID_KEY_PASSWORD"
   ],
-  "single_entry_ci": true,
-  "publication_token_secret": "BOT_PAT"
+  "single_entry_ci": true
 }
