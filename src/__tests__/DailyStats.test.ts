@@ -43,6 +43,7 @@ describe('DailyStats', () => {
           observed_at: observed / 1000,
           started_at: Date.parse(`${date}T00:00:00Z`) / 1000,
           complete: true,
+          status: 'complete',
           source: { service: 'com.victronenergy.grid.meter', device_instance: 40 },
         },
       },

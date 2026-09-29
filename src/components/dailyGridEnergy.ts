@@ -8,7 +8,7 @@ export interface GridEnergyDaily {
   observed_at: number | null
   started_at: number | null
   complete: boolean
-  status?: string
+  status: 'complete' | 'partial' | 'stale' | 'unknown' | 'reset'
   reason?: string
   source: { service: string; device_instance: number; serial?: string | null }
 }
@@ -25,6 +25,7 @@ const record = (value: unknown): value is Record<string, unknown> =>
 const nonnegative = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0
 const timestamp = (value: unknown): value is number => nonnegative(value) && value * 1000 <= 8.64e15
+const GRID_SERVICE_PREFIX = 'com.victronenergy.grid.'
 
 // Keep the frequent freshness tick cheap without accumulating arbitrary server time zones.
 let cachedZone: string | undefined
@@ -82,7 +83,9 @@ export function dailyGridPresentation(value: unknown, now: number): DailyGridPre
     if (
       !record(source) ||
       typeof source.service !== 'string' ||
-      !source.service.trim() ||
+      !source.service.startsWith(GRID_SERVICE_PREFIX) ||
+      !source.service.slice(GRID_SERVICE_PREFIX.length).trim() ||
+      source.service !== source.service.trim() ||
       !nonnegative(source.device_instance) ||
       !Number.isSafeInteger(source.device_instance) ||
       (source.serial != null && typeof source.serial !== 'string')
@@ -117,7 +120,10 @@ export function dailyGridPresentation(value: unknown, now: number): DailyGridPre
       return unavailable('The meter observation belongs to another site day.')
     if (now - observed > TELEMETRY_STALE_AFTER_MS)
       return unavailable('The meter observation is stale (older than 30 seconds).')
-    if (['stale', 'unknown', 'reset'].includes(String(value.status)))
+    if (!(
+      (value.status === 'complete' && value.complete) ||
+      (value.status === 'partial' && !value.complete)
+    ))
       return unavailable('The controller has not confirmed usable daily readings.')
 
     const imported = nonnegative(value.import_kwh) ? value.import_kwh.toFixed(2) : '—'

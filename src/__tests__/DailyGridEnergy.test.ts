@@ -14,6 +14,7 @@ const reading = (overrides: Record<string, unknown> = {}) => ({
   observed_at: now / 1000,
   started_at: seconds('2026-09-29T07:00:00Z'),
   complete: true,
+  status: 'complete',
   source: { service: 'com.victronenergy.grid.meter', device_instance: 40, serial: 'fixture-meter' },
   ...overrides,
 })
@@ -32,7 +33,7 @@ describe('daily grid energy coverage', () => {
 
   it('labels a partial ledger with the site start time, not a full-day total', () => {
     const result = dailyGridPresentation(
-      reading({ complete: false, started_at: seconds('2026-09-29T17:23:00Z') }),
+      reading({ complete: false, status: 'partial', started_at: seconds('2026-09-29T17:23:00Z') }),
       now
     )
     expect(result).toMatchObject({ label: 'Since 10:23', imported: '12.34', exported: '4.56' })
@@ -83,9 +84,9 @@ describe('daily grid energy coverage', () => {
     ['fractional start after midnight', { started_at: seconds('2026-09-29T07:00:00Z') + 0.0005 }],
     [
       'partial start on a previous site day',
-      { complete: false, started_at: seconds('2026-09-29T06:59:59Z') },
+      { complete: false, status: 'partial', started_at: seconds('2026-09-29T06:59:59Z') },
     ],
-    ['start after observation', { complete: false, started_at: now / 1000 + 1 }],
+    ['start after observation', { complete: false, status: 'partial', started_at: now / 1000 + 1 }],
     ['missing coverage flag', { complete: undefined }],
     ['missing start timestamp', { started_at: null }],
     ['missing observation timestamp', { observed_at: null }],
@@ -136,6 +137,7 @@ describe('daily grid energy validity and freshness', () => {
     const result = dailyGridPresentation(
       reading({
         complete: false,
+        status: 'partial',
         started_at: now / 1000 - 0.654321,
         observed_at: now / 1000 - 0.123456,
       }),
@@ -155,6 +157,35 @@ describe('daily grid energy validity and freshness', () => {
       expect(result.details).toContain('Meter counter changed.')
     }
   )
+
+  it.each([
+    'homeassistant.sensor.grid',
+    'com.victronenergy.acload.meter',
+    'com.victronenergy.system',
+    'com.victronenergy.grid.',
+    'com.victronenergy.grid.   ',
+  ])('rejects a nonphysical or empty grid source: %s', (service) => {
+    const result = dailyGridPresentation(reading({ source: { service, device_instance: 40 } }), now)
+    expect(result).toMatchObject({ imported: '—', exported: '—' })
+    expect(result.details).toContain('direct meter source is unavailable or invalid')
+  })
+
+  it.each([undefined, null, '', 'live', 1])('does not assume a usable status from %s', (status) => {
+    expect(dailyGridPresentation(reading({ status }), now)).toMatchObject({
+      imported: '—',
+      exported: '—',
+    })
+  })
+
+  it.each([
+    { complete: true, status: 'partial' },
+    { complete: false, status: 'complete' },
+  ])('rejects status inconsistent with coverage: %j', (coverage) => {
+    expect(dailyGridPresentation(reading(coverage), now)).toMatchObject({
+      imported: '—',
+      exported: '—',
+    })
+  })
 
   it('keeps old-server and malformed payloads unknown, without using legacy grid_kwh', () => {
     for (const value of [undefined, null, [], 'bad', { grid_kwh: 42 }]) {
@@ -187,6 +218,7 @@ describe('DailyGridEnergy', () => {
     await wrapper.setProps({
       energy: reading({
         complete: false,
+        status: 'partial',
         started_at: seconds('2026-09-29T18:00:00Z'),
         import_kwh: 0,
       }),
