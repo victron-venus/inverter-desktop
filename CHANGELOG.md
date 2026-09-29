@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
 - Live Home Assistant camera previews from configured MQTT URL topics.
 
 ### Fixed
-- Camera previews start with less repeated work and discard stale motion events.
+- Camera previews start with less repeated work and discard stale queued live-preview frames.
 - Configuration restore no longer leaks subscriptions or lets an older load
   overwrite newly restored settings. Plugin status refreshes coalesce event bursts.
 - Plugin restoration avoids repeatedly verifying every installed package for

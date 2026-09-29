@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http'
 import { gzipSync } from 'node:zlib'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 let server: Server
 let baseUrl: string
@@ -29,6 +29,10 @@ beforeAll(async () => {
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Missing fixture HTTP address')
   baseUrl = `http://127.0.0.1:${address.port}`
+})
+
+beforeEach(() => {
+  requests.length = 0
 })
 
 afterAll(async () => {
