@@ -40,8 +40,3 @@ updates:
     directory: /src-tauri
     schedule:
       interval: daily
-
-  - package-ecosystem: npm
-    directory: /infra
-    schedule:
-      interval: daily
