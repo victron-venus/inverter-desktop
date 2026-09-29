@@ -1,4 +1,5 @@
-import { TELEMETRY_STALE_AFTER_MS } from '../composables/useInverterState'
+// Meter snapshots arrive every 30 seconds, followed by the display/transport update.
+export const GRID_ENERGY_STALE_AFTER_MS = 90_000
 
 export interface GridEnergyDaily {
   date: string
@@ -118,8 +119,10 @@ export function dailyGridPresentation(value: unknown, now: number): DailyGridPre
     if (observed > now + 1000) return unavailable('The meter observation is in the future.')
     if (siteParts(observed, value.time_zone).date !== value.date)
       return unavailable('The meter observation belongs to another site day.')
-    if (now - observed > TELEMETRY_STALE_AFTER_MS)
-      return unavailable('The meter observation is stale (older than 30 seconds).')
+    if (now - observed > GRID_ENERGY_STALE_AFTER_MS)
+      return unavailable(
+        `The meter observation is stale (older than ${GRID_ENERGY_STALE_AFTER_MS / 1000} seconds).`
+      )
     if (!(
       (value.status === 'complete' && value.complete) ||
       (value.status === 'partial' && !value.complete)

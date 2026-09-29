@@ -142,7 +142,7 @@ installation's time zone. A first observation after midnight, a meter reset or
 an unverified day boundary starts partial coverage, labelled `Since HH:mm`.
 The app does not present that partial amount as a full-day total. A complete
 day requires a verified start-of-day baseline. Missing, invalid, stale (over
-30 seconds old) or previous-day readings display dashes, including when an
+90 seconds old) or previous-day readings display dashes, including when an
 older controller does not provide the new field. A measured zero remains zero.
 
 Update inverter-control to a version that provides this telemetry to enable

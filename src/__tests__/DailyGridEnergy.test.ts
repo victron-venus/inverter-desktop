@@ -1,8 +1,7 @@
 import { enableAutoUnmount, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import DailyGridEnergy from '../components/DailyGridEnergy.vue'
-import { dailyGridPresentation } from '../components/dailyGridEnergy'
-import { TELEMETRY_STALE_AFTER_MS } from '../composables/useInverterState'
+import { dailyGridPresentation, GRID_ENERGY_STALE_AFTER_MS } from '../components/dailyGridEnergy'
 
 const now = Date.parse('2026-09-29T18:30:00Z')
 const seconds = (iso: string) => Date.parse(iso) / 1000
@@ -121,8 +120,14 @@ describe('daily grid energy validity and freshness', () => {
     }
   )
 
-  it('requires a fresh observation and allows at most one second of clock skew', () => {
-    const value = reading({ observed_at: (now - TELEMETRY_STALE_AFTER_MS) / 1000 })
+  it('keeps a 46-second-old reading live across the meter cadence and display delay', () => {
+    expect(
+      dailyGridPresentation(reading({ observed_at: (now - 46_000) / 1000 }), now)
+    ).toMatchObject({ imported: '12.34', exported: '4.56' })
+  })
+
+  it('expires after 90 seconds and allows at most one second of clock skew', () => {
+    const value = reading({ observed_at: (now - 90_000) / 1000 })
     expect(dailyGridPresentation(value, now).imported).toBe('12.34')
     expect(dailyGridPresentation(value, now + 1)).toMatchObject({ imported: '—', exported: '—' })
     expect(dailyGridPresentation(reading({ observed_at: now / 1000 + 1 }), now).imported).toBe(
@@ -201,11 +206,13 @@ describe('DailyGridEnergy', () => {
     const wrapper = mount(DailyGridEnergy, { props: { energy: reading() } })
     expect(wrapper.text()).toBe('Today↓ 12.34 / ↑ 4.56 kWh')
     expect(wrapper.find('button').exists()).toBe(false)
-    await vi.advanceTimersByTimeAsync(TELEMETRY_STALE_AFTER_MS)
+    await vi.advanceTimersByTimeAsync(GRID_ENERGY_STALE_AFTER_MS)
     expect(wrapper.text()).toContain('12.34')
     await vi.advanceTimersByTimeAsync(1000)
     expect(wrapper.text()).toContain('↓ — / ↑ — kWh')
-    expect(wrapper.get('.daily-grid-energy').attributes('aria-label')).toContain('stale')
+    expect(wrapper.get('.daily-grid-energy').attributes('aria-label')).toContain(
+      'stale (older than 90 seconds)'
+    )
     wrapper.unmount()
     expect(vi.getTimerCount()).toBe(0)
   })
