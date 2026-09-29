@@ -54,37 +54,46 @@ def validate_bundle(bundle):
         raise ValueError('App bundle identity does not match Inverter Desktop')
 
 
+def promote_bundle(staged, app, backup, was_running):
+    """Restore the previous bundle if promotion fails; retain failed rollbacks."""
+    try:
+        if app.exists():
+            app.rename(backup)
+        staged.rename(app)
+    except BaseException:
+        if backup.exists():
+            try:
+                backup.rename(app)
+            except OSError as rollback:
+                raise ValueError(f'App replacement failed; previous app retained at {backup}') from rollback
+        if was_running:
+            subprocess.run(['open', str(app)], check=True)
+        raise
+
+
 def install_app(bundle, app=APP):
     """Copy completely before shutdown, then replace with rollback on rename failure."""
+    # Reject bundle links before resolving paths, so normalization cannot hide
+    # them. Absolute operands also keep names beginning with '-' out of options.
     validate_bundle(bundle)
-    if bundle.resolve() == app.resolve():
-        raise ValueError('The build and installed app must be different directories')
     if app.is_symlink() or (app.exists() and not app.is_dir()):
         raise ValueError('Installed app path must be a directory, not a link')
+    bundle = bundle.resolve(strict=True)
+    app = app.parent.resolve(strict=True) / app.name
+    if bundle == app:
+        raise ValueError('The build and installed app must be different directories')
     temporary = Path(tempfile.mkdtemp(prefix='.inverter-desktop-install-', dir=app.parent))
     staged, backup = temporary / app.name, temporary / 'previous.app'
-    replaced, was_running = False, False
+    replaced = False
     try:
         # ditto preserves macOS bundle metadata and links. A failed copy cannot
         # touch the installed app, and renames stay on the destination volume.
-        subprocess.run(['/usr/bin/ditto', str(bundle), str(staged)], check=True,
+        subprocess.run(['/usr/bin/ditto', '--', str(bundle), str(staged)], check=True,
                        stdout=sys.stderr)
         validate_bundle(staged)
         was_running = stop_app(app)
-        try:
-            if app.exists():
-                app.rename(backup)
-            staged.rename(app)
-            replaced = True
-        except BaseException:
-            if backup.exists():
-                try:
-                    backup.rename(app)
-                except OSError as rollback:
-                    raise ValueError(f'App replacement failed; previous app retained at {backup}') from rollback
-            if was_running:
-                subprocess.run(['open', str(app)], check=True)
-            raise
+        promote_bundle(staged, app, backup, was_running)
+        replaced = True
     finally:
         # Never erase the only old bundle if restoring its name failed.
         if replaced or not backup.exists():
@@ -102,7 +111,7 @@ def main():
         if sys.platform != 'darwin':
             raise ValueError('App installation requires macOS')
         install_app(args.bundle)
-    except (OSError, ValueError, plistlib.InvalidFileException, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f'Cannot install desktop app: {error}\n')
 
 

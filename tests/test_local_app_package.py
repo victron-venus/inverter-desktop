@@ -1,5 +1,6 @@
 """Bundle replacement failures must preserve the previous installed app."""
 
+import contextlib
 import plistlib
 import re
 import shutil
@@ -35,7 +36,8 @@ class LocalAppInstallTests(unittest.TestCase):
 
     def command(self, arguments, **_):
         if arguments[0] == '/usr/bin/ditto':
-            shutil.copytree(arguments[1], arguments[2])
+            self.assertEqual(arguments[1], '--')
+            shutil.copytree(arguments[2], arguments[3])
         else:
             self.assertEqual(arguments, ['open', str(self.app)])
         return subprocess.CompletedProcess(arguments, 0)
@@ -71,6 +73,36 @@ class LocalAppInstallTests(unittest.TestCase):
         stopped.assert_not_called()
         self.assertEqual(self.contents(self.app), 'old')
         self.assertEqual(list(self.app.parent.iterdir()), [self.app])
+
+    def test_relative_bundle_starting_with_dash_uses_absolute_ditto_paths(self):
+        relative_source = Path('-release.app')
+        self.source.rename(self.root / relative_source)
+        with contextlib.chdir(self.root), \
+                patch.object(macos_app.subprocess, 'run', side_effect=self.command) as command, \
+                patch.object(macos_app, 'stop_app', return_value=False) as stopped:
+            macos_app.install_app(relative_source, self.app.relative_to(self.root))
+        arguments = command.call_args_list[0].args[0]
+        self.assertEqual(arguments[0], '/usr/bin/ditto')
+        self.assertEqual(arguments[1], '--')
+        self.assertEqual(arguments[2], str(self.root / relative_source))
+        self.assertTrue(all(Path(value).is_absolute() for value in arguments[2:]))
+        stopped.assert_called_once_with(self.app)
+        self.assertEqual(self.contents(self.app), 'new')
+
+    @unittest.skipIf(sys.platform == 'win32', 'symbolic link fixtures require POSIX')
+    def test_source_and_destination_symlinks_are_rejected_before_copy(self):
+        source_link = self.root / 'source-link.app'
+        source_link.symlink_to(self.source, target_is_directory=True)
+        destination_link = self.root / 'destination-link.app'
+        destination_link.symlink_to(self.app, target_is_directory=True)
+        with patch.object(macos_app.subprocess, 'run') as command, \
+                patch.object(macos_app, 'stop_app') as stopped:
+            for source, destination in [(source_link, self.app), (self.source, destination_link)]:
+                with self.subTest(source=source, destination=destination), self.assertRaises(ValueError):
+                    macos_app.install_app(source, destination)
+        command.assert_not_called()
+        stopped.assert_not_called()
+        self.assertEqual(self.contents(self.app), 'old')
 
     def test_failed_promotion_restores_and_reopens_previous_app(self):
         rename = Path.rename
@@ -116,7 +148,7 @@ class LocalAppInstallTests(unittest.TestCase):
     def test_incomplete_staged_bundle_never_stops_installed_app(self):
         def incomplete_copy(arguments, **kwargs):
             result = self.command(arguments, **kwargs)
-            (Path(arguments[2]) / 'Contents/MacOS' / macos_app.EXECUTABLE).unlink()
+            (Path(arguments[3]) / 'Contents/MacOS' / macos_app.EXECUTABLE).unlink()
             return result
 
         with patch.object(macos_app.subprocess, 'run', side_effect=incomplete_copy), \
