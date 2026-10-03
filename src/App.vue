@@ -12,6 +12,11 @@
           :dryRun="coerceBoolean(state.dry_run)"
           :essClass="essClass"
           :essText="essText"
+          :essMode="state.ess_mode"
+          :essConnected="mqttConnected"
+          :essFresh="
+            isEssModeCommandFresh(state.ess_mode, state.ess_mode_observed_at, telemetryClockMs)
+          "
           :headerControls="headerControls"
           :controlStates="headerControlStates"
           :isDark="isDark"
@@ -135,11 +140,13 @@
 </template>
 
 <script setup lang="ts">
+import { isEssModeCommandFresh } from './essMode'
 import { useReleaseVersion } from './composables/useReleaseVersion'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type Event, type UnlistenFn } from '@tauri-apps/api/event'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
+import { telemetryClockMs } from './composables/useInverterState'
 import SetupWizard from './components/SetupWizard.vue'
 import BatterySolarPanel from './components/BatterySolarPanel.vue'
 import ChartPanel from './components/ChartPanel.vue'
@@ -281,8 +288,9 @@ const isInverterOff = computed(() => {
 })
 
 const essClass = computed(() => {
-  if (isInverterOff.value) return 'off'
   const m = state.value.ess_mode
+  if (m?.selection_supported) return m.vebus_mode === 3 ? 'on' : 'off'
+  if (isInverterOff.value) return 'off'
   if (!m) return 'off'
   if (m.mode_name === 'Off' || m.mode_name === 'Charger only') return 'off'
   return 'on'
