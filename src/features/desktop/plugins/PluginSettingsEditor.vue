@@ -137,11 +137,13 @@
       </div>
     </template>
 
-    <div v-if="hasChoices" class="flex items-center gap-2 text-[11px]">
-      <UiButton :disabled="busy || choicesLoading" @click="loadChoices">{{
+    <div class="flex items-center gap-2 text-[11px]" :class="{ 'sr-only': !hasChoices }">
+      <UiButton v-if="hasChoices" :disabled="busy || choicesLoading" @click="loadChoices">{{
         $t('plugins.manager.refreshChoices')
       }}</UiButton>
-      <span v-if="choicesError" role="status">{{ $t('plugins.manager.choicesUnavailable') }}</span>
+      <span role="status" aria-atomic="true" :class="{ 'sr-only': !choicesError }">{{
+        hasChoices && choicesError ? $t('plugins.manager.choicesUnavailable') : ''
+      }}</span>
     </div>
     <div class="flex flex-wrap gap-2">
       <UiButton

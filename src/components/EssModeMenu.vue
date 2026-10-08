@@ -18,6 +18,7 @@
       <Loader2 v-if="pending" :size="12" class="animate-spin" />
       <ChevronDown v-else :size="12" :class="{ 'ess-mode-chevron-open': open }" />
     </UiButton>
+    <span class="sr-only" role="status" aria-atomic="true">{{ statusMessage }}</span>
     <Teleport to="body">
       <div v-if="open" ref="panel" class="ess-mode-panel" :style="position">
         <div class="ess-mode-title">ESS mode</div>
@@ -40,10 +41,10 @@
           </button>
         </div>
         <p v-if="error" class="ess-mode-message ess-mode-error" role="alert">{{ error }}</p>
-        <p v-else-if="pending" class="ess-mode-message" role="status">
+        <p v-else-if="pending" class="ess-mode-message" aria-hidden="true">
           Waiting for the controller…
         </p>
-        <p v-else-if="unavailable" class="ess-mode-message" role="status">{{ unavailable }}</p>
+        <p v-else-if="unavailable" class="ess-mode-message" aria-hidden="true">{{ unavailable }}</p>
         <p v-else class="ess-mode-message">
           Off / On changes inverter power. Other choices keep the power switch unchanged.
         </p>
@@ -85,6 +86,10 @@ const unavailable = computed(() => {
   if (!props.mode?.selection_supported) return 'Update inverter-control to enable mode selection.'
   if (props.dryRun) return 'Mode changes are unavailable in DRY mode.'
   return ''
+})
+const statusMessage = computed(() => {
+  if (!open.value || error.value) return ''
+  return pending.value ? 'Waiting for the controller…' : unavailable.value
 })
 function trigger() {
   return root.value?.querySelector('button')
