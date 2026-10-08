@@ -87,5 +87,6 @@
     "ANDROID_KEY_ALIAS",
     "ANDROID_KEY_PASSWORD"
   ],
-  "single_entry_ci": true
+  "single_entry_ci": true,
+  "release_notes": "CHANGELOG.md"
 }
