@@ -191,8 +191,10 @@ class FrigatePackageTests(unittest.TestCase):
             (struct.pack("<IIII", 0x30, 16, 0, 0),),
         )
         for commands in invalid:
-            with self.subTest(commands=commands), self.assertRaises(ValueError):
-                packaging.verify_worker_target(executable(commands), target)
+            with self.subTest(commands=commands):
+                invalid_executable = executable(commands)
+                with self.assertRaises(ValueError):
+                    packaging.verify_worker_target(invalid_executable, target)
 
     def test_architecture_failure_does_not_create_staging(self):
         """Mislabelled payloads are rejected before output files are created."""

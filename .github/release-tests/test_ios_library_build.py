@@ -1,12 +1,12 @@
 """Exercise the production iOS build order and fail-closed artifact staging."""
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-
 
 BUILDER = Path(__file__).resolve().parents[2] / "scripts/ci-build-ios-library.sh"
 STAGED = "src-tauri/gen/apple/Externals/arm64/release/libapp.a"
@@ -15,9 +15,9 @@ STAGED = "src-tauri/gen/apple/Externals/arm64/release/libapp.a"
 class IosLibraryBuildTests(unittest.TestCase):
     """Run the real shell entry point with disposable build commands."""
 
-    def run_builder(self, frontend_status=0, rust_status=0, skip_frontend=False, xcode_major=26):
+    def run_builder(self, frontend_status=0, rust_status=0, skip_frontend=False, xcode_major=26, shell="bash"):
         """Return the process result and staged bytes without invoking toolchains."""
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(prefix="ios build ' ") as directory:
             root = Path(directory)
             commands = root / "commands"
             commands.mkdir()
@@ -75,7 +75,7 @@ class IosLibraryBuildTests(unittest.TestCase):
             for name in ("xcodebuild", "xcrun", "swift"):
                 (commands / name).chmod(0o755)
             result = subprocess.run(
-                ["bash", str(BUILDER)],
+                [shell, str(BUILDER)],
                 cwd=root,
                 env={
                     **os.environ,
@@ -127,6 +127,18 @@ class IosLibraryBuildTests(unittest.TestCase):
         self.assertEqual(result.returncode, 42, result.stderr)
         self.assertIsNone(staged)
         self.assertTrue(cargo_ran)
+
+    def test_missing_frontend_stops_on_each_supported_bash(self):
+        """The guard must stop before Cargo even on macOS's older Bash."""
+        candidates = ["/bin/bash", shutil.which("bash"), "/opt/homebrew/bin/bash"]
+        shells = {str(Path(p).resolve()) for p in candidates if p and Path(p).is_file()}
+        self.assertTrue(shells, "The build script requires Bash")
+        for shell in sorted(shells):
+            with self.subTest(shell=shell):
+                result, staged, cargo_ran = self.run_builder(skip_frontend=True, shell=shell)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIsNone(staged)
+                self.assertFalse(cargo_ran)
 
     def test_xcode_27_uses_native_backend_only_for_build_and_cleans_up(self):
         """Portable stubs verify actual wrapper arguments on success and Rust failure."""
