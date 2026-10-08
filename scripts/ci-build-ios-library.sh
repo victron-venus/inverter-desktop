@@ -4,7 +4,9 @@ set -euo pipefail
 # Raw cargo does not run Tauri's beforeBuildCommand. Build the frontend first
 # and enable the production asset protocol in both validation and release IPAs.
 pnpm run build:mobile
-test -s dist/index.html
+if [[ ! -s dist/index.html ]]; then
+  exit 1
+fi
 
 # Xcode 27's default SwiftPM backend internalizes the C entry points used by
 # swift-rs. Keep the native backend for the Swift packages built by Cargo.

@@ -70,11 +70,12 @@ for base in bases:
             )
         ):
             if (root / ".release-plan.json").exists():
-                kind = (
-                    "linux"
-                    if path.suffix in {".deb", ".rpm", ".AppImage"}
-                    else "windows" if path.suffix in {".exe", ".msi"} else None
-                )
+                if path.suffix in {".deb", ".rpm", ".AppImage"}:
+                    kind = "linux"
+                elif path.suffix in {".exe", ".msi"}:
+                    kind = "windows"
+                else:
+                    kind = None
                 if kind:
                     subprocess.run(
                         [

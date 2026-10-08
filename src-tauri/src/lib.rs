@@ -1,5 +1,6 @@
 mod app_visibility;
 mod auth;
+mod auth_password;
 mod config_backup;
 mod config_file_io;
 mod config_store;
@@ -70,7 +71,6 @@ const CAMERA_VIDEO_WINDOW_MARGIN: f64 = 0.0;
 #[cfg(desktop)]
 use tauri::WindowEvent;
 use tauri::{Emitter, Manager, State};
-use tauri_plugin_store::StoreExt;
 
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -205,7 +205,10 @@ struct FullConfig {
     auto_start: Option<bool>,
     auth_enabled: Option<bool>,
     auth_username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     auth_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_password_verifier: Option<auth_password::Verifier>,
     auth_biometric: Option<bool>,
 
     /// Enable remote inverter-gateway as a data source alongside configured MQTT.
@@ -317,6 +320,7 @@ impl Default for FullConfig {
             auth_enabled: Some(false),
             auth_username: None,
             auth_password: None,
+            auth_password_verifier: None,
             auth_biometric: Some(false),
             gateway_enabled: false,
             gateway_url: None,
@@ -577,12 +581,7 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
         .map_err(|_| "Config update lock failed")?;
     let mut config = load_config(&app)?;
 
-    let store = app
-        .store_builder("config.json")
-        .build()
-        .map_err(|e| format!("Failed to build store: {}", e))?;
-
-    let had_saved_config = store.get("config").is_some();
+    let had_saved_config = config_store::has_saved_config(&app)?;
     #[cfg(desktop)]
     let is_first_run = !had_saved_config;
 
@@ -701,7 +700,40 @@ fn get_config(app: tauri::AppHandle) -> Result<FullConfig, String> {
 fn public_core_config(mut config: FullConfig) -> FullConfig {
     config.modules = module_config::portable(&config.modules);
     config.camera_live_urls.clear();
+    config.auth_password = None;
+    config.auth_password_verifier = None;
     config
+}
+
+#[cfg(test)]
+mod auth_storage_projection_tests {
+    use super::*;
+
+    #[test]
+    fn core_settings_and_portable_backups_never_expose_authentication_secrets() {
+        let mut config = FullConfig {
+            auth_enabled: Some(true),
+            auth_username: Some("operator".into()),
+            auth_password: Some("local password".into()),
+            ..Default::default()
+        };
+        auth_password::migrate(&mut config).unwrap();
+        let projected = public_core_config(config.clone());
+        let public = serde_json::to_value(projected).unwrap();
+        assert!(public.get("auth_password").is_none());
+        assert!(public.get("auth_password_verifier").is_none());
+        let mut backup = config_backup::redacted(&config).unwrap();
+        assert!(backup.get("auth_password").is_none());
+        assert!(backup.get("auth_password_verifier").is_none());
+        backup["auth_password"] = serde_json::json!("attacker password");
+        backup["auth_password_verifier"] = serde_json::json!("attacker verifier");
+        let restored = config_backup::restore(&backup.to_string(), &config).unwrap();
+        assert_eq!(
+            restored.auth_password_verifier,
+            config.auth_password_verifier
+        );
+        assert!(restored.auth_password.is_none());
+    }
 }
 
 fn preserve_private_camera_config(
@@ -718,7 +750,7 @@ fn preserve_private_camera_config(
 }
 
 #[tauri::command]
-async fn save_config(
+fn save_config(
     app: tauri::AppHandle,
     #[allow(unused_variables)] window: tauri::WebviewWindow,
     mut config: FullConfig,
@@ -728,6 +760,11 @@ async fn save_config(
         .lock()
         .map_err(|_| "Config update lock failed")?;
     let previous = load_config(&app)?;
+    auth::require_session(&app)?;
+    auth_password::prepare_save(&mut config, &previous)?;
+    // Password derivation runs in the enclosing IPC spawn_blocking handler.
+    // A session can expire or be revoked while it runs.
+    auth::require_session(&app)?;
     plugin_config::reconcile_for_save(
         &mut config.desktop_plugins,
         &previous.desktop_plugins,

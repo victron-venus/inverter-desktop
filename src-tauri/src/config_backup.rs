@@ -15,6 +15,7 @@ const PRIVATE_FIELDS: &[&str] = &[
     "auth_enabled",
     "auth_username",
     "auth_password",
+    "auth_password_verifier",
     "auth_biometric",
 ];
 // URLs/templates may contain embedded credentials or query tokens.
