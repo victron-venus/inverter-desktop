@@ -34,6 +34,7 @@ pub struct Book {
     published: Option<u64>,
     actions: Vec<ConfiguredAction>,
     advertised: Vec<bool>,
+    advertised_lock_params: Vec<Value>,
     inputs: Vec<Input>,
     link: watch::Sender<Connection>,
     layout: Option<crate::presentation::Layout>,
@@ -89,6 +90,7 @@ struct Entity {
     cover_features: u64,
     title: String,
     observation: Option<crate::presentation::Observation>,
+    lock_revision: Option<u64>,
 }
 
 pub(crate) fn bounded(value: &str, limit: usize) -> String {
@@ -218,6 +220,7 @@ impl Book {
                     cover_features: 0,
                     title: bounded(name, MAX_TITLE_BYTES),
                     observation: None,
+                    lock_revision: Some(0),
                 })
                 .collect(),
             discovery: Discovery::new(entities, discovery_prefixes),
@@ -228,6 +231,7 @@ impl Book {
             published: None,
             actions: actions.to_vec(),
             advertised: vec![false; actions.len()],
+            advertised_lock_params: vec![Value::Null; actions.len()],
             inputs: inputs
                 .iter()
                 .map(|action| Input {
@@ -423,6 +427,13 @@ impl Book {
         entity.live_seen |= live;
         let observation = crate::presentation::Observation::from_state(name, state);
         if entity.observation != observation {
+            if entity.name.starts_with("lock.") {
+                // Any intervening observation invalidates an in-flight command,
+                // including unsafe -> safe ABA transitions during a slow read.
+                entity.lock_revision = entity
+                    .lock_revision
+                    .and_then(|revision| revision.checked_add(1));
+            }
             entity.observation = observation;
             self.revision = self.revision.wrapping_add(1);
         }
@@ -504,6 +515,16 @@ impl Book {
                 && (!action.operation.requires_binary_state() || entity.binary_known)
                 && action
                     .operation
+                    .required_lock_state()
+                    .is_none_or(|required| {
+                        entity.lock_revision.is_some()
+                            && entity
+                                .observation
+                                .as_ref()
+                                .is_some_and(|observation| observation.state == required)
+                    })
+                && action
+                    .operation
                     .required_cover_feature()
                     .is_none_or(|feature| entity.cover_features & feature != 0)
         })
@@ -515,11 +536,55 @@ impl Book {
             .actions
             .iter()
             .position(|action| action.id == action_id)?;
-        if !self.advertised[index] {
+        if !self.advertised[index]
+            || (self.actions[index].operation.lock_target().is_some()
+                && self.advertised_lock_params[index] != self.action_params(index))
+        {
             return None;
         }
         self.action_entity(index)?;
         Some(self.actions[index].clone())
+    }
+
+    fn action_params(&self, index: usize) -> Value {
+        if self.actions[index].operation.lock_target().is_some() {
+            return self.action_entity(index).and_then(|entity| entity.lock_revision).map_or(Value::Null, |revision| {
+                json!({"lock_revision":format!("ha-lock-{}-{revision}", self.link.borrow().epoch)})
+            });
+        }
+        json!({})
+    }
+
+    pub fn action_request(&self, action_id: &str, params: &Value) -> Option<ConfiguredAction> {
+        let index = self
+            .actions
+            .iter()
+            .position(|action| action.id == action_id)?;
+        if *params != self.action_params(index) {
+            return None;
+        }
+        self.action_target(action_id)
+    }
+
+    pub fn lock_observation(&self, entity: &str) -> Option<(u64, &str)> {
+        if !self.link.borrow().connected {
+            return None;
+        }
+        let entity = self.entities.iter().find(|item| item.name == entity)?;
+        Some((
+            entity.lock_revision?,
+            entity.observation.as_ref()?.state.as_str(),
+        ))
+    }
+
+    pub fn lock_revision(&self, action_id: &str) -> Option<u64> {
+        let index = self
+            .actions
+            .iter()
+            .position(|action| action.id == action_id)?;
+        self.actions[index].operation.lock_target()?;
+        self.action_target(action_id)?;
+        self.action_entity(index)?.lock_revision
     }
 
     /// Numeric parameters are authorized against the last published grant and
@@ -564,6 +629,9 @@ impl Book {
         self.advertised = (0..self.actions.len())
             .map(|index| self.action_entity(index).is_some())
             .collect();
+        self.advertised_lock_params = (0..self.actions.len())
+            .map(|index| self.action_params(index))
+            .collect();
         self.published = Some(self.revision);
         let connected = self.link.borrow().connected;
         for input in &mut self.inputs {
@@ -597,7 +665,7 @@ impl Book {
                 );
                 items.push(json!({"kind":"action","id":action.id,
                     "title":entity.title,"action_id":action.id,
-                    "label":label,"params":{},"state_id":entity.item["id"]}));
+                    "label":label,"params":self.action_params(index),"state_id":entity.item["id"]}));
             }
         }
         if self.link.borrow().connected {

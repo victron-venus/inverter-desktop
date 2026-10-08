@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.9.0**, independently of the application version. The
+The current host API is **1.10.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -64,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.9.0",
+  "host_api_version": "1.10.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -76,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.9.0",
+  "host_api_version": "1.10.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -848,3 +848,19 @@ camera cooldown across reconnects using clean MQTT sessions. The payload has no
 timestamp: freshly republishing an old URL cannot be detected from this format.
 An image origin CSP does not provide strict HTTP redirect denial; configured HA
 endpoints must directly serve MJPEG without redirects.
+
+## Observed lock controls (host API 1.10)
+
+Compact control presentations optionally carry `lock_state` (locked, unlocked,
+locking, unlocking, jammed, unknown or unavailable) and a `state_id` referencing
+their status/text contribution. The host-owned icon set includes `lock`.
+A supplied lock action must reference the same state contribution. Unsupported
+fields still fail validation; workers emitting these fields require API 1.10.
+Older workers remain compatible through their existing semver ranges.
+
+The desktop retains observed state during an action and shares pending/error
+state by worker instance and state contribution across duplicate placements.
+It submits the captured action descriptor and parameters, never a replacement
+action from a newer snapshot. Provider-side state revision and connection fences
+still decide whether submission is authorized. See the
+[HA worker contract](../desktop-plugins/home-assistant/README.md#lock-controls-014-host-api-110).

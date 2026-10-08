@@ -15,7 +15,7 @@ use serde_json::Value;
 pub mod mqtt_live;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const HOST_API_VERSION: &str = "1.9.0";
+pub const HOST_API_VERSION: &str = "1.10.0";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Includes the newline terminating a frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -2086,16 +2086,16 @@ mod tests {
     }
 
     #[test]
-    fn host_api_19_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
-        assert_eq!(HOST_API_VERSION, "1.9.0");
+    fn host_api_110_accepts_earlier_worker_ranges_and_requires_negotiated_acknowledgement() {
+        assert_eq!(HOST_API_VERSION, "1.10.0");
         for requirement in [
-            "^1.0", "^1.3", "^1.4", "^1.5", "^1.6", "^1.7", "^1.8", "^1.9",
+            "^1.0", "^1.3", "^1.4", "^1.5", "^1.6", "^1.7", "^1.8", "^1.9", "^1.10",
         ] {
             let mut manifest = manifest();
             manifest.host_api = requirement.into();
             manifest.validate().unwrap();
         }
-        assert!(validate_versions(1, "1.9.0").is_ok());
+        assert!(validate_versions(1, "1.10.0").is_ok());
         assert!(validate_versions(1, "1.8.0").is_err());
         assert!(validate_versions(2, "1.8.0").is_err());
     }

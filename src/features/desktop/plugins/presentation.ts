@@ -11,6 +11,9 @@ import {
   Blinds,
   Play,
   CloudSun,
+  LockKeyhole,
+  LockKeyholeOpen,
+  ShieldQuestion,
 } from '@lucide/vue'
 import { dashboardControlSource } from '../../../composables/useDashboardControls'
 import type { DashboardControlView } from '../../../dashboardControlView'
@@ -37,6 +40,7 @@ const icons = {
   blinds: Blinds,
   play: Play,
   cloud: CloudSun,
+  lock: LockKeyhole,
 }
 export function presentationIcon(icon?: PresentationIcon | null) {
   return icon ? icons[icon] : undefined
@@ -147,7 +151,17 @@ export function createPluginPresentation() {
     for (const { plugin, item } of entries.value) {
       if (item.kind !== 'control' || item.surface !== surface) continue
       const action = actionContribution(plugin, item.action)
-      const available = dashboard.canAct(plugin) && !!action
+      const lockState = item.lock_state
+        ? dashboard.canAct(plugin)
+          ? item.lock_state
+          : 'unavailable'
+        : undefined
+      const lockKey =
+        item.lock_state && item.state_id
+          ? dashboard.lockActionKey(plugin.plugin_id, plugin.instance_id, item.state_id)
+          : undefined
+      const stableLock = !lockState || lockState === 'locked' || lockState === 'unlocked'
+      const available = dashboard.canAct(plugin) && !!action && stableLock
       controls.push({
         order: item.order,
         control: {
@@ -156,11 +170,26 @@ export function createPluginPresentation() {
           entity: '',
           state: dashboard.canAct(plugin) ? item.state : 'unavailable',
           disabled: !available,
-          pending: item.action ? pending(plugin, item.action) : false,
-          failed: item.action ? failed(plugin, item.action) : false,
-          icon: presentationIcon(item.icon),
+          lockState,
+          pending: lockKey
+            ? dashboard.pendingActions.value.has(lockKey)
+            : item.action
+              ? pending(plugin, item.action)
+              : false,
+          failed: lockKey
+            ? dashboard.failedActions.value.has(lockKey)
+            : item.action
+              ? failed(plugin, item.action)
+              : false,
+          icon: lockState
+            ? lockState === 'locked'
+              ? LockKeyhole
+              : lockState === 'unlocked'
+                ? LockKeyholeOpen
+                : ShieldQuestion
+            : presentationIcon(item.icon),
           activate: () => {
-            if (item.action) runAction(plugin, item.action)
+            if (available && item.action) runAction(plugin, item.action)
           },
         },
       })

@@ -34,7 +34,7 @@ fn validate_hello(frame: Frame) -> Result<String, &'static str> {
         } if plugin_id == PLUGIN_ID => {
             let version =
                 semver::Version::parse(&host_api_version).map_err(|_| "unsupported host API")?;
-            if !semver::VersionReq::parse("^1.8")
+            if !semver::VersionReq::parse("^1.10")
                 .expect("fixed version requirement")
                 .matches(&version)
             {
@@ -115,13 +115,15 @@ mod tests {
     #[test]
     fn only_own_identity_and_stable_compatible_api_are_accepted() {
         for (api, accepted) in [
-            ("1.8.0", true),
+            ("1.8.0", false),
             ("1.7.0", false),
             ("1.6.0", false),
             ("1.5.0", false),
             ("1.4.0", false),
             ("1.3.0", false),
-            ("1.9.0", true),
+            ("1.9.0", false),
+            ("1.10.0", true),
+            ("1.11.0", true),
             ("1.2.0", false),
             ("2.0.0", false),
             ("1.8.0-beta.1", false),
@@ -139,13 +141,13 @@ mod tests {
         }
         assert!(validate_hello(HostFrame::Hello {
             protocol_version: 1,
-            host_api_version: "1.8.0".into(),
+            host_api_version: "1.10.0".into(),
             plugin_id: "other.plugin".into()
         })
         .is_err());
         assert!(validate_hello(HostFrame::Hello {
             protocol_version: 2,
-            host_api_version: "1.8.0".into(),
+            host_api_version: "1.10.0".into(),
             plugin_id: PLUGIN_ID.into()
         })
         .is_err());
@@ -217,7 +219,7 @@ mod configuration_flush_tests {
         assert!(frames
             .send(HostFrame::Hello {
                 protocol_version: 1,
-                host_api_version: "1.8.0".into(),
+                host_api_version: "1.10.0".into(),
                 plugin_id: PLUGIN_ID.into(),
             })
             .await

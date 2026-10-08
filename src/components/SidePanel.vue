@@ -100,11 +100,14 @@
             :key="btn.id"
             variant="tile"
             class="home-btn-tile relative"
-            toggle
+            :toggle="!btn.lockState || isStableLock(btn)"
+            v-bind="lockAccessibility(btn)"
             :active="(btn.state ?? buttonStates[btn.id]) === 'on'"
             :unavailable="(btn.state ?? buttonStates[btn.id]) === 'unavailable'"
             :disabled="
-              btn.disabled || (controlsConnected === false && !isInverterControlFlag(btn.entity))
+              btn.disabled ||
+              (!!btn.lockState && !isStableLock(btn)) ||
+              (controlsConnected === false && !isInverterControlFlag(btn.entity))
             "
             :loading="btn.pending"
             @click="activate(btn)"
@@ -112,7 +115,11 @@
             <template #loading>
               <Loader2
                 :size="12"
-                class="absolute inset-0 m-auto animate-spin pointer-events-none"
+                :class="
+                  btn.lockState
+                    ? 'home-tile-icon animate-spin pointer-events-none'
+                    : 'absolute inset-0 m-auto animate-spin pointer-events-none'
+                "
                 aria-hidden="true"
               />
             </template>
@@ -122,12 +129,19 @@
               :size="12"
               class="home-tile-icon shrink-0"
               :class="btn.pending ? 'opacity-0' : 'opacity-70'"
+              aria-hidden="true"
             />
-            <span class="home-tile-label" :class="{ 'opacity-0': btn.pending }">{{
-              getControlLabel?.(btn.label) ?? btn.label
-            }}</span
+            <span class="home-tile-label" :class="{ 'opacity-0': btn.pending && !btn.lockState }">
+              {{ getControlLabel?.(btn.label) ?? btn.label }}
+              <span
+                v-if="btn.lockState"
+                class="block font-normal"
+                aria-live="polite"
+                :role="btn.failed ? 'alert' : undefined"
+                >{{ lockStatus(btn) }}</span
+              > </span
             ><span
-              v-if="btn.failed"
+              v-if="btn.failed && !btn.lockState"
               role="alert"
               title="Action unconfirmed; check the current state before retrying."
               >!</span
@@ -169,9 +183,25 @@ const props = defineProps<{
 const emit = defineEmits<{ send: [action: string, payload?: Record<string, unknown>] }>()
 const { t: $t } = useI18n()
 function activate(control: DashboardControlView) {
-  if (control.disabled || control.pending) return
+  if (control.disabled || control.pending || (control.lockState && !isStableLock(control))) return
   if (control.activate) control.activate()
   else emit('send', 'toggle', { entity: control.entity })
+}
+function isStableLock(control: DashboardControlView) {
+  return control.lockState === 'locked' || control.lockState === 'unlocked'
+}
+function lockStatus(control: DashboardControlView) {
+  if (!control.lockState) return undefined
+  const state = $t(`lock.${control.lockState}`)
+  if (control.pending) return `${state} · ${$t('lock.pending')}`
+  if (control.failed) return `${state} · ${$t('lock.notConfirmed')}`
+  return state
+}
+function lockAccessibility(control: DashboardControlView) {
+  if (!control.lockState) return {}
+  const label = props.getControlLabel?.(control.label) ?? control.label
+  const description = `${label}: ${lockStatus(control)}${control.failed ? `. ${$t('lock.unconfirmed')}` : ''}`
+  return { 'aria-label': description, title: description }
 }
 function onValveClick() {
   if (props.waterValve === false && !window.confirm('Open city water valve?')) return

@@ -65,10 +65,16 @@ async fn completed_before_deadline(
     matches!(time::timeout_at(deadline, operation).await, Ok(Ok(()))) && Instant::now() < deadline
 }
 
+struct LockAdmission {
+    book: Shared,
+    revision: u64,
+}
+
 async fn service(
     client: reqwest::Client,
     configuration: Arc<Validated>,
     action: ConfiguredAction,
+    lock_admission: Option<LockAdmission>,
     body: Value,
     request_id: String,
     deadline: Instant,
@@ -88,7 +94,9 @@ async fn service(
     let operation = async {
         let mut selected = action.operation;
         let mut body = body;
-        if let crate::config::Operation::Toggle(domain) = selected {
+        if matches!(selected, crate::config::Operation::Toggle(_))
+            || selected.lock_target().is_some()
+        {
             // Resolve the primary operation from a fresh read, never from the
             // displayed cache. Failure cannot authorize a write or a core fallback.
             let response = client
@@ -107,11 +115,30 @@ async fn service(
                 return Err(());
             }
             let value = state["state"].as_str().ok_or(())?;
-            selected = if value == "on" {
-                crate::config::Operation::TurnOff(domain)
-            } else {
-                crate::config::Operation::TurnOn(domain)
-            };
+            if let Some(target) = selected.lock_target() {
+                if !matches!(value, "locked" | "unlocked") {
+                    return Err(());
+                }
+                // Both current eligibility and the admission observation must
+                // survive the read. An unsafe -> safe ABA cannot revive it.
+                let admission = lock_admission.as_ref().ok_or(())?;
+                let mut book = admission.book.lock().map_err(|_| ())?;
+                if book.lock_revision(&action.id) != Some(admission.revision) {
+                    return Err(());
+                }
+                if value == target {
+                    // The explicit target already holds. Never invert intent
+                    // or issue another actuation merely because state changed.
+                    book.live(&action.entity, Some(&state));
+                    return Ok(());
+                }
+            } else if let crate::config::Operation::Toggle(domain) = selected {
+                selected = if value == "on" {
+                    crate::config::Operation::TurnOff(domain)
+                } else {
+                    crate::config::Operation::TurnOn(domain)
+                };
+            }
         }
         match selected {
             crate::config::Operation::PrimaryCover => {
@@ -151,6 +178,22 @@ async fn service(
                 return Err(());
             }
         }
+        if let Some(target) = selected.lock_target() {
+            let admission = lock_admission.as_ref().ok_or(())?;
+            loop {
+                {
+                    let book = admission.book.lock().map_err(|_| ())?;
+                    let (revision, observed) = book.lock_observation(&action.entity).ok_or(())?;
+                    if revision != admission.revision && observed == target {
+                        return Ok(());
+                    }
+                    if !matches!(observed, "locked" | "unlocked" | "locking" | "unlocking") {
+                        return Err(());
+                    }
+                }
+                time::sleep(Duration::from_millis(25)).await;
+            }
+        }
         Ok(())
     };
     let success = completed_before_deadline(deadline, operation).await;
@@ -170,6 +213,7 @@ async fn service(
 
 struct Active {
     id: String,
+    lock_entity: Option<String>,
     cancel: futures_util::future::AbortHandle,
 }
 
@@ -252,7 +296,8 @@ pub async fn run(
                         history.remember(request_id.clone(), false);
                         let known = configured_actions.iter().any(|action| action.id == action_id);
                         let input = configured_inputs.iter().any(|input| input.id == action_id);
-                        if (!known && !input) || (known && params != json!({})) || !(1..=30_000).contains(&deadline_ms) {
+                        let lock = configured_actions.iter().any(|action| action.id == action_id && action.operation.lock_target().is_some());
+                        if (!known && !input) || (known && !lock && params != json!({})) || !(1..=30_000).contains(&deadline_ms) {
                             responses.push_back(error(&request_id, "invalid_action", "The action does not match its configured preset."));
                             continue;
                         }
@@ -268,34 +313,44 @@ pub async fn run(
                         }
                         let target = {
                             let book = book.lock().map_err(|_| "state unavailable")?;
-                            if input {
+                            let target = if input {
                                 book.input_target(&action_id, &params)
                             } else {
-                                book.action_target(&action_id)
+                                book.action_request(&action_id, &params)
                                     .map(|action| {
                                         let body = json!({"entity_id":action.entity});
                                         (action, body)
                                     }).ok_or("unavailable")
-                            }
+                            };
+                            target.map(|(action, body)| {
+                                let revision = book.lock_revision(&action.id);
+                                (action, body, revision)
+                            })
                         };
-                        let (action, body) = match target {
+                        let (action, body, lock_revision) = match target {
                             Ok(target) => target,
                             Err(code) => {
                                 responses.push_back(error(&request_id, code, "The numeric input or selected Home Assistant action is no longer eligible."));
                                 continue;
                             }
                         };
+                        let lock_entity = action.operation.lock_target().map(|_| action.entity.clone());
+                        if lock_entity.is_some() && active.iter().any(|operation| operation.lock_entity == lock_entity) {
+                            responses.push_back(error(&request_id, "overloaded", "An operation for this lock is already pending."));
+                            continue;
+                        }
                         if active.len() == MAX_ACTIVE {
                             responses.push_back(error(&request_id, "overloaded", "Two Home Assistant operations are already pending."));
                             continue;
                         }
                         let (cancel, registration) = futures_util::future::AbortHandle::new_pair();
-                        let operation = service(client.clone(), configuration.clone(), action, body, request_id.clone(), deadline);
+                        let lock_admission = lock_revision.map(|revision| LockAdmission { book: book.clone(), revision });
+                        let operation = service(client.clone(), configuration.clone(), action, lock_admission, body, request_id.clone(), deadline);
                         let id = request_id.clone();
                         pending.push(async move {
                             (id, futures_util::future::Abortable::new(operation, registration).await.ok())
                         }.boxed());
-                        active.push(Active { id: request_id, cancel });
+                        active.push(Active { id: request_id, lock_entity, cancel });
                     }
                     _ => return Err("unexpected host command"),
                 }

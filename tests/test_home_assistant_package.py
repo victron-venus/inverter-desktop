@@ -43,8 +43,8 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 if "windows" in target:
                     binary += ".exe"
                 self.assertEqual(manifest["plugin_id"], "inverter-desktop.home-assistant")
-                self.assertEqual(manifest["version"], "0.13.0")
-                self.assertEqual(manifest["host_api"], "^1.8")
+                self.assertEqual(manifest["version"], "0.14.0")
+                self.assertEqual(manifest["host_api"], "^1.10")
                 self.assertEqual(manifest["target"], target)
                 self.assertEqual(manifest["entrypoint"], f"bin/{binary}")
                 self.assertEqual(set(manifest["permissions"]), {

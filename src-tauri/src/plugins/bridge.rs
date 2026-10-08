@@ -5,6 +5,8 @@ use super::application::{
     PluginDesiredChange, RetainedPluginData, SettingsSaveResult,
 };
 use super::media::MediaService;
+use super::presentation::{ControlState, LockState, Presentation};
+use super::protocol::DashboardContribution;
 use super::publishers::embedded_trust;
 use super::runtime::{PluginHost, PluginSnapshot, WorkerState};
 use super::settings::PluginSettingsView;
@@ -554,6 +556,52 @@ pub(crate) fn get_plugin_snapshot(
     Ok(state.host.snapshots())
 }
 
+/// Allow time for a lock motor and a newer HA observation only when the
+/// current native snapshot binds this exact request to a typed lock control.
+/// This selects a bounded wait; action_in_epoch still performs admission again.
+fn plugin_action_timeout(
+    snapshots: &[PluginSnapshot],
+    plugin_id: &str,
+    instance_id: &str,
+    action_id: &str,
+    params: &Value,
+) -> Duration {
+    let is_lock = snapshots.iter().any(|snapshot| {
+        snapshot.plugin_id == plugin_id
+            && snapshot.instance_id.as_deref() == Some(instance_id)
+            && snapshot.state == WorkerState::Running
+            && snapshot.contributions.iter().any(|contribution| {
+                let DashboardContribution::Action {
+                    id,
+                    state_id: Some(state_id),
+                    action_id: published_id,
+                    params: published_params,
+                    ..
+                } = contribution
+                else {
+                    return false;
+                };
+                published_id == action_id
+                    && published_params == params
+                    && snapshot.presentation.iter().any(|view| {
+                        matches!(view,
+                            Presentation::Control {
+                                action: Some(reference),
+                                state_id: Some(view_state),
+                                lock_state: Some(lock_state),
+                                state,
+                                ..
+                            } if reference == id && view_state == state_id
+                                && matches!((lock_state, state),
+                                    (LockState::Locked, ControlState::On)
+                                    | (LockState::Unlocked, ControlState::Off))
+                        )
+                    })
+            })
+    });
+    Duration::from_secs(if is_lock { 30 } else { 5 })
+}
+
 #[tauri::command]
 pub(crate) async fn plugin_action(
     plugin_id: String,
@@ -566,16 +614,16 @@ pub(crate) async fn plugin_action(
 ) -> Result<Value, String> {
     let epoch = state.host.authority_epoch();
     require_access(&app, &window, &state)?;
+    let timeout = plugin_action_timeout(
+        &state.host.snapshots(),
+        &plugin_id,
+        &instance_id,
+        &action_id,
+        &params,
+    );
     let result = state
         .host
-        .action_in_epoch(
-            &plugin_id,
-            &instance_id,
-            &action_id,
-            params,
-            Duration::from_secs(5),
-            epoch,
-        )
+        .action_in_epoch(&plugin_id, &instance_id, &action_id, params, timeout, epoch)
         .await
         .map_err(|error| error.to_string())?;
     require_access(&app, &window, &state)?;
@@ -1064,9 +1112,125 @@ mod recovery_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_notification_requests, management_window, trusted_window, ExitGate, Ordering,
-        NOTIFICATION_SIGNAL_CAPACITY,
+        drain_notification_requests, management_window, plugin_action_timeout, trusted_window,
+        ExitGate, Ordering, PluginSnapshot, WorkerState, NOTIFICATION_SIGNAL_CAPACITY,
     };
+
+    fn current_lock_snapshot() -> PluginSnapshot {
+        use serde_json::json;
+        let snapshot = PluginSnapshot {
+            plugin_id: "example.home".into(),
+            instance_id: Some("worker-1".into()),
+            state: WorkerState::Running,
+            generation: 1,
+            restart_count: 0,
+            last_error: None,
+            contributions: vec![
+                serde_json::from_value(json!({"kind":"status","id":"door-state","title":"Door","value":"locked","tone":"neutral"})).unwrap(),
+                serde_json::from_value(json!({"kind":"action","id":"door-action","state_id":"door-state","action_id":"unlock","label":"Unlock","title":"Door","params":{"lock_revision":"observation-1"}})).unwrap(),
+            ],
+            presentation: vec![serde_json::from_value(json!({"kind":"control","id":"door","surface":"home","order":0,"title":"Door","icon":"lock","state":"on","lock_state":"locked","state_id":"door-state","action":"door-action"})).unwrap()],
+        };
+        crate::plugins::presentation::validate(&snapshot.presentation, &snapshot.contributions)
+            .unwrap();
+        snapshot
+    }
+
+    #[test]
+    fn lock_observation_timeout_requires_the_current_exact_native_descriptor() {
+        use serde_json::json;
+        use std::time::Duration;
+        let snapshot = current_lock_snapshot();
+        let snapshots = [snapshot];
+        let params = json!({"lock_revision":"observation-1"});
+        assert_eq!(
+            plugin_action_timeout(&snapshots, "example.home", "worker-1", "unlock", &params),
+            Duration::from_secs(30)
+        );
+        for (plugin, instance, action, params) in [
+            ("other.home", "worker-1", "unlock", params.clone()),
+            ("example.home", "replaced-worker", "unlock", params.clone()),
+            ("example.home", "worker-1", "lock", params.clone()),
+            (
+                "example.home",
+                "worker-1",
+                "unlock",
+                json!({"lock_revision":"observation-0"}),
+            ),
+            (
+                "example.home",
+                "worker-1",
+                "unlock",
+                json!({"lock_revision":"observation-1","lock":true}),
+            ),
+        ] {
+            assert_eq!(
+                plugin_action_timeout(&snapshots, plugin, instance, action, &params),
+                Duration::from_secs(5)
+            );
+        }
+        assert_eq!(
+            plugin_action_timeout(&[], "example.home", "worker-1", "unlock", &params),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn generic_unavailable_or_mismatched_controls_keep_the_normal_timeout() {
+        use super::{ControlState, LockState, Presentation};
+        use serde_json::json;
+        use std::time::Duration;
+        let timeout = |snapshot| {
+            plugin_action_timeout(
+                &[snapshot],
+                "example.home",
+                "worker-1",
+                "unlock",
+                &json!({"lock_revision":"observation-1"}),
+            )
+        };
+        let mut snapshot = current_lock_snapshot();
+        snapshot.state = WorkerState::Restarting;
+        assert_eq!(timeout(snapshot), Duration::from_secs(5));
+        let mut snapshot = current_lock_snapshot();
+        snapshot.presentation.clear();
+        assert_eq!(timeout(snapshot), Duration::from_secs(5));
+        for change in 0..5 {
+            let mut snapshot = current_lock_snapshot();
+            if let Presentation::Control {
+                lock_state,
+                state,
+                state_id,
+                action,
+                ..
+            } = &mut snapshot.presentation[0]
+            {
+                match change {
+                    0 => {
+                        *lock_state = None;
+                        *state_id = None;
+                    }
+                    1 => {
+                        *lock_state = Some(LockState::Locking);
+                        *state = ControlState::Unavailable;
+                    }
+                    2 => *action = Some("other-action".into()),
+                    3 => *state_id = Some("other-door".into()),
+                    _ => *state = ControlState::Off,
+                }
+            }
+            assert_eq!(timeout(snapshot), Duration::from_secs(5));
+        }
+        let mut snapshot = current_lock_snapshot();
+        if let Presentation::Control {
+            lock_state, state, ..
+        } = &mut snapshot.presentation[0]
+        {
+            *lock_state = Some(LockState::Unlocked);
+            *state = ControlState::Off;
+        }
+        assert_eq!(timeout(snapshot), Duration::from_secs(30));
+    }
 
     #[tokio::test]
     async fn slow_notification_delivery_coalesces_without_blocking_or_overlapping() {

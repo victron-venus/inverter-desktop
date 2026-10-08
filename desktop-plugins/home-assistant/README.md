@@ -1,7 +1,7 @@
 # Home Assistant worker
 
 `inverter-home-assistant-worker` is the optional desktop package
-`inverter-desktop.home-assistant`, version **0.13.0**, requiring host API **^1.8**.
+`inverter-desktop.home-assistant`, version **0.14.0**, requiring host API **^1.10**.
 It owns its HA HTTP/WebSocket session, selected state reads, explicitly configured
 household commands, compact dashboard presentation, entity picker catalog and
 optional notifications. The host renders bounded data and invokes exact current
@@ -111,10 +111,10 @@ Controls preserve their configured labels, placement (`header` or `home`) and
 order. IDs are unique ASCII alphanumeric/`-_.` strings, begin with an alphanumeric
 character, and are at most 64 bytes; internal `ha-*` presentation IDs are reserved.
 There are at most 64 placements. Two placements of the same entity share one
-primary command. Icons are a finite host-owned set: home, plug, light, washer,
-dryer, dishwasher, thermometer, gauge, blinds, play and cloud.
+primary action set. Icons are a finite host-owned set: home, plug, light, washer,
+dryer, dishwasher, thermometer, gauge, blinds, play, cloud and lock.
 
-A control's trimmed, case-folded state is on for on/open/opening/unlocked,
+A non-lock control's trimmed, case-folded state is on for on/open/opening/unlocked,
 unavailable for missing/empty/unknown/unavailable, and off otherwise. Unavailable
 controls have no action reference. Every available reference points to an exact
 action contribution in that same atomic snapshot; equal friendly names never
@@ -131,7 +131,11 @@ Primary commands match the legacy explicit dispatch:
 - Button: `button/press`; scene: `scene/turn_on`.
 - Cover: `cover/set_cover_position` with `position: 0`.
 - Number: `number/set_value` with `value: 0`.
-- Switch, input_boolean, light, fan, media_player, lock, script, climate, sensor
+- Lock: explicit `lock/lock` and `lock/unlock`, chosen from the observed stable
+  state. Locked is on; unlocked is off. Locking, unlocking, jammed, unknown and
+  unavailable are distinct read-only states. A stale command never changes
+  direction based on a later read.
+- Switch, input_boolean, light, fan, media_player, script, climate, sensor
   and binary_sensor: first GET the **current exact entity state**. Literal `on`
   selects that domain's `turn_off`; every other returned string selects `turn_on`.
   This deliberately preserves the old explicit domain routes, even if an HA
@@ -143,6 +147,29 @@ The fresh read and service POST share the original action deadline. Callers
 cannot change the target, route or fixed request parameters. Settings changes
 replace the worker instance, so an old visible descriptor cannot target a newly
 configured entity.
+
+### Lock controls (0.14, host API 1.10)
+
+Select the native `lock.*` entity in **Header and Home controls**. The compact
+control shows the observed lock state and a lock icon; the action label says
+Lock or Unlock explicitly. The plugin does not support `lock.open`, PIN entry,
+or inferring whether the physical door is open or closed.
+
+Each command retains its explicit direction and the observed state revision.
+A newer observation, connection change, unavailable/jammed/transitional state,
+or another pending command can revoke it before submission. A fresh exact-entity
+read precedes a write. If the lock is already at the requested state, no write is
+needed. After a service accepts a write, the control stays pending until a newer
+live target observation arrives within the original deadline. Missing confirmation
+reports an unknown outcome; the plugin never retries or marks a lock changed
+from HTTP success alone. Home/Header duplicates share pending status.
+
+Replace any template `switch.*` proxy with the native `lock.*` only after both
+the 0.14 worker and a host supporting API 1.10 are installed. Older switch proxies
+retain generic toggle semantics and do not gain lock-specific intent protection.
+Updating the application alone does not replace a pinned worker archive. Existing
+settings remain compatible; no automatic entity replacement or physical lock
+operation is performed during upgrade.
 
 Collapsed sensor, number, cover, media and scene groups reference exact read
 contributions and explicit action/input contributions. Read discovery never

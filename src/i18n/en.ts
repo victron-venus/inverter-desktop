@@ -1,4 +1,16 @@
 export default {
+  lock: {
+    notConfirmed: 'Not confirmed',
+    locked: 'Locked',
+    unlocked: 'Unlocked',
+    locking: 'Locking…',
+    unlocking: 'Unlocking…',
+    jammed: 'Jammed',
+    unknown: 'State unknown',
+    unavailable: 'Unavailable',
+    pending: 'Confirming…',
+    unconfirmed: 'Action unconfirmed; check the current state before retrying.',
+  },
   status: {
     telemetrylive: 'Live data',
     telemetrystale: 'Stale data',

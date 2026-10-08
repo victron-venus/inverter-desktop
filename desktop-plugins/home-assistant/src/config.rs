@@ -120,7 +120,6 @@ pub enum BinaryDomain {
     Light,
     Fan,
     MediaPlayer,
-    Lock,
     Script,
     Climate,
     Sensor,
@@ -156,6 +155,8 @@ pub enum Operation {
     Toggle(BinaryDomain),
     PrimaryCover,
     PrimaryNumber,
+    Lock,
+    Unlock,
 }
 
 impl Operation {
@@ -176,6 +177,8 @@ impl Operation {
             Self::Toggle(_) => "Toggle ",
             Self::PrimaryCover => "Close ",
             Self::PrimaryNumber => "Set zero ",
+            Self::Lock => "Lock ",
+            Self::Unlock => "Unlock ",
         }
     }
 
@@ -185,6 +188,22 @@ impl Operation {
 
     pub fn requires_binary_state(self) -> bool {
         matches!(self, Self::TurnOn(_) | Self::TurnOff(_))
+    }
+
+    pub fn lock_target(self) -> Option<&'static str> {
+        match self {
+            Self::Lock => Some("locked"),
+            Self::Unlock => Some("unlocked"),
+            _ => None,
+        }
+    }
+
+    pub fn required_lock_state(self) -> Option<&'static str> {
+        match self {
+            Self::Lock => Some("unlocked"),
+            Self::Unlock => Some("locked"),
+            _ => None,
+        }
     }
 
     pub fn required_cover_feature(self) -> Option<u64> {
@@ -213,8 +232,8 @@ impl Operation {
             Self::TurnOff(BinaryDomain::Fan) => "api/services/fan/turn_off",
             Self::TurnOn(BinaryDomain::MediaPlayer) => "api/services/media_player/turn_on",
             Self::TurnOff(BinaryDomain::MediaPlayer) => "api/services/media_player/turn_off",
-            Self::TurnOn(BinaryDomain::Lock) => "api/services/lock/turn_on",
-            Self::TurnOff(BinaryDomain::Lock) => "api/services/lock/turn_off",
+            Self::Lock => "api/services/lock/lock",
+            Self::Unlock => "api/services/lock/unlock",
             Self::TurnOn(BinaryDomain::Script) => "api/services/script/turn_on",
             Self::TurnOff(BinaryDomain::Script) => "api/services/script/turn_off",
             Self::TurnOn(BinaryDomain::Climate) => "api/services/climate/turn_on",
