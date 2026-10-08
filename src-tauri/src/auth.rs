@@ -323,13 +323,36 @@ mod tests {
                 assert!(!changed.load(Ordering::SeqCst));
                 Ok("session".into())
             },
-            || assert!(gate.try_lock().is_ok()),
+            || {},
         )
         .unwrap();
         assert_eq!(token, "session");
         worker.unwrap().join().unwrap();
         assert!(changed.load(Ordering::SeqCst));
         assert!(gate.try_lock().is_ok());
+    }
+
+    #[test]
+    fn successful_login_notifies_after_releasing_policy_gate() {
+        let gate = Mutex::new(());
+        let notified = std::cell::Cell::new(false);
+        let token = login_with_config(
+            &gate,
+            || Ok(password_config()),
+            "operator",
+            "original password",
+            || {
+                assert!(gate.try_lock().is_err());
+                Ok("session".into())
+            },
+            || {
+                assert!(gate.try_lock().is_ok());
+                notified.set(true);
+            },
+        )
+        .unwrap();
+        assert_eq!(token, "session");
+        assert!(notified.get());
     }
 
     #[test]

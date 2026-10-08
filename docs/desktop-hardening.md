@@ -50,13 +50,13 @@ lock, so a concurrent policy change cannot authorize a session using stale polic
 Expensive derivation runs in the blocking IPC path, including the final biometric
 policy check after the native prompt.
 
-This is a one-way local authentication upgrade. Earlier application versions do
+This is a one-way local authentication upgrade. Earlier application versions
 cannot read the versioned encrypted profile. Verifier-bearing configurations use
 an `inverter-config:v2:` prefix and authenticated encryption domain; removing the
 prefix does not make them readable by the old decoder. This prevents an older
 reader from ignoring the verifier and comparing a missing password as empty.
-Keep using the updated application, or restore a separately protected full installation backup
-when intentionally downgrading. The application does not create a plaintext
+Keep using the updated application, or restore a separately protected full
+installation backup when intentionally downgrading. The application does not create a plaintext
 compatibility copy. Portable settings exports cannot restore local credentials.
 
 `get_config` never returns the local password or its verifier. For authenticated
@@ -76,8 +76,8 @@ preserve the old complete document. If directory sync fails after replacement,
 the native log records a durability warning and the save returns committed
 success. Session revocation, plugin desired-state updates and notifications still
 finish; the UI is not told to retry a completed change. The next read uses the
-complete new document rather than restoring an old cache. These transactions serialize writers within this application process;
-they do not provide a security boundary against another process running as the
+complete new document rather than restoring an old cache. These transactions
+serialize writers within this application process; they do not provide a security boundary against another process running as the
 same OS user.
 
 ## Transport ownership and displayed data
