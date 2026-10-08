@@ -22,6 +22,9 @@ mod release_info;
 #[cfg(desktop)]
 mod tariff_export;
 mod tls;
+#[cfg(all(test, desktop))]
+#[path = "../../tests/tls-policy/probe.rs"]
+mod tls_policy_tests;
 
 #[cfg(all(desktop, feature = "native-media-smoke"))]
 pub use plugins::native_media_smoke::run as run_native_media_smoke;

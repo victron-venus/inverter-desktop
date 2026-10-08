@@ -52,9 +52,9 @@ fn record() {
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
-    def run_cases(self, cases=("first", "second")):
+    def run_cases(self, cases=("first", "second"), separately_run_cases=()):
         with contextlib.redirect_stdout(io.StringIO()):
-            RUNNER.run_acceptance(self.root, cases)
+            RUNNER.run_acceptance(self.root, cases, separately_run_cases)
 
     def test_build_once_and_keep_distinct_processes_on_each_invocation(self):
         self.run_cases()
@@ -71,6 +71,27 @@ fn record() {
             with self.subTest(cases=cases), self.assertRaises(subprocess.CalledProcessError):
                 self.run_cases(cases)
         self.assertFalse((self.crate / "runs").exists())
+
+    def test_separate_scenario_is_counted_but_not_run_by_acceptance(self):
+        # The separate test must be present, but another mandatory job owns it.
+        (self.crate / "src/lib.rs").write_text(self.source.replace(
+            "fn second() { record(); }", 'fn second() { panic!("separate job"); }'))
+        self.run_cases(("first",), ("second",))
+        self.assertEqual(len((self.crate / "runs").read_text().splitlines()), 1)
+
+    def test_missing_or_extra_separate_scenarios_fail_before_execution(self):
+        for separate in (("missing",), ("second", "extra")):
+            with (self.subTest(separate=separate),
+                  self.assertRaises(subprocess.CalledProcessError)):
+                self.run_cases(("first",), separate)
+        self.assertFalse((self.crate / "runs").exists())
+
+    def test_duplicate_or_overlap_separate_scenarios_fail_before_build(self):
+        for separate in (("second", "second"), ("first",)):
+            with (self.subTest(separate=separate),
+                  self.assertRaisesRegex(ValueError, "unique")):
+                self.run_cases(("first",), separate)
+        self.assertFalse((self.crate / "builds").exists())
 
     def test_real_failure_stops_before_the_following_scenario(self):
         (self.crate / "src/lib.rs").write_text(
