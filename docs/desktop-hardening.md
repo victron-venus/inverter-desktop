@@ -32,6 +32,54 @@ window routes. See [plugin media grants](../src-tauri/src/plugins/protocol.rs),
 [bounded transfers](../src-tauri/src/plugins/http_video.rs), and
 [owned windows](../src-tauri/src/plugins/media_windows.rs).
 
+## Local password storage and upgrade
+
+The local username/password lock stores an Argon2id v19 verifier, using the
+RustCrypto library with 19 MiB of memory, two iterations, one lane and a 32-byte
+output. Each password change receives a new random salt of at least 16 bytes.
+The encrypted native configuration remains the storage boundary; no plaintext
+local password is written by the current version. See the
+[OWASP password-storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html).
+
+On the first native read, a legacy password is converted and the complete
+configuration is committed before it is returned or an unlock session is
+created. Existing password bytes and the username are preserved exactly.
+Malformed verifiers fail closed and do not fall back to an old plaintext value.
+Password verification and session creation share the configuration transaction
+lock, so a concurrent policy change cannot authorize a session using stale policy.
+Expensive derivation runs in the blocking IPC path, including the final biometric
+policy check after the native prompt.
+
+This is a one-way local authentication upgrade. Earlier application versions
+cannot read the versioned encrypted profile. Verifier-bearing configurations use
+an `inverter-config:v2:` prefix and authenticated encryption domain; removing the
+prefix does not make them readable by the old decoder. This prevents an older
+reader from ignoring the verifier and comparing a missing password as empty.
+Keep using the updated application, or restore a separately protected full
+installation backup when intentionally downgrading. The application does not create a plaintext
+compatibility copy. Portable settings exports cannot restore local credentials.
+
+`get_config` never returns the local password or its verifier. For authenticated
+native settings writes, an omitted, null or empty `auth_password` retains the
+current verifier; a nonempty value means an intentional password change. Sending
+the same password keeps the existing verifier. Callers cannot supply a verifier.
+This interface does not infer whether a nonempty password supplied by a stale
+caller was intentional. Ordinary settings roundtrips do not carry that value.
+Exports omit both fields, and imports preserve this installation's authentication.
+Outbound service passwords retain their separate existing storage behavior.
+
+The native configuration adapter owns `config.json` directly, preserving the
+existing JSON envelope and unrelated entries. It does not register this file with
+plugin-store's autosave or exit handlers. Writes stage a private file in the same
+directory, sync it, then replace the destination. Failures before replacement
+preserve the old complete document. If directory sync fails after replacement,
+the native log records a durability warning and the save returns committed
+success. Session revocation, plugin desired-state updates and notifications still
+finish; the UI is not told to retry a completed change. The next read uses the
+complete new document rather than restoring an old cache. These transactions
+serialize writers within this application process; they do not provide a security boundary against another process running as the
+same OS user.
+
 ## Transport ownership and displayed data
 
 Core MQTT owns its coalesced emitter and cancellation signal. Camera workers own

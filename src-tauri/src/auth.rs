@@ -88,7 +88,7 @@ pub(super) fn validate_policy(config: &FullConfig) -> Result<(), String> {
             .unwrap_or("")
             .trim()
             .is_empty()
-            || config.auth_password.as_deref().unwrap_or("").is_empty())
+            || config.auth_password_verifier.is_none())
     {
         return Err("A username and password are required when authentication is enabled".into());
     }
@@ -99,6 +99,7 @@ fn policy_changed(before: &FullConfig, after: &FullConfig) -> bool {
     before.auth_enabled != after.auth_enabled
         || before.auth_username != after.auth_username
         || before.auth_password != after.auth_password
+        || before.auth_password_verifier != after.auth_password_verifier
         || before.auth_biometric != after.auth_biometric
 }
 
@@ -113,20 +114,28 @@ pub(super) fn revoke_if_policy_changed(
     before: &FullConfig,
     after: &FullConfig,
 ) -> Result<(), String> {
+    revoke_policy_session(&SESSION, before, after, || notify_session_changed(app))
+}
+
+fn revoke_policy_session(
+    sessions: &Mutex<Option<Session>>,
+    before: &FullConfig,
+    after: &FullConfig,
+    notify: impl FnOnce(),
+) -> Result<(), String> {
     if policy_changed(before, after) {
-        *SESSION.lock().map_err(|e| e.to_string())? = None;
-        notify_session_changed(app);
+        *sessions.lock().map_err(|e| e.to_string())? = None;
+        notify();
     }
     Ok(())
 }
 
-fn start_session(app: &tauri::AppHandle) -> Result<String, String> {
+fn start_session() -> Result<String, String> {
     let token = uuid::Uuid::new_v4().to_string();
     *SESSION.lock().map_err(|e| e.to_string())? = Some(Session {
         token: token.clone(),
         created: Instant::now(),
     });
-    notify_session_changed(app);
     Ok(token)
 }
 
@@ -156,16 +165,42 @@ pub(crate) fn auth_login(
     password: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let config = load_config(&app)?;
+    login_with_config(
+        &crate::CONFIG_UPDATE_GATE,
+        || load_config(&app),
+        &username,
+        &password,
+        start_session,
+        || notify_session_changed(&app),
+    )
+}
+
+// The same lock covers the policy snapshot, expensive verification and session
+// commit. Notifications happen only after this helper releases it.
+fn login_with_config(
+    gate: &Mutex<()>,
+    load: impl FnOnce() -> Result<FullConfig, String>,
+    username: &str,
+    password: &str,
+    grant: impl FnOnce() -> Result<String, String>,
+    notify: impl FnOnce(),
+) -> Result<String, String> {
+    let _update = gate.lock().map_err(|_| "Config update lock failed")?;
+    let config = load()?;
     if !config.auth_enabled.unwrap_or(false) {
         return Ok("disabled".into());
     }
-    if username != config.auth_username.as_deref().unwrap_or("")
-        || password != config.auth_password.as_deref().unwrap_or("")
-    {
+    let matches = match &config.auth_password_verifier {
+        Some(verifier) => verifier.matches(password)?,
+        None => false,
+    };
+    if username != config.auth_username.as_deref().unwrap_or("") || !matches {
         return Err("Invalid credentials".into());
     }
-    start_session(&app)
+    let token = grant()?;
+    drop(_update);
+    notify();
+    Ok(token)
 }
 
 #[tauri::command]
@@ -206,7 +241,10 @@ pub(crate) fn auth_biometric_available(app: tauri::AppHandle) -> Result<bool, St
 
 #[tauri::command]
 pub(crate) async fn auth_biometric(app: tauri::AppHandle) -> Result<String, String> {
-    let policy = load_config(&app)?;
+    let owned_app = app.clone();
+    let policy = tauri::async_runtime::spawn_blocking(move || load_config(&owned_app))
+        .await
+        .map_err(|e| e.to_string())??;
     if !biometric_enabled(&policy) {
         return Err("Biometric authentication is disabled".into());
     }
@@ -220,10 +258,20 @@ pub(crate) async fn auth_biometric(app: tauri::AppHandle) -> Result<String, Stri
         .await
         .map_err(|e| e.to_string())?;
         // The policy may have changed while the native prompt was open.
-        if !ok || policy_changed(&policy, &load_config(&app)?) {
-            return Err("Biometric authentication failed or was cancelled".into());
-        }
-        start_session(&app)
+        let owned_app = app.clone();
+        let token = tauri::async_runtime::spawn_blocking(move || {
+            let _update = crate::CONFIG_UPDATE_GATE
+                .lock()
+                .map_err(|_| "Config update lock failed")?;
+            if !ok || policy_changed(&policy, &load_config(&owned_app)?) {
+                return Err("Biometric authentication failed or was cancelled".into());
+            }
+            start_session()
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        notify_session_changed(&app);
+        Ok(token)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -234,6 +282,168 @@ pub(crate) async fn auth_biometric(app: tauri::AppHandle) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn password_config() -> FullConfig {
+        let mut config = FullConfig {
+            auth_enabled: Some(true),
+            auth_username: Some("operator".into()),
+            auth_password: Some("original password".into()),
+            ..Default::default()
+        };
+        crate::auth_password::migrate(&mut config).unwrap();
+        config
+    }
+
+    #[test]
+    fn login_policy_is_locked_until_session_commit_and_released_afterward() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+        let gate = Arc::new(Mutex::new(()));
+        let changed = Arc::new(AtomicBool::new(false));
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let other_gate = gate.clone();
+        let other_changed = changed.clone();
+        let config = password_config();
+        let mut worker = None;
+        let token = login_with_config(
+            &gate,
+            || {
+                worker = Some(std::thread::spawn(move || {
+                    waiting_tx.send(()).unwrap();
+                    let _update = other_gate.lock().unwrap();
+                    other_changed.store(true, Ordering::SeqCst);
+                }));
+                waiting_rx.recv().unwrap();
+                Ok(config)
+            },
+            "operator",
+            "original password",
+            || {
+                assert!(gate.try_lock().is_err());
+                assert!(!changed.load(Ordering::SeqCst));
+                Ok("session".into())
+            },
+            || {},
+        )
+        .unwrap();
+        assert_eq!(token, "session");
+        worker.unwrap().join().unwrap();
+        assert!(changed.load(Ordering::SeqCst));
+        assert!(gate.try_lock().is_ok());
+    }
+
+    #[test]
+    fn successful_login_notifies_after_releasing_policy_gate() {
+        let gate = Mutex::new(());
+        let notified = std::cell::Cell::new(false);
+        let token = login_with_config(
+            &gate,
+            || Ok(password_config()),
+            "operator",
+            "original password",
+            || {
+                assert!(gate.try_lock().is_err());
+                Ok("session".into())
+            },
+            || {
+                assert!(gate.try_lock().is_ok());
+                notified.set(true);
+            },
+        )
+        .unwrap();
+        assert_eq!(token, "session");
+        assert!(notified.get());
+    }
+
+    #[test]
+    fn committed_storage_warning_still_revokes_session_and_finishes_desired_effects() {
+        use crate::config_store::test_support::{self, Fault};
+        use std::cell::Cell;
+        let before = password_config();
+        let mut after = before.clone();
+        after.auth_password_verifier = None;
+        after.auth_password = Some("new password".into());
+        crate::auth_password::prepare_save(&mut after, &before).unwrap();
+        for fault in [Fault::None, Fault::FileSync, Fault::DirectorySync] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("config.json");
+            let key = [3; 32];
+            test_support::save(&path, &key, &before, Fault::None).unwrap();
+            let original = std::fs::read(&path).unwrap();
+            let sessions = Mutex::new(Some(Session {
+                token: "existing session".into(),
+                created: Instant::now(),
+            }));
+            let notified = Cell::new(false);
+            let desired_completed = Cell::new(false);
+            // Same ?-ordered native boundary as core save and plugin commits:
+            // precommit errors stop, committed outcomes continue finalization.
+            let result = (|| {
+                test_support::save(&path, &key, &after, fault)?;
+                revoke_policy_session(&sessions, &before, &after, || notified.set(true))?;
+                desired_completed.set(true);
+                Ok::<(), String>(())
+            })();
+            if matches!(fault, Fault::FileSync) {
+                assert!(result.is_err());
+                assert_eq!(std::fs::read(&path).unwrap(), original);
+                assert!(sessions.lock().unwrap().is_some());
+                assert!(!notified.get());
+                assert!(!desired_completed.get());
+            } else {
+                assert!(result.is_ok(), "{fault:?}: {result:?}");
+                assert_eq!(
+                    test_support::load(&path, &key).auth_password_verifier,
+                    after.auth_password_verifier
+                );
+                assert!(sessions.lock().unwrap().is_none());
+                assert!(notified.get());
+                assert!(desired_completed.get());
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_login_preserves_sentinel_without_session_or_notification() {
+        let token = login_with_config(
+            &Mutex::new(()),
+            || Ok(FullConfig::default()),
+            "ignored",
+            "ignored",
+            || panic!("disabled authentication must not grant a session"),
+            || panic!("disabled authentication must not notify"),
+        )
+        .unwrap();
+        assert_eq!(token, "disabled");
+    }
+
+    #[test]
+    fn wrong_or_missing_password_never_grants_session() {
+        let gate = Mutex::new(());
+        let mut config = password_config();
+        for (username, password) in [("other", "original password"), ("operator", "wrong")] {
+            assert!(login_with_config(
+                &gate,
+                || Ok(config.clone()),
+                username,
+                password,
+                || panic!("invalid credentials must not grant a session"),
+                || panic!("invalid credentials must not notify")
+            )
+            .is_err());
+        }
+        config.auth_password_verifier = None;
+        assert!(login_with_config(
+            &gate,
+            || Ok(config),
+            "operator",
+            "original password",
+            || panic!("missing verifier must fail closed"),
+            || panic!("missing verifier must not notify")
+        )
+        .is_err());
+    }
+
     #[test]
     fn privileged_commands_are_not_public() {
         for command in [

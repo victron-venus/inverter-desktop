@@ -112,6 +112,7 @@ export interface AppConfig {
   auto_start?: boolean
   auth_enabled?: boolean
   auth_username?: string | null
+  /** Write-only password change. Omit/null/empty preserves the stored verifier. */
   auth_password?: string | null
   auth_biometric?: boolean
   /** Enable an HTTPS inverter-gateway connection */
