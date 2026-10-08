@@ -1,16 +1,23 @@
 import { invoke } from '@tauri-apps/api/core'
 import { validatePlan, type TariffPlan } from './model'
 
+type ControllerTariffStatus = {
+  writable?: boolean
+  revision?: string
+  request_id?: string
+  error?: string | null
+}
+
 export interface ControllerTariff {
   plan: unknown
-  status?: { writable?: boolean; revision?: string; request_id?: string; error?: string | null }
+  status?: ControllerTariffStatus
 }
 
 export async function readControllerTariff(): Promise<ControllerTariff> {
   const state = await invoke<{
     ui_config?: {
       electricity_tariff?: unknown
-      electricity_tariff_status?: ControllerTariff['status']
+      electricity_tariff_status?: ControllerTariffStatus
     }
   }>('get_state')
   return {
