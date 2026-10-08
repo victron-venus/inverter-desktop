@@ -106,7 +106,7 @@ export function createRetainedPluginData(fallbackError: () => string, canUse: ()
     if (!opened.value || busy.value || operation || !canUse()) return Promise.resolve()
     const selected = confirmation.value
     const record = snapshot.value?.records.find((entry) => entry.record_id === selected?.record_id)
-    if (!selected || !record || record.plugin_id !== null || record.revision !== selected.revision)
+    if (!selected || record?.plugin_id !== null || record.revision !== selected.revision)
       return Promise.resolve()
     cancelDeletion()
     error.value = null

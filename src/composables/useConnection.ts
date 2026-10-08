@@ -339,6 +339,79 @@ export function useConnection() {
       if (requestIsCurrent()) listeners.push(unlisten)
       else unlisten()
     }
+    async function startPreferredMqtt(config: AppConfig, igwOk: boolean): Promise<boolean> {
+      try {
+        if (!(await startMqtt(config, { title: 'MQTT', body: 'Connecting to inverter' }, attempt)))
+          return false
+        if (!requestIsCurrent()) return false
+        if (dualPathPreferMqtt) {
+          startMqttConnectWatchdog()
+        }
+      } catch (e) {
+        if (!requestIsCurrent()) return false
+        logger.error('MQTT connect failed:', e)
+        if (!igwOk) throw e
+        logger.log('MQTT connect failed — starting IGW')
+        attempt = beginTransportReplacement()
+        if (
+          !(await startIgw(
+            config,
+            { title: 'Gateway', body: 'MQTT unavailable — using IGW' },
+            attempt
+          ))
+        )
+          return false
+        if (!requestIsCurrent()) return false
+        startMqttRecoveryProbe()
+      }
+      return true
+    }
+
+    async function startSelectedTransport(
+      config: AppConfig,
+      startup: ReturnType<typeof chooseStartupSource>,
+      igwOk: boolean
+    ): Promise<boolean> {
+      if (startup === 'mqtt') return startPreferredMqtt(config, igwOk)
+      if (startup === 'igw') {
+        if (
+          !(await startIgw(
+            config,
+            {
+              title: 'Gateway',
+              body: dualPathPreferMqtt ? 'MQTT unreachable — using IGW' : 'Connected remotely',
+            },
+            attempt
+          ))
+        )
+          return false
+        if (!requestIsCurrent()) return false
+        if (dualPathPreferMqtt) {
+          startMqttRecoveryProbe()
+        }
+      } else {
+        logger.log('Neither Cerbo MQTT nor IGW configured')
+        dualPathPreferMqtt = false
+        mqttConnected.value = false
+        dataSource.value = 'mqtt'
+        resetInverterState()
+        await invokeTransport('disconnect_inverter', undefined, attempt)
+      }
+      return true
+    }
+
+    async function readInitialState() {
+      try {
+        if (!inverterEnabled) return
+        const initialAttempt = attempt
+        const initial = await invoke<TransportEvent<InverterState>>('get_state')
+        if (isCurrentTransport(initialAttempt) && acceptsNotification(initial))
+          processState(initial, true)
+      } catch (e) {
+        logger.error('Failed to get initial state:', e)
+      }
+    }
+
     try {
       const config = await getAppConfig()
       if (!requestIsCurrent()) return
@@ -423,57 +496,7 @@ export function useConnection() {
 
       stopMqttRecoveryProbe()
 
-      if (startup === 'mqtt') {
-        try {
-          if (
-            !(await startMqtt(config, { title: 'MQTT', body: 'Connecting to inverter' }, attempt))
-          )
-            return
-          if (!requestIsCurrent()) return
-          if (dualPathPreferMqtt) {
-            startMqttConnectWatchdog()
-          }
-        } catch (e) {
-          if (!requestIsCurrent()) return
-          logger.error('MQTT connect failed:', e)
-          if (!igwOk) throw e
-          logger.log('MQTT connect failed — starting IGW')
-          attempt = beginTransportReplacement()
-          if (
-            !(await startIgw(
-              config,
-              { title: 'Gateway', body: 'MQTT unavailable — using IGW' },
-              attempt
-            ))
-          )
-            return
-          if (!requestIsCurrent()) return
-          startMqttRecoveryProbe()
-        }
-      } else if (startup === 'igw') {
-        if (
-          !(await startIgw(
-            config,
-            {
-              title: 'Gateway',
-              body: dualPathPreferMqtt ? 'MQTT unreachable — using IGW' : 'Connected remotely',
-            },
-            attempt
-          ))
-        )
-          return
-        if (!requestIsCurrent()) return
-        if (dualPathPreferMqtt) {
-          startMqttRecoveryProbe()
-        }
-      } else {
-        logger.log('Neither Cerbo MQTT nor IGW configured')
-        dualPathPreferMqtt = false
-        mqttConnected.value = false
-        dataSource.value = 'mqtt'
-        resetInverterState()
-        await invokeTransport('disconnect_inverter', undefined, attempt)
-      }
+      if (!(await startSelectedTransport(config, startup, igwOk))) return
 
       if (!requestIsCurrent()) return
       await featureConnection.connect(config)
@@ -496,15 +519,7 @@ export function useConnection() {
         }
       })
 
-      try {
-        if (!inverterEnabled) return
-        const initialAttempt = attempt
-        const initial = await invoke<TransportEvent<InverterState>>('get_state')
-        if (isCurrentTransport(initialAttempt) && acceptsNotification(initial))
-          processState(initial, true)
-      } catch (e) {
-        logger.error('Failed to get initial state:', e)
-      }
+      await readInitialState()
     } catch (e) {
       logger.error('Failed to connect to MQTT:', e)
       if (requestIsCurrent()) mqttConnected.value = false
