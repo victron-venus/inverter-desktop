@@ -171,10 +171,8 @@ pub(crate) async fn download_archive(url: &str) -> Result<Vec<u8>, String> {
     download_with_policy(url, &DownloadPolicy::default()).await
 }
 
-async fn download_with_policy(value: &str, policy: &DownloadPolicy) -> Result<Vec<u8>, String> {
-    let mut url = source_url(value, policy)?;
-    let deadline = tokio::time::Instant::now() + policy.total_timeout;
-    let client = Client::builder()
+fn http_client_builder(policy: &DownloadPolicy) -> reqwest::ClientBuilder {
+    Client::builder()
         .https_only(policy.https_only())
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
@@ -184,6 +182,12 @@ async fn download_with_policy(value: &str, policy: &DownloadPolicy) -> Result<Ve
         .no_deflate()
         .no_zstd()
         .connect_timeout(policy.connect_timeout)
+}
+
+async fn download_with_policy(value: &str, policy: &DownloadPolicy) -> Result<Vec<u8>, String> {
+    let mut url = source_url(value, policy)?;
+    let deadline = tokio::time::Instant::now() + policy.total_timeout;
+    let client = http_client_builder(policy)
         .build()
         .map_err(|_| "desktop plugin download client could not be initialized")?;
 
@@ -245,3 +249,12 @@ async fn download_with_policy(value: &str, policy: &DownloadPolicy) -> Result<Ve
 #[cfg(test)]
 #[path = "download_tests.rs"]
 mod tests;
+
+#[tokio::test]
+#[ignore = "requires Python/OpenSSL disposable TLS oracle"]
+async fn tls_key_policy_plugin_download() {
+    crate::tls_policy_tests::matrix("plugin-download", || {
+        http_client_builder(&DownloadPolicy::default())
+    })
+    .await;
+}
