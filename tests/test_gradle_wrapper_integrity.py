@@ -27,11 +27,29 @@ class GradleWrapperIntegrityTests(unittest.TestCase):
     def test_reviewed_bootstrap_passes(self):
         VERIFIER.verify(self.root)
 
+    def _file_state(self):
+        state = {}
+        for path in self.root.rglob("*"):
+            mode = path.lstat().st_mode
+            if path.is_symlink():
+                content = str(path.readlink())
+            elif path.is_file():
+                content = path.read_bytes()
+            else:
+                content = None
+            state[str(path.relative_to(self.root))] = (mode, content)
+        return state
+
+    def _assert_rejected_without_changes(self, message):
+        before = self._file_state()
+        with self.assertRaisesRegex(ValueError, message):
+            VERIFIER.verify(self.root)
+        self.assertEqual(self._file_state(), before)
+
     def test_modified_jar_is_rejected(self):
         jar = self.root / "src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar"
         jar.write_bytes(jar.read_bytes() + b"modified")
-        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
-            VERIFIER.verify(self.root)
+        self._assert_rejected_without_changes("checksum mismatch")
 
     def test_removed_distribution_pin_is_rejected(self):
         props = (
@@ -45,24 +63,21 @@ class GradleWrapperIntegrityTests(unittest.TestCase):
                 if not line.startswith("distributionSha256Sum=")
             )
         )
-        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
-            VERIFIER.verify(self.root)
+        self._assert_rejected_without_changes("checksum mismatch")
 
     def test_linked_jar_is_rejected(self):
         jar = self.root / "src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar"
         target = self.root / "copied-wrapper.jar"
         jar.rename(target)
         jar.symlink_to(target)
-        with self.assertRaisesRegex(ValueError, "regular file"):
-            VERIFIER.verify(self.root)
+        self._assert_rejected_without_changes("regular file")
 
     def test_missing_bootstrap_is_rejected(self):
         props = (
             self.root / "src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties"
         )
         props.unlink()
-        with self.assertRaisesRegex(ValueError, "regular file"):
-            VERIFIER.verify(self.root)
+        self._assert_rejected_without_changes("regular file")
 
 
 if __name__ == "__main__":
