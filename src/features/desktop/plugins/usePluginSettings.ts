@@ -9,6 +9,16 @@ import type {
   PluginSettingValue,
 } from './types'
 
+function schemaHasChoices(schema: JsonEditorSchema): boolean {
+  return (
+    !!schema['x-options-source'] ||
+    Object.values(schema.properties ?? {}).some(schemaHasChoices) ||
+    !!(schema.items && schemaHasChoices(schema.items)) ||
+    (typeof schema.additionalProperties === 'object' &&
+      schemaHasChoices(schema.additionalProperties))
+  )
+}
+
 /** Only newly entered secrets exist in this editor; native reads return presence flags. */
 export function createPluginSettings(
   pluginId: string,
@@ -37,15 +47,6 @@ export function createPluginSettings(
   let active = true
   let generation = 0
 
-  function schemaHasChoices(schema: JsonEditorSchema): boolean {
-    return (
-      !!schema['x-options-source'] ||
-      Object.values(schema.properties ?? {}).some(schemaHasChoices) ||
-      !!(schema.items && schemaHasChoices(schema.items)) ||
-      (typeof schema.additionalProperties === 'object' &&
-        schemaHasChoices(schema.additionalProperties))
-    )
-  }
   async function loadChoices() {
     if (!active || !hasChoices.value) return
     const request = ++choicesGeneration

@@ -738,11 +738,12 @@
 /* Unavailable entity tiles */
 .classic-btn-unavailable,
 .classic-btn-unavailable.classic-btn-on {
-  opacity: 0.55 !important;
+  /* Unavailable controls remain clickable, so retain readable contrast. */
+  opacity: 1 !important;
   background-color: #e8e8ed !important;
-  border-color: #aeaeb2 !important;
+  border-color: #76767c !important;
   border-style: dashed !important;
-  color: #8e8e93 !important;
+  color: #54545a !important;
   filter: none !important;
   cursor: not-allowed;
 }
@@ -756,8 +757,8 @@
 .dark .classic-btn-unavailable,
 .dark .classic-btn-unavailable.classic-btn-on {
   background-color: #2a2a2c !important;
-  border-color: #636366 !important;
-  color: #8e8e93 !important;
+  border-color: #8e8e93 !important;
+  color: #aeaeb2 !important;
 }
 
 .dark .classic-btn-unavailable:hover,

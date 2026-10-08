@@ -7,14 +7,19 @@ export interface ContributionCard {
   controls: Control[]
 }
 
-/** Group explicit references for display without changing the authorization snapshot. */
-export function contributionCards(items: DashboardContribution[]): ContributionCard[] {
+function indexStateCards(items: DashboardContribution[]): Map<string, ContributionCard> {
   const states = new Map<string, ContributionCard>()
   for (const item of items) {
     if (item.kind === 'text' || item.kind === 'metric' || item.kind === 'status') {
       states.set(item.id, { item, controls: [] })
     }
   }
+  return states
+}
+
+/** Group explicit references for display without changing the authorization snapshot. */
+export function contributionCards(items: DashboardContribution[]): ContributionCard[] {
+  const states = indexStateCards(items)
   const cards: ContributionCard[] = []
   for (const item of items) {
     if (item.kind === 'action' || item.kind === 'number_input') {

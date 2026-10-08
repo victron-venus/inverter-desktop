@@ -139,7 +139,8 @@ export interface InverterState {
   /** Cerbo GX tank/pump/ev/evcharger instances discovered via MQTT. */
   discovered_water_ev?: Array<{
     instance: number
-    kind: 'tank' | 'pump' | 'ev' | 'evcharger' | string
+    /** Known types are tank/pump/ev/evcharger; preserve unknown future device types. */
+    kind: string
     name?: string | null
   }> | null
 }
@@ -183,14 +184,15 @@ export function refreshTelemetryQuality(now = Date.now()) {
   const staleFields = Object.keys(previous.fields).filter(
     (field) => now - previous.fields[field].observed_at > TELEMETRY_STALE_AFTER_MS
   )
-  const quality: TelemetryQuality =
-    previous.observed_at === null
-      ? 'unknown'
-      : !mqttConnected.value ||
-          now - previous.observed_at > TELEMETRY_STALE_AFTER_MS ||
-          staleFields.length > 0
+  let quality: TelemetryQuality = 'unknown'
+  if (previous.observed_at !== null) {
+    quality =
+      !mqttConnected.value ||
+      now - previous.observed_at > TELEMETRY_STALE_AFTER_MS ||
+      staleFields.length > 0
         ? 'stale'
         : 'live'
+  }
   if (quality !== previous.quality || staleFields.join() !== previous.stale_fields.join()) {
     telemetry.value = { ...previous, quality, stale_fields: staleFields }
   }
@@ -240,16 +242,9 @@ const GATEWAY_OWNED_FIELDS = [
   'discovered_water_ev',
 ] as const
 
-/** Non-destructive merge into dashboard state. Skips null/undefined so partial
- *  MQTT snapshots and serde nulls cannot wipe live telemetry. Always assigns a
- *  new markRaw object so shallowRef watchers/tiles re-render. */
-export function applyInverterState(
-  newState: InverterState,
-  observation: { snapshot?: boolean; observedAt?: number; source?: 'mqtt' | 'igw' } = {}
-) {
-  const prev = state.value
-  const merged: InverterState = { ...prev }
-  const cachedSnapshot = observation.snapshot === true || newState.cached_snapshot === true
+type StateObservation = { snapshot?: boolean; observedAt?: number; source?: 'mqtt' | 'igw' }
+
+function mergeStateFields(merged: InverterState, newState: InverterState) {
   if (newState.gateway_snapshot) {
     for (const key of GATEWAY_OWNED_FIELDS) {
       if ((newState as Record<string, unknown>)[key] == null) {
@@ -262,17 +257,9 @@ export function applyInverterState(
       ;(merged as Record<string, unknown>)[key] = val
     }
   }
-  // Provenance belongs to this event, never to the held measurement values.
-  merged.cached_snapshot = cachedSnapshot
-  if (newState.grid_backup === null) {
-    delete merged.grid_backup
-    merged.grid_using_backup = false
-  }
-  // Retained inverter/state clears the command gate; do not hold a prior live stamp.
-  if (Object.prototype.hasOwnProperty.call(newState, 'ess_mode_observed_at')) {
-    if (newState.ess_mode_observed_at == null) delete merged.ess_mode_observed_at
-    else merged.ess_mode_observed_at = newState.ess_mode_observed_at
-  }
+}
+
+function applyGridAvailability(merged: InverterState) {
   // Cerbo explicitly publishes null for unavailable/unused grid phases. Keep
   // ordinary partial-message holding, but never resurrect an invalid phase
   // or add its previous value into the live total.
@@ -287,27 +274,64 @@ export function applyInverterState(
     )
     merged.gt = phases.length ? phases.reduce((sum, value) => sum + value, 0) : undefined
   }
-  // IGW serde omits null time_to_go; a partial MQTT/IGW race must not blank the
-  // "40h 48m" chip every couple of seconds while still Charging/Discharging.
-  if (Array.isArray(merged.batteries) && Array.isArray(prev.batteries)) {
-    merged.batteries = merged.batteries.map((bat) => {
-      if (bat.time_to_go) return bat
-      // Only drop sticky ETA on explicit Idle — Unknown/missing state still
-      // keeps the last Charging/Discharging time_to_go so 2s IGW polls do not blink.
-      if (bat.state === 'Idle') return bat
-      const prevBat = prev.batteries?.find(
-        (p) =>
-          (p.serial && bat.serial && p.serial === bat.serial) ||
-          (p.instance != null && bat.instance != null && p.instance === bat.instance) ||
-          (p.name && bat.name && p.name === bat.name)
-      )
-      if (prevBat?.time_to_go) {
-        return { ...bat, time_to_go: prevBat.time_to_go }
-      }
-      return bat
-    })
+}
+
+function preserveBatteryTimeToGo(
+  bat: NonNullable<InverterState['batteries']>[number],
+  prev: InverterState
+) {
+  if (bat.time_to_go) return bat
+  // Only drop sticky ETA on explicit Idle — Unknown/missing state still
+  // keeps the last Charging/Discharging time_to_go so 2s IGW polls do not blink.
+  if (bat.state === 'Idle') return bat
+  const prevBat = prev.batteries?.find(
+    (p) =>
+      (p.serial && bat.serial && p.serial === bat.serial) ||
+      (p.instance != null && bat.instance != null && p.instance === bat.instance) ||
+      (p.name && bat.name && p.name === bat.name)
+  )
+  if (prevBat?.time_to_go) {
+    return { ...bat, time_to_go: prevBat.time_to_go }
   }
-  state.value = markRaw(merged)
+  return bat
+}
+
+function recordObservedFields(
+  newState: InverterState,
+  fields: TelemetryMetadata['fields'],
+  observedAt: number,
+  source: 'mqtt' | 'igw'
+) {
+  let observed = false
+  for (const [key, value] of Object.entries(newState)) {
+    if (value === null || value === undefined) continue
+    // Discovery/config metadata has no periodic measurement cadence.
+    if (
+      [
+        'gateway_snapshot',
+        'cached_snapshot',
+        'ui_config',
+        'features',
+        'version',
+        'latest_version',
+        'load_names',
+        'discovered_water_ev',
+        'ev_present',
+        'evcharger_present',
+      ].includes(key)
+    )
+      continue
+    fields[key] = { observed_at: observedAt, source }
+    observed = true
+  }
+  return observed
+}
+
+function applyTelemetryObservation(
+  newState: InverterState,
+  cachedSnapshot: boolean,
+  observation: StateObservation
+) {
   const observedAt = observation.observedAt ?? Date.now()
   const source = observation.source ?? dataSource.value
   const fields = { ...telemetry.value.fields }
@@ -324,27 +348,7 @@ export function applyInverterState(
   // Window snapshots and failed-poll replays may update visuals/invalidation,
   // but only a genuine transport update can renew observation timestamps.
   if (!cachedSnapshot) {
-    for (const [key, value] of Object.entries(newState)) {
-      if (value === null || value === undefined) continue
-      // Discovery/config metadata has no periodic measurement cadence.
-      if (
-        [
-          'gateway_snapshot',
-          'cached_snapshot',
-          'ui_config',
-          'features',
-          'version',
-          'latest_version',
-          'load_names',
-          'discovered_water_ev',
-          'ev_present',
-          'evcharger_present',
-        ].includes(key)
-      )
-        continue
-      fields[key] = { observed_at: observedAt, source }
-      observed = true
-    }
+    observed = recordObservedFields(newState, fields, observedAt, source)
   }
   if (observed || invalidated) {
     telemetry.value = {
@@ -354,6 +358,35 @@ export function applyInverterState(
     }
   }
   refreshTelemetryQuality(observedAt)
+}
+
+/** Non-destructive merge into dashboard state. Skips null/undefined so partial
+ *  MQTT snapshots and serde nulls cannot wipe live telemetry. Always assigns a
+ *  new markRaw object so shallowRef watchers/tiles re-render. */
+export function applyInverterState(newState: InverterState, observation: StateObservation = {}) {
+  const prev = state.value
+  const merged: InverterState = { ...prev }
+  const cachedSnapshot = observation.snapshot === true || newState.cached_snapshot === true
+  mergeStateFields(merged, newState)
+  // Provenance belongs to this event, never to the held measurement values.
+  merged.cached_snapshot = cachedSnapshot
+  if (newState.grid_backup === null) {
+    delete merged.grid_backup
+    merged.grid_using_backup = false
+  }
+  // Retained inverter/state clears the command gate; do not hold a prior live stamp.
+  if (Object.prototype.hasOwnProperty.call(newState, 'ess_mode_observed_at')) {
+    if (newState.ess_mode_observed_at == null) delete merged.ess_mode_observed_at
+    else merged.ess_mode_observed_at = newState.ess_mode_observed_at
+  }
+  applyGridAvailability(merged)
+  // IGW serde omits null time_to_go; a partial MQTT/IGW race must not blank the
+  // "40h 48m" chip every couple of seconds while still Charging/Discharging.
+  if (Array.isArray(merged.batteries) && Array.isArray(prev.batteries)) {
+    merged.batteries = merged.batteries.map((bat) => preserveBatteryTimeToGo(bat, prev))
+  }
+  state.value = markRaw(merged)
+  applyTelemetryObservation(newState, cachedSnapshot, observation)
 }
 
 export interface NotificationEntry {

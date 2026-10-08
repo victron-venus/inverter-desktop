@@ -30,7 +30,9 @@ export async function subscribeFeatureConfig(config: AppConfig, current: () => b
     }
   )
 }
-export function prepareFeatureConfig(_config: AppConfig) {}
+export function prepareFeatureConfig(_config: AppConfig) {
+  // The native package manager owns desktop settings; this shared hook leaves them intact.
+}
 export function getFeatureView(path: string): Component | undefined {
   return path === '/camera-video' ? PluginMedia : undefined
 }

@@ -39,7 +39,7 @@ function timestamp(value: unknown): number {
 
 export function validateIntervals(value: unknown): IntervalHistory {
   const data = value as Partial<IntervalHistory> | null
-  if (!data || data.type !== 'grid-import-intervals' || data.version !== 1)
+  if (data?.type !== 'grid-import-intervals' || data.version !== 1)
     throw new Error('Expected grid-import-intervals version 1.')
   if (!Array.isArray(data.intervals) || !data.intervals.length || data.intervals.length > 20_000)
     throw new Error('Import between 1 and 20,000 measured intervals.')

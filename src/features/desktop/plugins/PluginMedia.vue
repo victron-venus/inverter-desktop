@@ -82,6 +82,24 @@ import ErrorBoundary from '../../../components/ErrorBoundary.vue'
 import { logger } from '../../../logger'
 import { pluginVideoRoute } from './pluginVideoRoute'
 
+const mediaErrors = {
+  video: {
+    display: 'Failed to play camera clip. Local file may be missing or unsupported.',
+    log: 'Plugin video playback failed',
+    open: 'Failed to download camera clip.',
+  },
+  image: {
+    display: 'Failed to display camera snapshot. Local file may be missing or unsupported.',
+    log: 'Plugin image display failed',
+    open: 'Failed to download camera snapshot.',
+  },
+  live: {
+    display: 'Failed to display live camera preview.',
+    log: 'Live camera preview failed',
+    open: 'Failed to open live camera preview.',
+  },
+} as const
+
 const videoUrl = ref('')
 const cameraName = ref('Camera')
 const errorMessage = ref('')
@@ -239,19 +257,9 @@ function onMediaError() {
   if (disposed || closing || errorMessage.value) return
   clearReadinessTimers()
   clearImageCloseTimer()
-  errorMessage.value =
-    mediaKind.value === 'live'
-      ? 'Failed to display live camera preview.'
-      : mediaKind.value === 'image'
-        ? 'Failed to display camera snapshot. Local file may be missing or unsupported.'
-        : 'Failed to play camera clip. Local file may be missing or unsupported.'
-  logger.warn(
-    mediaKind.value === 'live'
-      ? 'Live camera preview failed'
-      : mediaKind.value === 'image'
-        ? 'Plugin image display failed'
-        : 'Plugin video playback failed'
-  )
+  const error = mediaErrors[mediaKind.value]
+  errorMessage.value = error.display
+  logger.warn(error.log)
   releaseMedia()
   void revealWindow()
 }
@@ -281,6 +289,23 @@ async function dragOwnedWindow(event: MouseEvent) {
   }
 }
 
+async function loadLivePreview(name: string) {
+  try {
+    // The host resolves only this window's active, verified grant. Source
+    // URLs never come from route parameters, snapshots, or arbitrary IDs.
+    const url = await invoke<string>('get_live_preview_url')
+    if (disposed || closing || errorMessage.value) return
+    if (typeof url !== 'string' || !url.trim()) throw new Error('Live preview unavailable')
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      throw new Error('Live preview unavailable')
+    }
+    videoUrl.value = url
+  } catch {
+    if (!disposed) showError('Failed to open live camera preview.', name)
+  }
+}
+
 onMounted(async () => {
   let label = ''
   try {
@@ -291,34 +316,13 @@ onMounted(async () => {
   const route = pluginVideoRoute(globalThis.location.search, label)
   ownedRoute = route !== null
   if (!route) showError('This video window is unavailable.')
-  else if (route.failed)
-    showError(
-      route.mediaKind === 'live'
-        ? 'Failed to open live camera preview.'
-        : route.mediaKind === 'image'
-          ? 'Failed to download camera snapshot.'
-          : 'Failed to download camera clip.',
-      route.name
-    )
+  else if (route.failed) showError(mediaErrors[route.mediaKind].open, route.name)
   else {
     setName(route.name)
     mediaKind.value = route.mediaKind
     waitForFirstFrame()
     if (route.mediaKind === 'live') {
-      try {
-        // The host resolves only this window's active, verified grant. Source
-        // URLs never come from route parameters, snapshots, or arbitrary IDs.
-        const url = await invoke<string>('get_live_preview_url')
-        if (disposed || closing || errorMessage.value) return
-        if (typeof url !== 'string' || !url.trim()) throw new Error('Live preview unavailable')
-        const parsed = new URL(url)
-        if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
-          throw new Error('Live preview unavailable')
-        }
-        videoUrl.value = url
-      } catch {
-        if (!disposed) showError('Failed to open live camera preview.', route.name)
-      }
+      await loadLivePreview(route.name)
     } else {
       videoUrl.value = convertFileSrc(route.id, 'plugin-media')
     }

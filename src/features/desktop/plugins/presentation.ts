@@ -130,19 +130,19 @@ export function createPluginPresentation() {
   ): DashboardControlView[] {
     const source = dashboardControlSource(surface)
     const controls: Array<{ order: number; control: DashboardControlView }> = core.map(
-      (control, index) => ({
-        order:
-          source.findIndex((entry) => entry.id === control.id) < 0
-            ? index
-            : source.findIndex((entry) => entry.id === control.id),
-        // Runtime callbacks never come from persisted opaque configuration fields.
-        control: {
-          id: control.id,
-          label: control.label,
-          entity: control.entity,
-          state_key: control.state_key,
-        },
-      })
+      (control, index) => {
+        const sourceIndex = source.findIndex((entry) => entry.id === control.id)
+        return {
+          order: sourceIndex < 0 ? index : sourceIndex,
+          // Runtime callbacks never come from persisted opaque configuration fields.
+          control: {
+            id: control.id,
+            label: control.label,
+            entity: control.entity,
+            state_key: control.state_key,
+          },
+        }
+      }
     )
     for (const { plugin, item } of entries.value) {
       if (item.kind !== 'control' || item.surface !== surface) continue
@@ -165,7 +165,8 @@ export function createPluginPresentation() {
         },
       })
     }
-    return controls.sort((left, right) => left.order - right.order).map(({ control }) => control)
+    controls.sort((left, right) => left.order - right.order)
+    return controls.map(({ control }) => control)
   }
   return { dashboard, sidebar, connections, mergeControls, runAction, pending, failed }
 }

@@ -406,6 +406,12 @@ watch(
   { deep: false }
 )
 
+function prepareStartupConnection(config: AppConfig | null, startupRevision: number): boolean {
+  if (startupRevision !== configRevision) return false
+  showSetupWizard.value = needsSetup(config)
+  return !showSetupWizard.value
+}
+
 onMounted(async () => {
   // Settings can be saved while the initial permission/config/MQTT probe awaits.
   // Subscribe first so useConnection can cancel that older startup session.
@@ -442,10 +448,7 @@ onMounted(async () => {
   if (disposed) return
   // A save already started the newer session; an older config read must not
   // supersede it or reopen first-run setup after that save completed setup.
-  if (startupRevision === configRevision) {
-    showSetupWizard.value = needsSetup(cfg)
-    if (!showSetupWizard.value) await connectMqtt()
-  }
+  if (prepareStartupConnection(cfg, startupRevision)) await connectMqtt()
 
   if (disposed) return
   if (!showSetupWizard.value) await features.init()
