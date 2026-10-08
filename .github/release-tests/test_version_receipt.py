@@ -192,6 +192,96 @@ class CurrentBuildInputsTests(unittest.TestCase):
             self.create()
         self.assertTrue(self.output.is_file())
 
+    def test_invalid_package_name_fails_before_toolchain_or_receipt_write(self):
+        (self.assets / "unsafe package.bin").write_bytes(b"not a safe asset name")
+        with patch.object(version_receipt, "capture_toolchain") as toolchain:
+            with self.assertRaisesRegex(ValueError, "Unsafe or duplicate package name"):
+                self.create()
+        toolchain.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_publisher_rejects_mutated_receipt_identity_and_coverage(self):
+        original = self.create()
+        artifact = original["artifacts"][0]
+        for changes, message in (
+            ({"plan_sha256": "0" * 64}, "different release plan"),
+            ({"source_sha": "b" * 40}, "source-bound"),
+            ({"toolchain": {}}, "toolchain versions"),
+            ({"effective_inputs_sha256": "0" * 64}, "input digest"),
+            ({"artifacts": []}, "Empty receipt artifact"),
+            ({"artifacts": [{**artifact, "sha256": "0" * 64}]}, "does not match staged payload"),
+            ({"artifacts": [artifact, artifact]}, "duplicate or recursive"),
+            ({"artifacts": [{**artifact, "name": self.output.name}]}, "duplicate or recursive"),
+        ):
+            with self.subTest(message=message, changes=changes):
+                value = {**original, **changes}
+                self.output.write_bytes(version_receipt.canonical(value))
+                payloads = [
+                    {"name": path.name, "size": path.stat().st_size,
+                     "sha256": version_receipt.sha256(path.read_bytes())}
+                    for path in self.assets.iterdir()
+                ]
+                with self.assertRaisesRegex(ValueError, message):
+                    version_receipt.verify_receipts(
+                        self.assets, self.plan, payloads, self.policy
+                    )
+
+    def test_oversized_receipt_reads_only_a_bounded_prefix(self):
+        self.create()
+        with self.output.open("ab") as output:
+            output.truncate(64 * 1024 * 1024)
+        with self.output.open("rb") as source:
+            original_read = source.read
+
+            def bounded_read(size=-1):
+                self.assertGreater(size, 0, "Receipt read must have a size limit")
+                self.assertLessEqual(size, 2_000_001)
+                return original_read(size)
+
+            with (
+                patch.object(Path, "open", return_value=source),
+                patch.object(source, "read", side_effect=bounded_read) as read,
+                self.assertRaisesRegex(ValueError, "Oversized build receipt"),
+            ):
+                version_receipt.verify_receipts(
+                    self.assets, self.plan, [{"name": self.output.name}], self.policy
+                )
+            read.assert_called_once_with(2_000_001)
+
+    def test_receipt_size_boundary_preserves_exact_bytes_and_validation(self):
+        receipt = self.create()
+        original = self.output.read_bytes()
+        for size in (1_999_999, 2_000_000, 2_000_001):
+            with self.subTest(size=size):
+                raw = original.ljust(size, b" ")
+                self.output.write_bytes(raw)
+                payloads = receipt["artifacts"] + [
+                    {
+                        "name": self.output.name,
+                        "size": size,
+                        "sha256": version_receipt.sha256(raw),
+                    }
+                ]
+                if size > 2_000_000:
+                    with self.assertRaisesRegex(ValueError, "Oversized build receipt"):
+                        version_receipt.verify_receipts(
+                            self.assets, self.plan, payloads, self.policy
+                        )
+                else:
+                    verified = version_receipt.verify_receipts(
+                        self.assets, self.plan, payloads, self.policy
+                    )
+                    self.assertEqual(
+                        verified,
+                        [
+                            {
+                                "name": self.output.name,
+                                "sha256": version_receipt.sha256(raw),
+                                "inputs": receipt,
+                            }
+                        ],
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
