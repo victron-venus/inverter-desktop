@@ -87,5 +87,7 @@
     "ANDROID_KEY_ALIAS",
     "ANDROID_KEY_PASSWORD"
   ],
-  "single_entry_ci": true
+  "single_entry_ci": true,
+  "release_notes": "CHANGELOG.md",
+  "toolkit_revision": "ab9f337e5fa49c263c873d65c9e50dde7249af56"
 }

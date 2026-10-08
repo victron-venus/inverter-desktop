@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.5.47] - Development line
 
 ### Added
 - Ring-MQTT camera motion/ding handling via HA MQTT `camera_topic` wildcards and optional
@@ -33,12 +33,21 @@ All notable changes to this project will be documented in this file.
 - Update Lucide icons and Prettier. Remove the unused direct Undici development
   dependency; jsdom keeps its compatible, patched Undici 7.29.1 dependency.
 
-### Upgrade and rollback
+### Upgrade
 - Application updates preserve the existing configuration, cached encryption key,
   plugin version pins and enabled/disabled choices. Camera packages remain managed
   separately through the Plugins settings.
 - Keep the previous application bundle for rollback. Updating the app does not
   require exporting and importing configuration or enabling camera plugins.
+
+### Maintenance
+
+- Publish reviewed release notes from the exact source commit used to build each candidate, preserving build provenance.
+- Document contribution checks, confidential security reporting and the project-specific trust boundaries.
+
+### Security
+
+Private vulnerability reporting and response policy are documented in SECURITY.md. This maintenance update strengthens release evidence and review instructions; it does not replace deployment authentication, network isolation or independent equipment safeguards. No new project CVE is announced by these changes.
 
 ## [2.5.41] - 2026-09-12
 

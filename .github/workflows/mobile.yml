@@ -138,6 +138,10 @@ jobs:
 
     timeout-minutes: 30
   android:
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
     runs-on: ${{ fromJSON((vars.CI_RUNNER_MODE == 'self-hosted' || vars.CI_RUNNER_MODE == 'k3s') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) && (vars.CI_RUNNER_LABELS || '[]') || '["ubuntu-latest"]') }}
     env:
       INVERTER_BUILD_PROFILE: mobile
@@ -207,10 +211,25 @@ jobs:
           key: android-ndk-${{ steps.ndk-cache.outputs.fingerprint }}
           env-vars: CARGO CC CFLAGS CXX CMAKE RUST ANDROID NDK
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Initialize Android source analysis
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: java-kotlin
+          build-mode: manual
+      - name: Compile upload verifier for source analysis
+        run: |
+          mkdir -p "$RUNNER_TEMP/codeql-upload-verifier"
+          javac --release 17 -d "$RUNNER_TEMP/codeql-upload-verifier" scripts/android/VerifyUploadBundle.java
       - name: Build Android
         env:
           ORG_GRADLE_PROJECT_inverterAndroidBothPackages: 'true'
+          # CodeQL must observe fresh Kotlin/Java compiler invocations.
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.caching=false -Dorg.gradle.project.kotlin.incremental=false -Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process
         run: pnpm tauri android build --ci --apk
+      - name: Analyze Android source
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:java-kotlin
       - name: Verify 64-bit Android load and RELRO alignment
         run: python3 scripts/android/check_native_alignment.py src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
       - name: Verify packaged Android excludes desktop features

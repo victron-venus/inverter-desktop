@@ -16,6 +16,10 @@ from pathlib import Path
 import yaml
 
 
+COMMIT_SHA_PATTERN = r"[0-9a-f]{40}"
+QUALITY_GATE = "quality-gate.yml"
+
+
 class UniqueKeyLoader(yaml.BaseLoader):
     """Keep YAML scalars as strings and reject ambiguous mappings."""
 
@@ -29,12 +33,9 @@ class UniqueKeyLoader(yaml.BaseLoader):
         return mapping
 
 
-def validate_codeql(workflows):
-    """All CodeQL components in the repository share one immutable release."""
-    repository_pins = set()
-    for filename, workflow in workflows.items():
-        for name, job in workflow.get("jobs", {}).items():
-            pins = {
+def codeql_pins(job):
+    """Read the analyzer action references recognized by this validator."""
+    return {
                 step["uses"].rsplit("@", 1)[-1]
                 for step in job.get("steps", [])
                 if re.match(
@@ -42,8 +43,39 @@ def validate_codeql(workflows):
                     step.get("uses", ""),
                 )
             }
+
+
+def _validate_immutable_reference(filename, reference):
+    """Reject mutable remote actions and workflows; retain local action references."""
+    if reference is None:
+        return
+    if isinstance(reference, str) and reference.startswith("./"):
+        return
+    pattern = (
+        r"docker://[^@\s]+@sha256:[0-9a-f]{64}"
+        if isinstance(reference, str) and reference.startswith("docker://")
+        else r"[^@\s]+@[0-9a-f]{40}"
+    )
+    if not isinstance(reference, str) or not re.fullmatch(pattern, reference):
+        raise ValueError(f"{filename}: external uses must have an immutable SHA")
+
+def validate_immutable_actions(workflows):
+    """Require immutable external references even without a generator manifest."""
+    for filename, workflow in workflows.items():
+        for job in workflow.get("jobs", {}).values():
+            _validate_immutable_reference(filename, job.get("uses"))
+            for step in job.get("steps", []):
+                _validate_immutable_reference(filename, step.get("uses"))
+
+
+def validate_codeql(workflows):
+    """All CodeQL components in the repository share one immutable release."""
+    repository_pins = set()
+    for filename, workflow in workflows.items():
+        for name, job in workflow.get("jobs", {}).items():
+            pins = codeql_pins(job)
             if len(pins) > 1 or any(
-                not re.fullmatch(r"[0-9a-f]{40}", pin) for pin in pins
+                not re.fullmatch(COMMIT_SHA_PATTERN, pin) for pin in pins
             ):
                 raise ValueError(
                     f"{filename}/{name}: CodeQL actions must share one full commit SHA"
@@ -64,15 +96,14 @@ def validate_workflow_pins(filename, workflow, pins):
         for reference in references:
             if not reference or reference.startswith("./"):
                 continue
+            _validate_immutable_reference(filename, reference)
             action, _, revision = reference.partition("@")
-            if not re.fullmatch(r"[0-9a-f]{40}", revision):
-                raise ValueError(f"{filename}: {action} must use a full commit SHA")
             if pins is not None and (action not in pins or revision != pins[action]):
                 raise ValueError(f"{filename}: {action} differs from generator pins")
 
 
-def validate_generator_pins(directory, workflows):
-    """Validate generated consumers and the toolkit's canonical pin manifest."""
+def generator_pins(directory):
+    """Read an optional immutable generator action manifest."""
     manifest = directory / ".github/action-pins.json"
     # Consumers vendor the generated scripts, not the generator or its manifest.
     # The canonical toolkit must retain the manifest consumed by its generator.
@@ -81,10 +112,16 @@ def validate_generator_pins(directory, workflows):
     pins = None if not manifest.exists() else {
         pin["packageName"]: pin["digest"] for pin in json.loads(manifest.read_text())
     }
-    if pins is not None and any(not re.fullmatch(r"[0-9a-f]{40}", pin) for pin in pins.values()):
+    if pins is not None and any(not re.fullmatch(COMMIT_SHA_PATTERN, pin) for pin in pins.values()):
         raise ValueError("Generator pins must be full commit SHAs")
+    return pins
+
+
+def validate_generator_pins(directory, workflows):
+    """Validate generated consumers and the toolkit's canonical pin manifest."""
+    pins = generator_pins(directory)
     for filename, workflow in workflows.items():
-        if filename not in {"quality-gate.yml", "release-pipeline.yml"}:
+        if filename not in {QUALITY_GATE, "release-pipeline.yml"}:
             validate_workflow_pins(filename, workflow, None)
             continue
         source = (directory / ".github/workflows" / filename).read_text()
@@ -95,31 +132,33 @@ def validate_generator_pins(directory, workflows):
         validate_workflow_pins(filename, workflow, pins)
 
 
+def _callable_workflow(workflows, visited, filename, chain=()):
+    """Traverse callable workflows, retaining cycle detection before visited pruning."""
+    if filename in chain:
+        raise ValueError(f"Recursive validation: {chain} -> {filename}")
+    if filename in visited:
+        return
+    workflow = workflows[filename]
+    triggers = workflow.get("on", {})
+    if not isinstance(triggers, dict) or "workflow_call" not in triggers:
+        raise ValueError(f"{filename}: missing workflow_call")
+    if set(triggers) - {"workflow_call", "workflow_dispatch"}:
+        raise ValueError(f"{filename}: validation must start through Quality gate")
+    visited.add(filename)
+    for name, job in workflow.get("jobs", {}).items():
+        reference = job.get("uses", "")
+        if reference.startswith("./.github/workflows/"):
+            _callable_workflow(workflows, visited, reference.rsplit("/", 1)[-1], (*chain, filename))
+        elif "runs-on" in job and "timeout-minutes" not in job:
+            raise ValueError(f"{filename}/{name}: an explicit timeout is required")
+
+
 def validate_graph(workflows, validators):
     """Walk callable validators and enforce one orchestration entry point."""
     visited = set()
 
-    def callable_workflow(filename, chain=()):
-        if filename in chain:
-            raise ValueError(f"Recursive validation: {chain} -> {filename}")
-        if filename in visited:
-            return
-        workflow = workflows[filename]
-        triggers = workflow.get("on", {})
-        if not isinstance(triggers, dict) or "workflow_call" not in triggers:
-            raise ValueError(f"{filename}: missing workflow_call")
-        if set(triggers) - {"workflow_call", "workflow_dispatch"}:
-            raise ValueError(f"{filename}: validation must start through Quality gate")
-        visited.add(filename)
-        for name, job in workflow.get("jobs", {}).items():
-            reference = job.get("uses", "")
-            if reference.startswith("./.github/workflows/"):
-                callable_workflow(reference.rsplit("/", 1)[-1], (*chain, filename))
-            elif "runs-on" in job and "timeout-minutes" not in job:
-                raise ValueError(f"{filename}/{name}: an explicit timeout is required")
-
     for filename in validators:
-        callable_workflow(filename)
+        _callable_workflow(workflows, visited, filename)
     return visited
 
 
@@ -131,6 +170,7 @@ def validate(directory: Path, *, actions_only=False) -> None:
         path.name: yaml.load(path.read_text(), Loader=UniqueKeyLoader)  # nosec B506
         for path in (directory / ".github/workflows").glob("*.y*ml")
     }
+    validate_immutable_actions(workflows)
     validate_codeql(workflows)
     validate_generator_pins(directory, workflows)
     if actions_only:
@@ -141,10 +181,10 @@ def validate(directory: Path, *, actions_only=False) -> None:
             "pull_request" in workflow.get("on", {})
             and filename not in visited
             and filename
-            not in {"quality-gate.yml", "auto-approve.yml", "auto-merge.yml"}
+            not in {QUALITY_GATE, "auto-approve.yml", "auto-merge.yml"}
         ):
             raise ValueError(f"{filename}: PR validator is outside the required gate")
-    gate = workflows["quality-gate.yml"]["jobs"]
+    gate = workflows[QUALITY_GATE]["jobs"]
     expected = {
         f"./.github/workflows/{filename}" for filename in policy["validation_workflows"]
     }
