@@ -110,6 +110,6 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 
-# Preserve the locked upstream version; only Windows chain-strength policy differs.
+# Preserve the locked upstream version with native key policies and bounded CA diagnostics.
 [patch.crates-io]
 rustls-platform-verifier = { path = "vendor/rustls-platform-verifier-0.7.1" }

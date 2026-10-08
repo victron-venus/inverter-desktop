@@ -112,6 +112,7 @@ jobs:
           export DESKTOP_TLS_PYTHON
           DESKTOP_TLS_OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
           export DESKTOP_TLS_OPENSSL
+          "$DESKTOP_TLS_OPENSSL" version
           export DESKTOP_TLS_PROBE_OUTPUT_DIR="$RUNNER_TEMP/tls-policy-apple-native"
           python -c 'import os; from pathlib import Path; assert not Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]).exists(), "stale probe output"'
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tls_key_policy -- --ignored --nocapture

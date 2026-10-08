@@ -6,7 +6,7 @@ comes from the exact published crate recorded in
 [`platform-verifier-provenance.json`](platform-verifier-provenance.json), including
 its upstream revision and per-file hashes. MIT and Apache-2.0 license texts are
 retained in both directories. All upstream files except `src/verification/windows.rs` and
-`src/verification/apple.rs` are byte-identical; the upstream development `Cargo.lock` is not included.
+`src/verification/apple.rs` and `src/verification/others.rs` are byte-identical; the upstream development `Cargo.lock` is not included.
 
 The Windows delta supplies an explicit serialized strong-sign policy to the
 existing `CertGetCertificateChain` call: RSA keys must be at least 2048 bits,
@@ -35,7 +35,9 @@ The shipped Windows build targets Windows 10 or later, consistent with the
 [supported Rust Windows targets](https://blog.rust-lang.org/2024/02/26/Windows-7/).
 The strong-sign API is available starting with Windows 8. An explicit `win7`
 cross-compilation target is rejected rather than silently compiling a weaker
-policy. Linux and Android verification code is unchanged.
+policy. Linux and Android certificate verification is unchanged. On Unix,
+root-loading warnings retain their static error context but omit detailed error
+values, because malformed PEM errors can contain raw input lines.
 
 The three actual client builders are tested in Windows CI with disposable
 certificates; see [the probe instructions](../../../tests/tls-policy/README.md).

@@ -28,6 +28,6 @@ lto = true
 codegen-units = 1
 strip = true
 
-# Preserve the locked upstream version; only Windows chain-strength policy differs.
+# Preserve the locked upstream version with native key policies and bounded CA diagnostics.
 [patch.crates-io]
 rustls-platform-verifier = { path = "../../src-tauri/vendor/rustls-platform-verifier-0.7.0" }

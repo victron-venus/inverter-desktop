@@ -75,6 +75,10 @@ successful TLS 1.3 RSA probe. The minimum-key gate still requires both supported
 strong chains and all eight negative cases, including the omitted RSA-2047
 trust anchor. Actual iOS device behavior is not established by macOS tests.
 
+The Linux package-acceptance runner requires the exact union of its thirteen
+package scenarios and these two native TLS test names, while running only the
+package scenarios there. The Windows/macOS jobs below run the TLS tests.
+
 The tests are ignored in ordinary unit-test runs because they require external
 fixture tools. The Windows and macOS CI jobs explicitly invoke `--ignored`,
 require all three expected JSON reports across the native and worker jobs, and

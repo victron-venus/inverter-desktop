@@ -96,7 +96,8 @@ impl Verifier {
             }
 
             for error in result.errors {
-                log::warn!("Error loading CA root certificate: {error}");
+                // PEM errors can contain raw, potentially sensitive input lines.
+                log::warn!("Error loading CA root certificate: {}", error.context);
             }
 
             // Don't return an error if this fails when other roots have already been loaded via
