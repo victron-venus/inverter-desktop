@@ -7,7 +7,12 @@ private unit tests. Windows uses the local native-chain policy documented in
 [`platform-verifier-policy.md`](../../src-tauri/vendor/platform-verifier-policy.md).
 
 Requirements: Python 3.11 or newer with OpenSSL 3, the `openssl` command, and the
-normal native Rust build prerequisites. No Python packages are installed.
+normal native Rust build prerequisites. CI selects Python 3.13; local fixture
+checks also cover Python 3.11 and 3.14. Set `DESKTOP_TLS_PYTHON` to select the
+interpreter (`python3` is the default) and `DESKTOP_TLS_OPENSSL` to select the
+OpenSSL CLI (`openssl` is the default). Fixture setup checks both selected
+OpenSSL major versions before generating certificates. No Python packages are
+installed.
 
 ```sh
 export DESKTOP_TLS_PYTHON="$(command -v python3)"
@@ -58,7 +63,8 @@ substitute for it.
 
 The expanded matrix is a strict Windows-policy acceptance test. Independent
 macOS runs found that Apple's unchanged verifier accepts the RSA-2047 root and
-rejects the RSA-PSS public-key CA; these remain separate minimum-strength and
+rejects both tested RSA-PSS signature chains (including the public-key CA);
+these remain separate minimum-strength and
 compatibility limitations. They must not be reported as passing Windows evidence
 or as full-project OpenSSF compliance.
 

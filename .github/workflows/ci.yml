@@ -148,7 +148,7 @@ jobs:
       - run: cargo test --locked --manifest-path desktop-plugins/${{ matrix.plugin }}/Cargo.toml --all-targets
       - name: Set up Python for isolated ha TLS probes
         if: matrix.plugin == 'home-assistant' && runner.os == 'Windows'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
       - name: Verify ha TLS key policy with disposable certificates
@@ -162,10 +162,10 @@ jobs:
           python -c 'import os, subprocess; subprocess.run([os.environ["DESKTOP_TLS_OPENSSL"], "version"], check=True)'
           python -c 'import os; from pathlib import Path; assert not Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]).exists(), "stale probe output"'
           cargo test --locked --manifest-path desktop-plugins/home-assistant/Cargo.toml tls_key_policy -- --ignored --nocapture
-          python -c 'import json, os; from pathlib import Path; p=Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]); names=["ha-rest"]; assert all((p/(n+".json")).is_file() for n in names); assert all(len(json.loads((p/(n+".json")).read_text())["observations"]) == 6 for n in names)'
+          python -c 'import json, os; from pathlib import Path; p=Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]); names=["ha-rest"]; assert all((p/(n+".json")).is_file() for n in names); assert all(len(json.loads((p/(n+".json")).read_text())["observations"]) == 12 for n in names)'
       - name: Upload ha TLS probe evidence
         if: matrix.plugin == 'home-assistant' && runner.os == 'Windows' && always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tls-policy-ha-windows
           path: ${{ runner.temp }}/tls-policy-ha/*.json
@@ -217,7 +217,7 @@ jobs:
       # from Unix. Exercise actual signed archives and child processes here.
       - run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib plugins::'
       - name: Set up Python for isolated native TLS probes
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
       - name: Verify native TLS key policy with disposable certificates
@@ -230,10 +230,10 @@ jobs:
           python -c 'import os, subprocess; subprocess.run([os.environ["DESKTOP_TLS_OPENSSL"], "version"], check=True)'
           python -c 'import os; from pathlib import Path; assert not Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]).exists(), "stale probe output"'
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tls_key_policy -- --ignored --nocapture
-          python -c 'import json, os; from pathlib import Path; p=Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]); names=["plugin-download", "video-transfer"]; assert all((p/(n+".json")).is_file() for n in names); assert all(len(json.loads((p/(n+".json")).read_text())["observations"]) == 6 for n in names)'
+          python -c 'import json, os; from pathlib import Path; p=Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]); names=["plugin-download", "video-transfer"]; assert all((p/(n+".json")).is_file() for n in names); assert all(len(json.loads((p/(n+".json")).read_text())["observations"]) == 12 for n in names)'
       - name: Upload native TLS probe evidence
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tls-policy-native-windows
           path: ${{ runner.temp }}/tls-policy-native/*.json

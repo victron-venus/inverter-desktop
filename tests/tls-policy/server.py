@@ -39,6 +39,19 @@ def openssl(*args):
 
 
 def prepare(directory):
+    version = subprocess.check_output(
+        [os.environ.get("DESKTOP_TLS_OPENSSL", "openssl"), "version"],
+        text=True,
+        timeout=10,
+    ).strip()
+    if not version.startswith("OpenSSL 3."):
+        raise RuntimeError(
+            f"TLS fixtures require the selected OpenSSL 3 CLI; got {version!r}"
+        )
+    if ssl.OPENSSL_VERSION_INFO[0] != 3:
+        raise RuntimeError(
+            f"TLS fixture Python must use OpenSSL 3; got {ssl.OPENSSL_VERSION!r}"
+        )
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.umask(0o077)
     ca_ext = directory / "ca.ext"
@@ -184,21 +197,31 @@ def serve(directory, case):
                     "request": "",
                     "error": str(error),
                 }
-            with secured:
-                data = b""
-                while b"\r\n\r\n" not in data and len(data) < 16384:
-                    chunk = secured.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-                secured.sendall(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
-                )
+            data = b""
+            try:
+                with secured:
+                    while b"\r\n\r\n" not in data and len(data) < 16384:
+                        chunk = secured.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                    secured.sendall(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
+                    )
+                    return {
+                        "phase": "application",
+                        "version": secured.version(),
+                        "bytes": len(data),
+                        "request": data.decode("ascii"),
+                    }
+            except (OSError, UnicodeError) as error:
+                # A completed handshake followed by I/O failure is not proof
+                # that the client rejected the certificate. Preserve evidence.
                 return {
-                    "phase": "application",
-                    "version": secured.version(),
+                    "phase": "application-error",
                     "bytes": len(data),
-                    "request": data.decode("ascii"),
+                    "request": data.decode("ascii", errors="replace"),
+                    "error": str(error),
                 }
 
     with socket.socket() as listener:
