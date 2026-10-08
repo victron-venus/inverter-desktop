@@ -251,6 +251,10 @@ impl Book {
         }))
     }
 
+    pub fn connection_epoch(&self) -> u64 {
+        self.link.borrow().epoch
+    }
+
     pub fn subscribe_connection(&self) -> watch::Receiver<Connection> {
         self.link.subscribe()
     }

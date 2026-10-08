@@ -8,7 +8,7 @@ use super::media::MediaService;
 use super::presentation::{ControlState, LockState, Presentation};
 use super::protocol::DashboardContribution;
 use super::publishers::embedded_trust;
-use super::runtime::{PluginHost, PluginSnapshot, WorkerState};
+use super::runtime::{ActionBudget, PluginHost, PluginSnapshot, WorkerState};
 use super::settings::PluginSettingsView;
 use crate::auth;
 use serde_json::Value;
@@ -559,13 +559,13 @@ pub(crate) fn get_plugin_snapshot(
 /// Allow time for a lock motor and a newer HA observation only when the
 /// current native snapshot binds this exact request to a typed lock control.
 /// This selects a bounded wait; action_in_epoch still performs admission again.
-fn plugin_action_timeout(
+fn plugin_action_budget(
     snapshots: &[PluginSnapshot],
     plugin_id: &str,
     instance_id: &str,
     action_id: &str,
     params: &Value,
-) -> Duration {
+) -> ActionBudget {
     let is_lock = snapshots.iter().any(|snapshot| {
         snapshot.plugin_id == plugin_id
             && snapshot.instance_id.as_deref() == Some(instance_id)
@@ -599,7 +599,10 @@ fn plugin_action_timeout(
                     })
             })
     });
-    Duration::from_secs(if is_lock { 30 } else { 5 })
+    ActionBudget {
+        total: Duration::from_secs(if is_lock { 30 } else { 5 }),
+        worker: Duration::from_secs(if is_lock { 25 } else { 5 }),
+    }
 }
 
 #[tauri::command]
@@ -614,7 +617,7 @@ pub(crate) async fn plugin_action(
 ) -> Result<Value, String> {
     let epoch = state.host.authority_epoch();
     require_access(&app, &window, &state)?;
-    let timeout = plugin_action_timeout(
+    let budget = plugin_action_budget(
         &state.host.snapshots(),
         &plugin_id,
         &instance_id,
@@ -623,7 +626,7 @@ pub(crate) async fn plugin_action(
     );
     let result = state
         .host
-        .action_in_epoch(&plugin_id, &instance_id, &action_id, params, timeout, epoch)
+        .action_in_epoch_with_budget(&plugin_id, &instance_id, &action_id, params, budget, epoch)
         .await
         .map_err(|error| error.to_string())?;
     require_access(&app, &window, &state)?;
@@ -1112,8 +1115,9 @@ mod recovery_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_notification_requests, management_window, plugin_action_timeout, trusted_window,
-        ExitGate, Ordering, PluginSnapshot, WorkerState, NOTIFICATION_SIGNAL_CAPACITY,
+        drain_notification_requests, management_window, plugin_action_budget, trusted_window,
+        ActionBudget, ExitGate, Ordering, PluginSnapshot, WorkerState,
+        NOTIFICATION_SIGNAL_CAPACITY,
     };
 
     fn current_lock_snapshot() -> PluginSnapshot {
@@ -1144,8 +1148,11 @@ mod tests {
         let snapshots = [snapshot];
         let params = json!({"lock_revision":"observation-1"});
         assert_eq!(
-            plugin_action_timeout(&snapshots, "example.home", "worker-1", "unlock", &params),
-            Duration::from_secs(30)
+            plugin_action_budget(&snapshots, "example.home", "worker-1", "unlock", &params),
+            ActionBudget {
+                total: Duration::from_secs(30),
+                worker: Duration::from_secs(25)
+            }
         );
         for (plugin, instance, action, params) in [
             ("other.home", "worker-1", "unlock", params.clone()),
@@ -1165,13 +1172,19 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                plugin_action_timeout(&snapshots, plugin, instance, action, &params),
-                Duration::from_secs(5)
+                plugin_action_budget(&snapshots, plugin, instance, action, &params),
+                ActionBudget {
+                    total: Duration::from_secs(5),
+                    worker: Duration::from_secs(5)
+                }
             );
         }
         assert_eq!(
-            plugin_action_timeout(&[], "example.home", "worker-1", "unlock", &params),
-            Duration::from_secs(5)
+            plugin_action_budget(&[], "example.home", "worker-1", "unlock", &params),
+            ActionBudget {
+                total: Duration::from_secs(5),
+                worker: Duration::from_secs(5)
+            }
         );
     }
 
@@ -1181,7 +1194,7 @@ mod tests {
         use serde_json::json;
         use std::time::Duration;
         let timeout = |snapshot| {
-            plugin_action_timeout(
+            plugin_action_budget(
                 &[snapshot],
                 "example.home",
                 "worker-1",
@@ -1191,10 +1204,22 @@ mod tests {
         };
         let mut snapshot = current_lock_snapshot();
         snapshot.state = WorkerState::Restarting;
-        assert_eq!(timeout(snapshot), Duration::from_secs(5));
+        assert_eq!(
+            timeout(snapshot),
+            ActionBudget {
+                total: Duration::from_secs(5),
+                worker: Duration::from_secs(5)
+            }
+        );
         let mut snapshot = current_lock_snapshot();
         snapshot.presentation.clear();
-        assert_eq!(timeout(snapshot), Duration::from_secs(5));
+        assert_eq!(
+            timeout(snapshot),
+            ActionBudget {
+                total: Duration::from_secs(5),
+                worker: Duration::from_secs(5)
+            }
+        );
         for change in 0..5 {
             let mut snapshot = current_lock_snapshot();
             if let Presentation::Control {
@@ -1219,7 +1244,13 @@ mod tests {
                     _ => *state = ControlState::Off,
                 }
             }
-            assert_eq!(timeout(snapshot), Duration::from_secs(5));
+            assert_eq!(
+                timeout(snapshot),
+                ActionBudget {
+                    total: Duration::from_secs(5),
+                    worker: Duration::from_secs(5)
+                }
+            );
         }
         let mut snapshot = current_lock_snapshot();
         if let Presentation::Control {
@@ -1229,7 +1260,13 @@ mod tests {
             *lock_state = Some(LockState::Unlocked);
             *state = ControlState::Off;
         }
-        assert_eq!(timeout(snapshot), Duration::from_secs(30));
+        assert_eq!(
+            timeout(snapshot),
+            ActionBudget {
+                total: Duration::from_secs(30),
+                worker: Duration::from_secs(25)
+            }
+        );
     }
 
     #[tokio::test]

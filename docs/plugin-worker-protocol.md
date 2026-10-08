@@ -47,8 +47,8 @@ The additional limits are:
 - Action deadlines are relative milliseconds in the range 1–60,000. The host
   forwards the remaining budget immediately before writing, subtracting time
   spent in its queues and dropping requests with less than one millisecond left.
-  Its original absolute deadline and cancellation remain authoritative, including
-  during pipe transmission and when a worker does not cooperate.
+  The original absolute execution and reply deadlines, together with cancellation,
+  remain authoritative during pipe transmission and when a worker does not cooperate.
 - Error codes follow the identifier rules. Error messages occupy at most 1,024
   bytes.
 
@@ -857,6 +857,18 @@ their status/text contribution. The host-owned icon set includes `lock`.
 A supplied lock action must reference the same state contribution. Unsupported
 fields still fail validation; workers emitting these fields require API 1.10.
 Older workers remain compatible through their existing semver ranges.
+
+For an exact current action bound to a validated stable lock control, the native
+host allows 25 seconds of worker execution within a 30-second total reply budget.
+Both absolute deadlines begin at admission. The writer recomputes the remaining
+relative worker budget on every pending first-byte write, including after pipe
+backpressure. Once any bytes are accepted, that frame cannot be rewritten; an
+execution deadline or cancellation during a partial write ends the generation.
+Delayed partial delivery can still shift the worker's receipt-relative window,
+so the five-second response reserve does not promise an absolute remote completion
+time. The total host reply deadline remains enforced. Other application actions
+keep the existing five-second execution and reply budgets; callers cannot select
+a longer budget through action parameters.
 
 The desktop retains observed state during an action and shares pending/error
 state by worker instance and state contribution across duplicate placements.

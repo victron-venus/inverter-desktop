@@ -12,7 +12,7 @@ description = "Standalone desktop Home Assistant state and selected action worke
 inverter-worker-protocol = { path = "../worker-protocol" }
 futures-util = "=0.3.34"
 percent-encoding = "=2.3.2"
-reqwest = { version = "=0.13.5", features = ["json"] }
+reqwest = { version = "=0.13.5", features = ["json", "stream"] }
 semver = "=1.0.28"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision"] }
