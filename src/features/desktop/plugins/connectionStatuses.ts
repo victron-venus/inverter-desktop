@@ -73,11 +73,13 @@ export function connectionStatuses(
   ): ConnectionStatus {
     const usable = !!item && !!plugin && available(plugin)
     const connected = usable && item.connected
+    let state = 'Unavailable'
+    if (usable) state = connected ? 'Connected' : 'Disconnected'
     return {
       key: JSON.stringify([identity, plugin?.instance_id ?? null, id]),
       label: title,
       connected,
-      details: `${title}: ${usable ? (connected ? 'Connected' : 'Disconnected') : 'Unavailable'}`,
+      details: `${title}: ${state}`,
     }
   }
 }
