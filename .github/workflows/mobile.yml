@@ -179,6 +179,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p 'test_play_upload_signing.py' -v
           python3 -m unittest discover -s tests -p 'test_native_alignment.py' -v
+          python3 -m unittest discover -s tests -p 'test_gradle_wrapper_integrity.py' -v
       - name: Setup Android SDK
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
@@ -193,8 +194,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev
+      - name: Verify committed Gradle bootstrap
+        run: python3 scripts/android/verify_gradle_wrapper.py
       - name: Init Android project
         run: pnpm tauri android init --ci
+      - name: Verify initialized Gradle bootstrap
+        run: python3 scripts/android/verify_gradle_wrapper.py
       - name: Test combined Android package graph
         run: python3 -m unittest discover -s tests -p test_android_gradle_graph.py -v
       - name: Fingerprint Android NDK installations

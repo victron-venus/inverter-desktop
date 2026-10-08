@@ -46,6 +46,7 @@ All notable changes to this project will be documented in this file.
 - Document contribution checks, confidential security reporting and the project-specific trust boundaries.
 
 ### Security
+- Verify the official Gradle 8.14.3 wrapper and pinned distribution checksum before and after Android project generation.
 
 Private vulnerability reporting and response policy are documented in SECURITY.md. This maintenance update strengthens release evidence and review instructions; it does not replace deployment authentication, network isolation or independent equipment safeguards. No new project CVE is announced by these changes.
 

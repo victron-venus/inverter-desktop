@@ -145,3 +145,22 @@ References: [GitHub schedules](https://docs.github.com/en/actions/reference/work
 Run `python3 scripts/release.py prepare-version --pr` from the clean default-branch HEAD. The command refreshes tags and opens a PR with synchronized owned version fields. An existing unreleased base is retained; use `--bump minor`, `--bump major`, or `--version X.Y.Z` for explicit intent. See [version plans](VERSIONING.md) for build overlays, the dedicated allocation ledger and recovery.
 
 A local candidate package also needs the saved `.release-plan.json` at its exact source commit. Restore the `version_plan` object from the published `release-manifest.json` into a disposable checkout before `release.py package`; do not invent a tag or native counter locally. Ordinary development builds can use the project's native build command and explicitly local version identity.
+
+
+### Android Gradle bootstrap verification
+
+Android CI, release packaging and Play bundle jobs run
+`python3 scripts/android/verify_gradle_wrapper.py` before and after the pinned
+Tauri CLI initializes the project. The verifier rejects modified or linked
+wrapper/configuration files before any subsequent Gradle task. The committed
+wrapper is the official Gradle 8.14.3 JAR; `distributionSha256Sum` verifies the
+8.14.3 binary distribution when Gradle downloads it.
+
+For a Gradle upgrade, obtain the wrapper and distribution checksums from the
+[official Gradle distribution service](https://services.gradle.org/distributions/),
+verify the downloaded wrapper, and update the two reviewed checksums in the
+verifier together with `gradle-wrapper.properties`. Run the integrity tests and
+`test_android_gradle_graph.py`, initialize the Android project with the locked
+Tauri CLI, and verify the files again. Native Android build and analysis must
+also pass in CI before merging. These checks do not change application signing
+or publication permissions.
