@@ -50,7 +50,8 @@ DNS policy. No invalid-certificate or invalid-hostname override is used.
 On Windows, the pinned platform verifier first attempts the normal chain and
 then uses an in-memory exclusive-root chain engine for the extra fixture root.
 Both paths use the same native certificate-policy validation and the local
-strong-sign configuration. This does not measure
+strong-sign configuration plus exact RSA modulus checks on the selected chain.
+This does not measure
 the contents or administrative policies of the system trust store.
 
 The assertions deliberately require rejection of weak chains, so a provider

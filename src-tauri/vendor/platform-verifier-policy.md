@@ -11,8 +11,15 @@ retained in both directories. All upstream files except `src/verification/window
 The Windows delta supplies an explicit serialized strong-sign policy to the
 existing `CertGetCertificateChain` call: RSA keys must be at least 2048 bits,
 ECDSA keys at least 256 bits, and certificate signatures use SHA-256, SHA-384 or
-SHA-512 with RSA/ECDSA. The explicit RSA limit avoids the 2047-bit threshold in
-Windows' predefined strong-sign OID. ECDSA-P224 and legacy SHA-1 certificate
+SHA-512 with RSA/ECDSA. The explicit RSA limit avoids selecting Windows' predefined 2047-bit
+strong-sign OID, but Windows can still accept a 2047-bit modulus under this
+configuration. After successful native SSL policy verification, an additional
+check walks every element in all selected simple chains, including the trusted
+root. It uses native CNG import/export for RSA and RSA-PSS public keys and counts
+the actual significant bits of the exported modulus. It does not rely on a
+rounded key-width property. Missing or malformed key data, import/export
+failures, and RSA moduli below 2048 bits fail closed. The strong-sign policy
+continues to enforce ECDSA and signature requirements. ECDSA-P224 and legacy SHA-1 certificate
 chains are intentionally outside this policy. Applications using private CAs
 must replace undersized keys and legacy signatures rather than disable checking.
 
@@ -63,6 +70,11 @@ API references:
 - [CERT_CHAIN_PARA](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_para)
 - [CERT_STRONG_SIGN_SERIALIZED_INFO](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_strong_sign_serialized_info)
 - [CERT_STRONG_SIGN_PARA](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_strong_sign_para)
+
+- [CERT_CHAIN_CONTEXT](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_context)
+- [CryptImportPublicKeyInfoEx2](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-cryptimportpublickeyinfoex2)
+- [BCryptExportKey](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptexportkey)
+- [BCRYPT_RSAKEY_BLOB](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/ns-bcrypt-bcrypt_rsakey_blob)
 
 - [SecTrustGetCertificateAtIndex](https://developer.apple.com/documentation/security/sectrustgetcertificateatindex(_:_:))
 - [SecCertificateCopyKey](https://developer.apple.com/documentation/security/seccertificatecopykey(_:))
