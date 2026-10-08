@@ -235,6 +235,7 @@ async fn entity_card_regrouping_preserves_queued_numeric_grants_but_not_removed_
                 numeric: Some(lease.clone()),
                 cancellation,
                 deadline: Instant::now() + Duration::from_secs(2),
+                worker_deadline: Instant::now() + Duration::from_secs(2),
                 reply,
             },
             &entry,
@@ -338,6 +339,7 @@ async fn queued_numeric_controls_recheck_full_grant_and_continuity_not_only_work
                 numeric: Some(lease.clone()),
                 cancellation,
                 deadline: Instant::now() + Duration::from_secs(2),
+                worker_deadline: Instant::now() + Duration::from_secs(2),
                 reply,
             },
             &entry,
@@ -377,6 +379,7 @@ async fn queued_numeric_controls_recheck_full_grant_and_continuity_not_only_work
             numeric: None,
             cancellation,
             deadline: Instant::now() + Duration::from_secs(2),
+            worker_deadline: Instant::now() + Duration::from_secs(2),
             reply,
         },
         &entry,
@@ -446,6 +449,73 @@ impl AsyncWrite for GatedWriter {
         _: &mut std::task::Context<'_>,
     ) -> Poll<std::io::Result<()>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn nonnumeric_writer_rechecks_budget_and_authority_after_pending_first_write() {
+    for change in ["unchanged", "cancel", "revoke"] {
+        let gate = Arc::new(WriteGate::default());
+        let (outgoing, receiver) = mpsc::channel(2);
+        let (_stop, stop_receiver) = watch::channel(false);
+        let (cancel, cancellation) = watch::channel(false);
+        let authority = Arc::new(Mutex::new(Authority {
+            enabled: true,
+            epoch: 7,
+        }));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let params = json!({"lock_revision":"observed-1"});
+        outgoing
+            .send(Outgoing::Action {
+                request_id: "first-write".into(),
+                action_id: "lock".into(),
+                params: params.clone(),
+                numeric: None,
+                deadline,
+                cancellation,
+            })
+            .await
+            .unwrap();
+        drop(outgoing);
+        let task = tokio::spawn(write_frames(
+            GatedWriter(gate.clone()),
+            receiver,
+            stop_receiver,
+            authority.clone(),
+            7,
+        ));
+        gate.polled().await;
+        time::sleep(Duration::from_millis(40)).await;
+        match change {
+            "cancel" => {
+                cancel.send_replace(true);
+            }
+            "revoke" => {
+                authority.lock().unwrap().enabled = false;
+            }
+            _ => {}
+        }
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u64;
+        gate.open();
+        let result = time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let bytes = gate.state.lock().unwrap().3.clone();
+        if change == "unchanged" {
+            result.unwrap();
+            let frame: HostMessage = serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                matches!(frame, HostMessage::Action { request_id, action_id, params: forwarded, deadline_ms }
+                if request_id == "first-write" && action_id == "lock" && forwarded == params
+                    && (1..=remaining).contains(&deadline_ms))
+            );
+        } else {
+            assert_eq!(result.unwrap_err(), "worker_write_cancelled");
+            assert!(bytes.is_empty(), "{change} must reject before any byte");
+        }
     }
 }
 
@@ -1224,6 +1294,132 @@ async fn uninstall_reaps_workers_and_releases_registry_capacity() {
         assert!(entry.task.lock().unwrap().is_none());
         assert!(host.snapshots().is_empty());
     }
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn worker_deadline_response_arrives_within_separate_host_reply_budget() {
+    let host = PluginHost::default();
+    host.start(spec("deadline_reply")).await.unwrap();
+    let snapshot = ready(&host).await;
+    let response = host
+        .action_in_epoch_with_budget(
+            TEST_PLUGIN,
+            snapshot.instance_id.as_deref().unwrap(),
+            "echo",
+            json!({}),
+            ActionBudget {
+                total: Duration::from_secs(2),
+                worker: Duration::from_millis(120),
+            },
+            host.authority_epoch(),
+        )
+        .await
+        .unwrap();
+    let forwarded = response["worker_budget_ms"].as_u64().unwrap();
+    assert!((1..=120).contains(&forwarded));
+    assert_eq!(response["ok"], true);
+    // The fixture waits beyond its worker budget before writing the terminal
+    // response. This succeeds only while the host response deadline is later.
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn action_budgets_reject_zero_overflow_and_worker_later_than_host() {
+    let host = PluginHost::default();
+    for budget in [
+        ActionBudget {
+            total: Duration::ZERO,
+            worker: Duration::ZERO,
+        },
+        ActionBudget {
+            total: Duration::from_secs(1),
+            worker: Duration::ZERO,
+        },
+        ActionBudget {
+            total: Duration::from_secs(1),
+            worker: Duration::from_secs(2),
+        },
+        ActionBudget {
+            total: Duration::from_secs(61),
+            worker: Duration::from_secs(1),
+        },
+    ] {
+        assert_eq!(
+            host.action_in_epoch_with_budget(
+                TEST_PLUGIN,
+                "missing",
+                "echo",
+                json!({}),
+                budget,
+                host.authority_epoch()
+            )
+            .await
+            .unwrap_err(),
+            PluginError::InvalidRequest
+        );
+    }
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_action_expired_worker_budget_is_rejected_before_total_deadline() {
+    let host = PluginHost::default();
+    host.start(spec("normal")).await.unwrap();
+    let snapshot = ready(&host).await;
+    let entry = host.entry(TEST_PLUGIN).unwrap();
+    let (pipes, mut outgoing) = fake_pipes();
+    let (reply, response) = oneshot::channel();
+    let (_cancel, cancellation) = watch::channel(false);
+    let mut pending = HashMap::new();
+    handle_control(
+        Control::Action {
+            request_id: "expired-worker-budget".into(),
+            generation: snapshot.generation,
+            action_id: "echo".into(),
+            params: json!({}),
+            numeric: None,
+            cancellation,
+            deadline: Instant::now() + Duration::from_secs(1),
+            worker_deadline: Instant::now() - Duration::from_millis(1),
+            reply,
+        },
+        &entry,
+        snapshot.generation,
+        true,
+        &pipes,
+        &mut pending,
+    );
+    assert_eq!(response.await.unwrap(), Err(PluginError::DeadlineExceeded));
+    assert!(pending.is_empty());
+    assert!(outgoing.try_recv().is_err());
+    let (reply, _response) = oneshot::channel();
+    let (_cancel, cancellation) = watch::channel(false);
+    let admitted_at = Instant::now();
+    let deadline = admitted_at + Duration::from_secs(2);
+    let worker_deadline = admitted_at + Duration::from_millis(120);
+    handle_control(
+        Control::Action {
+            request_id: "separate-worker-budget".into(),
+            generation: snapshot.generation,
+            action_id: "echo".into(),
+            params: json!({}),
+            numeric: None,
+            cancellation,
+            deadline,
+            worker_deadline,
+            reply,
+        },
+        &entry,
+        snapshot.generation,
+        true,
+        &pipes,
+        &mut pending,
+    );
+    assert_eq!(pending["separate-worker-budget"].deadline, deadline);
+    assert!(
+        matches!(outgoing.try_recv().unwrap(), Outgoing::Action { deadline, .. } if deadline == worker_deadline)
+    );
     host.shutdown().await;
 }
 

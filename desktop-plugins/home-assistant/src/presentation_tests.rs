@@ -504,3 +504,105 @@ fn omitted_layout_enables_compact_default_while_explicit_empty_keeps_flat_optout
     let shared = Book::configured(&config);
     assert!(shared.lock().unwrap().frame().get("presentation").is_none());
 }
+
+fn lock_book() -> Shared {
+    let config = configuration(json!({"dashboard_layout":json!({"version":1,"controls":[
+        {"id":"home-lock","surface":"home","order":0,"label":"Front door","entity":"lock.door","icon":"lock"},
+        {"id":"header-lock","surface":"header","order":1,"label":"Same door","entity":"lock.door","icon":"lock"}
+    ]}).to_string()}));
+    assert_eq!(config.actions().len(), 2);
+    Book::configured(&config)
+}
+
+#[test]
+fn lock_presentation_uses_native_states_exact_intents_and_shared_identity() {
+    let shared = lock_book();
+    let mut book = shared.lock().unwrap();
+    book.connected();
+    for (observed, shown, next) in [("locked", "on", "unlock"), ("unlocked", "off", "lock")] {
+        book.live("lock.door", Some(&state("lock.door", observed)));
+        let frame = book.frame();
+        book.mark_published();
+        for id in ["home-lock", "header-lock"] {
+            let control = presentation(&frame, id);
+            assert_eq!(control["state"], shown);
+            assert_eq!(control["lock_state"], observed);
+            assert_eq!(control["state_id"], "entity-0");
+            assert_eq!(control["action"], format!("ha-primary-0-{next}"));
+        }
+        let action = frame["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["kind"] == "action")
+            .unwrap();
+        let id = action["action_id"].as_str().unwrap();
+        assert!(book.action_request(id, &action["params"]).is_some());
+        assert!(book.action_request(id, &json!({})).is_none());
+        assert_eq!(action["state_id"], "entity-0");
+    }
+    for observed in [
+        "unknown",
+        "unavailable",
+        "jammed",
+        "locking",
+        "unlocking",
+        "open",
+        "on",
+        "off",
+        "LOCKED",
+        " unlocked ",
+        "",
+    ] {
+        book.live("lock.door", Some(&state("lock.door", observed)));
+        let frame = book.frame();
+        book.mark_published();
+        let control = presentation(&frame, "home-lock");
+        assert_eq!(control["state"], "unavailable");
+        assert_eq!(control["state_id"], "entity-0");
+        assert!(control.get("action").is_none(), "{observed}");
+        assert!(book.action_target("ha-primary-0-lock").is_none());
+        assert!(book.action_target("ha-primary-0-unlock").is_none());
+    }
+    book.disconnected();
+    assert_eq!(
+        presentation(&book.frame(), "home-lock")["lock_state"],
+        "unavailable"
+    );
+}
+
+#[test]
+fn lock_grants_cannot_survive_aba_or_reconnect_or_be_guessed_before_publication() {
+    let shared = lock_book();
+    let mut book = shared.lock().unwrap();
+    book.connected();
+    book.live("lock.door", Some(&state("lock.door", "unlocked")));
+    book.mark_published();
+    let params = book.action_params(0);
+    assert!(book.action_request("ha-primary-0-lock", &params).is_some());
+    book.live("lock.door", Some(&state("lock.door", "jammed")));
+    book.live("lock.door", Some(&state("lock.door", "unlocked")));
+    assert!(book.action_request("ha-primary-0-lock", &params).is_none());
+    let unpublished = book.action_params(0);
+    assert!(book
+        .action_request("ha-primary-0-lock", &unpublished)
+        .is_none());
+    book.mark_published();
+    assert!(book
+        .action_request("ha-primary-0-lock", &unpublished)
+        .is_some());
+    book.begin_session();
+    book.connected();
+    book.initial("lock.door", Some(&state("lock.door", "unlocked")));
+    book.mark_published();
+    assert!(book
+        .action_request("ha-primary-0-lock", &unpublished)
+        .is_none());
+    assert!(book
+        .action_request("ha-primary-0-lock", &book.action_params(0))
+        .is_some());
+    book.entities[0].lock_revision = Some(u64::MAX);
+    book.live("lock.door", Some(&state("lock.door", "locked")));
+    book.mark_published();
+    assert!(book.action_target("ha-primary-0-unlock").is_none());
+}

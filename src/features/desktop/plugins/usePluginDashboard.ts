@@ -22,9 +22,13 @@ function canonical(value: unknown): string {
   })
 }
 
-function actionKey(pluginId: string, instanceId: string | null, action: ActionContribution) {
+function genericActionKey(pluginId: string, instanceId: string | null, action: ActionContribution) {
   // Display-only changes must not unlock a pending operation or hide its error.
   return canonical([pluginId, instanceId, action.action_id, action.params])
+}
+
+function lockActionKey(pluginId: string, instanceId: string | null, stateId: string) {
+  return canonical([pluginId, instanceId, 'lock-control', stateId])
 }
 
 function numberInputKey(
@@ -251,6 +255,25 @@ export function createPluginDashboard() {
     )
   }
 
+  function actionKey(pluginId: string, instanceId: string | null, action: ActionContribution) {
+    // Opposite lock intents and duplicate projections share one operation.
+    // Compact views retain this state reference while transitions withdraw actions.
+    const plugin = plugins.value.find(
+      (entry) => entry.plugin_id === pluginId && entry.instance_id === instanceId
+    )
+    const lock = plugin?.presentation?.find(
+      (view) =>
+        view.kind === 'control' &&
+        view.lock_state &&
+        view.action === action.id &&
+        view.state_id &&
+        view.state_id === action.state_id
+    )
+    return lock?.kind === 'control' && lock.state_id
+      ? lockActionKey(pluginId, instanceId, lock.state_id)
+      : genericActionKey(pluginId, instanceId, action)
+  }
+
   async function runAction(
     pluginId: string,
     instanceId: string | null,
@@ -337,6 +360,7 @@ export function createPluginDashboard() {
     refresh,
     canAct,
     actionKey,
+    lockActionKey,
     runAction,
     numberInputKey,
     runNumberInput,

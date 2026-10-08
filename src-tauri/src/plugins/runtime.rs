@@ -104,6 +104,15 @@ struct MediaAdmission {
 }
 
 type ChangeCallback = Arc<dyn Fn() + Send + Sync>;
+
+/// Native-selected limits: the worker may finish before the host stops waiting
+/// so its final observed-state or unknown-outcome response has time to arrive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ActionBudget {
+    pub total: Duration,
+    pub worker: Duration,
+}
+
 type ActionReply = oneshot::Sender<Result<Value, PluginError>>;
 
 /// Native delivery only. Never serialize notification content into app snapshots.
@@ -847,12 +856,43 @@ impl PluginHost {
         timeout: Duration,
         epoch: u64,
     ) -> Result<Value, PluginError> {
+        self.action_in_epoch_with_budget(
+            plugin_id,
+            instance_id,
+            action_id,
+            params,
+            ActionBudget {
+                total: timeout,
+                worker: timeout,
+            },
+            epoch,
+        )
+        .await
+    }
+
+    pub(crate) async fn action_in_epoch_with_budget(
+        &self,
+        plugin_id: &str,
+        instance_id: &str,
+        action_id: &str,
+        params: Value,
+        budget: ActionBudget,
+        epoch: u64,
+    ) -> Result<Value, PluginError> {
         if self.0.stopped.load(Ordering::Acquire) {
             return Err(PluginError::HostStopped);
         }
-        if timeout.is_zero() || timeout > Duration::from_millis(MAX_ACTION_DEADLINE_MS) {
+        if budget.total.is_zero()
+            || budget.total > Duration::from_millis(MAX_ACTION_DEADLINE_MS)
+            || budget.worker.is_zero()
+            || budget.worker > budget.total
+        {
             return Err(PluginError::InvalidRequest);
         }
+        // Both absolute deadlines start at admission, never at pipe delivery.
+        let admitted_at = Instant::now();
+        let deadline = admitted_at + budget.total;
+        let worker_deadline = admitted_at + budget.worker;
         let entry = self.entry(plugin_id)?;
         let snapshot = entry.snapshot();
         if snapshot.state != WorkerState::Running
@@ -872,12 +912,11 @@ impl PluginHost {
             request_id: request_id.clone(),
             action_id: action_id.to_owned(),
             params: params.clone(),
-            deadline_ms: timeout.as_millis().max(1) as u64,
+            deadline_ms: budget.worker.as_millis().max(1) as u64,
         };
         validate_host_message(&message).map_err(|_| PluginError::InvalidRequest)?;
         let (reply, response) = oneshot::channel();
         let (cancel, cancellation) = watch::channel(false);
-        let deadline = Instant::now() + timeout;
         {
             let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
             if self.0.stopped.load(Ordering::Acquire) {
@@ -911,6 +950,7 @@ impl PluginHost {
                     numeric,
                     cancellation,
                     deadline,
+                    worker_deadline,
                     reply,
                 })
                 .map_err(|error| match error {
@@ -1153,6 +1193,7 @@ enum Control {
         numeric: Option<Arc<NumericLease>>,
         cancellation: watch::Receiver<bool>,
         deadline: Instant,
+        worker_deadline: Instant,
         reply: ActionReply,
     },
     Cancel(String),
@@ -1311,29 +1352,49 @@ async fn write_frames<W: AsyncWrite + Unpin>(
                     }
                     continue;
                 }
-                // Forward only the original request's remaining budget. Queue
-                // pressure must not give the worker a fresh full timeout.
-                let deadline_ms = deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis()
-                    .try_into()
-                    .map_err(|_| "host_frame_invalid")?;
-                if deadline_ms == 0 {
+                let stop_check = stop.clone();
+                let cancel_check = cancellation.clone();
+                let first = tokio::select! {
+                    biased;
+                    _ = stop.changed() => return Ok(()),
+                    _ = cancellation.changed() => return Err("worker_write_cancelled"),
+                    _ = time::sleep_until(deadline) => return Err("worker_write_timeout"),
+                    result = poll_fn(|context| {
+                        // Pending accepts no bytes, so backpressure must not
+                        // preserve a previously encoded relative deadline.
+                        let authority = authority.lock().unwrap_or_else(|e| e.into_inner());
+                        if !authority.enabled || authority.epoch != epoch
+                            || *stop_check.borrow() || *cancel_check.borrow()
+                        {
+                            return Poll::Ready(Err("worker_write_cancelled"));
+                        }
+                        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+                        if remaining == 0 { return Poll::Ready(Ok(None)); }
+                        let encoded = match encode_host_frame(&HostMessage::Action {
+                            request_id: request_id.clone(), action_id: action_id.clone(),
+                            params: params.clone(), deadline_ms: remaining as u64,
+                        }) {
+                            Ok(encoded) => encoded,
+                            Err(_) => return Poll::Ready(Err("host_frame_invalid")),
+                        };
+                        match std::pin::Pin::new(&mut stdin).poll_write(context, &encoded) {
+                            Poll::Ready(Ok(0) | Err(_)) => Poll::Ready(Err("worker_write_failed")),
+                            Poll::Ready(Ok(count)) => Poll::Ready(Ok(Some((encoded, count)))),
+                            Poll::Pending => Poll::Pending,
+                        }
+                    }) => result?,
+                };
+                let Some((encoded, count)) = first else {
                     continue;
-                }
-                let encoded = encode_host_frame(&HostMessage::Action {
-                    request_id,
-                    action_id,
-                    params,
-                    deadline_ms,
-                })
-                .map_err(|_| "host_frame_invalid")?;
+                };
+                // Once bytes are accepted the frame cannot be rewritten. The
+                // original absolute execution deadline still bounds completion.
                 tokio::select! {
                     biased;
                     _ = stop.changed() => return Ok(()),
                     _ = cancellation.changed() => return Err("worker_write_cancelled"),
                     _ = time::sleep_until(deadline) => return Err("worker_write_timeout"),
-                    result = stdin.write_all(&encoded) => result.map_err(|_| "worker_write_failed")?,
+                    result = stdin.write_all(&encoded[count..]) => result.map_err(|_| "worker_write_failed")?,
                 }
                 // A cancelled partial frame ends this writer/generation; queued frames never follow it.
             }
@@ -1967,6 +2028,7 @@ fn handle_control(
             numeric,
             cancellation,
             deadline,
+            worker_deadline,
             reply,
         } => {
             let authority = entry.authority.lock().unwrap_or_else(|e| e.into_inner());
@@ -1976,7 +2038,7 @@ fn handle_control(
                 || expected != generation
             {
                 Some(PluginError::Unavailable)
-            } else if Instant::now() >= deadline {
+            } else if Instant::now() >= worker_deadline {
                 Some(PluginError::DeadlineExceeded)
             } else if !advertises(&entry.snapshot().contributions, &action_id, &params)
                 || numeric.as_ref().is_some_and(|lease| {
@@ -2014,7 +2076,7 @@ fn handle_control(
                         registry: entry.numeric.clone(),
                         rejected: pipes.rejection_sender.clone(),
                     }),
-                    deadline,
+                    deadline: worker_deadline,
                     cancellation,
                 })
                 .is_err()

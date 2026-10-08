@@ -1,9 +1,14 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import SidePanel from '../components/SidePanel.vue'
+import type { DashboardControlView, LockState } from '../dashboardControlView'
+import en from '../i18n/en'
 
 vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (key: string) => key }),
+  useI18n: () => ({
+    t: (key: string) =>
+      key.startsWith('lock.') ? (en.lock[key.slice(5) as keyof typeof en.lock] ?? key) : key,
+  }),
 }))
 
 const baseProps = {
@@ -201,5 +206,80 @@ describe('native IGW values', () => {
     expect(wrapper.emitted('send')?.[1]).toEqual(['water_mode', { which: 'valve', mode: 1 }])
     await wrapper.setProps({ pumpSwitch: null, waterValve: null })
     expect(water.findAll('button')).toHaveLength(0)
+  })
+})
+
+describe('Home lock control', () => {
+  function lock(state: LockState): DashboardControlView {
+    return {
+      id: 'front-lock',
+      label: 'C100 Plus',
+      entity: '',
+      lockState: state,
+      state: state === 'locked' ? 'on' : state === 'unlocked' ? 'off' : 'unavailable',
+      activate: vi.fn(),
+    }
+  }
+  it.each(['locked', 'unlocked'] as const)(
+    'shows an explicit %s state and toggle semantics',
+    (state) => {
+      const wrapper = mount(SidePanel, {
+        props: {
+          ...baseProps,
+          showHomeSection: true,
+          controlsConnected: true,
+          homeButtons: [lock(state)],
+        },
+      })
+      const button = wrapper.get('button.classic-btn-tile')
+      expect(button.text()).toContain(en.lock[state])
+      expect(button.attributes('aria-label')).toBe(`C100 Plus: ${en.lock[state]}`)
+      expect(button.attributes('aria-pressed')).toBe(state === 'locked' ? 'true' : 'false')
+      expect(button.attributes('disabled')).toBeUndefined()
+    }
+  )
+  it.each(['locking', 'unlocking', 'jammed', 'unknown', 'unavailable'] as const)(
+    'never presents %s as an unlocked actionable lock',
+    async (state) => {
+      const control = lock(state)
+      const wrapper = mount(SidePanel, {
+        props: {
+          ...baseProps,
+          showHomeSection: true,
+          controlsConnected: true,
+          homeButtons: [control],
+        },
+      })
+      const button = wrapper.get('button.classic-btn-tile')
+      expect(button.text()).toContain(en.lock[state])
+      expect(button.attributes('aria-pressed')).toBeUndefined()
+      expect(button.attributes('disabled')).toBeDefined()
+      await button.trigger('click')
+      expect(control.activate).not.toHaveBeenCalled()
+    }
+  )
+  it('keeps the observed lock state and label visible while waiting, then exposes an unconfirmed outcome', async () => {
+    const control = lock('unlocked')
+    const wrapper = mount(SidePanel, {
+      props: {
+        ...baseProps,
+        showHomeSection: true,
+        controlsConnected: true,
+        homeButtons: [{ ...control, pending: true }],
+      },
+    })
+    const button = wrapper.get('button.classic-btn-tile')
+    expect(button.get('.home-tile-label').classes()).not.toContain('opacity-0')
+    expect(button.text()).toContain('C100 Plus')
+    expect(button.text()).toContain('Unlocked')
+    expect(button.text()).toContain(en.lock.pending)
+    expect(button.attributes('aria-busy')).toBe('true')
+    expect(button.attributes('aria-pressed')).toBe('false')
+    await button.trigger('click')
+    expect(control.activate).not.toHaveBeenCalled()
+    await wrapper.setProps({ homeButtons: [{ ...control, failed: true }] })
+    expect(button.text()).toContain('Not confirmed')
+    expect(button.attributes('aria-label')).toContain(en.lock.unconfirmed)
+    expect(button.attributes('aria-pressed')).toBe('false')
   })
 })

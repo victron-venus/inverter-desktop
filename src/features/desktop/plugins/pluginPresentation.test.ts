@@ -9,6 +9,7 @@ import PluginConnectionStatus from './PluginConnectionStatus.vue'
 import PluginNumberSlider from './PluginNumberSlider.vue'
 import { createPluginPresentation, pluginPresentationKey } from './presentation'
 import type { NumberInputContribution, PluginSnapshot } from './types'
+import type { LockState } from '../../../dashboardControlView'
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: native.listen }))
@@ -345,5 +346,136 @@ describe('compact installed-package presentation', () => {
     await wrapper.get('input').trigger('pointerdown')
     await wrapper.get('input').setValue('60')
     expect(wrapper.emitted('submit')?.[0]).toEqual([{ ...input, input_revision: 'read-2' }, 60])
+  })
+})
+
+describe('lock presentation intent and pending state', () => {
+  async function observe(lockState: LockState, revision: string) {
+    const stable = lockState === 'locked' || lockState === 'unlocked'
+    const intent = lockState === 'locked' ? 'unlock' : 'lock'
+    plugins = [
+      {
+        ...snapshot,
+        contributions: [
+          {
+            kind: 'status',
+            id: 'lock-state',
+            title: 'C100 Plus',
+            value: lockState,
+            tone: 'neutral',
+          },
+          ...(stable
+            ? [
+                {
+                  kind: 'action' as const,
+                  id: intent,
+                  state_id: 'lock-state',
+                  title: 'C100 Plus',
+                  label: intent,
+                  action_id: `ha-primary-0-${intent}`,
+                  params: { lock_revision: revision },
+                },
+              ]
+            : []),
+        ],
+        presentation: (['header', 'home'] as const).map((surface) => ({
+          kind: 'control' as const,
+          id: `${surface}-lock`,
+          surface,
+          order: 0,
+          title: 'C100 Plus',
+          icon: 'lock' as const,
+          state: lockState === 'locked' ? 'on' : lockState === 'unlocked' ? 'off' : 'unavailable',
+          lock_state: lockState,
+          state_id: 'lock-state',
+          ...(stable ? { action: intent } : {}),
+        })),
+      },
+    ]
+    await context.dashboard.refresh()
+  }
+  function requests() {
+    return native.invoke.mock.calls.filter(([command]) => command === 'plugin_action')
+  }
+  it('shares pending across projections, state transitions and opposite intents until the original request settles', async () => {
+    await observe('unlocked', 'before')
+    const old = context.mergeControls('home', [])[0]
+    let finish!: () => void
+    native.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        })
+    )
+    old.activate?.()
+    expect(requests()).toHaveLength(1)
+    expect(requests()[0][1]).toMatchObject({
+      actionId: 'ha-primary-0-lock',
+      params: { lock_revision: 'before' },
+    })
+    expect(context.mergeControls('header', [])[0].pending).toBe(true)
+    await observe('locking', 'transition')
+    expect(context.mergeControls('home', [])[0]).toMatchObject({
+      pending: true,
+      disabled: true,
+      lockState: 'locking',
+    })
+    await observe('locked', 'after')
+    const opposite = context.mergeControls('header', [])[0]
+    expect(opposite.pending).toBe(true)
+    opposite.activate?.()
+    old.activate?.()
+    expect(requests()).toHaveLength(1)
+    finish()
+    await flushPromises()
+    expect(context.mergeControls('home', [])[0].pending).toBe(false)
+    context.mergeControls('home', [])[0].activate?.()
+    await flushPromises()
+    expect(requests()).toHaveLength(2)
+    expect(requests()[1][1]).toMatchObject({
+      actionId: 'ha-primary-0-unlock',
+      params: { lock_revision: 'after' },
+    })
+  })
+  it('retains the unconfirmed outcome when a lock action disappears and returns with the opposite intent', async () => {
+    await observe('unlocked', 'before')
+    let fail!: (reason: Error) => void
+    native.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = reject
+        })
+    )
+    context.mergeControls('home', [])[0].activate?.()
+    await observe('jammed', 'transition')
+    fail(new Error('Outcome unknown'))
+    await flushPromises()
+    expect(context.mergeControls('home', [])[0]).toMatchObject({
+      failed: true,
+      pending: false,
+      disabled: true,
+    })
+    await observe('locked', 'after')
+    expect(context.mergeControls('header', [])[0]).toMatchObject({ failed: true, pending: false })
+    native.invoke.mockRejectedValueOnce(new Error('Snapshot unavailable'))
+    await context.dashboard.refresh()
+    expect(context.mergeControls('home', [])[0]).toMatchObject({
+      lockState: 'unavailable',
+      disabled: true,
+      failed: true,
+    })
+  })
+  it('rejects retained intents even when the same direction is offered again with a new observation revision', async () => {
+    await observe('unlocked', 'first')
+    const old = context.mergeControls('home', [])[0]
+    await observe('locking', 'second')
+    await observe('unlocked', 'third')
+    old.activate?.()
+    await flushPromises()
+    expect(requests()).toHaveLength(0)
+    context.mergeControls('home', [])[0].activate?.()
+    await flushPromises()
+    expect(requests()).toHaveLength(1)
+    expect(requests()[0][1]).toMatchObject({ params: { lock_revision: 'third' } })
   })
 })

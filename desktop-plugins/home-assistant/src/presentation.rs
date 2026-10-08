@@ -35,6 +35,7 @@ const ICONS: &[&str] = &[
     "blinds",
     "play",
     "cloud",
+    "lock",
 ];
 const SECTIONS: &[&str] = &[
     "sensors",
@@ -97,7 +98,7 @@ pub fn primary_operation(entity: &str) -> Option<Operation> {
         "light" => Operation::Toggle(BinaryDomain::Light),
         "fan" => Operation::Toggle(BinaryDomain::Fan),
         "media_player" => Operation::Toggle(BinaryDomain::MediaPlayer),
-        "lock" => Operation::Toggle(BinaryDomain::Lock),
+        "lock" => Operation::Lock,
         "script" => Operation::Toggle(BinaryDomain::Script),
         "climate" => Operation::Toggle(BinaryDomain::Climate),
         "sensor" => Operation::Toggle(BinaryDomain::Sensor),
@@ -173,10 +174,30 @@ impl Layout {
         self.entities()
             .filter(|entity| seen.insert(*entity))
             .enumerate()
-            .map(|(index, entity)| ConfiguredAction {
-                id: format!("ha-primary-{index}"),
-                entity: entity.clone(),
-                operation: primary_operation(entity).expect("validated primary operation"),
+            .flat_map(|(index, entity)| {
+                let operation = primary_operation(entity).expect("validated primary operation");
+                if operation.lock_target().is_some() {
+                    // Distinct immutable IDs bind the user's displayed intent.
+                    // Refreshing state must never turn Lock into Unlock.
+                    vec![
+                        ConfiguredAction {
+                            id: format!("ha-primary-{index}-lock"),
+                            entity: entity.clone(),
+                            operation: Operation::Lock,
+                        },
+                        ConfiguredAction {
+                            id: format!("ha-primary-{index}-unlock"),
+                            entity: entity.clone(),
+                            operation: Operation::Unlock,
+                        },
+                    ]
+                } else {
+                    vec![ConfiguredAction {
+                        id: format!("ha-primary-{index}"),
+                        entity: entity.clone(),
+                        operation,
+                    }]
+                }
             })
             .collect()
     }
@@ -264,11 +285,19 @@ pub(crate) fn project(
     let primary = layout.actions();
     for control in &layout.controls {
         let row = rows.iter().find(|row| row.entity == control.entity);
-        let state = row
+        let raw_state = row
             .and_then(|row| row.observation)
-            .map(|observation| observation.state.trim().to_ascii_lowercase());
+            .map(|observation| observation.state.as_str());
+        let is_lock = control.entity.starts_with("lock.");
+        let state = raw_state.map(|state| state.trim().to_ascii_lowercase());
         let state = if !connected {
             "unavailable"
+        } else if is_lock {
+            match raw_state {
+                Some("locked") => "on",
+                Some("unlocked") => "off",
+                _ => "unavailable",
+            }
         } else {
             match state.as_deref() {
                 Some("on" | "open" | "opening" | "unlocked") => "on",
@@ -278,9 +307,39 @@ pub(crate) fn project(
         };
         let mut item = json!({"kind":"control","id":control.id,"surface":control.surface,"order":control.order,
             "title":control.label,"icon":control.icon,"state":state});
+        if is_lock {
+            let lock_state = if !connected {
+                "unavailable"
+            } else {
+                raw_state
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "locked"
+                                | "unlocked"
+                                | "locking"
+                                | "unlocking"
+                                | "jammed"
+                                | "unknown"
+                                | "unavailable"
+                        )
+                    })
+                    .unwrap_or("unknown")
+            };
+            item["lock_state"] = json!(lock_state);
+            if let Some(row) = row {
+                item["state_id"] = row.item["id"].clone();
+            }
+        }
         if let Some(action) = primary
             .iter()
-            .find(|action| action.entity == control.entity)
+            .find(|action| {
+                action.entity == control.entity
+                    && action
+                        .operation
+                        .required_lock_state()
+                        .is_none_or(|required| raw_state == Some(required))
+            })
             // Unknown is a display state, not action authority. Legacy header/Home
             // controls remained clickable; the current published grant decides
             // whether a button, scene or fresh-read toggle is still permitted.

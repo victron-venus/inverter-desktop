@@ -26,6 +26,7 @@ pub enum Icon {
     Blinds,
     Play,
     Cloud,
+    Lock,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -33,6 +34,18 @@ pub enum Icon {
 pub enum ControlState {
     On,
     Off,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LockState {
+    Locked,
+    Unlocked,
+    Locking,
+    Unlocking,
+    Jammed,
+    Unknown,
     Unavailable,
 }
 
@@ -74,6 +87,10 @@ pub enum Presentation {
         title: String,
         icon: Icon,
         state: ControlState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lock_state: Option<LockState>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<String>,
     },
@@ -183,6 +200,9 @@ pub fn validate(views: &[Presentation], items: &[DashboardContribution]) -> Resu
             Presentation::Control {
                 surface,
                 action: reference,
+                state,
+                lock_state,
+                state_id,
                 ..
             } => {
                 if *surface == Surface::Sidebar {
@@ -190,6 +210,36 @@ pub fn validate(views: &[Presentation], items: &[DashboardContribution]) -> Resu
                 }
                 if let Some(reference) = reference {
                     action(reference)?;
+                }
+                match (lock_state, state_id) {
+                    (None, None) => {}
+                    (Some(lock_state), Some(state_id)) => {
+                        identifier(state_id)?;
+                        if !matches!(
+                            item(state_id)?,
+                            DashboardContribution::Text { .. }
+                                | DashboardContribution::Status { .. }
+                        ) {
+                            return Err("Invalid lock state reference".into());
+                        }
+                        let expected = match lock_state {
+                            LockState::Locked => ControlState::On,
+                            LockState::Unlocked => ControlState::Off,
+                            _ => ControlState::Unavailable,
+                        };
+                        if *state != expected
+                            || (expected == ControlState::Unavailable && reference.is_some())
+                        {
+                            return Err("Invalid lock control state".into());
+                        }
+                        if let Some(reference) = reference {
+                            if !matches!(item(reference)?, DashboardContribution::Action { state_id: Some(action_state), .. } if action_state == state_id)
+                            {
+                                return Err("Invalid lock action state reference".into());
+                            }
+                        }
+                    }
+                    _ => return Err("Incomplete lock state presentation".into()),
                 }
             }
             Presentation::Group { surface, rows, .. } => {
@@ -308,6 +358,45 @@ mod tests {
             *action = None;
         }
         validate(&[unavailable], &[]).unwrap();
+    }
+
+    #[test]
+    fn lock_controls_bind_stable_states_and_actions_to_one_readonly_entity() {
+        let contributions = vec![
+            item(
+                json!({"kind":"status","id":"lock-state","title":"Front door","value":"Locked","tone":"success"}),
+            ),
+            item(
+                json!({"kind":"action","id":"unlock","state_id":"lock-state","title":"Front door","label":"Unlock","action_id":"unlock-door","params":{}}),
+            ),
+        ];
+        let control = json!({"kind":"control","id":"lock","surface":"home","order":1,"title":"Front door","icon":"lock","state":"on","lock_state":"locked","state_id":"lock-state","action":"unlock"});
+        validate(&[view(control.clone())], &contributions).unwrap();
+        let mut invalid = control.clone();
+        invalid["state"] = json!("off");
+        assert!(validate(&[view(invalid)], &contributions).is_err());
+        let mut invalid = control.clone();
+        invalid["state_id"] = json!("unlock");
+        assert!(validate(&[view(invalid)], &contributions).is_err());
+        let mut invalid = control.clone();
+        invalid.as_object_mut().unwrap().remove("state_id");
+        assert!(validate(&[view(invalid)], &contributions).is_err());
+        let mut wrong_action = contributions.clone();
+        if let DashboardContribution::Action { state_id, .. } = &mut wrong_action[1] {
+            *state_id = None;
+        }
+        assert!(validate(&[view(control.clone())], &wrong_action).is_err());
+        for state in ["locking", "unlocking", "jammed", "unknown", "unavailable"] {
+            let mut transitional = control.clone();
+            transitional["state"] = json!("unavailable");
+            transitional["lock_state"] = json!(state);
+            assert!(validate(&[view(transitional.clone())], &contributions).is_err());
+            transitional.as_object_mut().unwrap().remove("action");
+            validate(&[view(transitional)], &contributions).unwrap();
+        }
+        let mut unknown_enum = control;
+        unknown_enum["lock_state"] = json!("open");
+        assert!(serde_json::from_value::<Presentation>(unknown_enum).is_err());
     }
 
     #[test]

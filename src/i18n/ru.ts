@@ -1,4 +1,16 @@
 export default {
+  lock: {
+    notConfirmed: 'Не подтверждено',
+    locked: 'Заперт',
+    unlocked: 'Отперт',
+    locking: 'Запирается…',
+    unlocking: 'Отпирается…',
+    jammed: 'Заклинил',
+    unknown: 'Состояние неизвестно',
+    unavailable: 'Недоступен',
+    pending: 'Проверяется…',
+    unconfirmed: 'Действие не подтверждено; проверьте текущее состояние перед повтором.',
+  },
   actions: {},
   status: {
     telemetrylive: 'Данные актуальны',

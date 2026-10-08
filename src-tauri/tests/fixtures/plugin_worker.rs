@@ -220,6 +220,14 @@ fn main() {
             }
             "action" => {
                 let request_id = field(&line, "request_id");
+                if mode == "deadline_reply" && field(&line, "action_id") == "echo" {
+                    let budget_ms: u64 = integer_field(&line, "deadline_ms").parse().unwrap();
+                    std::thread::sleep(Duration::from_millis(budget_ms + 50));
+                    emit(&format!(
+                        r#"{{"type":"action_result","request_id":"{request_id}","value":{{"ok":true,"worker_budget_ms":{budget_ms}}}}}"#
+                    ));
+                    continue;
+                }
                 if mode == "numeric" {
                     let value = match field(&line, "action_id") {
                         "set-number" => {

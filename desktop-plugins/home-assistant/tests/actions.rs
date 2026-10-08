@@ -143,7 +143,7 @@ impl Worker {
         assert_eq!(
             self.next(),
             json!({"type":"ready","protocol_version":1,
-            "host_api_version":"1.8.0","plugin_id":"inverter-desktop.home-assistant"})
+            "host_api_version":"1.10.0","plugin_id":"inverter-desktop.home-assistant"})
         );
         self.send(frame);
         assert_eq!(
@@ -246,7 +246,7 @@ fn assert_state_links(frame: &Value) {
 }
 
 fn hello() -> Value {
-    json!({"type":"hello","protocol_version":1,"host_api_version":"1.8.0",
+    json!({"type":"hello","protocol_version":1,"host_api_version":"1.10.0",
         "plugin_id":"inverter-desktop.home-assistant"})
 }
 
@@ -614,18 +614,27 @@ fn initialize_primary(
     ]}).to_string());
     worker.configure_frame(frame);
     let socket = authorize(fixture, true);
+    let observed = if target.starts_with("lock.") {
+        "unlocked"
+    } else {
+        "off"
+    };
     let mut seen = HashSet::new();
     for _ in 0..2 {
         let mut requested = request(fixture);
         assert!(seen.insert(requested.line.clone()));
         if requested.line == "GET /reverse/proxy/ha/api/states HTTP/1.1" {
-            respond(&mut requested.stream, 200, json!([entity(target, "off")]));
+            respond(
+                &mut requested.stream,
+                200,
+                json!([entity(target, observed)]),
+            );
         } else {
             assert_eq!(
                 requested.line,
                 format!("GET /reverse/proxy/ha/api/states/{target} HTTP/1.1")
             );
-            respond(&mut requested.stream, 200, entity(target, "off"));
+            respond(&mut requested.stream, 200, entity(target, observed));
         }
     }
     let frame = connected(worker, 1);
@@ -635,7 +644,14 @@ fn initialize_primary(
         .iter()
         .find(|item| item["id"] == "primary")
         .unwrap();
-    assert_eq!(control["action"], "ha-primary-0");
+    assert_eq!(
+        control["action"],
+        if target.starts_with("lock.") {
+            "ha-primary-0-lock"
+        } else {
+            "ha-primary-0"
+        }
+    );
     assert_eq!(control["state"], "off");
     socket
 }
@@ -650,7 +666,6 @@ fn primary_controls_read_fresh_state_and_use_explicit_legacy_routes_without_cach
         "media_player",
         "script",
         "climate",
-        "lock",
         "sensor",
         "binary_sensor",
     ] {
@@ -5954,5 +5969,285 @@ fn compact_catalog_and_opt_in_notifications_cross_real_worker_pipes_without_gran
     worker.action("read-only", "ha-primary-0", 5000);
     worker.error("read-only", "invalid_action");
     no_request(&fixture, Duration::ZERO);
+    worker.stop(false);
+}
+
+fn lock_snapshot(worker: &mut Worker, observed: &str) -> Value {
+    worker.until(|frame| {
+        frame["presentation"].as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item["id"] == "primary" && item["lock_state"] == observed)
+        })
+    })
+}
+
+fn current_lock_action(frame: &Value) -> (String, Value) {
+    let action = actions(frame)
+        .into_iter()
+        .next()
+        .expect("published lock action");
+    (
+        action["action_id"].as_str().unwrap().to_owned(),
+        action["params"].clone(),
+    )
+}
+
+fn fresh_lock_read(fixture: &TcpListener, observed: &str) {
+    let mut fresh = request(fixture);
+    assert_eq!(
+        fresh.line,
+        "GET /reverse/proxy/ha/api/states/lock.door HTTP/1.1"
+    );
+    respond(&mut fresh.stream, 200, entity("lock.door", observed));
+}
+
+#[test]
+fn native_lock_commands_keep_exact_intent_and_wait_for_observed_confirmation() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize_primary(&mut worker, &fixture, "lock.door");
+    // Produce a fresh grant after the initializer consumed its first frame.
+    live(
+        &mut socket,
+        "lock.door",
+        Some(entity("lock.door", "locked")),
+    );
+    let mut frame = lock_snapshot(&mut worker, "locked");
+    for (verb, before, target) in [
+        ("unlock", "locked", "unlocked"),
+        ("lock", "unlocked", "locked"),
+    ] {
+        let (id, params) = current_lock_action(&frame);
+        assert_eq!(id, format!("ha-primary-0-{verb}"));
+        worker.send(action_frame(verb, &id, params, 5000));
+        fresh_lock_read(&fixture, before);
+        let mut post = exact_service(&fixture, "lock", verb, "lock.door");
+        respond(&mut post, 200, json!([]));
+        // HTTP success alone is not evidence that the lock moved.
+        assert!(worker
+            .frames
+            .recv_timeout(Duration::from_millis(80))
+            .is_err());
+        live(&mut socket, "lock.door", Some(entity("lock.door", target)));
+        frame = lock_snapshot(&mut worker, target);
+        worker.success(verb);
+        no_request(&fixture, Duration::from_millis(30));
+    }
+    worker.stop(false);
+}
+
+#[test]
+fn native_lock_already_at_target_is_observed_noop_not_inverse_command() {
+    for (before, target, verb) in [
+        ("locked", "unlocked", "unlock"),
+        ("unlocked", "locked", "lock"),
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut socket = initialize_primary(&mut worker, &fixture, "lock.door");
+        live(
+            &mut socket,
+            "lock.door",
+            Some(entity("lock.door", "jammed")),
+        );
+        lock_snapshot(&mut worker, "jammed");
+        live(&mut socket, "lock.door", Some(entity("lock.door", before)));
+        let frame = lock_snapshot(&mut worker, before);
+        let (id, params) = current_lock_action(&frame);
+        worker.send(action_frame(verb, &id, params, 5000));
+        fresh_lock_read(&fixture, target);
+        lock_snapshot(&mut worker, target);
+        worker.success(verb);
+        no_request(&fixture, Duration::from_millis(100));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn native_lock_rejects_invalid_fresh_states_and_never_retries() {
+    for value in [
+        json!("unknown"),
+        json!("unavailable"),
+        json!("jammed"),
+        json!("locking"),
+        json!("unlocking"),
+        json!("on"),
+        json!("LOCKED"),
+        json!(" unlocked "),
+        Value::Null,
+    ] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut socket = initialize_primary(&mut worker, &fixture, "lock.door");
+        live(
+            &mut socket,
+            "lock.door",
+            Some(entity("lock.door", "locked")),
+        );
+        let frame = lock_snapshot(&mut worker, "locked");
+        let (id, params) = current_lock_action(&frame);
+        worker.send(action_frame("invalid", &id, params, 5000));
+        let mut fresh = request(&fixture);
+        respond(
+            &mut fresh.stream,
+            200,
+            json!({"entity_id":"lock.door","state":value}),
+        );
+        worker.error("invalid", "unavailable");
+        no_request(&fixture, Duration::from_millis(30));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn native_lock_live_invalidation_and_aba_revoke_stalled_preflight() {
+    for observed in ["jammed", "unavailable", "locking", "unlocked", "aba"] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut socket = initialize_primary(&mut worker, &fixture, "lock.door");
+        live(
+            &mut socket,
+            "lock.door",
+            Some(entity("lock.door", "locked")),
+        );
+        let frame = lock_snapshot(&mut worker, "locked");
+        let (id, params) = current_lock_action(&frame);
+        worker.send(action_frame("late", &id, params, 5000));
+        let mut fresh = request(&fixture);
+        let changed = if observed == "aba" {
+            "jammed"
+        } else {
+            observed
+        };
+        live(&mut socket, "lock.door", Some(entity("lock.door", changed)));
+        lock_snapshot(&mut worker, changed);
+        if observed == "aba" {
+            live(
+                &mut socket,
+                "lock.door",
+                Some(entity("lock.door", "locked")),
+            );
+            lock_snapshot(&mut worker, "locked");
+        }
+        respond(&mut fresh.stream, 200, entity("lock.door", "locked"));
+        worker.error("late", "unavailable");
+        no_request(&fixture, Duration::from_millis(30));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn native_lock_serializes_opposite_intents_and_rejects_stale_queued_grants() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize_primary(&mut worker, &fixture, "lock.door");
+    live(
+        &mut socket,
+        "lock.door",
+        Some(entity("lock.door", "locked")),
+    );
+    let frame = lock_snapshot(&mut worker, "locked");
+    let (id, params) = current_lock_action(&frame);
+    worker.send(action_frame("first", &id, params.clone(), 5000));
+    let mut fresh = request(&fixture);
+    worker.send(action_frame("duplicate", &id, params.clone(), 5000));
+    worker.error("duplicate", "overloaded");
+    live(
+        &mut socket,
+        "lock.door",
+        Some(entity("lock.door", "unlocked")),
+    );
+    let opposite = lock_snapshot(&mut worker, "unlocked");
+    let (opposite_id, opposite_params) = current_lock_action(&opposite);
+    worker.send(action_frame(
+        "opposite",
+        &opposite_id,
+        opposite_params,
+        5000,
+    ));
+    worker.error("opposite", "overloaded");
+    live(
+        &mut socket,
+        "lock.door",
+        Some(entity("lock.door", "locked")),
+    );
+    lock_snapshot(&mut worker, "locked");
+    worker.send(action_frame("queued", &id, params, 5000));
+    worker.error("queued", "unavailable");
+    respond(&mut fresh.stream, 200, entity("lock.door", "locked"));
+    worker.error("first", "unavailable");
+    no_request(&fixture, Duration::from_millis(100));
+    worker.stop(false);
+}
+
+#[test]
+fn native_lock_unconfirmed_http_success_and_failed_post_are_not_retried() {
+    for status in [200, 500] {
+        let fixture = listener();
+        let mut worker = Worker::start();
+        let mut socket = initialize_primary(&mut worker, &fixture, "lock.door");
+        live(
+            &mut socket,
+            "lock.door",
+            Some(entity("lock.door", "locked")),
+        );
+        let frame = lock_snapshot(&mut worker, "locked");
+        let (id, params) = current_lock_action(&frame);
+        worker.send(action_frame("uncertain", &id, params, 500));
+        fresh_lock_read(&fixture, "locked");
+        let mut post = exact_service(&fixture, "lock", "unlock", "lock.door");
+        respond(&mut post, status, json!([]));
+        worker.error("uncertain", "outcome_unknown");
+        no_request(&fixture, Duration::from_millis(100));
+        worker.stop(false);
+    }
+}
+
+#[test]
+fn native_lock_disconnect_aborts_preflight_and_reconnect_rejects_old_grant() {
+    let fixture = listener();
+    let mut worker = Worker::start();
+    let mut socket = initialize_primary(&mut worker, &fixture, "lock.door");
+    live(
+        &mut socket,
+        "lock.door",
+        Some(entity("lock.door", "locked")),
+    );
+    let frame = lock_snapshot(&mut worker, "locked");
+    let (id, params) = current_lock_action(&frame);
+    worker.send(action_frame("old-read", &id, params.clone(), 5000));
+    let pending = request(&fixture);
+    socket.close(None).unwrap();
+    drop(socket);
+    lock_snapshot(&mut worker, "unavailable");
+    worker.error("old-read", "outcome_unknown");
+    drop(pending);
+    let _socket = authorize(&fixture, true);
+    for _ in 0..2 {
+        let mut req = request(&fixture);
+        let body = if req.line == "GET /reverse/proxy/ha/api/states HTTP/1.1" {
+            json!([entity("lock.door", "locked")])
+        } else {
+            assert_eq!(
+                req.line,
+                "GET /reverse/proxy/ha/api/states/lock.door HTTP/1.1"
+            );
+            entity("lock.door", "locked")
+        };
+        respond(&mut req.stream, 200, body);
+    }
+    let next = lock_snapshot(&mut worker, "locked");
+    let (next_id, next_params) = current_lock_action(&next);
+    assert_eq!(id, next_id);
+    assert_ne!(params, next_params);
+    worker.send(action_frame("stale-session", &id, params, 5000));
+    worker.error("stale-session", "unavailable");
+    no_request(&fixture, Duration::from_millis(100));
+    worker.send(action_frame("current-session", &next_id, next_params, 5000));
+    fresh_lock_read(&fixture, "unlocked");
+    lock_snapshot(&mut worker, "unlocked");
+    worker.success("current-session");
+    no_request(&fixture, Duration::from_millis(100));
     worker.stop(false);
 }

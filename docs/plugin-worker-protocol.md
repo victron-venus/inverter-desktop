@@ -1,7 +1,7 @@
 # Desktop plugin worker protocol
 
 This document describes the first worker contract for optional desktop features.
-The current host API is **1.9.0**, independently of the application version. The
+The current host API is **1.10.0**, independently of the application version. The
 wire protocol and package manifest each start at schema version **1**. Android
 and iOS do not compile the worker host or include plugin UI contributions.
 
@@ -47,8 +47,8 @@ The additional limits are:
 - Action deadlines are relative milliseconds in the range 1–60,000. The host
   forwards the remaining budget immediately before writing, subtracting time
   spent in its queues and dropping requests with less than one millisecond left.
-  Its original absolute deadline and cancellation remain authoritative, including
-  during pipe transmission and when a worker does not cooperate.
+  The original absolute execution and reply deadlines, together with cancellation,
+  remain authoritative during pipe transmission and when a worker does not cooperate.
 - Error codes follow the identifier rules. Error messages occupy at most 1,024
   bytes.
 
@@ -64,7 +64,7 @@ The host starts with the expected identity and the API version it selected:
 {
   "type": "hello",
   "protocol_version": 1,
-  "host_api_version": "1.9.0",
+  "host_api_version": "1.10.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -76,7 +76,7 @@ before sending data:
 {
   "type": "ready",
   "protocol_version": 1,
-  "host_api_version": "1.9.0",
+  "host_api_version": "1.10.0",
   "plugin_id": "org.example.weather"
 }
 ```
@@ -848,3 +848,31 @@ camera cooldown across reconnects using clean MQTT sessions. The payload has no
 timestamp: freshly republishing an old URL cannot be detected from this format.
 An image origin CSP does not provide strict HTTP redirect denial; configured HA
 endpoints must directly serve MJPEG without redirects.
+
+## Observed lock controls (host API 1.10)
+
+Compact control presentations optionally carry `lock_state` (locked, unlocked,
+locking, unlocking, jammed, unknown or unavailable) and a `state_id` referencing
+their status/text contribution. The host-owned icon set includes `lock`.
+A supplied lock action must reference the same state contribution. Unsupported
+fields still fail validation; workers emitting these fields require API 1.10.
+Older workers remain compatible through their existing semver ranges.
+
+For an exact current action bound to a validated stable lock control, the native
+host allows 25 seconds of worker execution within a 30-second total reply budget.
+Both absolute deadlines begin at admission. The writer recomputes the remaining
+relative worker budget on every pending first-byte write, including after pipe
+backpressure. Once any bytes are accepted, that frame cannot be rewritten; an
+execution deadline or cancellation during a partial write ends the generation.
+Delayed partial delivery can still shift the worker's receipt-relative window,
+so the five-second response reserve does not promise an absolute remote completion
+time. The total host reply deadline remains enforced. Other application actions
+keep the existing five-second execution and reply budgets; callers cannot select
+a longer budget through action parameters.
+
+The desktop retains observed state during an action and shares pending/error
+state by worker instance and state contribution across duplicate placements.
+It submits the captured action descriptor and parameters, never a replacement
+action from a newer snapshot. Provider-side state revision and connection fences
+still decide whether submission is authorized. See the
+[HA worker contract](../desktop-plugins/home-assistant/README.md#lock-controls-014-host-api-110).

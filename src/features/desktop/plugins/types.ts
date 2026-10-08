@@ -1,3 +1,5 @@
+import type { LockState } from '../../../dashboardControlView'
+
 /** Declarative values validated by the native host; workers never supply view code. */
 export type DashboardContribution =
   | { kind: 'text'; id: string; title: string; text: string }
@@ -46,6 +48,7 @@ export type PresentationIcon =
   | 'blinds'
   | 'play'
   | 'cloud'
+  | 'lock'
 
 export interface PresentationAction {
   id: string
@@ -60,6 +63,8 @@ export type PluginPresentation =
       title: string
       icon?: PresentationIcon | null
       state: 'on' | 'off' | 'unavailable'
+      lock_state?: LockState | null
+      state_id?: string | null
       action?: string | null
     }
   | {
