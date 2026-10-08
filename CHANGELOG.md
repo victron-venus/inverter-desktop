@@ -34,6 +34,10 @@ All notable changes to this project will be documented in this file.
   dependency; jsdom keeps its compatible, patched Undici 7.29.1 dependency.
 
 ### Upgrade
+- Local authentication passwords migrate once to Argon2id verifiers while keeping
+  the same login. This storage change is one-way: older app versions cannot
+  unlock migrated profiles. Portable settings exports do not include credentials;
+  see `docs/desktop-hardening.md` before intentionally downgrading.
 - Application updates preserve the existing configuration, cached encryption key,
   plugin version pins and enabled/disabled choices. Camera packages remain managed
   separately through the Plugins settings.
@@ -46,6 +50,9 @@ All notable changes to this project will be documented in this file.
 - Document contribution checks, confidential security reporting and the project-specific trust boundaries.
 
 ### Security
+- Replace reversible local login passwords with salted Argon2id verifiers,
+  keep them out of settings IPC and exports, and atomically migrate the native
+  configuration before granting access. Outbound service credentials are unchanged.
 - Verify the official Gradle 8.14.3 wrapper and pinned distribution checksum before and after Android project generation.
 
 Private vulnerability reporting and response policy are documented in SECURITY.md. This maintenance update strengthens release evidence and review instructions; it does not replace deployment authentication, network isolation or independent equipment safeguards. No new project CVE is announced by these changes.
