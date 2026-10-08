@@ -1,6 +1,21 @@
 use std::sync::Arc;
 
 use core_foundation::date::CFDate;
+use core_foundation::{
+    base::{CFType, TCFType},
+    dictionary::CFDictionary,
+    number::CFNumber,
+    string::CFString,
+};
+use security_framework::key::SecKey;
+use security_framework_sys::{
+    certificate::SecCertificateCopyKey,
+    item::{
+        kSecAttrKeySizeInBits, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeyTypeRSA,
+    },
+    key::SecKeyCopyAttributes,
+};
+
 use core_foundation_sys::date::kCFAbsoluteTimeIntervalSince1970;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
@@ -15,6 +30,79 @@ use security_framework::{
 
 use super::log_server_cert;
 use crate::verification::invalid_certificate;
+
+/// Enforce the Desktop key profile on the chain selected by Apple, including its anchor.
+/// Native trust, name, time, EKU and revocation validation must succeed first.
+#[allow(deprecated)] // These chain accessors support the same OS range as the verifier.
+fn verify_chain_key_lengths(trust: &SecTrust) -> Result<(), TlsError> {
+    let count = trust.certificate_count();
+    if count <= 0 {
+        return Err(invalid_certificate(
+            "Apple returned an empty verified chain",
+        ));
+    }
+    for index in 0..count {
+        let certificate = trust
+            .certificate_at_index(index)
+            .ok_or_else(|| invalid_certificate("Apple omitted a verified chain certificate"))?;
+        // SAFETY: certificate is a live SecCertificate; Copy returns an owned key or null.
+        let key_ref = unsafe { SecCertificateCopyKey(certificate.as_concrete_TypeRef()) };
+        if key_ref.is_null() {
+            return Err(invalid_certificate("Certificate public key is unavailable"));
+        }
+        // SAFETY: the non-null Copy result is transferred to the owning wrapper.
+        let key = unsafe { SecKey::wrap_under_create_rule(key_ref) };
+        // SAFETY: key is live; Copy returns an owned dictionary or null.
+        let attributes_ref = unsafe { SecKeyCopyAttributes(key.as_concrete_TypeRef()) };
+        if attributes_ref.is_null() {
+            return Err(invalid_certificate(
+                "Certificate key attributes are unavailable",
+            ));
+        }
+        // SAFETY: the non-null Copy result is transferred to the owning wrapper.
+        let attributes = unsafe { CFDictionary::wrap_under_create_rule(attributes_ref) };
+        // SAFETY: Apple's immutable attribute-name constants are always valid CFStrings.
+        let kind = key_attribute(&attributes, unsafe { kSecAttrKeyType })?
+            .downcast::<CFString>()
+            .ok_or_else(|| invalid_certificate("Certificate key type is invalid"))?;
+        let bits = key_attribute(&attributes, unsafe { kSecAttrKeySizeInBits })?
+            .downcast::<CFNumber>()
+            .and_then(|number| number.to_i64())
+            .ok_or_else(|| invalid_certificate("Certificate key size is invalid"))?;
+        // SAFETY: borrowed immutable CFString constants are retained by the wrappers.
+        let rsa = unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeRSA) };
+        let ec = unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) };
+        let minimum = if kind == rsa {
+            2048
+        } else if kind == ec {
+            256
+        } else {
+            return Err(invalid_certificate(
+                "Certificate key algorithm is outside the RSA/ECDSA profile",
+            ));
+        };
+        if bits < minimum {
+            return Err(invalid_certificate(format!(
+                "Certificate key has {bits} bits; at least {minimum} are required"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn key_attribute(
+    attributes: &CFDictionary,
+    name: core_foundation_sys::string::CFStringRef,
+) -> Result<CFType, TlsError> {
+    let value = attributes
+        .find(name.cast())
+        .ok_or_else(|| invalid_certificate("Certificate key attribute is missing"))?;
+    if (*value).is_null() {
+        return Err(invalid_certificate("Certificate key attribute is null"));
+    }
+    // SAFETY: the dictionary owns this non-null CF object; the wrapper retains it.
+    Ok(unsafe { CFType::wrap_under_get_rule(*value) })
+}
 
 mod errors {
     pub(super) use security_framework_sys::base::{
@@ -207,7 +295,7 @@ impl Verifier {
         }
 
         let trust_error = match trust_evaluation.evaluate_with_error() {
-            Ok(()) => return Ok(()),
+            Ok(()) => return verify_chain_key_lengths(&trust_evaluation),
             Err(e) => e,
         };
 

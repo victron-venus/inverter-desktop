@@ -266,8 +266,8 @@
       {
         "path": "src/verification/apple.rs",
         "upstream_sha256": "9fe3b62eb8a5615ca2c2bbdf512e83907c87c771212d5bb2c3c671af6a8c6875",
-        "local_sha256": "9fe3b62eb8a5615ca2c2bbdf512e83907c87c771212d5bb2c3c671af6a8c6875",
-        "unchanged": true
+        "local_sha256": "47e944ce926a922766d4f558e1a43c2c9de146ce3e0298283f78ee1514e7d80d",
+        "unchanged": false
       },
       {
         "path": "src/verification/mod.rs",
@@ -568,8 +568,8 @@
       {
         "path": "src/verification/apple.rs",
         "upstream_sha256": "c874abb7dcb9b4542f8bddf51df0e3afaafd9ec710feb735c06db6d2988c5a70",
-        "local_sha256": "c874abb7dcb9b4542f8bddf51df0e3afaafd9ec710feb735c06db6d2988c5a70",
-        "unchanged": true
+        "local_sha256": "a9057db1434881af5b34a7222975857f60fe64a6e4aa2e08dde6257ed6bd0425",
+        "unchanged": false
       },
       {
         "path": "src/verification/mod.rs",

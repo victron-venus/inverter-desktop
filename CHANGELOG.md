@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
   time, and unavailable or stale readings remain unknown.
 
 ### Fixed
+- Reject undersized RSA and ECDSA keys throughout the Apple-validated TLS
+  certificate chain, including trust anchors omitted by the server.
 - Desktop tariff exports use the system save dialog, avoiding a macOS WebKit
   download hang. Cancelling the export leaves the tariff draft unchanged.
 - Camera previews start with less repeated work and discard stale queued live-preview frames.

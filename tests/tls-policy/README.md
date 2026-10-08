@@ -3,7 +3,7 @@
 These opt-in tests measure the actual HTTP client builders used by desktop
 plugin downloads, media transfers and the separate Home Assistant worker.
 Extracting the builders makes the same production settings accessible to their
-private unit tests. Windows uses the local native-chain policy documented in
+private unit tests. Windows and Apple use the local native-chain policies documented in
 [`platform-verifier-policy.md`](../../src-tauri/vendor/platform-verifier-policy.md).
 
 Requirements: Python 3.11 or newer with OpenSSL 3, the `openssl` command, and the
@@ -61,15 +61,19 @@ policy or behavior of the separate WebPKI, iOS or
 WKWebView clients. Windows results require a Windows run; macOS success cannot
 substitute for it.
 
-The expanded matrix is a strict Windows-policy acceptance test. Independent
-macOS runs found that Apple's unchanged verifier accepts the RSA-2047 root and
-rejects both tested RSA-PSS signature chains (including the public-key CA);
-these remain separate minimum-strength and
-compatibility limitations. They must not be reported as passing Windows evidence
-or as full-project OpenSSF compliance.
+Windows runs the strict twelve-case matrix above. Apple runs a ten-case
+RSA-PKCS1/ECDSA certificate profile: its native evaluator rejects both tested
+RSA-PSS certificate fixtures before the local key check. The report identifies
+`apple-rsa-pkcs1-ecdsa` and lists those two compatibility cases outside the gate.
+The original twelve-case observations are not evidence of PSS support or an
+overall pass. Certificate PSS signatures and PSS public-key identifiers are
+separate from TLS handshake RSA-PSS signatures, which remain supported by the
+successful TLS 1.3 RSA probe. The minimum-key gate still requires both supported
+strong chains and all eight negative cases, including the omitted RSA-2047
+trust anchor. Actual iOS device behavior is not established by macOS tests.
 
 The tests are ignored in ordinary unit-test runs because they require external
-fixture tools. The existing Windows CI jobs explicitly invoke `--ignored`,
+fixture tools. The Windows and macOS CI jobs explicitly invoke `--ignored`,
 require all three expected JSON reports across the native and worker jobs, and
 preserve failed-run reports. These steps do not add certificate trust or broaden
 job permissions.
