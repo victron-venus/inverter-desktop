@@ -81,14 +81,36 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
     let fixtures = fixtures();
     let mut observations = Vec::new();
     let mut failures = Vec::new();
+    // Apple currently rejects both PSS certificate fixtures before our key guard.
+    // Keep the Windows compatibility assertions intact; the Apple gate covers
+    // the documented RSA-PKCS1/ECDSA certificate profile and records exclusions.
+    let compatibility_only: &[&str] = if cfg!(target_vendor = "apple") {
+        &["strong-pss", "strong-pss-key"]
+    } else {
+        &[]
+    };
+    let profile = if cfg!(target_vendor = "apple") {
+        "apple-rsa-pkcs1-ecdsa"
+    } else {
+        "native-rsa-ecdsa-pss"
+    };
     for case in [
         "strong",
+        "strong-ec",
+        "strong-pss",
+        "strong-pss-key",
         "weak-leaf",
         "weak-intermediate",
         "weak-root",
+        "weak-2047-root",
+        "weak-ec-intermediate",
+        "weak-ec-root",
         "untrusted",
         "wrong-host",
     ] {
+        if compatibility_only.contains(&case) {
+            continue;
+        }
         let child = Command::new(python())
             .arg(helper())
             .arg("serve")
@@ -115,7 +137,7 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
             .no_proxy()
             .resolve("localhost", ([127, 0, 0, 1], port).into())
             .build()
-            .expect("unchanged production TLS builder must initialize");
+            .expect("production TLS builder must initialize");
         let host = if case == "wrong-host" {
             "127.0.0.1"
         } else {
@@ -137,7 +159,7 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
         );
         let request = received["request"].as_str().unwrap();
         let token_received = request.contains("disposable-tls-policy-test-token");
-        let expected = if case == "strong" {
+        let expected = if case.starts_with("strong") {
             accepted && received["phase"] == "application" && token_received
         } else {
             !accepted
@@ -150,7 +172,7 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
         }
         observations.push(json!({"case":case,"accepted":accepted,"client_error":error,"server":received,"oracle":ready["oracle"],"oracle_policy":ready["oracle_policy"],"openssl":ready["openssl"],"expected_strong_only":expected}));
     }
-    let report = json!({"builder":label,"os":std::env::consts::OS,"observations":observations});
+    let report = json!({"builder":label,"os":std::env::consts::OS,"profile":profile,"compatibility_cases_outside_gate":compatibility_only,"observations":observations});
     println!("TLS_POLICY_REPORT {report}");
     if let Some(directory) = std::env::var_os("DESKTOP_TLS_PROBE_OUTPUT_DIR") {
         std::fs::create_dir_all(&directory).unwrap();
