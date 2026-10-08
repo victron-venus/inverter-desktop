@@ -155,8 +155,8 @@ jobs:
         if: matrix.plugin == 'home-assistant' && runner.os == 'Windows'
         shell: bash
         run: |
-          DESKTOP_TLS_PYTHON="$(python -c 'import sys; print(sys.executable)')"
-          DESKTOP_TLS_OPENSSL="$(python -c 'import shutil, sys; p = shutil.which("openssl"); print(p or ""); sys.exit(p is None)')"
+          DESKTOP_TLS_PYTHON="$(python -c 'import sys; sys.stdout.write(sys.executable)')"
+          DESKTOP_TLS_OPENSSL="$(python -c 'import shutil, sys; p = shutil.which("openssl"); sys.stdout.write(p or ""); sys.exit(p is None)')"
           export DESKTOP_TLS_PYTHON DESKTOP_TLS_OPENSSL
           export DESKTOP_TLS_PROBE_OUTPUT_DIR="$RUNNER_TEMP/tls-policy-ha"
           python -c 'import os, subprocess; subprocess.run([os.environ["DESKTOP_TLS_OPENSSL"], "version"], check=True)'
@@ -223,8 +223,8 @@ jobs:
       - name: Verify native TLS key policy with disposable certificates
         shell: bash
         run: |
-          DESKTOP_TLS_PYTHON="$(python -c 'import sys; print(sys.executable)')"
-          DESKTOP_TLS_OPENSSL="$(python -c 'import shutil, sys; p = shutil.which("openssl"); print(p or ""); sys.exit(p is None)')"
+          DESKTOP_TLS_PYTHON="$(python -c 'import sys; sys.stdout.write(sys.executable)')"
+          DESKTOP_TLS_OPENSSL="$(python -c 'import shutil, sys; p = shutil.which("openssl"); sys.stdout.write(p or ""); sys.exit(p is None)')"
           export DESKTOP_TLS_PYTHON DESKTOP_TLS_OPENSSL
           export DESKTOP_TLS_PROBE_OUTPUT_DIR="$RUNNER_TEMP/tls-policy-native"
           python -c 'import os, subprocess; subprocess.run([os.environ["DESKTOP_TLS_OPENSSL"], "version"], check=True)'
