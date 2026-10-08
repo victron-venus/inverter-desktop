@@ -298,6 +298,34 @@ export function useConnection() {
     return true
   }
 
+  function applyConnectionConfig(config: AppConfig) {
+    inverterEnabled = isMqttConfigured(config) || isIgwConfigured(config)
+    const nextKey = JSON.stringify([
+      config.mqtt_host,
+      config.mqtt_port,
+      config.mqtt_tls === true,
+      config.portal_id,
+      config.gateway_url,
+      config.water_tank_instance,
+      config.water_pump_instance,
+      config.water_valve_instance,
+      config.evcharger_instance,
+      config.ev_instance,
+    ])
+    if (connectionKey !== null && connectionKey !== nextKey) resetInverterState()
+    connectionKey = nextKey
+    if (inverterEnabled)
+      freshnessTimer = setInterval(() => {
+        if (transportIsOwned()) refreshTelemetryQuality()
+      }, 1000)
+    appConfig.value = config
+    if (config.color_scheme) {
+      const isDark = config.color_scheme !== 'light'
+      document.body.classList.toggle('light', !isDark)
+      localStorage.setItem('theme', config.color_scheme)
+    }
+  }
+
   async function connectMqtt() {
     cleanup()
     let attempt = beginTransportReplacement()
@@ -314,31 +342,7 @@ export function useConnection() {
     try {
       const config = await getAppConfig()
       if (!requestIsCurrent()) return
-      inverterEnabled = isMqttConfigured(config) || isIgwConfigured(config)
-      const nextKey = JSON.stringify([
-        config.mqtt_host,
-        config.mqtt_port,
-        config.mqtt_tls === true,
-        config.portal_id,
-        config.gateway_url,
-        config.water_tank_instance,
-        config.water_pump_instance,
-        config.water_valve_instance,
-        config.evcharger_instance,
-        config.ev_instance,
-      ])
-      if (connectionKey !== null && connectionKey !== nextKey) resetInverterState()
-      connectionKey = nextKey
-      if (inverterEnabled)
-        freshnessTimer = setInterval(() => {
-          if (transportIsOwned()) refreshTelemetryQuality()
-        }, 1000)
-      appConfig.value = config
-      if (config.color_scheme) {
-        const isDark = config.color_scheme !== 'light'
-        document.body.classList.toggle('light', !isDark)
-        localStorage.setItem('theme', config.color_scheme)
-      }
+      applyConnectionConfig(config)
 
       await listenForSession<TransportEvent<InverterState>>('mqtt-state-update', (event) => {
         if (acceptsNotification(event.payload)) processState(event.payload)
@@ -432,22 +436,19 @@ export function useConnection() {
         } catch (e) {
           if (!requestIsCurrent()) return
           logger.error('MQTT connect failed:', e)
-          if (igwOk) {
-            logger.log('MQTT connect failed — starting IGW')
-            attempt = beginTransportReplacement()
-            if (
-              !(await startIgw(
-                config,
-                { title: 'Gateway', body: 'MQTT unavailable — using IGW' },
-                attempt
-              ))
-            )
-              return
-            if (!requestIsCurrent()) return
-            startMqttRecoveryProbe()
-          } else {
-            throw e
-          }
+          if (!igwOk) throw e
+          logger.log('MQTT connect failed — starting IGW')
+          attempt = beginTransportReplacement()
+          if (
+            !(await startIgw(
+              config,
+              { title: 'Gateway', body: 'MQTT unavailable — using IGW' },
+              attempt
+            ))
+          )
+            return
+          if (!requestIsCurrent()) return
+          startMqttRecoveryProbe()
         }
       } else if (startup === 'igw') {
         if (
