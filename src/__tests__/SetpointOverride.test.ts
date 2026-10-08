@@ -46,6 +46,26 @@ const trigger = () => wrapper!.get('button[aria-label="Setpoint override"]')
 const dialog = () => document.querySelector('dialog')!
 
 describe('Setpoint Override transport status', () => {
+  it('keeps one live status node across available and unavailable updates', async () => {
+    const rendering = render()
+    const node = wrapper!.get('[role="status"]').element
+    await rendering
+    expect(wrapper!.get('[role="status"]').element).toBe(node)
+    expect(node.textContent?.trim()).toBe('')
+    expect(node.getAttribute('aria-atomic')).toBe('true')
+    onStatus({ payload: null })
+    await flushPromises()
+    expect(wrapper!.get('[role="status"]').element).toBe(node)
+    expect(node.textContent?.trim()).toBe('Status unknown')
+    onStatus({ payload: active })
+    await flushPromises()
+    expect(wrapper!.get('[role="status"]').element).toBe(node)
+    expect(node.textContent?.trim()).toBe('')
+    onConnection({ payload: { connected: false, notification_session: 'current' } })
+    await flushPromises()
+    expect(wrapper!.get('[role="status"]').element).toBe(node)
+    expect(node.textContent?.trim()).toBe('Status unknown')
+  })
   it('keeps failed initial status unknown and disallows submission', async () => {
     boundary.invoke.mockRejectedValue(new Error('Gateway status unavailable'))
     await render()

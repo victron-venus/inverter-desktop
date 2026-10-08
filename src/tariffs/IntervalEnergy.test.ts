@@ -30,6 +30,29 @@ async function upload(wrapper: ReturnType<typeof mount>, text: string) {
   await input.trigger('change')
   await flushPromises()
 }
+it('keeps one live status node across import, rejection, removal and scope changes', async () => {
+  const wrapper = mount(IntervalEnergy, { props: { plan: tariff, tariffScope: 'site' } })
+  try {
+    const node = wrapper.get('[role="status"]').element
+    expect(node.textContent).toBe('')
+    expect(node.getAttribute('aria-atomic')).toBe('true')
+    await upload(wrapper, csv)
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toContain('Imported and saved measured intervals.')
+    await upload(wrapper, csv.replace('import_kwh', 'net_kwh'))
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('')
+    expect(wrapper.get('[role="alert"]').text()).toContain('CSV header')
+    await wrapper.get('button.remove').trigger('click')
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('Saved intervals removed.')
+    await wrapper.setProps({ tariffScope: 'other' })
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('')
+  } finally {
+    wrapper.unmount()
+  }
+})
 it('imports CSV through the UI, shows measured subtotal and gaps, persists and isolates sites', async () => {
   const wrapper = mount(IntervalEnergy, {
     props: { plan: tariff, tariffScope: 'site' },

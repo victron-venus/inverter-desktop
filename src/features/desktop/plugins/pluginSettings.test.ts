@@ -138,6 +138,33 @@ it('saves the host video window preference as a boolean without changing secrets
 })
 
 describe('desktop plugin settings', () => {
+  it('keeps one live status node across choice loading, failure and recovery', async () => {
+    view.fields = [field('target', { options_source: 'entities' })]
+    const pending = deferred<unknown>()
+    let failed = false
+    native.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_plugin_settings') return structuredClone(view)
+      if (command === 'get_plugin_settings_choices') {
+        return failed ? { revision: null, sources: {} } : pending.promise
+      }
+      throw new Error(`Unexpected IPC: ${command}`)
+    })
+    const opening = open()
+    const node = wrapper!.get('[role="status"]').element
+    const mounted = await opening
+    expect(mounted.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('')
+    expect(node.getAttribute('aria-atomic')).toBe('true')
+    failed = true
+    pending.reject(new Error('Choices unavailable'))
+    await flushPromises()
+    expect(mounted.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe(en.plugins.manager.choicesUnavailable)
+    await button(en.plugins.manager.refreshChoices).trigger('click')
+    await flushPromises()
+    expect(mounted.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('')
+  })
   it('renders labeled native descriptors as text and never fills saved secret inputs', async () => {
     view.fields[0].title = '<img src=x onerror=alert(1)>'
     view.fields[0].description = '<script>metadata</script>'
