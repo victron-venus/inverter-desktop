@@ -14,6 +14,18 @@ import subprocess
 import threading
 from pathlib import Path
 
+# OpenSSL 3.0 and newer releases choose different default PSS salt lengths.
+# Keep the certificate profile identical: SHA-256/MGF1-SHA256 and a 32-byte salt.
+PSS_SIGNATURE_OPTIONS = (
+    "-sigopt",
+    "rsa_padding_mode:pss",
+    "-sigopt",
+    "rsa_pss_saltlen:digest",
+    "-sigopt",
+    "rsa_mgf1_md:sha256",
+)
+
+
 # (server key, issuing CA, trusted root). Roots are never sent by the server.
 CHAINS = {
     "strong": ("leaf", "root", "root"),
@@ -117,6 +129,7 @@ def prepare(directory):
             ca_ext,
             "-out",
             directory / f"{name}.pem",
+            *(PSS_SIGNATURE_OPTIONS if name == "pss-root" else ()),
         )
     for name, issuer in [("intermediate", "root"), ("ec-intermediate", "ec-root")]:
         openssl(
@@ -158,7 +171,11 @@ def prepare(directory):
             leaf_ext,
             "-out",
             cert,
-            *(["-sigopt", "rsa_padding_mode:pss"] if name == "strong-pss" else []),
+            *(
+                PSS_SIGNATURE_OPTIONS
+                if name in ("strong-pss", "strong-pss-key")
+                else ()
+            ),
         )
         if issuer != root:
             cert.write_bytes(

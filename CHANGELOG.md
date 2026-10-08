@@ -37,9 +37,11 @@ All notable changes to this project will be documented in this file.
 
 ### Upgrade
 - Windows HTTPS integrations require certificate chains with RSA keys of at
-  least 2048 bits or ECDSA keys of at least 256 bits and SHA-2 signatures. Replace
-  undersized private CA keys or legacy signatures before upgrading; certificate
-  trust and hostname verification remain enabled.
+  least 2048 bits or ECDSA keys of at least 256 bits and SHA-2 signatures.
+  Apple platform-verified connections require the same minimum key sizes,
+  including the trust anchor. Replace undersized private CA keys or legacy
+  signatures before upgrading; certificate trust and hostname verification
+  remain enabled.
 - Local authentication passwords migrate once to Argon2id verifiers while keeping
   the same login. This storage change is one-way: older app versions cannot
   unlock migrated profiles. Portable settings exports do not include credentials;

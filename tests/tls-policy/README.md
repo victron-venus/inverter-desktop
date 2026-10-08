@@ -23,7 +23,9 @@ cargo test --locked --manifest-path desktop-plugins/home-assistant/Cargo.toml tl
 ```
 
 Each builder is tested with strong RSA-2048 and ECDSA-P256 chains, RSA-PSS
-signatures with an ordinary RSA key, and an RSA-PSS public-key CA. Negative cases
+signatures with an ordinary RSA key, and an RSA-PSS public-key CA. Both PSS
+certificate cases explicitly use SHA-256, MGF1-SHA256 and a 32-byte salt, rather
+than OpenSSL-version-dependent defaults. Negative cases
 use RSA-1024 leaf/intermediate/root keys, a boundary RSA-2047 root, ECDSA-P224
 intermediate/root keys, an unknown root and a wrong hostname. The server never
 sends the root, so root-key tests exercise the selected trust anchor rather than
@@ -48,7 +50,8 @@ DNS policy. No invalid-certificate or invalid-hostname override is used.
 On Windows, the pinned platform verifier first attempts the normal chain and
 then uses an in-memory exclusive-root chain engine for the extra fixture root.
 Both paths use the same native certificate-policy validation and the local
-strong-sign configuration. This does not measure
+strong-sign configuration plus exact RSA modulus checks on the selected chain.
+This does not measure
 the contents or administrative policies of the system trust store.
 
 The assertions deliberately require rejection of weak chains, so a provider
@@ -71,6 +74,10 @@ separate from TLS handshake RSA-PSS signatures, which remain supported by the
 successful TLS 1.3 RSA probe. The minimum-key gate still requires both supported
 strong chains and all eight negative cases, including the omitted RSA-2047
 trust anchor. Actual iOS device behavior is not established by macOS tests.
+
+The Linux package-acceptance runner requires the exact union of its thirteen
+package scenarios and these two native TLS test names, while running only the
+package scenarios there. The Windows/macOS jobs below run the TLS tests.
 
 The tests are ignored in ordinary unit-test runs because they require external
 fixture tools. The Windows and macOS CI jobs explicitly invoke `--ignored`,

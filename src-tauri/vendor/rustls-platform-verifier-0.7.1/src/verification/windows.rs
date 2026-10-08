@@ -42,20 +42,23 @@ use windows_sys::Win32::{
         CERT_E_WRONG_USAGE, CRYPT_E_REVOKED, FILETIME, TRUE,
     },
     Security::Cryptography::{
-        CertAddEncodedCertificateToStore, CertCloseStore, CertCreateCertificateChainEngine,
-        CertFreeCertificateChain, CertFreeCertificateChainEngine, CertFreeCertificateContext,
-        CertGetCertificateChain, CertOpenStore, CertSetCertificateContextProperty,
-        CertVerifyCertificateChainPolicy, HTTPSPolicyCallbackData, AUTHTYPE_SERVER,
+        BCryptDestroyKey, BCryptExportKey, CertAddEncodedCertificateToStore, CertCloseStore,
+        CertCreateCertificateChainEngine, CertFreeCertificateChain, CertFreeCertificateChainEngine,
+        CertFreeCertificateContext, CertGetCertificateChain, CertOpenStore,
+        CertSetCertificateContextProperty, CertVerifyCertificateChainPolicy,
+        CryptImportPublicKeyInfoEx2, HTTPSPolicyCallbackData, AUTHTYPE_SERVER, BCRYPT_KEY_HANDLE,
+        BCRYPT_RSAKEY_BLOB, BCRYPT_RSAPUBLIC_BLOB, BCRYPT_RSAPUBLIC_MAGIC,
         CERT_CHAIN_CACHE_END_CERT, CERT_CHAIN_CONTEXT,
         CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS, CERT_CHAIN_POLICY_PARA,
         CERT_CHAIN_POLICY_SSL, CERT_CHAIN_POLICY_STATUS,
         CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT, CERT_CHAIN_REVOCATION_CHECK_END_CERT,
-        CERT_CONTEXT, CERT_OCSP_RESPONSE_PROP_ID, CERT_SET_PROPERTY_IGNORE_PERSIST_ERROR_FLAG,
-        CERT_STORE_ADD_ALWAYS, CERT_STORE_DEFER_CLOSE_UNTIL_LAST_FREE_FLAG,
-        CERT_STORE_PROV_MEMORY, CERT_STRONG_SIGN_PARA, CERT_STRONG_SIGN_PARA_0,
-        CERT_STRONG_SIGN_SERIALIZED_INFO, CERT_STRONG_SIGN_SERIALIZED_INFO_CHOICE,
-        CERT_TRUST_IS_PARTIAL_CHAIN, CERT_TRUST_IS_UNTRUSTED_ROOT, CERT_USAGE_MATCH,
-        CRYPT_INTEGER_BLOB, CTL_USAGE, HCERTSTORE, USAGE_MATCH_TYPE_AND, X509_ASN_ENCODING,
+        CERT_CONTEXT, CERT_OCSP_RESPONSE_PROP_ID, CERT_PUBLIC_KEY_INFO,
+        CERT_SET_PROPERTY_IGNORE_PERSIST_ERROR_FLAG, CERT_STORE_ADD_ALWAYS,
+        CERT_STORE_DEFER_CLOSE_UNTIL_LAST_FREE_FLAG, CERT_STORE_PROV_MEMORY, CERT_STRONG_SIGN_PARA,
+        CERT_STRONG_SIGN_PARA_0, CERT_STRONG_SIGN_SERIALIZED_INFO,
+        CERT_STRONG_SIGN_SERIALIZED_INFO_CHOICE, CERT_TRUST_IS_PARTIAL_CHAIN,
+        CERT_TRUST_IS_UNTRUSTED_ROOT, CERT_USAGE_MATCH, CRYPT_INTEGER_BLOB, CTL_USAGE, HCERTSTORE,
+        USAGE_MATCH_TYPE_AND, X509_ASN_ENCODING,
     },
 };
 
@@ -148,11 +151,150 @@ unsafe impl ZeroedWithSize for CERT_CHAIN_ENGINE_CONFIG {
     }
 }
 
+// The native strong-sign policy can accept a 2047-bit RSA modulus as 2048 bits.
+// Inspect the exported integer, not a provider's rounded key-width property.
+fn rsa_public_blob_bits(blob: &[u8]) -> Option<usize> {
+    let field = |offset: usize| -> Option<u32> {
+        Some(u32::from_ne_bytes(
+            blob.get(offset..offset + 4)?.try_into().ok()?,
+        ))
+    };
+    if field(0)? != BCRYPT_RSAPUBLIC_MAGIC || field(16)? != 0 || field(20)? != 0 {
+        return None;
+    }
+    let exponent = usize::try_from(field(8)?).ok()?;
+    let modulus = usize::try_from(field(12)?).ok()?;
+    if exponent == 0 || modulus == 0 {
+        return None;
+    }
+    let start = mem::size_of::<BCRYPT_RSAKEY_BLOB>().checked_add(exponent)?;
+    let end = start.checked_add(modulus)?;
+    if end != blob.len() {
+        return None;
+    }
+    let integer = blob.get(start..end)?;
+    let first = integer.iter().position(|byte| *byte != 0)?;
+    let leading = usize::try_from(integer[first].leading_zeros()).ok()?;
+    (integer.len() - first).checked_mul(8)?.checked_sub(leading)
+}
+
+struct ImportedPublicKey(BCRYPT_KEY_HANDLE);
+
+impl Drop for ImportedPublicKey {
+    fn drop(&mut self) {
+        // SAFETY: This owns the live key returned by CryptImportPublicKeyInfoEx2.
+        unsafe { BCryptDestroyKey(self.0) };
+    }
+}
+
+fn verify_rsa_key_length(info: &CERT_PUBLIC_KEY_INFO) -> Result<(), TlsError> {
+    if info.Algorithm.pszObjId.is_null() {
+        return Err(invalid_certificate(
+            "Missing certificate public-key algorithm",
+        ));
+    }
+    // SAFETY: The native certificate context owns the NUL-terminated OID string.
+    let oid = unsafe { std::ffi::CStr::from_ptr(info.Algorithm.pszObjId.cast()) }.to_bytes();
+    if oid != b"1.2.840.113549.1.1.1" && oid != b"1.2.840.113549.1.1.10" {
+        // ECDSA and signature algorithms remain checked by the native policy.
+        return Ok(());
+    }
+    let mut key = ptr::null_mut();
+    // SAFETY: info belongs to the live selected certificate; key is a valid output.
+    let imported =
+        unsafe { CryptImportPublicKeyInfoEx2(X509_ASN_ENCODING, info, 0, ptr::null(), &mut key) };
+    if imported == 0 || key.is_null() {
+        return Err(invalid_certificate("Unable to inspect certificate RSA key"));
+    }
+    let key = ImportedPublicKey(key);
+    let mut size = 0;
+    // SAFETY: The key is live, NULL output requests the size, and size is writable.
+    let status = unsafe {
+        BCryptExportKey(
+            key.0,
+            ptr::null_mut(),
+            BCRYPT_RSAPUBLIC_BLOB,
+            ptr::null_mut(),
+            0,
+            &mut size,
+            0,
+        )
+    };
+    if status != 0 || size == 0 {
+        return Err(invalid_certificate(
+            "Unable to export certificate RSA public key",
+        ));
+    }
+    let length =
+        usize::try_from(size).map_err(|_| invalid_certificate("Invalid RSA public-key size"))?;
+    let mut blob = Vec::new();
+    blob.try_reserve_exact(length)
+        .map_err(|_| invalid_certificate("Unable to inspect RSA public-key size"))?;
+    blob.resize(length, 0);
+    let mut written = 0;
+    // SAFETY: The key is live and blob provides size writable bytes.
+    let status = unsafe {
+        BCryptExportKey(
+            key.0,
+            ptr::null_mut(),
+            BCRYPT_RSAPUBLIC_BLOB,
+            blob.as_mut_ptr(),
+            size,
+            &mut written,
+            0,
+        )
+    };
+    if status != 0 || written != size {
+        return Err(invalid_certificate(
+            "Unable to export certificate RSA public key",
+        ));
+    }
+    let bits = rsa_public_blob_bits(&blob)
+        .ok_or_else(|| invalid_certificate("Invalid RSA public-key blob"))?;
+    if bits < 2048 {
+        return Err(invalid_certificate(
+            "RSA certificate key is below 2048 bits",
+        ));
+    }
+    Ok(())
+}
+
 struct CertChain {
     inner: NonNull<CERT_CHAIN_CONTEXT>,
 }
 
 impl CertChain {
+    fn verify_rsa_key_lengths(&self) -> Result<(), TlsError> {
+        // SAFETY: CertChain owns this native context and every referenced chain,
+        // element and certificate for the full duration of this inspection.
+        let context = unsafe { self.inner.as_ref() };
+        if context.cChain == 0 || context.rgpChain.is_null() {
+            return Err(invalid_certificate("Missing selected certificate chain"));
+        }
+        for chain_index in 0..context.cChain {
+            // SAFETY: cChain is the native array length; the context remains alive.
+            let chain = unsafe { (*context.rgpChain.add(chain_index as usize)).as_ref() }
+                .ok_or_else(|| invalid_certificate("Missing selected simple chain"))?;
+            if chain.cElement == 0 || chain.rgpElement.is_null() {
+                return Err(invalid_certificate("Missing selected certificate elements"));
+            }
+            for element_index in 0..chain.cElement {
+                // SAFETY: cElement bounds the native array owned by this context.
+                let element = unsafe { (*chain.rgpElement.add(element_index as usize)).as_ref() }
+                    .ok_or_else(|| {
+                    invalid_certificate("Missing selected certificate element")
+                })?;
+                // SAFETY: The element's certificate and parsed info share its lifetime.
+                let certificate = unsafe { element.pCertContext.as_ref() }
+                    .ok_or_else(|| invalid_certificate("Missing selected certificate"))?;
+                let info = unsafe { certificate.pCertInfo.as_ref() }
+                    .ok_or_else(|| invalid_certificate("Missing selected certificate info"))?;
+                verify_rsa_key_length(&info.SubjectPublicKeyInfo)?;
+            }
+        }
+        Ok(())
+    }
+
     fn verify_chain_policy(
         &self,
         mut server_null_terminated: Vec<u16>,
@@ -437,8 +579,7 @@ impl CertificateStore {
                 .encode_utf16()
                 .chain([0])
                 .collect();
-        let mut minimum_keys: Vec<u16> =
-            "RSA/2048;ECDSA/256".encode_utf16().chain([0]).collect();
+        let mut minimum_keys: Vec<u16> = "RSA/2048;ECDSA/256".encode_utf16().chain([0]).collect();
         let mut serialized = CERT_STRONG_SIGN_SERIALIZED_INFO {
             // Preserve existing CRL/OCSP policy; do not enable new flags here.
             dwFlags: 0,
@@ -707,7 +848,7 @@ impl Verifier {
         let status = cert_chain.verify_chain_policy(server)?;
 
         if status.dwError == 0 {
-            return Ok(());
+            return cert_chain.verify_rsa_key_lengths();
         }
 
         // Only map the errors we have tests for.

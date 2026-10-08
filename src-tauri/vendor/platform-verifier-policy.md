@@ -6,13 +6,20 @@ comes from the exact published crate recorded in
 [`platform-verifier-provenance.json`](platform-verifier-provenance.json), including
 its upstream revision and per-file hashes. MIT and Apache-2.0 license texts are
 retained in both directories. All upstream files except `src/verification/windows.rs` and
-`src/verification/apple.rs` are byte-identical; the upstream development `Cargo.lock` is not included.
+`src/verification/apple.rs` and `src/verification/others.rs` are byte-identical; the upstream development `Cargo.lock` is not included.
 
 The Windows delta supplies an explicit serialized strong-sign policy to the
 existing `CertGetCertificateChain` call: RSA keys must be at least 2048 bits,
 ECDSA keys at least 256 bits, and certificate signatures use SHA-256, SHA-384 or
-SHA-512 with RSA/ECDSA. The explicit RSA limit avoids the 2047-bit threshold in
-Windows' predefined strong-sign OID. ECDSA-P224 and legacy SHA-1 certificate
+SHA-512 with RSA/ECDSA. The explicit RSA limit avoids selecting Windows' predefined 2047-bit
+strong-sign OID, but Windows can still accept a 2047-bit modulus under this
+configuration. After successful native SSL policy verification, an additional
+check walks every element in all selected simple chains, including the trusted
+root. It uses native CNG import/export for RSA and RSA-PSS public keys and counts
+the actual significant bits of the exported modulus. It does not rely on a
+rounded key-width property. Missing or malformed key data, import/export
+failures, and RSA moduli below 2048 bits fail closed. The strong-sign policy
+continues to enforce ECDSA and signature requirements. ECDSA-P224 and legacy SHA-1 certificate
 chains are intentionally outside this policy. Applications using private CAs
 must replace undersized keys and legacy signatures rather than disable checking.
 
@@ -28,7 +35,9 @@ The shipped Windows build targets Windows 10 or later, consistent with the
 [supported Rust Windows targets](https://blog.rust-lang.org/2024/02/26/Windows-7/).
 The strong-sign API is available starting with Windows 8. An explicit `win7`
 cross-compilation target is rejected rather than silently compiling a weaker
-policy. Linux and Android verification code is unchanged.
+policy. Linux and Android certificate verification is unchanged. On Unix,
+root-loading warnings retain their static error context but omit detailed error
+values, because malformed PEM errors can contain raw input lines.
 
 The three actual client builders are tested in Windows CI with disposable
 certificates; see [the probe instructions](../../../tests/tls-policy/README.md).
@@ -63,6 +72,11 @@ API references:
 - [CERT_CHAIN_PARA](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_para)
 - [CERT_STRONG_SIGN_SERIALIZED_INFO](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_strong_sign_serialized_info)
 - [CERT_STRONG_SIGN_PARA](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_strong_sign_para)
+
+- [CERT_CHAIN_CONTEXT](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_context)
+- [CryptImportPublicKeyInfoEx2](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-cryptimportpublickeyinfoex2)
+- [BCryptExportKey](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptexportkey)
+- [BCRYPT_RSAKEY_BLOB](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/ns-bcrypt-bcrypt_rsakey_blob)
 
 - [SecTrustGetCertificateAtIndex](https://developer.apple.com/documentation/security/sectrustgetcertificateatindex(_:_:))
 - [SecCertificateCopyKey](https://developer.apple.com/documentation/security/seccertificatecopykey(_:))

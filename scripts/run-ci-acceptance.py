@@ -25,6 +25,15 @@ CASES = (
 )
 
 
+# These ignored tests run in the mandatory Windows/macOS TLS jobs, whose JSON
+# receipts cover all three production clients. They still belong in the exact
+# library inventory, so missing or unexpected ignored tests fail closed.
+SEPARATELY_RUN_CASES = (
+    "plugins::download::tls_key_policy_plugin_download",
+    "plugins::http_video::tls_key_policy_video_transfer",
+)
+
+
 def run_case(executable, directory, case):
     """Keep one scenario per process and require both a clean exit and one pass."""
     command = [str(executable), case, "--exact", "--ignored", "--test-threads=1",
@@ -54,9 +63,10 @@ def validate_cases(cases):
         raise ValueError("Invalid acceptance scenario name")
 
 
-def run_harness(executable, manifest, cases, receipt):
+def run_harness(executable, manifest, cases, receipt, separately_run_cases=()):
     """Cargo supplies this freshly checked executable and its native runtime env."""
     validate_cases(cases)
+    validate_cases((*cases, *separately_run_cases))
     executable = executable.resolve()
     directory = manifest.resolve().parent
     if not executable.is_file() or not executable.is_relative_to(directory):
@@ -67,7 +77,8 @@ def run_harness(executable, manifest, cases, receipt):
     )
     names = [line.removesuffix(": test") for line in inventory.splitlines()
              if line.endswith(": test")]
-    if len(names) != len(cases) or set(names) != set(cases):
+    expected = (*cases, *separately_run_cases)
+    if len(names) != len(expected) or set(names) != set(expected):
         raise ValueError("Ignored library-test inventory differs from acceptance scenarios")
     for case in cases:
         print(f"Acceptance scenario: {case}", flush=True)
@@ -75,13 +86,15 @@ def run_harness(executable, manifest, cases, receipt):
     # A missing/misapplied runner must never turn into a successful default run.
     # Exclusive creation also rejects more than one harness invocation.
     with receipt.open("x") as stream:
-        json.dump({"cases": cases, "executable": str(executable)}, stream)
+        json.dump({"cases": cases, "separately_run_cases": separately_run_cases,
+                   "executable": str(executable)}, stream)
     print(f"All {len(cases)} isolated acceptance scenarios passed.", flush=True)
 
 
-def run_acceptance(root, cases=CASES):
+def run_acceptance(root, cases=CASES, separately_run_cases=()):
     """Let Cargo build once and retain Cargo's cwd and dynamic-library environment."""
     validate_cases(cases)
+    validate_cases((*cases, *separately_run_cases))
     manifest = root.resolve() / "src-tauri/Cargo.toml"
     compiler = subprocess.check_output(["rustc", "-vV"], text=True)
     hosts = re.findall(r"^host: ([A-Za-z0-9_.-]+)$", compiler, re.MULTILINE)
@@ -90,7 +103,8 @@ def run_acceptance(root, cases=CASES):
     with tempfile.TemporaryDirectory(prefix="ci-acceptance-receipt-") as temporary:
         receipt = Path(temporary) / "executed.json"
         runner = [sys.executable, str(Path(__file__).resolve()), "--harness",
-                  str(manifest), json.dumps(cases), str(receipt)]
+                  str(manifest), json.dumps(cases), json.dumps(separately_run_cases),
+                  str(receipt)]
         # A command-local native runner does not add --target or change compiler flags.
         config = f"target.{hosts[0]}.runner={json.dumps(runner)}"
         subprocess.run(
@@ -100,17 +114,20 @@ def run_acceptance(root, cases=CASES):
         if not receipt.is_file():
             raise ValueError("Cargo did not produce the acceptance execution receipt")
         proof = json.loads(receipt.read_text())
-        if proof.get("cases") != list(cases):
+        if (proof.get("cases") != list(cases)
+                or proof.get("separately_run_cases") != list(separately_run_cases)):
             raise ValueError("Acceptance execution receipt has a different inventory")
 
 
 def main():
     """Only the normal entry point compiles; Cargo invokes the internal adapter."""
     if len(sys.argv) == 1:
-        run_acceptance(Path(__file__).resolve().parents[1])
-    elif len(sys.argv) == 6 and sys.argv[1] == "--harness":
-        manifest, cases, receipt, executable = sys.argv[2:]
-        run_harness(Path(executable), Path(manifest), json.loads(cases), Path(receipt))
+        run_acceptance(Path(__file__).resolve().parents[1],
+                       separately_run_cases=SEPARATELY_RUN_CASES)
+    elif len(sys.argv) == 7 and sys.argv[1] == "--harness":
+        manifest, cases, separate, receipt, executable = sys.argv[2:]
+        run_harness(Path(executable), Path(manifest), json.loads(cases),
+                    Path(receipt), json.loads(separate))
     else:
         raise ValueError("Unexpected acceptance runner arguments")
 
