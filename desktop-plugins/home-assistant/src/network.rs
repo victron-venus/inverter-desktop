@@ -428,13 +428,17 @@ async fn session(
     }
 }
 
-pub fn http_client() -> Result<reqwest::Client, &'static str> {
+fn http_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .no_proxy()
         .connect_timeout(OPERATION_TIMEOUT)
         .timeout(OPERATION_TIMEOUT)
+}
+
+pub fn http_client() -> Result<reqwest::Client, &'static str> {
+    http_client_builder()
         .build()
         .map_err(|_| "cannot initialize HA network")
 }
@@ -491,3 +495,13 @@ pub async fn run(configuration: Arc<Validated>, state: Shared) -> Result<(), &'s
 #[cfg(test)]
 #[path = "network_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/tls-policy/probe.rs"]
+mod tls_policy_tests;
+
+#[tokio::test]
+#[ignore = "requires Python/OpenSSL disposable TLS oracle"]
+async fn tls_key_policy_ha_rest() {
+    tls_policy_tests::matrix("ha-rest", http_client_builder).await;
+}
