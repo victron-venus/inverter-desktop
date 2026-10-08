@@ -533,7 +533,7 @@ This project includes comprehensive security measures:
 - **Security Policy**: See [SECURITY.md](SECURITY.md) for vulnerability reporting
 - **Fuzzing**: Automated fuzz testing via [FUZZING.md](FUZZING.md)
 - **OSS-Fuzz Integration**: Continuous fuzzing with [OSS_FUZZ_GUIDE.md](OSS_FUZZ_GUIDE.md)
-- **OpenSSF Best Practices**: Badge effort documented in [OPENSSF_BADGE_GUIDE.md](OPENSSF_BADGE_GUIDE.md)
+- **OpenSSF Best Practices**: Badge effort documented in [OpenSSF evidence index](docs/openssf-evidence.md)
 - **Dependency Auditing**: Regular security scans with `cargo audit`
 - **Status Tracking**: Current security status in [SECURITY_STATUS.md](SECURITY_STATUS.md)
 
@@ -541,7 +541,7 @@ This project includes comprehensive security measures:
 
 - ✅ **OSS-Fuzz Integration**: Continuous automated fuzzing
 - ✅ **3 Fuzz Targets**: JSON parsing, MQTT handling, command parsing
-- ✅ **OpenSSF Best Practices**: Working toward badge certification
+- **OpenSSF Best Practices**: assessment preparation; see the evidence index
 - ✅ **Regular Dependency Updates**: Automated vulnerability monitoring
 - ✅ **Secure MQTT**: Connection handling and input validation
 - ✅ **Security Policy**: Coordinated vulnerability disclosure
@@ -657,3 +657,9 @@ plan, and Configuration → Electricity tariff edits it after controller confirm
 Seasons, weekly rates and billing dates survive controller updates. A local plan
 can be selected explicitly for this device; it never silently replaces the shared
 plan. See [tariff editing and migration](docs/electricity-tariffs.md).
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for reports, development checks and pull requests,
+[SECURITY.md](SECURITY.md) for private vulnerability reporting and deployment trust boundaries,
+and the [OpenSSF evidence index](docs/openssf-evidence.md) for assessment references and remaining verification.

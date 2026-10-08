@@ -87,3 +87,6 @@ C*.md
 /release-output/
 /.release-plan.json
 /.release-inputs.json
+
+# Public contribution policy is maintained project documentation.
+!CONTRIBUTING.md
