@@ -55,10 +55,19 @@ export function shouldDiscover(lastDiscoveryMs: number | null, nowMs: number): b
   return nowMs - lastDiscoveryMs >= DISCOVERY_INTERVAL_MS
 }
 
+function sameDeviceIdentity(current: InventoryDevice, incoming: InventoryDevice): boolean {
+  return Boolean(
+    (current.serial && incoming.serial && current.serial === incoming.serial) ||
+    (current.instance === incoming.instance &&
+      incoming.instance != null &&
+      Number.isFinite(incoming.instance))
+  )
+}
+
 /**
  * Union two snapshots: keep every previously seen device, refresh metrics for
  * matches, lock names, and (when `addNew`) append first-seen devices.
- * Identity is serial, then Venus instance, then exact name.
+ * Use the first serial/instance match, then fall back to the exact name.
  */
 export function mergeDeviceInventory<T extends InventoryDevice>(
   existing: T[] | undefined,
@@ -71,16 +80,7 @@ export function mergeDeviceInventory<T extends InventoryDevice>(
   if (dest.length === 0) return incoming.map((d) => ({ ...d }))
 
   for (const inc of incoming) {
-    let matchIdx = -1
-    for (const dst of dest) {
-      if (
-        (dst.serial && inc.serial && dst.serial === inc.serial) ||
-        (dst.instance === inc.instance && inc.instance != null && Number.isFinite(inc.instance))
-      ) {
-        matchIdx = dest.indexOf(dst)
-        break
-      }
-    }
+    const matchIdx = dest.findIndex((dst) => sameDeviceIdentity(dst, inc))
     if (matchIdx >= 0) {
       const cur = dest[matchIdx]
       dest[matchIdx] = {

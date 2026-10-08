@@ -75,31 +75,11 @@ function validateRates(value: unknown): number[][] {
     })
   })
 }
-export function validatePlan(value: unknown): TariffPlan {
-  const data = object(value)
-  if (data.version !== 1 && data.version !== 2) throw new Error('Unsupported tariff version.')
-  // Prevent a mislabeled seasonal file being silently treated as a legacy weekly plan.
-  if (data.version === 1 && (data.seasons !== undefined || data.billingDay !== undefined))
-    throw new Error('Seasons and billing dates require tariff version 2.')
-  if (typeof data.name !== 'string' || !data.name.trim() || data.name.length > 120)
-    throw new Error('Enter a tariff name (up to 120 characters).')
-  if (typeof data.currency !== 'string' || !/^[A-Z]{3}$/.test(data.currency))
-    throw new Error('Enter a three-letter currency, for example USD.')
-  if (typeof data.timeZone !== 'string' || !data.timeZone)
-    throw new Error('Enter the tariff time zone.')
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: data.timeZone }).format()
-  } catch {
-    throw new Error('Unknown time zone. Use a name such as America/Los_Angeles.')
-  }
-  if (data.source !== 'manual' && data.source !== 'emporia')
-    throw new Error('Invalid tariff source.')
-  const rates = validateRates(data.rates)
-  const rawSeasons = data.version === 1 ? [] : data.seasons
+function validateSeasons(rawSeasons: unknown): TariffSeason[] {
   if (!Array.isArray(rawSeasons) || rawSeasons.length > 12)
     throw new Error('A tariff needs a seasons array with at most 12 seasons.')
   const usedMonths = new Set<number>()
-  const seasons = rawSeasons.map((value: unknown) => {
+  return rawSeasons.map((value: unknown) => {
     const season = object(value)
     if (typeof season.name !== 'string' || !season.name.trim() || season.name.length > 80)
       throw new Error('Enter a season name (up to 80 characters).')
@@ -126,6 +106,9 @@ export function validatePlan(value: unknown): TariffPlan {
       )
     }
   })
+}
+
+function validateOptionalMetadata(data: Record<string, unknown>): void {
   if (
     data.billingDay !== undefined &&
     (typeof data.billingDay !== 'number' ||
@@ -139,6 +122,31 @@ export function validatePlan(value: unknown): TariffPlan {
     (typeof data.reference !== 'string' || data.reference.length > 200)
   )
     throw new Error('Invalid tariff reference.')
+}
+
+export function validatePlan(value: unknown): TariffPlan {
+  const data = object(value)
+  if (data.version !== 1 && data.version !== 2) throw new Error('Unsupported tariff version.')
+  // Prevent a mislabeled seasonal file being silently treated as a legacy weekly plan.
+  if (data.version === 1 && (data.seasons !== undefined || data.billingDay !== undefined))
+    throw new Error('Seasons and billing dates require tariff version 2.')
+  if (typeof data.name !== 'string' || !data.name.trim() || data.name.length > 120)
+    throw new Error('Enter a tariff name (up to 120 characters).')
+  if (typeof data.currency !== 'string' || !/^[A-Z]{3}$/.test(data.currency))
+    throw new Error('Enter a three-letter currency, for example USD.')
+  if (typeof data.timeZone !== 'string' || !data.timeZone)
+    throw new Error('Enter the tariff time zone.')
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: data.timeZone }).format()
+  } catch {
+    throw new Error('Unknown time zone. Use a name such as America/Los_Angeles.')
+  }
+  if (data.source !== 'manual' && data.source !== 'emporia')
+    throw new Error('Invalid tariff source.')
+  const rates = validateRates(data.rates)
+  const rawSeasons = data.version === 1 ? [] : data.seasons
+  const seasons = validateSeasons(rawSeasons)
+  validateOptionalMetadata(data)
   return {
     version: 2,
     name: data.name.trim(),

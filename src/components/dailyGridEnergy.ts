@@ -28,6 +28,51 @@ const nonnegative = (value: unknown): value is number =>
 const timestamp = (value: unknown): value is number => nonnegative(value) && value * 1000 <= 8.64e15
 const GRID_SERVICE_PREFIX = 'com.victronenergy.grid.'
 
+function validMeterDate(value: Record<string, unknown>): value is Record<string, unknown> & {
+  date: string
+  time_zone: string
+} {
+  return (
+    typeof value.date === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value.date) &&
+    typeof value.time_zone === 'string' &&
+    !!value.time_zone &&
+    !/^[+-]/.test(value.time_zone)
+  )
+}
+
+function validMeterSource(source: unknown): source is GridEnergyDaily['source'] {
+  return (
+    record(source) &&
+    typeof source.service === 'string' &&
+    source.service.startsWith(GRID_SERVICE_PREFIX) &&
+    !!source.service.slice(GRID_SERVICE_PREFIX.length).trim() &&
+    source.service === source.service.trim() &&
+    nonnegative(source.device_instance) &&
+    Number.isSafeInteger(source.device_instance) &&
+    (source.serial == null || typeof source.serial === 'string')
+  )
+}
+
+function statusDetails(value: Record<string, unknown>): string {
+  let details = ''
+  if (typeof value.status === 'string') details += ` Status: ${value.status}.`
+  if (typeof value.reason === 'string' && value.reason.trim()) details += ` ${value.reason}`
+  return details
+}
+
+function energyAmounts(
+  value: Record<string, unknown>,
+  label: string,
+  details: string
+): DailyGridPresentation {
+  const imported = nonnegative(value.import_kwh) ? value.import_kwh.toFixed(2) : '—'
+  const exported = nonnegative(value.export_kwh) ? value.export_kwh.toFixed(2) : '—'
+  if (imported === '—') details += ' Import reading is unavailable or invalid.'
+  if (exported === '—') details += ' Export reading is unavailable or invalid.'
+  return { label, imported, exported, details }
+}
+
 // Keep the frequent freshness tick cheap without accumulating arbitrary server time zones.
 let cachedZone: string | undefined
 let cachedFormatter: Intl.DateTimeFormat | undefined
@@ -63,36 +108,20 @@ export function dailyGridPresentation(value: unknown, now: number): DailyGridPre
     details: `${context} ${reason}`,
   })
   if (!record(value)) return unavailable('Daily meter readings are unavailable.')
-  if (
-    typeof value.date !== 'string' ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(value.date) ||
-    typeof value.time_zone !== 'string' ||
-    !value.time_zone ||
-    /^[+-]/.test(value.time_zone)
-  )
-    return unavailable('The meter date or IANA time zone is invalid.')
+  if (!validMeterDate(value)) return unavailable('The meter date or IANA time zone is invalid.')
 
   try {
     const current = siteParts(now, value.time_zone)
     context += ` ${value.date} (${value.time_zone}).`
     if (value.date !== current.date)
       return unavailable('Readings do not belong to the current day at the meter site.')
-    if (typeof value.status === 'string') context += ` Status: ${value.status}.`
-    if (typeof value.reason === 'string' && value.reason.trim()) context += ` ${value.reason}`
+    context += statusDetails(value)
 
     const source = value.source
-    if (
-      !record(source) ||
-      typeof source.service !== 'string' ||
-      !source.service.startsWith(GRID_SERVICE_PREFIX) ||
-      !source.service.slice(GRID_SERVICE_PREFIX.length).trim() ||
-      source.service !== source.service.trim() ||
-      !nonnegative(source.device_instance) ||
-      !Number.isSafeInteger(source.device_instance) ||
-      (source.serial != null && typeof source.serial !== 'string')
-    )
+    if (!validMeterSource(source))
       return unavailable('The direct meter source is unavailable or invalid.')
-    context += ` Source: ${source.service}, instance ${source.device_instance}${source.serial ? `, serial ${source.serial}` : ''}.`
+    const serial = source.serial ? `, serial ${source.serial}` : ''
+    context += ` Source: ${source.service}, instance ${source.device_instance}${serial}.`
 
     if (
       !timestamp(value.observed_at) ||
@@ -129,11 +158,7 @@ export function dailyGridPresentation(value: unknown, now: number): DailyGridPre
     ))
       return unavailable('The controller has not confirmed usable daily readings.')
 
-    const imported = nonnegative(value.import_kwh) ? value.import_kwh.toFixed(2) : '—'
-    const exported = nonnegative(value.export_kwh) ? value.export_kwh.toFixed(2) : '—'
-    if (imported === '—') context += ' Import reading is unavailable or invalid.'
-    if (exported === '—') context += ' Export reading is unavailable or invalid.'
-    return { label, imported, exported, details: context }
+    return energyAmounts(value, label, context)
   } catch {
     return unavailable('The meter date or IANA time zone is invalid.')
   }
