@@ -216,6 +216,9 @@ describe('native-owned plugin video player', () => {
       vi.useFakeTimers()
       const wrapper = await player({ pluginMedia: id })
       const video = wrapper.get('video')
+      // jsdom queues volumechange when Vue sets muted. Deliver that DOM task
+      // without advancing the readiness timeout or frame polling interval.
+      await vi.advanceTimersByTimeAsync(0)
       let rejectPlay: (reason: Error) => void = () => {}
       vi.spyOn(video.element, 'play').mockImplementation(
         () =>
