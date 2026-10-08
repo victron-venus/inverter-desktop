@@ -34,6 +34,10 @@ All notable changes to this project will be documented in this file.
   dependency; jsdom keeps its compatible, patched Undici 7.29.1 dependency.
 
 ### Upgrade
+- Windows HTTPS integrations require certificate chains with RSA keys of at
+  least 2048 bits or ECDSA keys of at least 256 bits and SHA-2 signatures. Replace
+  undersized private CA keys or legacy signatures before upgrading; certificate
+  trust and hostname verification remain enabled.
 - Local authentication passwords migrate once to Argon2id verifiers while keeping
   the same login. This storage change is one-way: older app versions cannot
   unlock migrated profiles. Portable settings exports do not include credentials;
@@ -50,6 +54,9 @@ All notable changes to this project will be documented in this file.
 - Document contribution checks, confidential security reporting and the project-specific trust boundaries.
 
 ### Security
+- Apply explicit strong-sign policy to Windows' native certificate-chain
+  builder for plugin downloads, media transfers and Home Assistant HTTP. Earlier
+  native verification could accept weak intermediate and trusted-root keys.
 - Replace reversible local login passwords with salted Argon2id verifiers,
   keep them out of settings IPC and exports, and atomically migrate the native
   configuration before granting access. Outbound service credentials are unchanged.

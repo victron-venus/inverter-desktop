@@ -83,9 +83,15 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
     let mut failures = Vec::new();
     for case in [
         "strong",
+        "strong-ec",
+        "strong-pss",
+        "strong-pss-key",
         "weak-leaf",
         "weak-intermediate",
         "weak-root",
+        "weak-2047-root",
+        "weak-ec-intermediate",
+        "weak-ec-root",
         "untrusted",
         "wrong-host",
     ] {
@@ -115,7 +121,7 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
             .no_proxy()
             .resolve("localhost", ([127, 0, 0, 1], port).into())
             .build()
-            .expect("unchanged production TLS builder must initialize");
+            .expect("production TLS builder must initialize");
         let host = if case == "wrong-host" {
             "127.0.0.1"
         } else {
@@ -137,7 +143,7 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
         );
         let request = received["request"].as_str().unwrap();
         let token_received = request.contains("disposable-tls-policy-test-token");
-        let expected = if case == "strong" {
+        let expected = if case.starts_with("strong") {
             accepted && received["phase"] == "application" && token_received
         } else {
             !accepted
