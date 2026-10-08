@@ -42,7 +42,7 @@ export function formatDuration(s: number | undefined): string {
 
 /** An absent/invalid source time is unknown, not the time we received a replay. */
 export function notificationTimestampMs(tsString: string | undefined): number | null {
-  const timestamp = tsString ? Date.parse(tsString) : NaN
+  const timestamp = tsString ? Date.parse(tsString) : Number.NaN
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null
 }
 

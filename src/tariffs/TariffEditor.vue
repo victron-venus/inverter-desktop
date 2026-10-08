@@ -165,9 +165,11 @@ const props = withDefaults(
   { tariffScope: 'dashboard', persist: true, clearLabel: 'Clear local tariff' }
 )
 // Preserve existing callers while allowing native local persistence through savePlan.
-const destination = computed(
-  () => props.destination ?? (props.savePlan ? 'controller' : props.persist ? 'local' : 'draft')
-)
+const destination = computed(() => {
+  if (props.destination != null) return props.destination
+  if (props.savePlan) return 'controller'
+  return props.persist ? 'local' : 'draft'
+})
 const emit = defineEmits<{ close: []; saved: [plan: TariffPlan | null] }>()
 const draft = ref<TariffDraft>(props.plan ? JSON.parse(JSON.stringify(props.plan)) : newDraft())
 const dialog = ref<HTMLDialogElement | null>(null)

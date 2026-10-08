@@ -10,9 +10,8 @@ export async function exportTariff(plan: TariffPlan): Promise<boolean> {
       return await invoke<boolean>('export_tariff', { plan })
     } catch (cause) {
       // Tauri rejects Result::Err(String) with a string, not an Error instance.
-      throw cause instanceof Error
-        ? cause
-        : new Error(typeof cause === 'string' ? cause : 'Tariff export failed.')
+      if (cause instanceof Error) throw cause
+      throw new Error(typeof cause === 'string' ? cause : 'Tariff export failed.')
     }
   }
 
