@@ -17,8 +17,13 @@
     <output v-if="active" class="text-[9px] text-accent tabular whitespace-nowrap">
       {{ status?.value }} W · 2s
     </output>
-    <span v-if="!ready && !loading" class="text-[9px] text-text-secondary" role="status">
-      Status unknown
+    <span
+      class="text-[9px] text-text-secondary"
+      :class="{ 'sr-only': ready || loading }"
+      role="status"
+      aria-atomic="true"
+    >
+      {{ !ready && !loading ? 'Status unknown' : '' }}
     </span>
     <span
       v-if="error && !opened"

@@ -35,6 +35,31 @@ afterEach(() => {
 })
 
 describe('ESS menu', () => {
+  it('keeps one live status node across menu, pending and availability transitions', async () => {
+    const opening = open()
+    const node = wrapper.get('[role="status"]').element
+    await opening
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('')
+    expect(node.getAttribute('aria-atomic')).toBe('true')
+    menuItems()[0].click()
+    await flushPromises()
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('Waiting for the controller…')
+    const requestId = send.mock.calls[0][1].request_id
+    await wrapper.setProps({ mode: { ...status, request_id: requestId } })
+    expect(node.textContent).toBe('')
+    await wrapper.setProps({ fresh: false })
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('Waiting for fresh ESS status.')
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await flushPromises()
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('')
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.get('[role="status"]').element).toBe(node)
+    expect(node.textContent).toBe('Waiting for fresh ESS status.')
+  })
   it('opens six choices with External selected without dispatching', async () => {
     await open()
     expect(menuItems().map((item) => item.textContent?.trim())).toEqual(
