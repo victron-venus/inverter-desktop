@@ -93,11 +93,15 @@ pub(super) struct VideoTransfer {
 }
 
 impl VideoTransfer {
-    pub(super) fn new(policy: TransferPolicy) -> Result<Self, VideoError> {
-        let client = reqwest::Client::builder()
+    fn client_builder(policy: &TransferPolicy) -> reqwest::ClientBuilder {
+        reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(policy.connect_timeout)
             .read_timeout(policy.read_timeout)
+    }
+
+    pub(super) fn new(policy: TransferPolicy) -> Result<Self, VideoError> {
+        let client = Self::client_builder(&policy)
             .build()
             .map_err(|_| VideoError::Network)?;
         Ok(Self {
@@ -298,4 +302,13 @@ mod tests {
             [1, 2, 3, 4, 5, 5, 5]
         );
     }
+}
+
+#[tokio::test]
+#[ignore = "requires Python/OpenSSL disposable TLS oracle"]
+async fn tls_key_policy_video_transfer() {
+    crate::tls_policy_tests::matrix("video-transfer", || {
+        VideoTransfer::client_builder(&TransferPolicy::default())
+    })
+    .await;
 }

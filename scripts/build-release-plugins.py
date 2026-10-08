@@ -70,6 +70,23 @@ def encode_json(value):
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+def _build_packager(root, target, host, implicit_native):
+    """Build the host utility and keep native/cross worker layouts aligned."""
+    target_dir = root / "src-tauri" / "target"
+    # Windows/Linux installers use Cargo's native layout. Reuse their dependency
+    # artifacts instead of rebuilding the same crate graph under <host>/release.
+    host_args = [] if implicit_native else ["--target", host]
+    worker_args = [] if implicit_native else ["--target", target]
+    run(root, ["cargo", "build", "--locked", "--release", "--manifest-path",
+               root / "src-tauri/Cargo.toml", "--example", "plugin-package",
+               *host_args, "--target-dir", target_dir])
+    host_directory = target_dir if implicit_native else target_dir / host
+    worker_directory = target_dir if implicit_native else target_dir / target
+    packager = host_directory / "release/examples" / (
+        "plugin-package.exe" if "windows" in host else "plugin-package")
+    return target_dir, worker_args, worker_directory, packager
+
+
 # Each target produces the registered workers and one host-native packaging utility.
 # pylint: disable=too-many-locals
 def build_plugins(root, plan, repository, target, host, *, implicit_native=False):
@@ -83,18 +100,9 @@ def build_plugins(root, plan, repository, target, host, *, implicit_native=False
     output = root / "release-output" / "desktop"
     output.mkdir(parents=True, exist_ok=True)
     plugin_package.checked_path(output)
-    target_dir = root / "src-tauri" / "target"
-    # Windows/Linux installers use Cargo's native layout. Reuse their dependency
-    # artifacts instead of rebuilding the same crate graph under <host>/release.
-    host_args = [] if implicit_native else ["--target", host]
-    worker_args = [] if implicit_native else ["--target", target]
-    run(root, ["cargo", "build", "--locked", "--release", "--manifest-path",
-               root / "src-tauri/Cargo.toml", "--example", "plugin-package",
-               *host_args, "--target-dir", target_dir])
-    host_directory = target_dir if implicit_native else target_dir / host
-    worker_directory = target_dir if implicit_native else target_dir / target
-    packager = host_directory / "release/examples" / (
-        "plugin-package.exe" if "windows" in host else "plugin-package")
+    target_dir, worker_args, worker_directory, packager = _build_packager(
+        root, target, host, implicit_native
+    )
     declarations = []
     published = []
     with tempfile.TemporaryDirectory(prefix="plugin-build-", dir=output.parent) as temporary:
