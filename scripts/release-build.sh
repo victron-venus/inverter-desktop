@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${1:?Usage: release-build.sh X.Y.Z [nightly|beta|rc|stable] (requires .release-plan.json)}"
 CHANNEL="${2:-rc}"
-if [ ! -f .release-plan.json ]; then
+if [[ ! -f .release-plan.json ]]; then
   echo "Use the release workflow to reserve a release plan, or pnpm tauri build for a local base-version build." >&2
   exit 1
 fi

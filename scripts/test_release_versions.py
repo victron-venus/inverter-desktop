@@ -175,8 +175,9 @@ class ReleaseVersionTests(unittest.TestCase):
         verify_ipa(ipa, plan["base_version"], build, plan["version"])
         verifier = script("verify-native-release")
         verifier.verify_apple(ipa, plan)
+        different_build = self.plan("rc", 1, self.build + 1)
         with self.assertRaises(ValueError):
-            verifier.verify_apple(ipa, self.plan("rc", 1, self.build + 1))
+            verifier.verify_apple(ipa, different_build)
         with self.assertRaises(ValueError):
             verifier.verify_embedded_identity(b"old binary", plan)
 
