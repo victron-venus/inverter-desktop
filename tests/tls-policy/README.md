@@ -23,7 +23,9 @@ cargo test --locked --manifest-path desktop-plugins/home-assistant/Cargo.toml tl
 ```
 
 Each builder is tested with strong RSA-2048 and ECDSA-P256 chains, RSA-PSS
-signatures with an ordinary RSA key, and an RSA-PSS public-key CA. Negative cases
+signatures with an ordinary RSA key, and an RSA-PSS public-key CA. Both PSS
+certificate cases explicitly use SHA-256, MGF1-SHA256 and a 32-byte salt, rather
+than OpenSSL-version-dependent defaults. Negative cases
 use RSA-1024 leaf/intermediate/root keys, a boundary RSA-2047 root, ECDSA-P224
 intermediate/root keys, an unknown root and a wrong hostname. The server never
 sends the root, so root-key tests exercise the selected trust anchor rather than
