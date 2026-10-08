@@ -98,6 +98,31 @@ function siteParts(at: number, timeZone: string) {
   }
 }
 
+function observedEnergyAmounts(
+  value: Record<string, unknown> & { date: string; time_zone: string },
+  observed: number,
+  now: number,
+  label: string,
+  context: string,
+  unavailable: (reason: string) => DailyGridPresentation
+): DailyGridPresentation {
+  // Allow only one second of clock skew between the controller and this device.
+  if (observed > now + 1000) return unavailable('The meter observation is in the future.')
+  if (siteParts(observed, value.time_zone).date !== value.date)
+    return unavailable('The meter observation belongs to another site day.')
+  if (now - observed > GRID_ENERGY_STALE_AFTER_MS)
+    return unavailable(
+      `The meter observation is stale (older than ${GRID_ENERGY_STALE_AFTER_MS / 1000} seconds).`
+    )
+  if (!(
+    (value.status === 'complete' && value.complete) ||
+    (value.status === 'partial' && !value.complete)
+  ))
+    return unavailable('The controller has not confirmed usable daily readings.')
+
+  return energyAmounts(value, label, context)
+}
+
 export function dailyGridPresentation(value: unknown, now: number): DailyGridPresentation {
   let label = 'Today'
   let context = 'Grid energy: ↓ import / ↑ export.'
@@ -144,21 +169,7 @@ export function dailyGridPresentation(value: unknown, now: number): DailyGridPre
       context += ` Partial coverage: since ${start.time}; excludes earlier energy today.`
     }
     context += ` Observed: ${siteParts(observed, value.time_zone).time}.`
-    // Allow only one second of clock skew between the controller and this device.
-    if (observed > now + 1000) return unavailable('The meter observation is in the future.')
-    if (siteParts(observed, value.time_zone).date !== value.date)
-      return unavailable('The meter observation belongs to another site day.')
-    if (now - observed > GRID_ENERGY_STALE_AFTER_MS)
-      return unavailable(
-        `The meter observation is stale (older than ${GRID_ENERGY_STALE_AFTER_MS / 1000} seconds).`
-      )
-    if (!(
-      (value.status === 'complete' && value.complete) ||
-      (value.status === 'partial' && !value.complete)
-    ))
-      return unavailable('The controller has not confirmed usable daily readings.')
-
-    return energyAmounts(value, label, context)
+    return observedEnergyAmounts(value, observed, now, label, context, unavailable)
   } catch {
     return unavailable('The meter date or IANA time zone is invalid.')
   }

@@ -21,7 +21,7 @@ export const featureConfigSections = [
 export const featurePluginManagerTabId = 'plugins'
 export const featureSetupAvailable = false
 export const isMobileApp = false
-export async function subscribeFeatureConfig(config: AppConfig, current: () => boolean) {
+export function subscribeFeatureConfig(config: AppConfig, current: () => boolean) {
   return listen<{ desktop_plugins: NonNullable<AppConfig['desktop_plugins']> }>(
     'plugin-configuration-changed',
     (event) => {
