@@ -23,8 +23,8 @@ importers:
         specifier: ^4.3.0
         version: 4.3.3(vite@8.3.3(@types/node@26.2.0)(jiti@2.7.0))
       '@tauri-apps/api':
-        specifier: ^2.12.1
-        version: 2.12.1
+        specifier: ^2.12.2
+        version: 2.12.2
       '@tauri-apps/plugin-notification':
         specifier: ^2.5.1
         version: 2.5.1
@@ -950,8 +950,8 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tauri-apps/api@2.12.1':
-    resolution: {integrity: sha512-DeyFHa3wynpyoqTDikDEDGTJIq4LQ5USfolQGRmGIWT6JMADyxZBTDa5cAdT3tDg73rUXufPaCwN7aXBos4OnQ==}
+  '@tauri-apps/api@2.12.2':
+    resolution: {integrity: sha512-cr0FYEsbSQIeEuIIoC8bwdiHW3YlziMYOZ0j3R7F6kkIHSVrrZnV6CSjv/VQvFoyuERGxFc8NMtLJDXi5wYOYg==}
 
   '@tauri-apps/cli-darwin-arm64@2.12.1':
     resolution: {integrity: sha512-8bMnbpJ2jKO/ufrOPL65EMHC3ptw7fzeraoQkwibyfGLqIl+UCWsC0152kmNbW6r9NvVQduXqAZF5mH1QgTWhw==}
@@ -2932,7 +2932,7 @@ snapshots:
       tailwindcss: 4.3.3
       vite: 8.3.3(@types/node@26.2.0)(jiti@2.7.0)
 
-  '@tauri-apps/api@2.12.1': {}
+  '@tauri-apps/api@2.12.2': {}
 
   '@tauri-apps/cli-darwin-arm64@2.12.1':
     optional: true
@@ -2983,15 +2983,15 @@ snapshots:
 
   '@tauri-apps/plugin-notification@2.5.1':
     dependencies:
-      '@tauri-apps/api': 2.12.1
+      '@tauri-apps/api': 2.12.2
 
   '@tauri-apps/plugin-opener@2.7.0':
     dependencies:
-      '@tauri-apps/api': 2.12.1
+      '@tauri-apps/api': 2.12.2
 
   '@tauri-apps/plugin-store@2.5.0':
     dependencies:
-      '@tauri-apps/api': 2.12.1
+      '@tauri-apps/api': 2.12.2
 
   '@types/chai@5.2.3':
     dependencies:
