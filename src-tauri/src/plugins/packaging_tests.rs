@@ -142,7 +142,7 @@ fn manifest_is_first_payloads_are_sorted_and_actual_file_hashes_are_signed() {
     let archive = build(&root);
     let mut reader = ZipArchive::new(Cursor::new(&archive)).unwrap();
     let names: Vec<_> = (0..reader.len())
-        .map(|index| reader.by_index(index).unwrap().name().to_string())
+        .map(|index| reader.by_index(index).unwrap().name().unwrap().into_owned())
         .collect();
     assert_eq!(names, ["manifest.json", "a.txt", "bin/worker", "z.txt"]);
     let mut bytes = Vec::new();
@@ -170,7 +170,7 @@ fn manifest_is_first_payloads_are_sorted_and_actual_file_hashes_are_signed() {
         );
         assert_eq!(
             file.unix_mode(),
-            Some(if file.name() == "bin/worker" {
+            Some(if file.name().unwrap() == "bin/worker" {
                 0o100755
             } else {
                 0o100644
