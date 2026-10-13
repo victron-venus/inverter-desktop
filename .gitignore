@@ -35,6 +35,12 @@ Cargo.lock
 src-tauri/advisory-db/
 
 # Fuzzing artifacts
+!fuzz/Cargo.lock
+/fuzz/artifacts/
+/fuzz/coverage/
+/fuzz/corpus/*/crash-*
+/fuzz/corpus/*/leak-*
+/fuzz/corpus/*/timeout-*
 src-tauri/fuzz/artifacts/
 src-tauri/fuzz/corpus/*/crash-*
 src-tauri/fuzz/corpus/*/leak-*

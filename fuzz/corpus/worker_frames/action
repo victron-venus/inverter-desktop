@@ -1,0 +1,1 @@
+{"type":"action","request_id":"r1","action_id":"camera.refresh","params":{"camera":"front"},"deadline_ms":1}
