@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.47] - Development line
+## [2.5.48] - Development line
 
 ### Added
 - Ring-MQTT camera motion/ding handling via HA MQTT `camera_topic` wildcards and optional
@@ -32,6 +32,9 @@ All notable changes to this project will be documented in this file.
   and stays inline with the other values.
 
 ### Changed
+
+- Update both Tauri API layers to 2.12.2, ZIP packaging to 9.0.0, and the compatible frontend dependencies together.
+- Refresh quinn-proto to 0.11.18 in the application and Home Assistant worker locks, closing the known peer-triggered panic and memory-exhaustion advisories.
 - Update Lucide icons and Prettier. Remove the unused direct Undici development
   dependency; jsdom keeps its compatible, patched Undici 7.29.1 dependency.
 
