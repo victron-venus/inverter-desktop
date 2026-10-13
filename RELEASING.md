@@ -21,7 +21,7 @@ The committed base version comes from `src-tauri/Cargo.toml`. A release preparat
 updates that version and any required native/package companion versions together.
 Version numbers are explicit; a commit message does not automatically select one.
 
-Use `python3 scripts/release.py prepare-version --pr` to synchronize the declared source fields. A saved release plan fixes the full candidate version before compilation. See [version plans](docs/VERSIONING.md) for adapters, counters, retries and provenance.
+Use `python3 scripts/release.py prepare-version --pr` to synchronize the declared source fields. A saved release plan fixes the full candidate version before compilation. See [version plans](docs/VERSIONING.md) for adapters, counters, retries and provenance. Automatic nightlies keep all checks and builds but skip duplicate publication when retained evidence qualifies a beta/RC/stable with the same source, policy and base. Manual nightly requests still publish.
 
 Use [Semantic Versioning](https://semver.org/): patch for compatible fixes, minor
 for compatible functionality and major for incompatible changes. State changes to
@@ -47,9 +47,16 @@ Nightly and beta are previews; neither is directly promotable to stable. An RC
 may be requested without a previous beta. Channel order is a workflow policy,
 not a comparison of tag strings. Declared adapters map the saved full version to each package format. Native OS fields may retain the numeric base while the application embeds its full identity. RC packages under promote-bytes already use the final base; their original candidate identity remains provenance.
 
+
+
+Once the committed base has a stable tag, automatic push betas report
+`version-required`: quality and security checks still run, while packaging and
+publication are skipped. Prepare the next committed base through a reviewed PR.
+Explicit beta/RC requests still reject an occupied base; nightlies are unchanged.
+
 ## Required validation and evidence
 
-1. The aggregate **CI gate** requires every workflow declared in the policy to
+1. The aggregate **CI gate** requires every workflow selected by the source policy to
    succeed. Failed, missing, canceled or skipped required checks block the gate.
 2. Candidate publication additionally requires the complete platform build matrix
    and **Release gate**. Artifacts from a partially successful matrix are not a
@@ -140,3 +147,7 @@ Changes to the lifecycle, required gates or version/asset mappings go through PR
 review together with the corresponding workflow changes. Update the toolkit
 template and `.release-policy.json`, then regenerate and review this document and
 the runbook. The README links here rather than duplicating the release procedure.
+
+## Release-candidate fuzzing
+
+Every RC must pass bounded, network-isolated fuzz campaigns against the exact candidate source. The release inventory includes the report and its version-plan receipt. PRs, betas, nightlies and stable builds do not run these campaigns; stable qualification verifies the accepted RC evidence. See [the shared fuzzing contract](docs/rc-fuzzing.md) and this project's `.github/fuzz.json` for targets and budgets.
