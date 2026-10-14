@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.49] - Development line
+
+### Changes
+
+- Strengthen release-candidate fuzz evidence with required seed corpora, bounded
+  replay and validation of the pinned shared workflow.
+
+### Upgrade
+
+- Install the package for your current platform through the normal update path.
+  Existing settings and plugin choices are preserved; this patch adds no new
+  configuration or credential migration.
+- Keep camera plugin packages on the patched release when updating the desktop
+  application. The existing certificate and hostname verification requirements
+  still apply.
+
+### Security
+
+- Update rustls to 0.23.46 in the application, camera plugins and fuzz lockfiles
+  for RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and
+  RUSTSEC-2026-0349. TLS trust and hostname verification remain enabled.
+
 ## [2.5.48] - Development line
 
 ### Added
@@ -15,8 +37,6 @@ All notable changes to this project will be documented in this file.
   time, and unavailable or stale readings remain unknown.
 
 ### Fixed
-- Update rustls to 0.23.46 in the desktop application, camera plugins and fuzz
-  lockfiles for RUSTSEC-2026-0346 through RUSTSEC-2026-0349.
 - Reject undersized RSA and ECDSA keys throughout the Apple-validated TLS
   certificate chain, including trust anchors omitted by the server.
 - Desktop tariff exports use the system save dialog, avoiding a macOS WebKit
