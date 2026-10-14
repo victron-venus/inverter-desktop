@@ -113,3 +113,6 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 # Preserve the locked upstream version with native key policies and bounded CA diagnostics.
 [patch.crates-io]
 rustls-platform-verifier = { path = "vendor/rustls-platform-verifier-0.7.1" }
+
+# Backport upstream VariantStrIter out-pointer mutability fix; see vendor provenance.
+glib = { path = "vendor/glib-0.18.5" }

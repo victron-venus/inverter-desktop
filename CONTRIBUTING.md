@@ -31,3 +31,10 @@ Automated tests use mocks or controlled fixtures where available. A passing unit
 - [contracts](contracts)
 
 See [README.md](README.md) for acquisition, configuration and usage, and [the evidence index](docs/openssf-evidence.md) for the public development-process references.
+
+## Community and test evidence
+
+Follow the [Code of Conduct](CODE_OF_CONDUCT.md) and [governance process](GOVERNANCE.md).
+The [quality and build guide](docs/quality-and-build.md) lists test locations,
+platform prerequisites, reviewed warning debt and the limits of measured results.
+Maintainer-authored changes follow the same test and documentation policy.
