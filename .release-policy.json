@@ -79,7 +79,7 @@
       }
     ],
     "build_number_floor": 2005042,
-    "toolkit_revision": "bce4aac88f50366ff6e140bdc0b179c12f23c0f5"
+    "toolkit_revision": "5e413f80a4353d328b4529eae57992ac3987e2dd"
   },
   "build_secrets": [
     "ANDROID_KEYSTORE_BASE64",
@@ -89,5 +89,8 @@
   ],
   "single_entry_ci": true,
   "release_notes": "CHANGELOG.md",
-  "toolkit_revision": "ab9f337e5fa49c263c873d65c9e50dde7249af56"
+  "toolkit_revision": "5e413f80a4353d328b4529eae57992ac3987e2dd",
+  "fuzzing": {
+    "toolkit_ref": "5e413f80a4353d328b4529eae57992ac3987e2dd"
+  }
 }

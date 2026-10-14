@@ -169,6 +169,12 @@ jobs:
       - run: cargo fmt --manifest-path desktop-plugins/${{ matrix.plugin }}/Cargo.toml -- --check
       - run: cargo clippy --locked --manifest-path desktop-plugins/${{ matrix.plugin }}/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path desktop-plugins/${{ matrix.plugin }}/Cargo.toml --all-targets
+      - name: Replay checked-in fuzz regression seeds (no fuzz campaign)
+        if: matrix.plugin == 'camera-common' && runner.os == 'Linux'
+        run: |
+          cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path fuzz/Cargo.toml --lib -- -D warnings
+          cargo test --locked --manifest-path fuzz/Cargo.toml --lib
       - name: Set up Python for isolated ha TLS probes
         if: matrix.plugin == 'home-assistant' && (runner.os == 'Windows' || runner.os == 'macOS')
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "language": "rust",
+  "setup": [
+    [
+      "cargo",
+      "fetch",
+      "--locked",
+      "--manifest-path",
+      "fuzz/Cargo.toml"
+    ],
+    [
+      "cargo",
+      "+nightly-2026-10-12",
+      "fuzz",
+      "build",
+      "--fuzz-dir",
+      "fuzz",
+      "--target",
+      "x86_64-unknown-linux-gnu"
+    ]
+  ],
+  "targets": [
+    {
+      "name": "worker-frames",
+      "engine": "libfuzzer",
+      "command": [
+        "fuzz/target/x86_64-unknown-linux-gnu/release/worker_frames"
+      ],
+      "seconds": 60,
+      "corpus": "fuzz/corpus/worker_frames"
+    },
+    {
+      "name": "camera-topics",
+      "engine": "libfuzzer",
+      "command": [
+        "fuzz/target/x86_64-unknown-linux-gnu/release/camera_topics"
+      ],
+      "seconds": 60,
+      "corpus": "fuzz/corpus/camera_topics"
+    },
+    {
+      "name": "live-urls",
+      "engine": "libfuzzer",
+      "command": [
+        "fuzz/target/x86_64-unknown-linux-gnu/release/live_urls"
+      ],
+      "seconds": 60,
+      "corpus": "fuzz/corpus/live_urls"
+    }
+  ]
+}

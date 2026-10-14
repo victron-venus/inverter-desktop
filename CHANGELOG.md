@@ -57,6 +57,7 @@ All notable changes to this project will be documented in this file.
 
 ### Maintenance
 
+- Gate release candidates on bounded camera-topic, live-URL, and worker-frame fuzz campaigns, retaining source-bound validation evidence.
 - Publish reviewed release notes from the exact source commit used to build each candidate, preserving build provenance.
 - Document contribution checks, confidential security reporting and the project-specific trust boundaries.
 

@@ -5,7 +5,7 @@
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/victron-venus/inverter-desktop/graphs/commit-activity)
 [![CI](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/victron-venus/inverter-desktop/actions/workflows/codeql.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/codeql.yml)
-[![OSS-Fuzz](https://img.shields.io/badge/OSS--Fuzz-integrated-success)](https://oss-fuzz.com/testcases?project=inverter-desktop)
+[![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](FUZZING.md)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0%2B-blue.svg)](https://tauri.app/)
 
@@ -528,30 +528,20 @@ session protections are preserved.
 
 ## Security
 
-This project includes comprehensive security measures:
+- **Vulnerability reporting:** [Security policy](SECURITY.md).
+- **Release candidate fuzzing:** three instrumented Rust targets exercise worker
+  frame validation, camera MQTT filters and settings, and exact live-camera URL
+  restrictions. The shared release workflow runs the campaigns only for public
+  release candidates; [the fuzzing guide](FUZZING.md) covers scope, budgets,
+  reproduction, and limitations. The badge above describes this policy; it is
+  not a test-result badge or a claim of Google OSS-Fuzz enrollment.
+- **Dependency auditing:** `cargo audit`, `cargo deny`, dependency review and
+  automated update pull requests.
+- **OpenSSF Best Practices:** [public evidence index](docs/openssf-evidence.md).
 
-- **Security Policy**: See [SECURITY.md](SECURITY.md) for vulnerability reporting
-- **Fuzzing**: Automated fuzz testing via [FUZZING.md](FUZZING.md)
-- **OSS-Fuzz Integration**: Continuous fuzzing with [OSS_FUZZ_GUIDE.md](OSS_FUZZ_GUIDE.md)
-- **OpenSSF Best Practices**: Badge effort documented in [OpenSSF evidence index](docs/openssf-evidence.md)
-- **Dependency Auditing**: Regular security scans with `cargo audit`
-- **Status Tracking**: Current security status in [SECURITY_STATUS.md](SECURITY_STATUS.md)
-
-### Security Features
-
-- ✅ **OSS-Fuzz Integration**: Continuous automated fuzzing
-- ✅ **3 Fuzz Targets**: JSON parsing, MQTT handling, command parsing
-- **OpenSSF Best Practices**: assessment preparation; see the evidence index
-- ✅ **Regular Dependency Updates**: Automated vulnerability monitoring
-- ✅ **Secure MQTT**: Connection handling and input validation
-- ✅ **Security Policy**: Coordinated vulnerability disclosure
-
-### Monitoring
-
-- **OSS-Fuzz Dashboard**: https://oss-fuzz.com/testcases?project=inverter-desktop
-- **Coverage Analysis**: https://introspector.oss-fuzz.com/?project=inverter-desktop
-- **OpenSSF Best Practices**: https://www.bestpractices.dev/
-- **Automated Reports**: Weekly security monitoring via GitHub Actions
+A successful fuzz campaign is bounded evidence for its tested source and target
+set, not proof that every input or the full application is safe. Review the
+release workflow's RC fuzzing job and retained report for the actual result.
 
 ---
 

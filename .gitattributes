@@ -2,3 +2,7 @@
 # Keep checkout bytes stable before release input hashes are recorded.
 src-tauri/Cargo.toml text eol=lf
 src-tauri/Cargo.lock text eol=lf
+
+# Fuzz seeds are exact protocol bytes, including deliberate CRLF.
+/fuzz/corpus/** -text whitespace=-blank-at-eol
+/fuzz/Cargo.lock text eol=lf
