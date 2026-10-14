@@ -18,7 +18,12 @@ The Vue frontend calls an explicit Rust command interface. Native session guards
 protect configuration changes, export and controls when authentication is enabled.
 The [worker protocol](plugin-worker-protocol.md) bounds frames and actions and
 checks capabilities, generation and deadlines. A revoked generation cannot keep
-control authority. [Plugin packages](plugin-packages.md) require configured HTTPS
+control authority. This does not establish complete validation of every telemetry
+input: the MQTT path still accepts a nonempty discovered portal identifier
+without a format/length allowlist, converts topic bytes lossily, and can narrow
+unsigned numeric notification values to signed integers. These remain explicit
+pattern/range validation gaps, so the Silver all-input validation criterion is
+not claimed. [Plugin packages](plugin-packages.md) require configured HTTPS
 archive pins and hashes, or a trusted signature where a publisher is configured;
 unsafe archive paths and arbitrary executable selection are rejected. The default
 publisher set is empty. These worker processes are not a general hostile-code

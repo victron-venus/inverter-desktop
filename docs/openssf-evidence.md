@@ -66,7 +66,7 @@ continuity and a second human maintainer; DCO practice; project-wide accessibili
 and localization review; native build/install-variable and debug preservation
 contracts; reproducible builds; a measured six-month regression-test proportion
 and whole-project coverage; maximum warning strictness; separate credential files;
-all-network secure defaults; complete release/tag signatures; and sanitizer
+all-network secure defaults; complete MQTT pattern/range validation; complete release/tag signatures; and sanitizer
 coverage of Objective-C and unsafe native FFI. The public form records each
 criterion separately. Existing controls and a strong subset of tests do not
 substitute for these unmet requirements.
