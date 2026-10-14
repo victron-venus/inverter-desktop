@@ -1,15 +1,20 @@
 # Inverter Dashboard
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12830/badge)](https://www.bestpractices.dev/en/projects/12830)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub last commit](https://img.shields.io/github/last-commit/victron-venus/inverter-desktop)](https://github.com/victron-venus/inverter-desktop/commits/main)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/victron-venus/inverter-desktop/graphs/commit-activity)
 [![CI](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/victron-venus/inverter-desktop/actions/workflows/codeql.yml/badge.svg)](https://github.com/victron-venus/inverter-desktop/actions/workflows/codeql.yml)
 [![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](FUZZING.md)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0%2B-blue.svg)](https://tauri.app/)
 
 Desktop and mobile application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
+
+[Contribute](CONTRIBUTING.md) · [Security](SECURITY.md) · [Governance](GOVERNANCE.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [OpenSSF evidence](docs/openssf-evidence.md)
+
+The OpenSSF image reports the live assessment. It does not promise a Silver badge or replace release acceptance on the intended device.
 
 Android and iOS contain the inverter core: telemetry, MQTT controls, Cerbo EV/water,
 charts, and core notifications. Home Assistant, cameras, and the plugin ecosystem

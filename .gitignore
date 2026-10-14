@@ -96,3 +96,7 @@ C*.md
 
 # Public contribution policy is maintained project documentation.
 !CONTRIBUTING.md
+
+# Public governance and the isolated optimized GLib regression lock.
+!CODE_OF_CONDUCT.md
+!tests/glib-variant-regression/Cargo.lock

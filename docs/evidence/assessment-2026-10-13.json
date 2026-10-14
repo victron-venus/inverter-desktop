@@ -1,0 +1,104 @@
+{
+  "assessment_date": "2026-10-13",
+  "repository": "victron-venus/inverter-desktop",
+  "badge_id": 12830,
+  "source_base": "bc3deddc5efc3e5e9a87a442a5edcbc6ae223889",
+  "scope": "Evidence for project-specific Passing/Silver self-assessment, not a certification or installed-device acceptance.",
+  "human_attestations": {
+    "primary_maintainer_secure_design_knowledge": true,
+    "primary_maintainer_common_vulnerability_knowledge": true,
+    "outside_github_bug_enhancement_or_vulnerability_reports_last_12_months": false,
+    "backup_maintainer_or_one_week_access_recovery": false,
+    "source": "Owner explicitly extended analogous answers to the remaining public projects."
+  },
+  "public_audit": {
+    "ordinary_github_issues_open_or_closed": 0,
+    "published_security_advisories": 0,
+    "open_dependabot_alerts": 0,
+    "open_secret_scanning_alerts": 0,
+    "private_vulnerability_reporting_enabled": true,
+    "open_code_scanning": [
+      {
+        "number": 507,
+        "tool": "Scorecard",
+        "finding": "BinaryArtifactsID",
+        "file": "src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar",
+        "assessment": "Presence warning; committed wrapper and distribution are independently SHA-256-pinned and verified before execution. Not a confirmed exploitable vulnerability."
+      }
+    ],
+    "release_count": 173,
+    "stable_release_count": 67,
+    "all_release_bodies_have_change_upgrade_security_guidance": true
+  },
+  "local_validation": {
+    "host": "macOS arm64",
+    "rust": "1.96.1",
+    "pnpm": "10.34.4",
+    "frontend_tests_passed": 716,
+    "mobile_tests_passed": 18,
+    "build_profile_tests_passed": 8,
+    "frontend_builds": [
+      "desktop",
+      "mobile"
+    ],
+    "rust_library_tests_passed": 654,
+    "rust_library_tests_ignored": 15,
+    "rust_example_tests_passed": 2,
+    "gradle_integrity_tests_passed": 5,
+    "glib_optimized_regressions_passed": 3,
+    "glib_unpatched_positive_control": "Same optimized regression against original registry glib 0.18.5 terminated with SIGSEGV; patched crate passed. Tests do not access application credentials or devices.",
+    "biome_warning_count": 113,
+    "biome_informational_count": 67,
+    "frontend_lines_reviewed": 27240,
+    "no_device_acceptance_claimed": true,
+    "native_clippy": "passed with -D warnings",
+    "native_tls_probes": {
+      "builders": [
+        "plugin-download",
+        "video-transfer"
+      ],
+      "cases_per_builder": 10,
+      "profile": "apple-rsa-pkcs1-ecdsa",
+      "passed": true,
+      "same_apple_verifier_used_by_ios": true,
+      "physical_ios_acceptance": false
+    },
+    "glib_upstream_compiler_warnings": 34
+  },
+  "security_analysis": {
+    "host_cargo_audit_vulnerability_list_count": 0,
+    "obsolete_advisory_ignores_removed": [
+      "RUSTSEC-2026-0099",
+      "RUSTSEC-2026-0049",
+      "RUSTSEC-2026-0098",
+      "RUSTSEC-2026-0104",
+      "RUSTSEC-2026-0194",
+      "RUSTSEC-2026-0195"
+    ],
+    "glib_unsoundness": "RUSTSEC-2024-0429 backported from upstream commit 05dff0ee696f9bcd8617cd48c4b812d046d440cb without changing the 0.18.5 API. Version-based scanners can still list the original version.",
+    "unmaintained_advisories": [
+      "RUSTSEC-2024-0370",
+      "RUSTSEC-2026-0192"
+    ]
+  },
+  "source_files_sha256": {
+    "src-tauri/src/auth_password.rs": "8542a88c489b772f66cb9db90afc634f3bd982ca5b8c2accea7afe98b1a1c252",
+    "src-tauri/src/config_store.rs": "f87492d3506c61b0f946400c31c8e79610131c62ae2c9e9eebcd53dd75e4fd78",
+    "src-tauri/src/tls.rs": "3d6bc72d70019ca5387e1effeb5d48e564b52c786b2975e27a6864e3e7556449",
+    "src-tauri/src/mqtt/security.rs": "db9b07502aeb284b11f2b269ddb44956d8faa8fe98689f8ee6f1e2c6b4f9c8c6",
+    "src-tauri/src/gateway.rs": "7caa61cf86223f1fd346be689e7ee6703f33c51dc442ecdb29f1c2ae72f9ed31",
+    "src-tauri/vendor/rustls-platform-verifier-0.7.1/src/verification/apple.rs": "a9057db1434881af5b34a7222975857f60fe64a6e4aa2e08dde6257ed6bd0425",
+    "scripts/android/verify_gradle_wrapper.py": "059ce27289d9c8169a785fddf20b91ab4f0819ab9e4cd7603bdd46c892d473a3",
+    "src-tauri/vendor/glib-0.18.5/src/variant_iter.rs": "a0f5ee8acb8faa089bcdfbc9a57372609fce7654026ccef7d9a224d05a654ccc"
+  },
+  "limitations": [
+    "No one-week maintenance/access recovery mechanism or independent human backup",
+    "No whole-project statement/branch coverage metric",
+    "No claim of complete native FFI sanitizer coverage",
+    "No complete cross-platform native build reproducibility proof",
+    "No all-platform release signatures or signed tags",
+    "Accepted frontend warnings and partial accessibility/localization audit",
+    "Some local network compatibility transports remain plaintext",
+    "Credentials remain in encrypted configuration, not separate files"
+  ]
+}

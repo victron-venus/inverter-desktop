@@ -62,6 +62,13 @@ All notable changes to this project will be documented in this file.
 - Document contribution checks, confidential security reporting and the project-specific trust boundaries.
 
 ### Security
+- Backport the upstream GLib `VariantStrIter` pointer-mutability fix for
+  RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g) while retaining Tauri's GLib 0.18 API.
+  An optimized regression reproduces the original crash and passes the fix.
+  This is part of the unreleased development line, not a retroactive claim about
+  previously published packages.
+- Remove six obsolete Cargo advisory ignores after verifying that the locked
+  rustls-webpki and quick-xml versions already contain their upstream fixes.
 - Apply explicit strong-sign policy to Windows' native certificate-chain
   builder for plugin downloads, media transfers and Home Assistant HTTP. Earlier
   native verification could accept weak intermediate and trusted-root keys.

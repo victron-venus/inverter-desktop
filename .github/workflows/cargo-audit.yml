@@ -24,7 +24,7 @@ jobs:
             echo "any_changed=true" >> "$GITHUB_OUTPUT"
           else
             base="${{ github.event.pull_request.base.sha || github.event.before }}"
-            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^(src-tauri|desktop-plugins/[^/]+)/Cargo\.(toml|lock)$'; then
+            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^(\.github/workflows/cargo-audit\.yml|(src-tauri|desktop-plugins/[^/]+)/Cargo\.(toml|lock)|src-tauri/vendor/glib-0\.18\.5/.*)$'; then
               echo "any_changed=true" >> "$GITHUB_OUTPUT"
             else
               echo "any_changed=false" >> "$GITHUB_OUTPUT"
@@ -73,19 +73,9 @@ jobs:
       - name: Run cargo audit
         if: steps.changed.outputs.any_changed == 'true'
         working-directory: src-tauri
-        # rustls-webpki 0.102.x advisories — transitive via rumqttc 0.25,
-        # no semver-compatible fix available. Remove ignores when rumqttc
-        # upgrades to webpki >= 0.103.
-        # quick-xml 0.39.x advisories — transitive via plist 1.9.0 → tauri,
-        # plist requires ^0.39.2, upstream needs to update.
-        run: >
-          cargo audit
-          --ignore RUSTSEC-2026-0099
-          --ignore RUSTSEC-2026-0049
-          --ignore RUSTSEC-2026-0098
-          --ignore RUSTSEC-2026-0104
-          --ignore RUSTSEC-2026-0194
-          --ignore RUSTSEC-2026-0195
+        # The current lockfile no longer contains the former vulnerable
+        # rustls-webpki/quick-xml versions. Do not retain stale advisory ignores.
+        run: cargo audit
 
       - name: Audit the independent workers and shared protocol
         if: steps.changed.outputs.any_changed == 'true'

@@ -1,6 +1,12 @@
 # OpenSSF Best Practices evidence: inverter-desktop
 
-This index supports review against the [OpenSSF Passing criteria](https://www.bestpractices.dev/en/criteria/0). It is not an awarded badge, a security guarantee or a completed self-attestation. Initial source inventory: `74838cf6ae41fbf3e961ede40b99fe74f34f7b86`. Re-check the final merged commit and its CI before submitting an assessment.
+This index supports the [public assessment for project 12830](https://www.bestpractices.dev/en/projects/12830).
+The badge reports the live self-assessment; it is not an independent certification
+or a guarantee of device safety. The 2026-10-13 assessment expands the earlier
+unsubmitted inventory. Evidence is in [quality and build](quality-and-build.md),
+[security assurance](security-assurance.md), [governance](../GOVERNANCE.md) and the
+[assessment record](evidence/assessment-2026-10-13.json). Re-check the final merged
+commit and required CI before submitting or updating answers.
 
 ## Project and contribution process
 
@@ -48,21 +54,26 @@ The local validation entry point is [scripts/ci.sh](../scripts/ci.sh). Its actua
 
 Do not equate a green metadata or release job with successful application tests. Record actual test results, coverage limitations and security-analysis results for the submitted revision. Test execution does not establish physical-device behavior.
 
-## Items requiring explicit verification before submission
+## Remaining Silver requirements
 
-- Confirm the private reporting channel works and examine issue/advisory history. Historical response-time claims require actual reports and responses, including any reports outside GitHub.
-- Obtain primary-developer attestations about secure-design and vulnerability-prevention knowledge; repository text cannot establish a person's knowledge.
-- Verify every user-facing release has useful release notes and upgrade impact, and includes any assigned vulnerability identifiers for fixes.
-- Review dependency, code-scanning and secret-scanning findings and their age. A workflow success result is not proof that all findings are resolved.
-- Review the actual cryptographic libraries, protocols, key lengths, randomness, certificate checks and password storage applicable to this project. Do not copy another project's answers.
-- Verify build reproducibility from source, test policy adherence in recent substantive changes, dynamic analysis and any manual-memory-code checks.
-- Link only this project's real awarded badge once the assessment is accepted.
+The maintainer confirmed secure-design and common-vulnerability knowledge and no
+outside-GitHub bug, enhancement or vulnerability reports in the previous twelve
+months. There is no backup access/release recovery mechanism. These are human
+attestations, not properties inferred from source code.
 
-The live assessment, when created, is the source of truth for the badge level. Unverified criteria remain open.
+Silver is not claimed. Outstanding evidence includes actual one-week access
+continuity and a second human maintainer; DCO practice; project-wide accessibility
+and localization review; native build/install-variable and debug preservation
+contracts; reproducible builds; a measured six-month regression-test proportion
+and whole-project coverage; maximum warning strictness; separate credential files;
+all-network secure defaults; complete MQTT pattern/range validation; complete release/tag signatures; and sanitizer
+coverage of Objective-C and unsafe native FFI. The public form records each
+criterion separately. Existing controls and a strong subset of tests do not
+substitute for these unmet requirements.
 
 ## Release-note source
 
-[CHANGELOG.md](../CHANGELOG.md) contains the current development line's change summary, upgrade impact and security notes. The release policy opts into commit-pinned notes; publication rejects missing or incomplete current-version sections. Historical release bodies still require a separate audit before claiming complete coverage.
+[CHANGELOG.md](../CHANGELOG.md) contains the current development line's change summary, upgrade impact and security notes. The release policy opts into commit-pinned notes; publication rejects missing or incomplete current-version sections. The 2026-10-13 audit examined all 173 published release bodies (including 67 stable releases): all have human-readable change, upgrade and security guidance; older restored notes are explicitly retrospective.
 
 The October 2026 maintenance imports the release identity and metadata parser
 from `venus-os-ci-toolkit` revision `9dd211a`, including bounded TOML parsing and
