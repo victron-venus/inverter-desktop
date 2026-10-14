@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
   time, and unavailable or stale readings remain unknown.
 
 ### Fixed
+- Update rustls to 0.23.46 in the desktop application, camera plugins and fuzz
+  lockfiles for RUSTSEC-2026-0346 through RUSTSEC-2026-0349.
 - Reject undersized RSA and ECDSA keys throughout the Apple-validated TLS
   certificate chain, including trust anchors omitted by the server.
 - Desktop tariff exports use the system save dialog, avoiding a macOS WebKit
