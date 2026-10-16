@@ -184,6 +184,11 @@ See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and s
 
 ### Linux
 
+Run the app in your desktop user session with an active user D-Bus session and an
+unlocked Secret Service-compatible credential store. See
+[Linux credential storage](docs/desktop-hardening.md#linux-credential-storage)
+for setup requirements and recovery without deleting saved keys.
+
 **AppImage (recommended):**
 
 ```bash
