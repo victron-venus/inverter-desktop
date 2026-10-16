@@ -15,8 +15,11 @@ class ReleaseEnvironmentWorkflowTests(unittest.TestCase):
             Path(__file__).resolve().parents[2] / ".github/workflows/release-build.yml"
         )
         workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
-        self.assertEqual(workflow["permissions"]["actions"], "read")
+        self.assertNotIn("actions", workflow["permissions"])
         for job in workflow["jobs"].values():
+            self.assertEqual(
+                job["permissions"], {"contents": "read", "actions": "read"}
+            )
             steps = job["steps"]
             configurations = {
                 step.get("uses", "").split("@")[0]: step.get("with", {})
