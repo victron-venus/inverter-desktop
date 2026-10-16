@@ -19,7 +19,9 @@ history; the test sends a fresh native event before asserting chart rendering.
 Configuration rejects plaintext MQTT credentials before dispatching save.
 
 The existing CI reusable workflow includes five required current-browser/OS
-checks for pull requests and pushes. Scheduled/manual runs use the full 35-target
+checks for pull requests, pushes and beta releases. Scheduled source audits,
+manual audits without a release channel, RC runs and the existing final-build
+stable release use the full 35-target
 inventory: three pinned generations of Chromium, Firefox and WebKit on Linux,
 Windows and macOS, plus installed Chrome/Edge channels. The release/quality gate
 already requires the whole CI reusable workflow; browser failures remain failures.
