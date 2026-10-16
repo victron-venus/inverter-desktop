@@ -19,7 +19,7 @@
     "lint": "biome lint src"
   },
   "dependencies": {
-    "@lucide/vue": "^1.54.0",
+    "@lucide/vue": "^1.55.0",
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/api": "^2.12.2",
     "@tauri-apps/plugin-notification": "^2.5.1",
