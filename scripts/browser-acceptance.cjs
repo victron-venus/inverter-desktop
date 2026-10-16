@@ -34,14 +34,29 @@ const fixture = {
     batteries: [{ instance: 0, name: 'Fixture battery', soc: 73 }], features: {} },
 }
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.json': 'application/json', '.ico': 'image/x-icon' }
+// The server only serves this fixed inventory; request URLs never touch the filesystem.
+const staticAssets = new Map()
+function loadStaticAssets(directory) {
+  for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, item.name)
+    assert(!item.isSymbolicLink(), 'Static assets must not contain links')
+    if (item.isDirectory()) loadStaticAssets(file)
+    else {
+      assert(item.isFile(), 'Static assets must be regular files')
+      const relative = path.relative(dist, file).split(path.sep).join('/')
+      staticAssets.set(`/${relative}`, { data: fs.readFileSync(file), extension: path.extname(relative) })
+    }
+  }
+}
+loadStaticAssets(dist)
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost')
   const route = ['/', '/about', '/config'].includes(url.pathname) ? '/index.html' : url.pathname
-  const file = path.resolve(dist, `.${route}`)
-  if (!file.startsWith(dist + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return res.writeHead(404).end()
-  res.setHeader('Content-Type', mime[path.extname(file)] || 'application/octet-stream')
+  const asset = staticAssets.get(route)
+  if (!asset) return res.writeHead(404).end()
+  res.setHeader('Content-Type', mime[asset.extension] || 'application/octet-stream')
   res.setHeader('Cache-Control', 'no-store')
-  fs.createReadStream(file).pipe(res)
+  res.end(asset.data)
 })
 const scenarios = [], errors = [], blocked = [], consoleMessages = []
 async function eventually(read, predicate, message) {
@@ -55,6 +70,8 @@ async function main() {
   const origin = `http://127.0.0.1:${server.address().port}`
   let browser, context, page
   try {
+    const denied = await Promise.all(['/package.json', '/.git/config', '/%2e%2e%2fpackage.json'].map(async route => (await fetch(origin + route)).status))
+    assert.deepEqual(denied, [404, 404, 404], 'Only inventoried distribution files may be served')
     browser = await playwright[engine].launch({ headless: true, ...(channel ? { channel } : {}) })
     context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-US', serviceWorkers: 'block' })
     context.setDefaultTimeout(10000)
