@@ -1,5 +1,9 @@
 # Release candidate fuzzing
 
+See the [illustrated RC fuzzing process and verified rollout results](https://github.com/victron-venus/venus-os-ci-toolkit/blob/main/docs/rc-fuzzing-results.md)
+for the shared release flow, evidence requirements and a dated cross-project
+snapshot. The project-specific scope and reproduction guidance below still apply.
+
 Fuzzing runs the production input validators against mutated, malformed, and
 boundary inputs. This repository uses `cargo-fuzz`/libFuzzer through the shared
 `victron-venus/venus-os-ci-toolkit` release pipeline. It is **not enrolled in
