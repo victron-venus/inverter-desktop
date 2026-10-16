@@ -147,6 +147,8 @@ the core-only mobile feature boundary described above.
 See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and stable promotion rules, and the [operator runbook](docs/release-workflow.md) for local commands.
 <!-- ci-release-process:end -->
 
+[Build environment and RC/final drift checks](docs/RELEASE_ENVIRONMENT.md) explain exact tool versions, hosted runner limitations and recovery.
+
 ---
 
 ## Completed Features
