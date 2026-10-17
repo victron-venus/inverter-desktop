@@ -313,20 +313,18 @@ The receipt `inverter-home-spinner-geometry.json`, measured at
 `2026-09-16T19:27:22.698Z`, has SHA-256
 `dcc83c702c8d8c7f2e5458ba053ab0ac7b00c02f49c329173993aff3d0f54046`.
 [Release run 35143212192](https://github.com/victron-venus/inverter-desktop/actions/runs/35143212192)
-is automatically building frozen tag `v2.5.42-beta.49`, build `2005092`, from
-merged source `3b5c1d7ced27d4345b48d3030653ae1f81b0cb99`. At the last handoff
-readback, all quality/preparation jobs had passed and platform packaging was
-still running. This is an in-progress release status, not evidence of completed
-publication.
+completed successfully on 2026-09-16 at `20:49:12Z` for source
+`3b5c1d7ced27d4345b48d3030653ae1f81b0cb99`.
+[Release `v2.5.42-beta.49`](https://github.com/victron-venus/inverter-desktop/releases/tag/v2.5.42-beta.49),
+build `2005092`, was published at `20:49:08Z`. These GitHub run and release
+records were checked on 2026-10-16.
 
-At the user's request, the handoff ends with completed source, review, CI, and
-browser-fixture work while automatic builds continue. Waiting for publication,
-independent published-byte verification, a Mac upgrade, and live acceptance of
-these corrections are outside this handoff and have not been performed. The
-beta.47 installation above remains the latest completed installed evidence in
-this record; no new installed WKWebView or household-action result is claimed.
-Broader clean-profile, offline, performance, and physical-device acceptance in
-the roadmap remains unchanged.
+This record documents source, review, CI, browser-fixture results and publication.
+It does not contain independent published-byte verification, a Mac upgrade or
+live acceptance of these corrections. The beta.47 installation above remains
+the latest completed installed evidence in this record; no new installed
+WKWebView or household-action result is claimed. Broader clean-profile, offline,
+performance and physical-device acceptance remain open in the roadmap.
 
 ## Evidence boundaries
 

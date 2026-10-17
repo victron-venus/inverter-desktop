@@ -110,12 +110,12 @@ The uninstalled-declaration removal and Home-spinner corrections are merged
 through [PR #463](https://github.com/victron-venus/inverter-desktop/pull/463) at
 `3b5c1d7ced27d4345b48d3030653ae1f81b0cb99` on 2026-09-16 at `19:52:52Z`.
 Exact head `66623b0e8e1ca6521b8ee970b8c864148900ae9e` passed 60 checks with six
-skips, was approved, and had no unresolved review threads. Release run
-`35143212192` is automatically building frozen tag `v2.5.42-beta.49`, build
-`2005092`, from that merge revision. Source, review, CI, and browser-fixture work
-are complete. At the user's request, this handoff does not include waiting for
-publication, independent published-byte verification, a Mac upgrade, or live
-acceptance of these corrections; those proofs have not been performed.
+skips, was approved, and had no unresolved review threads. [Release run `35143212192`](https://github.com/victron-venus/inverter-desktop/actions/runs/35143212192)
+completed successfully on 2026-09-16 at `20:49:12Z`.
+[Tag `v2.5.42-beta.49`](https://github.com/victron-venus/inverter-desktop/releases/tag/v2.5.42-beta.49),
+build `2005092`, was published from that merge revision at `20:49:08Z`.
+Publication was checked on 2026-10-16. This record contains no independent
+published-byte verification, Mac upgrade or live acceptance of these corrections.
 
 ### Source complete: keep Home action button sizes stable
 
@@ -137,7 +137,7 @@ At baseline `98ab094`, a valid declaration whose download or first installation
 failed offered only Retry in Plugins. Without an installed inventory record, the
 user could not remove its automatic-restoration intent through the application.
 Camera-group failures also published an unsupported status value. PR #463 fixes
-both source gaps; installed acceptance is outside this handoff.
+both source gaps; installed acceptance is not recorded here.
 
 - [x] Reproduce both gaps in the current frontend/native contracts; retain the
       delivered installed-package uninstall behavior from PR #461.
@@ -177,8 +177,8 @@ fixtures. The local 19-test Home/presentation suite also passed. Desktop and mob
 builds, strict all-target Clippy, formatting, lint, and type checks passed.
 Mobile/profile boundary suites passed 18 frontend, 29 native-verifier, and seven
 build-profile checks. The [delivery record](docs/desktop-plugin-delivery.md#configured-declaration-removal-and-stable-home-buttons-source-merged)
-records the hosted and browser fixture receipts, in-progress automatic release,
-and the user-requested handoff boundary. The earlier beta.47 installation remains
+records the hosted and browser fixture receipts, completed publication and
+remaining acceptance gaps. The earlier beta.47 installation remains
 separate evidence; no installation or published-byte check of this correction is
 marked complete. Broader clean-profile, offline, performance, and physical-device
 acceptance below remains unchanged.
