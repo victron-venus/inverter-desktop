@@ -84,7 +84,7 @@ jobs:
           node-version: '24.21.0'
           cache: pnpm
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: '1.99.1'
           targets: ${{ matrix.platform == 'macos-26' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
@@ -179,7 +179,7 @@ jobs:
           node-version: '24.21.0'
           cache: pnpm
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: '1.99.1'
           targets:
@@ -294,7 +294,7 @@ jobs:
         if: matrix.type == 'ios'
       - name: Android – setup Java
         if: matrix.type == 'android'
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: '17'
