@@ -154,6 +154,31 @@ and `mqtt/cerbo`. Generic desktop services live in `plugins/application`,
 `desktop-plugins/home-assistant`, `frigate`, `kerberos`, and `ring` packages.
 Android/iOS exclude the plugin runtime and providers at build time.
 
+### Linux credential storage
+
+Linux requires an active user D-Bus session and an unlocked credential store
+implementing the freedesktop Secret Service API (`org.freedesktop.secrets`). Use
+your desktop's provider, such as GNOME Keyring or a KWallet configuration with
+supported Secret Service integration. A D-Bus session alone does not supply or
+unlock a credential store; minimal desktop sessions and containers may need
+separate setup. Launch the app as the same desktop user, not with `sudo`.
+
+The locked `keyring` 4.2.0 dependency uses its default `v1` interface, which
+automatically selects Secret Service on Linux. Its
+[`Entry::new` and `store_status` documentation](https://docs.rs/keyring/4.2.0/keyring/v1/struct.Entry.html)
+explains that `No default store has been set` can mean the selected provider
+failed to initialize. The initialization result is cached for the life of the
+process. After correcting the user session or provider, fully quit and restart
+the app; an in-app Retry action does not reinitialize a failed store.
+
+If settings cannot open, use your desktop's credential manager to unlock the
+existing store and make its default collection available in the same user
+session, then restart the app. Do not delete `config.key`, encrypted settings, or
+the existing `inverter-desktop` / `victron` credential to clear this error. Do not
+replace the store or generate a new key as a reset: existing data still needs its
+original key. If that key has been lost, recover the original credential store
+or a protected backup before trying to open the saved settings again.
+
 ## Build and update policy
 
 Use `pnpm install --frozen-lockfile --ignore-scripts` for development and CI.

@@ -262,52 +262,60 @@ async fn image_kind_mismatches_markup_and_short_signatures_are_terminal() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn image_full_responses_above_video_range_limit_keep_read_permits_bounded() {
-    let mut body = still_image(HttpMediaKind::Png);
-    body.resize(MAX_RANGE_BYTES + 100, 0);
-    let (base, server) = broker(vec![response("200 OK", &body)]).await;
-    let (_directory, service, mut events) = service(policy()).await;
-    let mut image_request = request(&base, lease());
-    image_request.media_kind = HttpMediaKind::Png;
-    service.try_submit(image_request).unwrap();
-    let image = ready(&mut events).await;
-    assert_eq!(image.error, None);
-    let mut held = Vec::new();
-    for _ in 0..MAX_RANGE_READS {
-        let result = service
-            .read_range(&image.media_id, &image.window_label, None, false)
+    // This checks read capacity, not transfer speed. Keep the test clock fixed
+    // while real sockets and disk I/O complete; frozen_io still bounds hangs
+    // with a wall-clock deadline. Timeout behavior has dedicated tests below.
+    frozen_io("image full-response read permits", async {
+        let mut body = still_image(HttpMediaKind::Png);
+        body.resize(MAX_RANGE_BYTES + 100, 0);
+        let (base, server) = broker(vec![response("200 OK", &body)]).await;
+        let (_directory, service, mut events) = service(policy()).await;
+        let mut image_request = request(&base, lease());
+        image_request.media_kind = HttpMediaKind::Png;
+        service.try_submit(image_request).unwrap();
+        let image = ready(&mut events).await;
+        assert_eq!(image.error, None);
+        let mut held = Vec::new();
+        for _ in 0..MAX_RANGE_READS {
+            let result = service
+                .read_range(&image.media_id, &image.window_label, None, false)
+                .await
+                .unwrap();
+            assert_eq!(result.status, 200);
+            assert_eq!(result.content_type, "image/png");
+            assert_eq!(result.bytes, body);
+            held.push(result);
+        }
+        assert!(matches!(
+            service
+                .read_range(&image.media_id, &image.window_label, None, false)
+                .await,
+            Err(MediaError::Busy)
+        ));
+        drop(held);
+        let partial = service
+            .read_range(
+                &image.media_id,
+                &image.window_label,
+                Some("bytes=0-"),
+                false,
+            )
             .await
             .unwrap();
-        assert_eq!(result.status, 200);
-        assert_eq!(result.content_type, "image/png");
-        assert_eq!(result.bytes, body);
-        held.push(result);
-    }
-    assert!(matches!(
-        service
-            .read_range(&image.media_id, &image.window_label, None, false)
-            .await,
-        Err(MediaError::Busy)
-    ));
-    drop(held);
-    let partial = service
-        .read_range(
-            &image.media_id,
-            &image.window_label,
-            Some("bytes=0-"),
-            false,
-        )
-        .await
-        .unwrap();
-    assert_eq!(partial.status, 206);
-    assert_eq!(partial.bytes.len(), MAX_RANGE_BYTES);
-    assert_eq!(partial.content_type, "image/png");
-    drop(partial);
-    server.await.unwrap();
-    service.window_destroyed(&image.window_label);
-    idle(&service).await;
-    service.shutdown().await.unwrap();
+        assert_eq!(partial.status, 206);
+        assert_eq!(partial.bytes.len(), MAX_RANGE_BYTES);
+        assert_eq!(partial.content_type, "image/png");
+        drop(partial);
+        assert_eq!(server.await.unwrap().len(), 1);
+        service.window_destroyed(&image.window_label);
+        while service.has_owned_work() {
+            tokio::task::yield_now().await;
+        }
+        service.shutdown().await.unwrap();
+    })
+    .await;
 }
 
 #[tokio::test]

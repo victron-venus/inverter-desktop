@@ -33,15 +33,18 @@ defaults:
     shell: bash
 jobs:
   desktop:
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: macos-26
             args: --target aarch64-apple-darwin
             target: aarch64-apple-darwin
             artifact: aarch64-apple-darwin
-          - platform: macos-latest
+          - platform: macos-26
             args: --target x86_64-apple-darwin
             target: x86_64-apple-darwin
             artifact: x86_64-apple-darwin
@@ -68,22 +71,27 @@ jobs:
       - name: Set up Python for release plan validation
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: ${{ runner.os == 'Linux' && '3.12.15' || '3.12.10' }}
       - name: Verify committed release version
         run: python3 scripts/check-release-version.py "$RELEASE_VERSION" "$RELEASE_CHANNEL"
       - name: Install frontend dependencies
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 10
+          version: '10.34.7'
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: '24.21.0'
           cache: pnpm
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          toolchain: '1.99.1'
+          targets: ${{ matrix.platform == 'macos-26' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - name: Check accepted RC toolchain before compiling
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-release-toolchain.py --receipt "release-inputs-${{ matrix.artifact }}.json"
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Synchronize candidate version inputs
@@ -128,6 +136,9 @@ jobs:
           retention-days: 14
     timeout-minutes: 90
   mobile:
+    permissions:
+      contents: read
+      actions: read
     name: Build mobile artifacts
     runs-on: ${{ matrix.platform }}
     env:
@@ -137,7 +148,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: macos-26
             type: ios
           - platform: ubuntu-22.04
             type: android
@@ -155,24 +166,29 @@ jobs:
       - name: Set up Python for release plan validation
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: ${{ runner.os == 'Linux' && '3.12.15' || '3.12.10' }}
       - name: Verify committed release version
         run: python3 scripts/check-release-version.py "$RELEASE_VERSION" "$RELEASE_CHANNEL"
       - name: Install pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 10
+          version: '10.34.7'
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: '24.21.0'
           cache: pnpm
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: '1.99.1'
           targets:
             ${{ matrix.type == 'ios' && 'aarch64-apple-ios' || 'aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android'
             }}
+      - name: Check accepted RC toolchain before compiling
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-release-toolchain.py --receipt "release-inputs-${{ matrix.type }}.json"
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Synchronize candidate version inputs

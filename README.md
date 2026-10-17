@@ -147,6 +147,8 @@ the core-only mobile feature boundary described above.
 See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and stable promotion rules, and the [operator runbook](docs/release-workflow.md) for local commands.
 <!-- ci-release-process:end -->
 
+[Build environment and RC/final drift checks](docs/RELEASE_ENVIRONMENT.md) explain exact tool versions, hosted runner limitations and recovery.
+
 ---
 
 ## Completed Features
@@ -183,6 +185,11 @@ See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and s
 3. Launch from Start Menu or Desktop shortcut
 
 ### Linux
+
+Run the app in your desktop user session with an active user D-Bus session and an
+unlocked Secret Service-compatible credential store. See
+[Linux credential storage](docs/desktop-hardening.md#linux-credential-storage)
+for setup requirements and recovery without deleting saved keys.
 
 **AppImage (recommended):**
 
