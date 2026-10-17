@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.50] - 2026-10-17
+
+### Changed
+
+- Document Linux credential-store requirements and recovery without changing credential storage behavior.
+- Clarify desktop plugin release and delivery status and link the maintained RC fuzzing process.
+- Remove obsolete handoff wording from the project documentation.
+
+### Upgrade
+
+Install the package for the intended platform using the existing update path.
+Settings and plugin choices remain compatible. Linux installations must provide
+the credential-store services described in the hardening guide; publication does
+not replace device, MQTT or plugin acceptance.
+
+### Security
+
+This documentation maintenance release adds no security fix or new trust policy.
+Existing TLS checks, credential storage requirements and RC qualification remain
+required.
+
 ## [2.5.49] - Development line
 
 ### Changes
