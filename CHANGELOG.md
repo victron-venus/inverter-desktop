@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Route Dependabot metadata approval through the trusted default branch while preserving the existing author and review policy.
 - Update notification, file-system, dialog and opener plugins together with compatible frontend and Rust build dependencies.
 - Document Linux credential-store requirements and recovery without changing credential storage behavior.
 - Clarify desktop plugin release and delivery status and link the maintained RC fuzzing process.
