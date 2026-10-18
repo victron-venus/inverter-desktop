@@ -2,10 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.50] - 2026-10-17
+## [2.5.50] - 2026-10-18
+
+### Fixed
+
+- Keep the Rust and JavaScript notification plugins on matching versions so Android builds remain compatible.
+- Detect split notification updates in the dependency contract checks before native builds.
 
 ### Changed
 
+- Route Dependabot metadata approval through the trusted default branch while preserving the existing author and review policy.
+- Update notification, file-system, dialog and opener plugins together with compatible frontend and Rust build dependencies.
 - Document Linux credential-store requirements and recovery without changing credential storage behavior.
 - Clarify desktop plugin release and delivery status and link the maintained RC fuzzing process.
 - Remove obsolete handoff wording from the project documentation.
@@ -19,9 +26,10 @@ not replace device, MQTT or plugin acceptance.
 
 ### Security
 
-This documentation maintenance release adds no security fix or new trust policy.
-Existing TLS checks, credential storage requirements and RC qualification remain
-required.
+The existing TLS checks, credential storage requirements and RC qualification
+remain required. Three informational zbus-family retirement notices retain their
+exact-version, fresh-classification guard and expire on 2026-11-17. This dependency
+update does not claim to resolve those upstream maintenance notices.
 
 ## [2.5.49] - Development line
 
