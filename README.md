@@ -12,6 +12,12 @@
 
 Desktop and mobile application for monitoring Victron inverter systems via MQTT. Built with Tauri + TypeScript.
 
+[![Inverter Desktop v2.5.50-rc.3: the native Linux first-launch setup screen, before connecting a data source](docs/images/app-hero.png)](docs/images/desktop-setup.png)
+
+*Inverter Desktop v2.5.50-rc.3: the native Linux first-launch setup screen, before connecting a data source. Click for the original screenshot.*
+
+[Artwork source and regeneration](docs/images/README.md).
+
 [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md) · [Governance](GOVERNANCE.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [OpenSSF evidence](docs/openssf-evidence.md)
 
 The OpenSSF image reports the live assessment. It does not promise a Silver badge or replace release acceptance on the intended device.
