@@ -40,17 +40,25 @@ jobs:
         run: |
           cargo install cargo-deny --version 0.20.2 --locked --force
 
+      - name: Install Python for the RustSec deferral guard
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
       - name: Run cargo deny check
         working-directory: src-tauri
         run: |
-          cargo deny --config cargo-deny.toml check advisories bans licenses sources
+          cargo fetch --locked
+          cargo deny --config cargo-deny.toml fetch all
+          python3 ../scripts/check_rustsec_deferrals.py
+          cargo deny --offline --locked --config cargo-deny.toml check advisories bans licenses sources
 
       - name: Generate SARIF report
         if: always()
         working-directory: src-tauri
         run: |
           mkdir -p target/deny
-          cargo deny --config cargo-deny.toml --format sarif check advisories bans licenses sources > target/deny/cargo-deny.sarif || true
+          cargo deny --offline --locked --config cargo-deny.toml --format sarif check advisories bans licenses sources > target/deny/cargo-deny.sarif || true
 
       - name: Upload SARIF
         if: always()

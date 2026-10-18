@@ -22,4 +22,7 @@ Obtain source and published artifacts through the repository's HTTPS URLs. Verif
 
 The [security architecture and assurance case](docs/security-assurance.md) describes the actual controls and unresolved limits.
 
+[Temporary RustSec retirement deferrals](docs/RUSTSEC.md) document the exact scope,
+expiry and enforced checks while the upstream zbus 6 migration is pending.
+
 [OpenSSF evidence and remaining verification](docs/openssf-evidence.md) is maintained separately from this policy.

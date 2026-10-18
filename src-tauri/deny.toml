@@ -72,6 +72,11 @@ feature-depth = 1
 ignore = [
     "RUSTSEC-2026-0192", # ttf-parser: unmaintained (via ab_glyph)
     "RUSTSEC-2024-0370", # proc-macro-error: unmaintained (transitive dependency)
+    # Temporary retirement notices only; run scripts/check_rustsec_deferrals.py
+    # before cargo-deny. The checked process and expiry are in docs/RUSTSEC.md.
+    "RUSTSEC-2026-0370", # zvariant: merged into zbus 6
+    "RUSTSEC-2026-0371", # zbus_names: merged into zbus 6
+    "RUSTSEC-2026-0372", # zvariant_derive: merged into zbus 6
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
