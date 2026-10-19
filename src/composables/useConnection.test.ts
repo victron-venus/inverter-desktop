@@ -588,6 +588,34 @@ describe('native notification transport identities', () => {
     )
   })
 
+  it('rejects an old gateway empty-load event after MQTT takes ownership', async () => {
+    boundary.getConfig.mockResolvedValue(igwConfig())
+    await connection.connectMqtt()
+    const oldToken = currentNotificationSession()
+    emitCurrentTransport('mqtt-state-update', {
+      gateway_snapshot: true,
+      loads: { '71': 218 },
+      load_names: { '71': 'Old installation' },
+    })
+    boundary.getConfig.mockResolvedValue(configured())
+    await connection.connectMqtt()
+    emitCurrentTransport('mqtt-state-update', {
+      loads: { '81': 350 },
+      load_names: { '81': 'Current installation' },
+      ha_direct_connected: true,
+    })
+    emit('mqtt-state-update', {
+      gateway_snapshot: true,
+      loads: {},
+      load_names: {},
+      ha_direct_connected: false,
+      notification_session: oldToken,
+    })
+    expect(state.value.loads).toEqual({ '81': 350 })
+    expect(state.value.load_names).toEqual({ '81': 'Current installation' })
+    expect(state.value.ha_direct_connected).toBe(true)
+  })
+
   it('rejects stale false and cancels the old offline timer when a live replacement starts', async () => {
     const dual = { ...configured(), gateway_enabled: true, gateway_url: 'https://igw.example' }
     boundary.getConfig.mockResolvedValue(dual)

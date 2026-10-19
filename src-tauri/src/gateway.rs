@@ -812,8 +812,15 @@ fn snapshot_to_state_with_instances(
     let mut loads = HashMap::new();
     let mut load_names = HashMap::new();
     for inst in load_insts {
-        let power = path_num(&snap.acload, &format!("{inst}/Ac/Power"))
-            .or_else(|| path_num(&snap.acload, &format!("{inst}/Ac/L1/Power")));
+        if !device_connected(&snap.acload, inst) {
+            continue;
+        }
+        let power = ["Ac/Power", "Ac/L1/Power"].iter().find_map(|path| {
+            snap.acload
+                .get(&format!("{inst}/{path}"))
+                .filter(|value| !value.is_boolean())
+                .and_then(num)
+        });
         if let Some(p) = power {
             let key = inst.to_string();
             loads.insert(key.clone(), p);
@@ -832,12 +839,11 @@ fn snapshot_to_state_with_instances(
             }
         }
     }
-    if !loads.is_empty() {
-        st.loads = Some(loads);
-        if !load_names.is_empty() {
-            st.load_names = Some(load_names);
-        }
-    }
+    // A successful GET is the full current aggregate, even when its empty
+    // acload bucket is omitted on the wire. Explicit empty maps replace old
+    // readings; None would make the frontend's partial-update merge retain them.
+    st.loads = Some(loads);
+    st.load_names = Some(load_names);
 
     map_water_ev(snap, instances, &mut st);
     map_controller(snap, &mut st);
@@ -1598,6 +1604,61 @@ mod tests {
         assert_eq!(state.car_charging_power, None);
         assert_eq!(state.ev_charging_power, None);
         assert!(!state.ev_present && !state.evcharger_present);
+    }
+
+    #[test]
+    fn authoritative_acload_snapshot_clears_empty_invalid_and_disconnected_loads() {
+        for wire in [
+            json!({}),
+            json!({"acload": {}}),
+            json!({"inverter": {"loads": {"71": 218},
+                "load_names": {"71": "Stale controller load"}}, "acload": {}}),
+            json!({"acload": {"71/Ac/Power": null, "71/Ac/L1/Power": null,
+                "71/CustomName": "Old load", "71/Connected": 1}}),
+            json!({"acload": {"71/Ac/Power": 218, "71/Ac/L1/Power": 218,
+                "71/CustomName": "Offline load", "71/Connected": 0}}),
+            json!({"acload": {"71/Ac/Power": 218, "71/Connected": null}}),
+            json!({"acload": {"71/Ac/Power": 218, "71/Connected": "invalid"}}),
+            json!({"acload": {"71/Ac/Power": true, "72/Ac/Power": "NaN",
+                "73/Ac/Power": "inf", "74/Ac/Power": {}, "75/Ac/Power": "invalid"}}),
+        ] {
+            let snap: GatewaySnapshot = serde_json::from_value(wire.clone()).unwrap();
+            let state = snapshot_to_state(&snap);
+            assert_eq!(state.loads, Some(HashMap::new()), "wire={wire}");
+            assert_eq!(state.load_names, Some(HashMap::new()), "wire={wire}");
+            // The frontend needs an explicit replacement, not an omitted field.
+            let event = serde_json::to_value(state).unwrap();
+            assert_eq!(event["loads"], json!({}));
+            assert_eq!(event["load_names"], json!({}));
+        }
+    }
+
+    #[test]
+    fn authoritative_acload_snapshot_keeps_valid_zero_signed_and_legacy_loads() {
+        let snap: GatewaySnapshot = serde_json::from_value(json!({"acload": {
+            "71/Ac/Power": 0, "71/Connected": 1, "71/CustomName": "Idle",
+            "72/Ac/Power": -50.5, "72/Connected": 1, "72/ProductName": "Solar",
+            "73/Ac/L1/Power": "125.25", "73/CustomName": "Legacy phase",
+            "74/Ac/Power": 20, "74/Ac/L1/Power": 99, "74/Connected": 1,
+            "75/Ac/Power": 218, "75/Connected": 0, "75/CustomName": "Offline"
+        }}))
+        .unwrap();
+        let mut state = snapshot_to_state(&snap);
+        let loads = state.loads.as_ref().unwrap();
+        assert_eq!(loads.len(), 4);
+        assert_eq!(loads["71"], 0.0);
+        assert_eq!(loads["72"], -50.5);
+        assert_eq!(loads["73"], 125.25);
+        assert_eq!(loads["74"], 20.0);
+        assert_eq!(state.load_names.as_ref().unwrap().len(), 3);
+        assert!(!state.load_names.as_ref().unwrap().contains_key("75"));
+        let previous_loads = state.loads.clone();
+        let previous_names = state.load_names.clone();
+        // An HTTP failure is a labelled replay, not a successful empty snapshot.
+        invalidate_gateway_controls(&mut state);
+        assert_eq!(state.loads, previous_loads);
+        assert_eq!(state.load_names, previous_names);
+        assert_eq!(state.cached_snapshot, Some(true));
     }
 
     #[test]

@@ -62,6 +62,36 @@ describe('applyInverterState merge', () => {
     expect(state.value.car_charging_power).toBe(0)
   })
 
+  it('replaces unavailable gateway loads with explicit empty maps without clearing HA state', () => {
+    applyInverterState({
+      gateway_snapshot: true,
+      loads: { '71': 218 },
+      load_names: { '71': 'TotalUsage' },
+    })
+    applyInverterState({ ha_direct_connected: true })
+    applyInverterState({ gateway_snapshot: true, loads: {}, load_names: {} })
+    expect(state.value.loads).toEqual({})
+    expect(state.value.load_names).toEqual({})
+    expect(state.value.ha_direct_connected).toBe(true)
+  })
+
+  it('keeps loads for partial MQTT updates and failed gateway poll replays', () => {
+    const loads = { '71': 218 }
+    const loadNames = { '71': 'TotalUsage' }
+    applyInverterState({ gateway_snapshot: true, loads, load_names: loadNames })
+    applyInverterState({ gt: 50 })
+    expect(state.value.loads).toEqual(loads)
+    applyInverterState({
+      gateway_snapshot: true,
+      cached_snapshot: true,
+      loads,
+      load_names: loadNames,
+    })
+    expect(state.value.loads).toEqual(loads)
+    expect(state.value.load_names).toEqual(loadNames)
+    expect(state.value.cached_snapshot).toBe(true)
+  })
+
   it('replaces state object identity so shallowRef consumers re-render', () => {
     applyInverterState({ gt: 100 })
     const first = state.value
