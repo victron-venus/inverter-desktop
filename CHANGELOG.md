@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.51] - 2026-10-20
+
+### Fixed
+
+- Clear stale Active Loads when a successful gateway snapshot removes a load or reports unavailable power or a disconnected device. Failed polls preserve labelled cached readings; partial MQTT updates and independent Home Assistant state keep their existing behavior.
+- Update the JavaScript and Rust notification/opener plugins together. The upstream fixes keep Linux notifications visible and avoid nested-runtime failures when revealing files.
+- Include the reviewed Scorecard HTTP/2 client fix.
+
+### Changed
+
+- Update Tauri, its CLI and runtime, dialog integration, native certificate loading and Lucide icons while preserving the existing dependency compatibility checks.
+- Align shared automation and RC fuzzing on a reviewed immutable Toolkit revision. Retain the reviewed ARC standby routing and its separate admission requirements.
+
+### Upgrade
+
+Install the package for the intended platform through the existing update path.
+Settings, credentials and plugin choices remain compatible. Beta publication
+checks the built candidate; device, MQTT, plugin and infrastructure acceptance
+remain separate requirements.
+
+### Security
+
+Re-review the exact notification and opener versions against the fresh RustSec
+database and the unchanged zbus 5 dependency paths. The three informational
+retirement deferrals still expire on 2026-11-17; no advisory, source, license or
+dependency check is relaxed. See [the recorded review](docs/RUSTSEC.md).
+
 ## [2.5.50] - 2026-10-18
 
 ### Fixed
