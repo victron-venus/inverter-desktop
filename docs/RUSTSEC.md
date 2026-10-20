@@ -37,6 +37,26 @@ from the same Secret Service item. Keeping the current tested runtime while
 tracking that upstream work avoids introducing this unrelated compatibility
 change into a documentation update.
 
+### Dependency review on 20 October 2026
+
+The notification plugin is updated from 2.6.0 to 2.7.0 and the opener plugin
+from 2.7.1 to 2.7.2 together with their JavaScript packages. The
+[notification release](https://github.com/tauri-apps/plugins-workspace/commit/4356356dab3b87faffcc2f0fc62aec23aede78cc)
+keeps its Linux D-Bus connection open, and the
+[opener release](https://github.com/tauri-apps/plugins-workspace/commit/1ab930465f43fc4574ce71ed2bda57b1f80a802b)
+moves blocking file-reveal calls to a dedicated thread. Both still use zbus 5.
+
+The reviewed Linux dependency graph retains `zbus` 5.16.0, `notify-rust` 4.18.2,
+`secret-service` 5.1.0, `zbus-secret-service-keyring-store` 1.0.0 and `keyring`
+4.2.0. The three fresh RustSec records still classify the notices as
+`unmaintained` and list no patched versions. Only the two plugin versions in
+the guard's reviewed inventory change; the 17 November deadline, advisory
+classification checks, exact dependency checks and exception list stay intact.
+
+Future JavaScript and Rust plugin updates must be reviewed together. A changed
+dependency must trigger this review again; do not remove the version guard or
+extend the deadline to accommodate an automated dependency PR.
+
 ## Enforcement
 
 [`scripts/check_rustsec_deferrals.py`](../scripts/check_rustsec_deferrals.py) is the
