@@ -24,6 +24,11 @@ remain separate requirements.
 
 ### Security
 
+Update `ctutils` to 0.4.4 in the application lockfile to restore the upstream
+constant-time mask generation and 32-bit `u128` comparisons covered by
+RUSTSEC-2026-0385. Existing encrypted settings, password verifiers and signed
+plugin formats remain compatible.
+
 Update `rustls-webpki` to 0.103.16 and `webpki-root-certs` to 1.0.10 in every
 affected lockfile to reject distrusted emSign certificate paths. Audit all nine
 Rust lockfiles, including target-specific, fuzz and native-regression
