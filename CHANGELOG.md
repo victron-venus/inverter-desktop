@@ -24,6 +24,13 @@ remain separate requirements.
 
 ### Security
 
+Update `rustls-webpki` to 0.103.16 and `webpki-root-certs` to 1.0.10 in every
+affected lockfile to reject distrusted emSign certificate paths. Audit all nine
+Rust lockfiles, including target-specific, fuzz and native-regression
+dependencies, without modifying the committed dependency graph. Servers that
+rely on the removed trust must provide a valid certificate chain; keep TLS
+verification enabled.
+
 Re-review the exact notification and opener versions against the fresh RustSec
 database and the unchanged zbus 5 dependency paths. The three informational
 retirement deferrals still expire on 2026-11-17; no advisory, source, license or
