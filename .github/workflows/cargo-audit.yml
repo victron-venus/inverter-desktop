@@ -24,7 +24,7 @@ jobs:
             echo "any_changed=true" >> "$GITHUB_OUTPUT"
           else
             base="${{ github.event.pull_request.base.sha || github.event.before }}"
-            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^(\.github/workflows/cargo-audit\.yml|(src-tauri|desktop-plugins/[^/]+)/Cargo\.(toml|lock)|src-tauri/vendor/glib-0\.18\.5/.*)$'; then
+            if git diff --name-only "$base" "${{ github.sha }}" | grep -qE '^(\.github/workflows/cargo-audit\.yml|(src-tauri|desktop-plugins/[^/]+|fuzz|tests/glib-variant-regression)/Cargo\.(toml|lock)|src-tauri/vendor/glib-0\.18\.5/.*)$'; then
               echo "any_changed=true" >> "$GITHUB_OUTPUT"
             else
               echo "any_changed=false" >> "$GITHUB_OUTPUT"
@@ -59,16 +59,9 @@ jobs:
       - name: Fetch dependencies
         if: steps.changed.outputs.any_changed == 'true'
         working-directory: src-tauri
-        # Ensures the local crates.io index matches Cargo.lock exactly before
-        # auditing. Without this, a stale cached index (from rust-cache) can
-        # cause cargo-audit to panic while building its dependency tree with
-        # "invalid Cargo.lock dependency tree: Resolution(...)".
-        # --locked is intentionally omitted: a stale restored rust-cache
-        # registry can make even a plain fetch look like it needs to change
-        # Cargo.lock, which --locked would then hard-fail on. Cargo.lock
-        # itself is never modified by `cargo fetch` unless it is genuinely
-        # incompatible with Cargo.toml.
-        run: cargo fetch
+        # Fetch the committed graph. An audit must not silently resolve a
+        # different lockfile when a restored registry cache is stale.
+        run: cargo fetch --locked
 
       - name: Run cargo audit
         if: steps.changed.outputs.any_changed == 'true'
@@ -84,6 +77,14 @@ jobs:
           for plugin in frigate home-assistant kerberos ring camera-common worker-protocol; do
             cargo fetch --locked --manifest-path "desktop-plugins/$plugin/Cargo.toml"
             cargo audit --file "desktop-plugins/$plugin/Cargo.lock"
+          done
+
+      - name: Audit fuzz and native regression dependencies
+        if: steps.changed.outputs.any_changed == 'true'
+        run: |
+          for project in fuzz tests/glib-variant-regression; do
+            cargo fetch --locked --manifest-path "$project/Cargo.toml"
+            cargo audit --file "$project/Cargo.lock"
           done
 
       - name: Skip (no Cargo changes)
