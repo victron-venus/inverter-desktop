@@ -284,7 +284,7 @@
     "playwright": "1.62.1",
     "browser_version": "153.0",
     "toolchain": "tools/browser-compatibility/playwright-1-62-1",
-    "tier": "extended"
+    "tier": "required"
   },
   {
     "id": "windows-2022-webkit-1-62-1",

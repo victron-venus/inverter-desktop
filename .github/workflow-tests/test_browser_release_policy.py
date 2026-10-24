@@ -17,11 +17,13 @@ class BrowserReleasePolicyTests(unittest.TestCase):
         matrix = json.loads((ROOT / ".github/browser-compatibility.json").read_text())
         self.assertEqual(len(matrix), 35)
         self.assertEqual(len({row["id"] for row in matrix}), 35)
-        self.assertEqual(sum(row["tier"] == "required" for row in matrix), 5)
+        self.assertEqual(sum(row["tier"] == "required" for row in matrix), 6)
+        regression = next(row for row in matrix if row["id"] == "windows-2022-firefox-1-62-1")
+        self.assertEqual(regression["tier"], "required")
         required = {(row["os"], row["engine"]) for row in matrix if row["tier"] == "required"}
         self.assertEqual(required, {("ubuntu-latest", "chromium"), ("ubuntu-latest", "firefox"),
                                    ("ubuntu-latest", "webkit"), ("windows-2022", "chromium"),
-                                   ("macos-15", "webkit")})
+                                   ("windows-2022", "firefox"), ("macos-15", "webkit")})
 
     def test_browser_route_remains_required_and_channel_selection_is_explicit(self):
         browser = workflow("ci.yml")["jobs"]["browser-compatibility"]
