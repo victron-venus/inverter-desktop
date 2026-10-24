@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const http = require('node:http')
+const { performance } = require('node:perf_hooks')
 const { setTimeout: delay } = require('node:timers/promises')
 const root = path.resolve(__dirname, '..')
 const dist = path.join(root, 'dist')
@@ -58,11 +59,13 @@ const server = http.createServer((req, res) => {
   res.setHeader('Cache-Control', 'no-store')
   res.end(asset.data)
 })
-const scenarios = [], errors = [], blocked = [], consoleMessages = []
+const scenarios = [], scenarioTimings = [], errors = [], blocked = [], consoleMessages = []
+const timeouts = { actionMs: 30000, navigationMs: 15000, nativeStateMs: 10000 }
+let failedScenario = null
 async function eventually(read, predicate, message) {
-  const deadline = Date.now() + 10000
+  const deadline = performance.now() + timeouts.nativeStateMs
   let value
-  while (Date.now() < deadline) { value = await read(); if (predicate(value)) return value; await delay(40) }
+  while (performance.now() < deadline) { value = await read(); if (predicate(value)) return value; await delay(40) }
   assert.fail(`${message}: ${JSON.stringify(value)}`)
 }
 async function main() {
@@ -74,8 +77,10 @@ async function main() {
     assert.deepEqual(denied, [404, 404, 404], 'Only inventoried distribution files may be served')
     browser = await playwright[engine].launch({ headless: true, ...(channel ? { channel } : {}) })
     context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-US', serviceWorkers: 'block' })
-    context.setDefaultTimeout(10000)
-    context.setDefaultNavigationTimeout(15000)
+    // Include driver input acknowledgement in the action budget. Assertions still
+    // require the real application effect; timed-out actions are never retried.
+    context.setDefaultTimeout(timeouts.actionMs)
+    context.setDefaultNavigationTimeout(timeouts.navigationMs)
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
     await context.route('**/*', route => {
       if (new URL(route.request().url()).origin === origin) return route.continue()
@@ -121,10 +126,20 @@ async function main() {
     context.on('page', page => { page.on('pageerror', error => errors.push(String(error))); page.on('console', message => consoleMessages.push({ type: message.type(), text: message.text() })) })
     page = await context.newPage()
     async function scenario(name, run) {
-      await run()
-      assert.deepEqual(errors, [])
-      assert.deepEqual(await page.evaluate(() => window.__acceptance.unexpected), [])
-      scenarios.push(name); console.log(`PASS ${name}`)
+      const started = performance.now()
+      let status = 'failed'
+      try {
+        await run()
+        assert.deepEqual(errors, [])
+        assert.deepEqual(await page.evaluate(() => window.__acceptance.unexpected), [])
+        status = 'passed'
+        scenarios.push(name); console.log(`PASS ${name}`)
+      } catch (error) {
+        failedScenario = name
+        throw error
+      } finally {
+        scenarioTimings.push({ name, status, durationMs: Math.round((performance.now() - started) * 1000) / 1000 })
+      }
     }
     const calls = () => page.evaluate(() => window.__acceptance.calls)
     const enable = () => page.evaluate(() => { window.__acceptance.authFailure = false })
@@ -165,6 +180,10 @@ async function main() {
       await page.getByRole('button', { name: 'Light mode', exact: true }).click()
       await eventually(calls, list => list.some(c => c.command === 'save_config' && c.args.config.color_scheme === 'light'), 'Persisted light scheme')
       assert.equal(await page.evaluate(() => localStorage.getItem('theme')), 'light')
+      assert.deepEqual(await page.evaluate(() => ({
+        htmlDark: document.documentElement.classList.contains('dark'),
+        bodyDark: document.body.classList.contains('dark'),
+      })), { htmlDark: false, bodyDark: false })
     })
     await scenario('settings window failure is visible and retry remains possible', async () => {
       await page.evaluate(() => { window.__acceptance.rejectSettings = true })
@@ -211,10 +230,10 @@ async function main() {
     })
     const runtimeFile = path.join(output, 'runtime.json')
     const runtime = fs.existsSync(runtimeFile) ? JSON.parse(fs.readFileSync(runtimeFile)) : { sourceSha: 'local' }
-    fs.writeFileSync(evidence, JSON.stringify({ ...runtime, engine: browser.browserType().name(), browserVersion: browser.version(), testsPassed: scenarios.length, testsFailed: 0, scenarios, fixtureBoundary: 'synthetic native IPC using pinned official Tauri mocks' }, null, 2))
+    fs.writeFileSync(evidence, JSON.stringify({ ...runtime, engine: browser.browserType().name(), browserVersion: browser.version(), testsPassed: scenarios.length, testsFailed: 0, scenarios, scenarioTimings, timeouts, fixtureBoundary: 'synthetic native IPC using pinned official Tauri mocks' }, null, 2))
   } catch (error) {
     const native = page ? await page.evaluate(() => window.__acceptance).catch(() => null) : null
-    fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ message: String(error.stack || error), scenarios, errors, blocked, native, consoleMessages, chart: page ? await page.locator('.chart-wrap').evaluateAll(nodes => nodes.map(node => node.outerHTML)) : [] }, null, 2))
+    fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ message: String(error.stack || error), failedScenario, scenarios, scenarioTimings, timeouts, errors, blocked, native, consoleMessages, chart: page ? await page.locator('.chart-wrap').evaluateAll(nodes => nodes.map(node => node.outerHTML)) : [] }, null, 2))
     if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {})
     throw error
   } finally {
