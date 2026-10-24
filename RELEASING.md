@@ -41,7 +41,9 @@ The `v` prefix belongs to the Git tag, not the numeric base version.
 - **Release candidate (RC)** is an explicit maintainer request for a version ready
   for acceptance testing. Tags are `vX.Y.Z-rc.N`. Each RC reruns the required checks
   and build matrix. A code, dependency or packaging change requires a new RC.
-- **Stable** creates final-version packages from the accepted RC's exact source and recipe. It repeats all checks and platform builds, then waits for acceptance of these new bytes in the protected release environment. It records `derived_from_rc`; it does not claim unchanged RC payloads.
+- **Stable** is a separate manual promotion of one accepted RC to `vX.Y.Z`.
+  Promotion copies the verified RC payloads byte for byte; it never rebuilds them.
+  Stable publication must not be inferred from a successful branch build.
 
 Nightly and beta are previews; neither is directly promotable to stable. An RC
 may be requested without a previous beta. Channel order is a workflow policy,
@@ -130,7 +132,7 @@ does not substitute for acceptance of the selected RC.
 
 ## Project-specific limits
 
-- Committed base versions are synchronized before build using a frozen release plan; full beta/RC/final identity is embedded separately from native numeric metadata.
+- RC packages contain the final package version and retain their exact candidate origin, source SHA and reserved native build counters. Stable promotes the same verified bytes without rebuilding or re-signing.
 - Retains macOS ARM/Intel, Linux, Windows, iOS unsigned and Android signed builds; configured Android signing secrets are required.
 - Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.
 - Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; updates are installed manually using the Download updates menu.

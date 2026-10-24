@@ -24,7 +24,7 @@
     "python3 -m unittest discover -s scripts -p test_release_versions.py"
   ],
   "notes": [
-    "Committed base versions are synchronized before build using a frozen release plan; full beta/RC/final identity is embedded separately from native numeric metadata.",
+    "RC packages contain the final package version and retain their exact candidate origin, source SHA and reserved native build counters. Stable promotes the same verified bytes without rebuilding or re-signing.",
     "Retains macOS ARM/Intel, Linux, Windows, iOS unsigned and Android signed builds; configured Android signing secrets are required.",
     "Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.",
     "Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; updates are installed manually using the Download updates menu."
@@ -39,25 +39,25 @@
   "visibility": "public",
   "versioning": {
     "schema": 1,
-    "promotion": "final-build",
+    "promotion": "promote-bytes",
     "files": [
       {
         "path": "package.json",
         "format": "json",
         "field": "version",
-        "value": "full"
+        "value": "package"
       },
       {
         "path": "src-tauri/Cargo.toml",
         "format": "toml",
         "field": "package.version",
-        "value": "full"
+        "value": "package"
       },
       {
         "path": "src-tauri/Cargo.lock",
         "format": "cargo-lock",
         "package": "inverter-dashboard",
-        "value": "full"
+        "value": "package"
       },
       {
         "path": "src-tauri/tauri.conf.json",

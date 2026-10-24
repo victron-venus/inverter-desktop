@@ -6,9 +6,18 @@ Release builds download one frozen `.release-plan.json` and apply its version in
 before compiling any platform. The resulting candidate changes are build overlays;
 the source tag alone does not contain those rewritten manifest values.
 
-This application uses `final-build`: beta, RC, and stable have their own embedded
-identity. Stable is rebuilt from the accepted RC source and requires acceptance of
-the new packages. It does not reuse the RC binaries unchanged.
+This application uses `promote-bytes`: beta packages retain their prerelease
+version, while RC packages already contain the final package version. Stable
+promotion copies the exact accepted RC binaries, receipts and native build
+counters. It does not compile or sign another set of packages. This avoids a
+hosted runner image change invalidating an already accepted candidate.
+
+The embedded descriptor remains the immutable build origin (`X.Y.Z-rc.N`, source
+SHA, channel and build counter), including after stable promotion. The status bar
+and About continue to show that origin; the GitHub release records that these
+exact bytes have been accepted as stable. A downloaded binary does not infer or
+change its release-channel assignment while offline. Existing `final-build` RCs
+cannot be reinterpreted: a reviewed policy change requires a new beta and RC.
 
 `get_release_info` returns the descriptor validated and embedded by `build.rs`. Both
 the main status bar and About display its complete version while offline. A local
@@ -17,7 +26,7 @@ inconsistent, or missing candidate plan stops compilation.
 
 Native representations are separate: Tauri and Apple marketing metadata keep the
 base; Apple build versions use the toolkit's numeric projection. Android reads the
-plan directly for its full `versionName` and reserved `versionCode`, because Tauri
+plan directly for its projected package `versionName` and reserved `versionCode`, because Tauri
 regenerates `tauri.properties`. The initial counter floor is 2005042, verified from
 the existing 2.5.42 APK. Counters across Play tracks must remain above published
 values when migrating or restoring release history.

@@ -19,7 +19,12 @@ pub fn release_identity(
     };
     let plan: Value =
         serde_json::from_str(raw).map_err(|e| format!("Invalid release plan: {e}"))?;
-    if plan["schema_version"] != 1 || plan["promotion"] != "final-build" {
+    if plan["schema_version"] != 1
+        || !matches!(
+            plan["promotion"].as_str(),
+            Some("final-build" | "promote-bytes")
+        )
+    {
         return Err("Unsupported release plan schema or promotion mode".into());
     }
     if source_sha.is_empty() || plan["source_sha"].as_str() != Some(source_sha) {
@@ -31,12 +36,21 @@ pub fn release_identity(
     let version = plan["version"]
         .as_str()
         .ok_or("Release plan version is missing")?;
-    if version != package_version {
-        return Err("Cargo version was not synchronized with the release plan".into());
-    }
     let channel = plan["channel"]
         .as_str()
         .ok_or("Release plan channel is missing")?;
+    let immutable = plan["promotion"] == "promote-bytes";
+    if immutable && channel == "stable" {
+        return Err("Immutable stable promotion must reuse the accepted RC binaries".into());
+    }
+    let expected_package = if immutable && channel == "rc" {
+        base.as_str()
+    } else {
+        version
+    };
+    if expected_package != package_version {
+        return Err("Cargo version was not synchronized with the release plan".into());
+    }
     let expected = match channel {
         "stable" => base.clone(),
         "nightly" => {
@@ -101,6 +115,41 @@ mod tests {
             release_identity("2.5.42-beta.3", "abc", Some(&plan.to_string())).unwrap(),
             plan
         );
+    }
+
+    #[test]
+    fn immutable_rc_uses_final_package_version_but_retains_its_origin() {
+        let mut candidate = plan();
+        candidate["promotion"] = json!("promote-bytes");
+        candidate["channel"] = json!("rc");
+        candidate["version"] = json!("2.5.42-rc.3");
+        candidate["tag"] = json!("v2.5.42-rc.3");
+        assert_eq!(
+            release_identity("2.5.42", "abc", Some(&candidate.to_string())).unwrap(),
+            candidate
+        );
+        // A stale RC-labelled manifest, a changed source, and a fabricated final
+        // build must not masquerade as the immutable accepted package.
+        assert!(release_identity("2.5.42-rc.3", "abc", Some(&candidate.to_string())).is_err());
+        assert!(release_identity("2.5.42", "other", Some(&candidate.to_string())).is_err());
+        candidate["channel"] = json!("stable");
+        candidate["version"] = json!("2.5.42");
+        candidate["tag"] = json!("v2.5.42");
+        candidate["sequence"] = Value::Null;
+        assert!(release_identity("2.5.42", "abc", Some(&candidate.to_string())).is_err());
+    }
+
+    #[test]
+    fn immutable_policy_does_not_turn_beta_into_a_final_package() {
+        let mut candidate = plan();
+        candidate["promotion"] = json!("promote-bytes");
+        assert_eq!(
+            release_identity("2.5.42-beta.3", "abc", Some(&candidate.to_string())).unwrap(),
+            candidate
+        );
+        assert!(release_identity("2.5.42", "abc", Some(&candidate.to_string())).is_err());
+        candidate["promotion"] = json!("ignore-checks");
+        assert!(release_identity("2.5.42-beta.3", "abc", Some(&candidate.to_string())).is_err());
     }
 
     #[test]

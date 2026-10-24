@@ -106,7 +106,7 @@ def verify_apk(path, plan, aapt):
     if not match or match.groups() != (
         "com.alvit.inverter_dashboard",
         str(plan["build_number"]),
-        plan["version"],
+        projected_value(plan, {"value": "package"}),
     ):
         raise ValueError(
             "APK package, versionCode or versionName differs from release plan"
@@ -148,7 +148,7 @@ def verify_aab(path, plan, bundletool):
     namespace = "{http://schemas.android.com/apk/res/android}"
     expected = {
         "package": "com.alvit.inverter_dashboard",
-        namespace + "versionName": plan["version"],
+        namespace + "versionName": projected_value(plan, {"value": "package"}),
         namespace + "versionCode": str(plan["build_number"]),
     }
     if any(info.get(key) != value for key, value in expected.items()):

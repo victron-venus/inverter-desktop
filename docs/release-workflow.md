@@ -109,7 +109,8 @@ python3 scripts/release.py stable --rc v1.2.3-rc.1
 Approve the pending `release` environment in GitHub Actions. The publisher checks
 that reviewers are configured, verifies the RC's successful run/attempt, default
 branch ancestry, Release gate, immutable evidence and every payload checksum.
-Stable `vX.Y.Z` is a new build of the accepted RC's exact source, locks and recipe. The RC must match current HEAD. All checks and builds run again; approve the new final artifacts after acceptance. The manifest records new hashes and `derived_from_rc`. No override or force-tag option exists. Expired/missing evidence requires a new RC. A partial
+Stable `vX.Y.Z` copies the tested RC bytes without rebuilding. No override or
+force-tag option exists. Expired/missing evidence requires a new RC. A partial
 upload remains an unpublished draft; inspect it before any manual recovery.
 
 GitHub releases do not deploy production. Existing push/tag/CI deployment hooks
@@ -118,7 +119,7 @@ and PyPI publication use verified stable assets as a separate explicit operation
 
 ## Project limits and rollout requirements
 
-- Committed base versions are synchronized before build using a frozen release plan; full beta/RC/final identity is embedded separately from native numeric metadata.
+- RC packages contain the final package version and retain their exact candidate origin, source SHA and reserved native build counters. Stable promotes the same verified bytes without rebuilding or re-signing.
 - Retains macOS ARM/Intel, Linux, Windows, iOS unsigned and Android signed builds; configured Android signing secrets are required.
 - Hosted smoke tests do not replace physical-device/MQTT acceptance; local packaging builds only the host desktop target.
 - Full iOS archive and installation require hosted runner/device verification. The raw Rust build embeds the production frontend with tauri/custom-protocol; updates are installed manually using the Download updates menu.
