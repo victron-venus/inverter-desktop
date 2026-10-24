@@ -24,6 +24,10 @@ remain separate requirements.
 
 ### Security
 
+Update Tokio to 1.53.3 in all affected application, plugin and fuzz lockfiles to
+address RUSTSEC-2026-0386. Keep the existing non-Tokio dependency graph and plugin
+protocol unchanged.
+
 Update `ctutils` to 0.4.4 in the application lockfile to restore the upstream
 constant-time mask generation and 32-bit `u128` comparisons covered by
 RUSTSEC-2026-0385. Existing encrypted settings, password verifiers and signed
