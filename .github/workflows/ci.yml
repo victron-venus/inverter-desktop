@@ -20,7 +20,7 @@ jobs:
       run-node-ci: false
       browser-matrix-file: .github/browser-compatibility.json
       browser-required-profile: windows-firefox-1.62.1
-      browser-release-channel: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.channel || '' }}
+      browser-release-channel: ${{ github.event_name == 'push' && 'beta' || github.event_name == 'workflow_dispatch' && github.event.inputs.channel || '' }}
       browser-prepare-command: npm exec --yes --package=pnpm@10.34.4 -- pnpm install --frozen-lockfile --ignore-scripts && npm exec --yes --package=pnpm@10.34.4 -- pnpm run build
       browser-test-command: node scripts/browser-acceptance.cjs
       browser-extended: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.channel == '' || github.event.inputs.channel == 'rc' || github.event.inputs.channel == 'stable')) }}

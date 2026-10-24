@@ -31,6 +31,13 @@ already requires the whole CI reusable workflow; browser failures remain failure
 The locks in `tools/browser-compatibility` isolate historical browser toolchains
 from application dependencies.
 
+Main pushes pass the release planner's `beta` channel, producing a
+source/run/attempt-bound browser verdict for automatically published betas.
+Manual releases pass their selected channel. Scheduled source audits retain all
+35 targets and individual evidence without a release verdict; the shared
+`nightly` release profile uses the smaller baseline. Ordinary pull requests also
+have no release channel.
+
 These are source-built browser compatibility checks with a synthetic native
 endpoint, not tests of every native OS webview or packaged release binary. The
 existing Linux native acceptance, Apple TLS and Windows plugin checks remain
