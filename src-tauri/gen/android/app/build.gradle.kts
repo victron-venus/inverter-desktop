@@ -31,7 +31,13 @@ android {
         targetSdk = 36
         versionCode = releasePlan?.get("build_number")?.let { (it as Number).toInt() }
             ?: tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = releasePlan?.get("version") as String?
+        // RC package versions are final when those exact bytes will be promoted.
+        // The full RC identity remains in the signed plan and embedded descriptor.
+        val packageVersion = releasePlan?.let {
+            if (it["promotion"] == "promote-bytes" && it["channel"] == "rc")
+                it["base_version"] else it["version"]
+        }
+        versionName = packageVersion as String?
             ?: tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
     buildTypes {

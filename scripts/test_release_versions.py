@@ -88,6 +88,10 @@ class ReleaseVersionTests(unittest.TestCase):
 
     def test_stable_requires_a_plan_matching_source_and_channel(self):
         """Reject absent or stale stable plans and accept the exact planned source."""
+        # The legacy final-build contract remains strict. This repository now
+        # promotes RC bytes and must never invoke a separate stable compilation.
+        self.policy["versioning"]["promotion"] = "final-build"
+        (self.root / ".release-policy.json").write_text(json.dumps(self.policy))
         checker = script("check-release-version")
         with self.assertRaisesRegex(ValueError, "verified"):
             checker.check_release_version(self.root, self.base, "stable")
@@ -98,6 +102,29 @@ class ReleaseVersionTests(unittest.TestCase):
         with patch.object(checker.subprocess, "check_output", return_value="b" * 40):
             with self.assertRaises(ValueError):
                 checker.check_release_version(self.root, self.base, "stable")
+
+    def test_rc_projects_final_package_versions_without_losing_origin(self):
+        """The exact RC can become stable without changing its native metadata."""
+        self.assertEqual(self.policy["versioning"]["promotion"], "promote-bytes")
+        plan = self.plan("rc", 4)
+        sync_versions(self.root, self.policy, plan)
+        sync_versions(self.root, self.policy, plan, check=True)
+        self.assertEqual(plan["version"], f"{self.base}-rc.4")
+        self.assertEqual(
+            json.loads((self.root / "package.json").read_bytes())["version"], self.base
+        )
+        self.assertEqual(
+            tomllib.loads((self.root / "src-tauri/Cargo.toml").read_text())["package"]["version"],
+            self.base,
+        )
+        packages = tomllib.loads((self.root / "src-tauri/Cargo.lock").read_text())["package"]
+        self.assertEqual(
+            next(item["version"] for item in packages if item["name"] == "inverter-dashboard"),
+            self.base,
+        )
+        checker = script("check-release-version")
+        with self.assertRaisesRegex(ValueError, "final-build promotion profile"):
+            checker.check_release_version(self.root, self.base, "stable")
 
     def test_windows_checkout_preserves_receipted_cargo_inputs(self):
         """Keep Cargo input hashes stable through Windows checkout and Tauri LF writes."""
@@ -274,10 +301,41 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertEqual(execute.call_args.args[0][0], str(aapt.resolve()))
         self.assertEqual(execute.call_args.args[0][-1], str(apk.resolve()))
 
+    def test_rc_apk_requires_final_version_and_original_candidate_identity(self):
+        """A stale RC versionName or binary from a different RC cannot be promoted."""
+        verifier = script("verify-native-release")
+        plan = self.plan("rc", 4)
+        apk = self.root / "candidate.apk"
+        library = "lib/arm64-v8a/libinverter_dashboard_lib.so"
+        with zipfile.ZipFile(apk, "w") as archive:
+            archive.writestr(library, json.dumps(plan, separators=(",", ":")))
+        sdk = self.root / "sdk"
+        aapt = sdk / "build-tools/34.0.0/aapt"
+        aapt.parent.mkdir(parents=True)
+        aapt.write_bytes(b"fixture inspector")
+        output = (
+            "package: name='com.alvit.inverter_dashboard' "
+            f"versionCode='{plan['build_number']}' versionName='{self.base}'"
+        )
+        with (
+            patch.dict(os.environ, {"ANDROID_HOME": str(sdk)}),
+            patch.object(verifier.subprocess, "check_output", return_value=output) as execute,
+        ):
+            verifier.verify_apk(apk, plan, aapt)
+            execute.return_value = output.replace(f"versionName='{self.base}'", f"versionName='{plan['version']}'")
+            with self.assertRaisesRegex(ValueError, "versionName"):
+                verifier.verify_apk(apk, plan, aapt)
+            execute.return_value = output
+            with zipfile.ZipFile(apk, "w") as archive:
+                other = self.plan("rc", 3)
+                archive.writestr(library, json.dumps(other, separators=(",", ":")))
+            with self.assertRaisesRegex(ValueError, "planned version"):
+                verifier.verify_apk(apk, plan, aapt)
+
     def test_aab_inspector_requires_fixed_path_and_matching_checksum(self):
         """Validate the selected bundletool bytes before any Java invocation."""
         verifier = script("verify-native-release")
-        plan = self.plan()
+        plan = self.plan("rc", 4)
         aab = self.root / "package.aab"
         with zipfile.ZipFile(aab, "w") as archive:
             archive.writestr(
@@ -293,7 +351,7 @@ class ReleaseVersionTests(unittest.TestCase):
         other.write_bytes(original)
         manifest = (
             '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
-            f'package="com.alvit.inverter_dashboard" android:versionName="{plan["version"]}" '
+            f'package="com.alvit.inverter_dashboard" android:versionName="{self.base}" '
             f'android:versionCode="{plan["build_number"]}" />'
         )
         with (
@@ -313,6 +371,9 @@ class ReleaseVersionTests(unittest.TestCase):
             execute.assert_not_called()
             bundletool.write_bytes(original)
             verifier.verify_aab(aab, plan, bundletool)
+            execute.return_value = manifest.replace(self.base + '\"', plan["version"] + '\"')
+            with self.assertRaisesRegex(ValueError, "versionName"):
+                verifier.verify_aab(aab, plan, bundletool)
         self.assertEqual(execute.call_args.args[0][2], str(bundletool.resolve()))
 
     @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is not installed")
