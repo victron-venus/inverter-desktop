@@ -18,8 +18,9 @@ identity/opener commands. Cached state is deliberately excluded from chart
 history; the test sends a fresh native event before asserting chart rendering.
 Configuration rejects plaintext MQTT credentials before dispatching save.
 
-The existing CI reusable workflow includes six required browser/OS checks for
-pull requests, pushes and beta releases: the five current-browser checks plus
+The existing CI reusable workflow selects the explicit
+`windows-firefox-1.62.1` required profile for six browser/OS checks on pull
+requests, pushes and beta releases: the five current-browser checks plus
 Windows 2022 / Firefox 153 (Playwright 1.62.1). The latter retains coverage for a
 historical browser that timed out while acknowledging a theme click even though
 the application had persisted the new theme. Scheduled source audits, manual
