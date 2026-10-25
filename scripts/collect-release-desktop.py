@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from macos_release import verify_bundle, verify_dmg, verify_zip
+
 root = Path.cwd()
 out = root / "release-output" / "desktop"
 out.mkdir(parents=True, exist_ok=True)
@@ -26,6 +28,7 @@ for base in bases:
         continue
     for path in sorted(bundle.rglob("*")):
         if path.is_dir() and path.suffix == ".app":
+            verify_bundle(path)
             if (root / ".release-plan.json").exists():
                 subprocess.run(
                     [
@@ -51,6 +54,7 @@ for base in bases:
                 ],
                 check=True,
             )
+            verify_zip(dest, path)
             found += 1
         elif (
             path.is_file()
@@ -69,6 +73,11 @@ for base in bases:
                 )
             )
         ):
+            if path.suffix == ".dmg":
+                applications = list(bundle.glob("macos/*.app"))
+                if len(applications) != 1:
+                    raise ValueError("Expected one built macOS application")
+                verify_dmg(path, applications[0])
             if (root / ".release-plan.json").exists():
                 if path.suffix in {".deb", ".rpm", ".AppImage"}:
                     kind = "linux"

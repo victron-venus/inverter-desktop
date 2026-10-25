@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.52] - 2026-10-24
+
+### Fixed
+
+- Seal the complete macOS application with an explicit ad-hoc signature before building its ZIP and DMG. The native executable, Info.plist and resources are now checked together before publication.
+- Verify both macOS installer payloads against the sealed app, rejecting missing, changed or substituted files before upload.
+
+### Upgrade
+
+Install the new official macOS package through the existing update path. Existing
+settings, credentials and plugin choices remain compatible. Version 2.5.51 macOS
+packages are superseded because their linker-only signature did not seal the
+application bundle. Do not repair previously published packages by re-signing them.
+
+### Security
+
+Ad-hoc signing verifies local bundle integrity; it does not establish an Apple
+Developer ID identity or notarization. This release does not disable Gatekeeper
+or change the trust policy for downloads and plugins.
+
 ## [2.5.51] - 2026-10-20
 
 ### Fixed

@@ -146,6 +146,27 @@ References: [GitHub schedules](https://docs.github.com/en/actions/reference/work
 [protected environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
 [artifact provenance](https://docs.github.com/en/rest/actions/artifacts).
 
+## macOS bundle integrity
+
+The default macOS configuration selects Tauri's ad-hoc signing identity `-`.
+Tauri seals the complete app before creating the DMG. The collector requires
+`codesign --verify --deep --strict` to pass, compares every ZIP payload file with
+the sealed app, then mounts the DMG read-only and verifies both its inner seal
+and its payload equality. These checks finish before release receipts and
+immutable manifest hashes are written.
+
+Ad-hoc signatures provide bundle integrity only. They do not identify an Apple
+Developer ID publisher, notarize the app, or bypass Gatekeeper. Configured
+Developer ID signing can replace the default through Tauri's normal signing
+configuration; the same strict verification remains mandatory.
+
+`verify-native-release.py apple` validates a sealed macOS app directory or an
+intentionally unsigned iOS IPA. It rejects standalone macOS app ZIPs rather than
+reporting metadata-only success. ZIP verification uses
+`macos_release.verify_zip(archive, sealed_app)` in the collector. No signing or
+modification is performed by these verifiers, and already published artifacts
+must not be repaired by local re-signing.
+
 ## Automatic version preparation
 
 Run `python3 scripts/release.py prepare-version --pr` from the clean default-branch HEAD. The command refreshes tags and opens a PR with synchronized owned version fields. An existing unreleased base is retained; use `--bump minor`, `--bump major`, or `--version X.Y.Z` for explicit intent. See [version plans](VERSIONING.md) for build overlays, the dedicated allocation ledger and recovery.
