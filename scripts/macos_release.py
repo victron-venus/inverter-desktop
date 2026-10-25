@@ -4,10 +4,12 @@ import hashlib
 import os
 import platform
 import plistlib
+import shutil
 import stat
 import subprocess
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 BUNDLE_ID = "com.alvit.inverter-dashboard"
@@ -80,12 +82,32 @@ def verify_zip(archive, app):
         raise ValueError("Packaged macOS ZIP differs from sealed app")
 
 
-def verify_dmg(image, app):
-    """Mount read-only, verify the inner seal and compare it with the built app."""
-    verify_bundle(app)
-    with tempfile.TemporaryDirectory(prefix="inverter-dmg-check-") as temp:
-        mount = Path(temp) / "volume"
-        mount.mkdir()
+def _cleanup_mount(directory, mount, attached):
+    """Release only the owned mount and never remove a still-mounted tree."""
+    try:
+        if attached or mount.is_mount():
+            subprocess.run(
+                ["/usr/bin/hdiutil", "detach", str(mount)],
+                check=True,
+                timeout=60,
+                stdout=subprocess.DEVNULL,
+            )
+            if mount.is_mount():
+                raise OSError(f"Owned disk image remains mounted at {mount}")
+    finally:
+        if not mount.is_mount():
+            shutil.rmtree(directory)
+
+
+@contextmanager
+def _mounted_image(image):
+    """Cover partial attach failures while retaining the original exception."""
+    directory = Path(tempfile.mkdtemp(prefix="inverter-dmg-check-"))
+    mount = directory / "volume"
+    mount.mkdir()
+    attached = False
+    failure = None
+    try:
         subprocess.run(
             [
                 "/usr/bin/hdiutil",
@@ -101,17 +123,30 @@ def verify_dmg(image, app):
             timeout=60,
             stdout=subprocess.DEVNULL,
         )
+        attached = True
+        yield mount
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
         try:
-            candidates = list(mount.glob("*.app"))
-            if len(candidates) != 1 or candidates[0].name != Path(app).name:
-                raise ValueError("Expected one macOS application in disk image")
-            verify_bundle(candidates[0])
-            if app_files(candidates[0]) != app_files(app):
-                raise ValueError("Packaged macOS DMG differs from sealed app")
-        finally:
-            subprocess.run(
-                ["/usr/bin/hdiutil", "detach", str(mount)],
-                check=True,
-                timeout=60,
-                stdout=subprocess.DEVNULL,
+            _cleanup_mount(directory, mount, attached)
+        except (OSError, subprocess.SubprocessError) as cleanup_error:
+            if failure is None:
+                raise
+            failure.add_note(
+                f"Cleanup of owned mount {mount} also failed: {cleanup_error}. "
+                "A still-mounted directory is retained for recovery."
             )
+
+
+def verify_dmg(image, app):
+    """Mount read-only, verify the inner seal and compare it with the built app."""
+    verify_bundle(app)
+    with _mounted_image(image) as mount:
+        candidates = list(mount.glob("*.app"))
+        if len(candidates) != 1 or candidates[0].name != Path(app).name:
+            raise ValueError("Expected one macOS application in disk image")
+        verify_bundle(candidates[0])
+        if app_files(candidates[0]) != app_files(app):
+            raise ValueError("Packaged macOS DMG differs from sealed app")

@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -180,6 +181,79 @@ class MacOSReleasePackageTests(unittest.TestCase):
         self.sign(other)
         with self.assertRaisesRegex(ValueError, "differs"):
             macos_release.verify_dmg(self.disk_image(other), self.app)
+
+    def test_attach_failure_after_real_mount_releases_owned_volume(self):
+        """A failed or timed-out attach still cleans a mount it established."""
+        self.sign()
+        image = self.disk_image(self.app)
+        real_run = subprocess.run
+        for error_type in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            mounts = []
+
+            def fail_after_attach(
+                arguments, _mounts=mounts, _error_type=error_type, **kwargs
+            ):
+                result = real_run(arguments, **kwargs)
+                if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
+                    _mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
+                    if _error_type is subprocess.TimeoutExpired:
+                        raise subprocess.TimeoutExpired(arguments, 60)
+                    raise subprocess.CalledProcessError(1, arguments)
+                return result
+
+            with self.subTest(error=error_type.__name__):
+                try:
+                    with (
+                        patch.object(
+                            macos_release.subprocess, "run", fail_after_attach
+                        ),
+                        self.assertRaises(error_type),
+                    ):
+                        macos_release.verify_dmg(image, self.app)
+                    self.assertEqual(len(mounts), 1)
+                    self.assertFalse(mounts[0].is_mount())
+                    self.assertFalse(mounts[0].parent.exists())
+                finally:
+                    for mount in mounts:
+                        if mount.is_mount():
+                            real_run(
+                                ["/usr/bin/hdiutil", "detach", str(mount)], check=True
+                            )
+                        shutil.rmtree(mount.parent, ignore_errors=True)
+
+    def test_detach_failure_preserves_primary_error_and_owned_mount(self):
+        """A cleanup failure must not hide the verification failure or erase a mount."""
+        self.sign()
+        image = self.disk_image(self.app)
+        real_run = subprocess.run
+        mounts = []
+
+        def fail_detach(arguments, **kwargs):
+            if arguments[:2] == ["/usr/bin/hdiutil", "detach"]:
+                raise subprocess.CalledProcessError(1, arguments)
+            result = real_run(arguments, **kwargs)
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
+                mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
+            return result
+
+        try:
+            with (
+                patch.object(macos_release.subprocess, "run", fail_detach),
+                patch.object(
+                    macos_release, "app_files", side_effect=ValueError("primary")
+                ),
+                self.assertRaisesRegex(ValueError, "primary") as caught,
+            ):
+                macos_release.verify_dmg(image, self.app)
+            self.assertIn("Cleanup of owned mount", caught.exception.__notes__[0])
+            self.assertEqual(len(mounts), 1)
+            self.assertTrue(mounts[0].is_mount())
+            self.assertTrue(mounts[0].parent.exists())
+        finally:
+            for mount in mounts:
+                if mount.is_mount():
+                    real_run(["/usr/bin/hdiutil", "detach", str(mount)], check=True)
+                shutil.rmtree(mount.parent, ignore_errors=True)
 
 
 if __name__ == "__main__":
