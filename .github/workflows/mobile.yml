@@ -19,7 +19,7 @@ jobs:
       INVERTER_BUILD_PROFILE: mobile
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
 
@@ -147,7 +147,7 @@ jobs:
       INVERTER_BUILD_PROFILE: mobile
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
 
@@ -210,14 +210,14 @@ jobs:
           fingerprint=$(sha256sum "$ANDROID_HOME"/ndk/*/source.properties | sha256sum | cut -d' ' -f1)
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
       - name: Cache Android Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri -> target
           key: android-ndk-${{ steps.ndk-cache.outputs.fingerprint }}
           env-vars: CARGO CC CFLAGS CXX CMAKE RUST ANDROID NDK
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Initialize Android source analysis
-        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: java-kotlin
           build-mode: manual
@@ -232,7 +232,7 @@ jobs:
           GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.caching=false -Dorg.gradle.project.kotlin.incremental=false -Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process
         run: pnpm tauri android build --ci --apk
       - name: Analyze Android source
-        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:java-kotlin
       - name: Verify 64-bit Android load and RELRO alignment
