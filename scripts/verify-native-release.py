@@ -10,7 +10,6 @@ import io
 import json
 import os
 import platform
-from pathlib import Path
 import plistlib
 import re
 import subprocess
@@ -18,7 +17,9 @@ import tarfile
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
+from macos_release import verify_bundle
 from version_plan import projected_value, validate_plan
 from version_receipt import confined_cli_path
 
@@ -61,8 +62,9 @@ def verify_embedded_identity(binary, plan):
 
 
 def verify_apple(path, plan):
-    """Inspect native metadata and the Rust binary in an Apple app or archive."""
+    """Check a sealed macOS app or intentionally unsigned iOS IPA metadata."""
     if path.is_dir():
+        verify_bundle(path)
         info = plistlib.loads((path / "Contents/Info.plist").read_bytes())
         binary = (path / "Contents/MacOS" / info["CFBundleExecutable"]).read_bytes()
     else:
@@ -81,6 +83,11 @@ def verify_apple(path, plan):
             if len(manifests) != 1:
                 raise ValueError("Expected one application plist")
             name = manifests[0]
+            if ".app/Contents/" in name:
+                raise ValueError(
+                    "macOS ZIP validation requires its sealed source app; "
+                    "use macos_release.verify_zip or the release collector"
+                )
             info = plistlib.loads(archive.read(name))
             prefix = name.removesuffix("Info.plist")
             executable = ("MacOS/" if ".app/Contents/" in name else "") + info[

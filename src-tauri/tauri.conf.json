@@ -98,6 +98,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
+      "signingIdentity": "-",
       "dmg": {
         "windowSize": {
           "width": 660,
@@ -115,5 +116,5 @@
       "bundleVersion": "2.5.42"
     }
   },
-  "version": "2.5.51"
+  "version": "2.5.52"
 }

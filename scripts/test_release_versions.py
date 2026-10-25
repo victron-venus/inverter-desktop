@@ -208,6 +208,18 @@ class ReleaseVersionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verifier.verify_embedded_identity(b"old binary", plan)
 
+    def test_macos_zip_cannot_fall_back_to_metadata_only_validation(self):
+        """Standalone macOS ZIPs need a sealed source app, unlike iOS IPAs."""
+        archive = self.root / "App.app.zip"
+        with zipfile.ZipFile(archive, "w") as package:
+            package.writestr(
+                "App.app/Contents/Info.plist",
+                plistlib.dumps({"CFBundleExecutable": "App"}),
+            )
+        verifier = script("verify-native-release")
+        with self.assertRaisesRegex(ValueError, "sealed source app"):
+            verifier.verify_apple(archive, self.plan())
+
     def test_native_cli_rejects_escape_and_symlink_before_inspection(self):
         """Constrain caller-selected packages to regular paths in this checkout."""
         verifier = script("verify-native-release")

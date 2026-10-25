@@ -133,6 +133,8 @@ jobs:
           python -c 'import os; from pathlib import Path; assert not Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]).exists(), "stale probe output"'
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tls_key_policy -- --ignored --nocapture
           python -c 'import json, os; from pathlib import Path; p=Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]); reports=[json.loads((p/(n+".json")).read_text()) for n in ["plugin-download", "video-transfer"]]; assert all(r["profile"] == "apple-rsa-pkcs1-ecdsa" and len(r["observations"]) == 10 for r in reports)'
+      - name: Verify macOS bundle and installer integrity regressions
+        run: python -m unittest discover -s tests -p 'test_macos_release_package.py' -v
       - name: Upload Apple native TLS probe evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
