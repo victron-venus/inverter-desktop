@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.53] - 2026-10-25
+
+### Changed
+
+- Update the coordinated Univer spreadsheet packages, Vue, localization, Lucide icons and Vitest tooling.
+- Update native logging, ZIP archive handling and platform/build support dependencies, preserving the reviewed dependency graph.
+
+### Upgrade
+
+Use the official beta package for the intended platform. This preparation introduces
+no configuration or credential migration. Keep the accepted stable installation
+available while evaluating the beta; package and CI checks do not replace native
+connection, notification, plugin and spreadsheet acceptance on the target device.
+
+### Security
+
+Existing certificate validation, encrypted credential storage and signed-plugin
+requirements remain in force. The documented RustSec retirement-notice deferrals
+retain their exact dependency checks and 17 November 2026 deadline; see
+[the security review](docs/RUSTSEC.md).
+
 ## [2.5.52] - 2026-10-24
 
 ### Fixed
