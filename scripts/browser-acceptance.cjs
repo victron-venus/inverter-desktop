@@ -25,8 +25,8 @@ assert(/export \{ clearMocks, mockConvertFileSrc, mockIPC, mockWindows \};/.test
 const mocks = mockModule.replace(/export \{ clearMocks, mockConvertFileSrc, mockIPC, mockWindows \};/, '')
 const tariffFixture = {
   version: 2, name: 'Acceptance tariff', currency: 'USD', timeZone: 'UTC', source: 'manual', billingDay: 17,
-  rates: Array.from({ length: 48 }, () => Array(7).fill(0.31)),
-  seasons: [{ name: 'Acceptance winter', months: [1], rates: Array.from({ length: 48 }, () => Array(7).fill(0.31)) }],
+  rates: Array.from({ length: 48 }, () => new Array(7).fill(0.31)),
+  seasons: [{ name: 'Acceptance winter', months: [1], rates: Array.from({ length: 48 }, () => new Array(7).fill(0.31)) }],
 }
 const fixture = {
   config: { mqtt_host: 'fixture.invalid', mqtt_port: 1883, mqtt_tls: false, setup_completed: true,
@@ -155,7 +155,11 @@ async function main() {
     const tariffExports = () => page.evaluate(() => window.__acceptance.tariffExports)
     const tariffPersistence = () => page.evaluate(() => ({
       controller: window.__acceptance.state.ui_config,
-      local: Object.entries(localStorage).filter(([key]) => key.startsWith('victron.energy-tariff')).sort(),
+      local: Object.entries(localStorage).filter(([key]) => key.startsWith('victron.energy-tariff')).sort(([left], [right]) => {
+        if (left < right) return -1
+        if (left > right) return 1
+        return 0
+      }),
       writes: window.__acceptance.calls.filter(call => call.command === 'perform_action' && call.args.action === 'electricity_tariff'),
       configurationSaves: window.__acceptance.calls.filter(call => call.command === 'save_config').length,
     }))
