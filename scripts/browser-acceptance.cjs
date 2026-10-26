@@ -23,6 +23,11 @@ const mockFile = path.join(root, 'node_modules/@tauri-apps/api/mocks.js')
 const mockModule = fs.readFileSync(mockFile, 'utf8')
 assert(/export \{ clearMocks, mockConvertFileSrc, mockIPC, mockWindows \};/.test(mockModule))
 const mocks = mockModule.replace(/export \{ clearMocks, mockConvertFileSrc, mockIPC, mockWindows \};/, '')
+const tariffFixture = {
+  version: 2, name: 'Acceptance tariff', currency: 'USD', timeZone: 'UTC', source: 'manual', billingDay: 17,
+  rates: Array.from({ length: 48 }, () => Array(7).fill(0.31)),
+  seasons: [{ name: 'Acceptance winter', months: [1], rates: Array.from({ length: 48 }, () => Array(7).fill(0.31)) }],
+}
 const fixture = {
   config: { mqtt_host: 'fixture.invalid', mqtt_port: 1883, mqtt_tls: false, setup_completed: true,
     color_scheme: 'dark', show_active_loads: true, show_batteries: true, show_solar_production: true,
@@ -32,7 +37,9 @@ const fixture = {
     battery_soc: 73, battery_power: -300, battery_voltage: 51.2, battery_current: -5.8,
     setpoint: 25, inverter_state: 'Inverting', uptime: 7200, dry_run: false,
     loads: { '1': 200, '2': -100 }, load_names: { '1': 'Fixture refrigerator', '2': 'Fixture solar' },
-    batteries: [{ instance: 0, name: 'Fixture battery', soc: 73 }], features: {} },
+    batteries: [{ instance: 0, name: 'Fixture battery', soc: 73 }], features: {},
+    ui_config: { electricity_tariff: tariffFixture,
+      electricity_tariff_status: { writable: true, revision: 'a'.repeat(64) } } },
 }
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.json': 'application/json', '.ico': 'image/x-icon' }
 // The server only serves this fixed inventory; request URLs never touch the filesystem.
@@ -89,7 +96,7 @@ async function main() {
     await context.addInitScript({ content: `${mocks}\n(${function setup(fixture) {
       if (location.origin !== fixture.origin) return
       const f = window.__acceptance = { ...fixture, calls: [], unexpected: [], authFailure: true,
-        unlocked: false, rejectSettings: false, notificationSession: null }
+        unlocked: false, rejectSettings: false, notificationSession: null, tariffExports: [] }
       localStorage.setItem('theme', f.config.color_scheme)
       mockWindows(location.pathname === '/about' ? 'about' : location.pathname === '/config' ? 'config' : 'main')
       f.emit = (event, payload) => window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event, payload })
@@ -107,6 +114,7 @@ async function main() {
           case 'save_config': f.config = structuredClone(args.config); return null
           case 'get_release_info': return { version: '9.8.7-rc.6', source_commit: '0'.repeat(40) }
           case 'get_state': return { ...f.state, notification_session: f.notificationSession }
+          case 'export_tariff': f.tariffExports.push(structuredClone(args.plan)); return true
           case 'connect_mqtt':
             f.notificationSession = args.notificationSession
             await f.emit('mqtt-connection-status', { connected: true, notification_session: f.notificationSession })
@@ -143,6 +151,77 @@ async function main() {
     }
     const calls = () => page.evaluate(() => window.__acceptance.calls)
     const enable = () => page.evaluate(() => { window.__acceptance.authFailure = false })
+    const tariffDialog = () => page.getByRole('dialog', { name: 'Electricity tariff', exact: true })
+    const tariffExports = () => page.evaluate(() => window.__acceptance.tariffExports)
+    const tariffPersistence = () => page.evaluate(() => ({
+      controller: window.__acceptance.state.ui_config,
+      local: Object.entries(localStorage).filter(([key]) => key.startsWith('victron.energy-tariff')).sort(),
+      writes: window.__acceptance.calls.filter(call => call.command === 'perform_action' && call.args.action === 'electricity_tariff'),
+      configurationSaves: window.__acceptance.calls.filter(call => call.command === 'save_config').length,
+    }))
+    async function tariffCanvas() {
+      const canvases = tariffDialog().getByRole('region', { name: 'Weekly electricity rates', exact: true }).locator('canvas')
+      // The cell editor also owns a small canvas. Require one actual sheet canvas,
+      // rather than silently choosing the first of several render surfaces.
+      const candidates = await eventually(() => canvases.evaluateAll(nodes => nodes.flatMap((node, index) => {
+        const box = node.getBoundingClientRect()
+        return box.width > 400 && box.height > 200 ? [index] : []
+      })), list => list.length === 1, 'One rendered tariff sheet canvas')
+      return canvases.nth(candidates[0])
+    }
+    async function selectTariffSchedule(value) {
+      const oldCanvas = await (await tariffCanvas()).elementHandle()
+      assert(oldCanvas, 'The current sheet is mounted before changing its schedule')
+      await tariffDialog().getByRole('combobox', { name: 'Schedule', exact: true }).selectOption(value)
+      await eventually(() => oldCanvas.evaluate(node => node.isConnected), connected => !connected, 'Schedule change unmounts the old sheet canvas')
+      await oldCanvas.dispose()
+      await tariffCanvas()
+    }
+    async function openTariff() {
+      await page.getByRole('button', { name: 'Edit controller tariff', exact: true }).click()
+      await tariffDialog().waitFor()
+      await tariffCanvas()
+      // A January run initially selects the winter season; the first edit must
+      // always target the default week, independently of the CI calendar.
+      const schedule = tariffDialog().getByRole('combobox', { name: 'Schedule', exact: true })
+      if (await schedule.inputValue() !== '-1') await selectTariffSchedule('-1')
+    }
+    async function typeTariffCell(day, text) {
+      assert(Number.isInteger(day) && day >= 0 && day < 7)
+      const canvas = await tariffCanvas()
+      // TariffSheet's 150px time column and 105x28px cells follow the 46x20px
+      // native sheet headers. Click B2/C2 through the real canvas, then type;
+      // no workbook API or Vue state is exposed or changed by this test.
+      await canvas.click({ position: { x: 46 + 150 + 105 * (day + 0.5), y: 20 + 28 * 1.5 } })
+      await page.keyboard.type(text, { delay: 20 })
+      await eventually(() => page.evaluate(() => {
+        const active = document.activeElement
+        const sheet = document.querySelector('.tariff-sheet')
+        const editors = sheet ? [...sheet.querySelectorAll('[data-u-comp="editor"]:not([contenteditable])')] : []
+        return {
+          focused: active instanceof HTMLElement && active.isContentEditable && active.id.startsWith('__editor_'),
+          visible: editors.filter(node => {
+            const box = node.getBoundingClientRect(), style = getComputedStyle(node)
+            return box.width > 0 && box.height > 0 && style.opacity !== '0' && style.visibility !== 'hidden'
+          }).length,
+        }
+      }), state => state.focused && state.visible === 1, 'Real Univer cell editor remains active before committing')
+    }
+    async function exportTariff(expected) {
+      const count = (await tariffExports()).length
+      await tariffDialog().getByRole('button', { name: 'Export tariff', exact: true }).click()
+      const exported = await eventually(tariffExports, list => list.length === count + 1, 'Exactly one tariff export reaches native IPC')
+      await tariffDialog().getByText('Tariff exported.', { exact: true }).waitFor()
+      // Compare the entire plan, including all 336 prices and seasonal metadata.
+      assert.deepEqual(exported[count], expected)
+    }
+    async function cancelTariff() {
+      await tariffDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+      await tariffDialog().waitFor({ state: 'detached' })
+      assert.equal(await page.locator('.tariff-sheet').count(), 0)
+    }
+    let tariffBaseline, tariffAcceptance
+    const editedTariff = structuredClone(tariffFixture)
     await scenario('native authentication failure keeps the dashboard closed', async () => {
       await page.goto(origin)
       await page.getByText('Unable to open settings: Error: Synthetic settings unavailable', { exact: true }).waitFor()
@@ -215,6 +294,44 @@ async function main() {
       await page.getByRole('button', { name: 'Close settings', exact: true }).click()
       assert((await calls()).some(c => ['plugin:window|close', 'close_config_window'].includes(c.command)))
     })
+    await scenario('real Univer editor exports a pending cell without saving the tariff', async () => {
+      await page.getByRole('button', { name: 'Electricity tariff', exact: true }).click()
+      tariffBaseline = await tariffPersistence()
+      assert.deepEqual(tariffBaseline.controller.electricity_tariff, tariffFixture)
+      assert.deepEqual(tariffBaseline.writes, [])
+      await openTariff()
+      await typeTariffCell(0, '0.1234')
+      await page.screenshot({ path: path.join(output, 'tariff-pending-cell.png') })
+      editedTariff.rates[0][0] = 0.1234
+      await exportTariff(editedTariff)
+      assert.deepEqual(await tariffPersistence(), tariffBaseline)
+    })
+    await scenario('real Univer season remount preserves each pending week edit', async () => {
+      await typeTariffCell(1, '0.2345')
+      editedTariff.rates[0][1] = 0.2345
+      await selectTariffSchedule('0')
+      await typeTariffCell(0, '0.4567')
+      editedTariff.seasons[0].rates[0][0] = 0.4567
+      await selectTariffSchedule('-1')
+      await exportTariff(editedTariff)
+      assert.deepEqual(await tariffPersistence(), tariffBaseline)
+    })
+    await scenario('real Univer Cancel and reopen discard committed and pending draft edits', async () => {
+      await cancelTariff()
+      assert.deepEqual(await tariffPersistence(), tariffBaseline)
+      await openTariff()
+      await exportTariff(tariffFixture)
+      await typeTariffCell(0, '0.9876')
+      await cancelTariff()
+      assert.deepEqual(await tariffPersistence(), tariffBaseline)
+      await openTariff()
+      await exportTariff(tariffFixture)
+      assert.equal((await tariffExports()).length, 4)
+      await page.screenshot({ path: path.join(output, 'tariff-reopened.png') })
+      await cancelTariff()
+      assert.deepEqual(await tariffPersistence(), tariffBaseline)
+      tariffAcceptance = { baseline: tariffBaseline, exports: await tariffExports(), afterCancel: await tariffPersistence() }
+    })
     await scenario('about window uses native identity and safe opener commands', async () => {
       await page.goto(`${origin}/about`); await enable()
       await page.evaluate(() => { window.__acceptance.unlocked = true })
@@ -230,7 +347,7 @@ async function main() {
     })
     const runtimeFile = path.join(output, 'runtime.json')
     const runtime = fs.existsSync(runtimeFile) ? JSON.parse(fs.readFileSync(runtimeFile)) : { sourceSha: 'local' }
-    fs.writeFileSync(evidence, JSON.stringify({ ...runtime, engine: browser.browserType().name(), browserVersion: browser.version(), testsPassed: scenarios.length, testsFailed: 0, scenarios, scenarioTimings, timeouts, fixtureBoundary: 'synthetic native IPC using pinned official Tauri mocks' }, null, 2))
+    fs.writeFileSync(evidence, JSON.stringify({ ...runtime, engine: browser.browserType().name(), browserVersion: browser.version(), testsPassed: scenarios.length, testsFailed: 0, scenarios, scenarioTimings, timeouts, tariffAcceptance, fixtureBoundary: 'synthetic native IPC using pinned official Tauri mocks' }, null, 2))
   } catch (error) {
     const native = page ? await page.evaluate(() => window.__acceptance).catch(() => null) : null
     fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ message: String(error.stack || error), failedScenario, scenarios, scenarioTimings, timeouts, errors, blocked, native, consoleMessages, chart: page ? await page.locator('.chart-wrap').evaluateAll(nodes => nodes.map(node => node.outerHTML)) : [] }, null, 2))
