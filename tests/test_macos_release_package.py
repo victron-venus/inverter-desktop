@@ -7,6 +7,7 @@ import plistlib
 import shutil
 import subprocess
 import tempfile
+import traceback
 import unittest
 import zipfile
 from pathlib import Path
@@ -18,6 +19,67 @@ SPEC = importlib.util.spec_from_file_location(
 )
 macos_release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(macos_release)
+
+
+def run_fixture_tool(arguments):
+    """Keep failed native fixture commands fatal and expose bounded diagnostics."""
+    try:
+        return subprocess.run(
+            arguments, check=True, capture_output=True, timeout=60
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        for stream in ("stdout", "stderr"):
+            output = getattr(error, stream) or b""
+            tail = output[-4096:]
+            if isinstance(tail, bytes):
+                tail = tail.decode("utf-8", errors="replace")
+            prefix = (
+                "[truncated; last 4096 bytes/characters] "
+                if len(output) > 4096
+                else ""
+            )
+            error.add_note(f"Native fixture {stream}: {prefix}{tail or '[empty]'}")
+        raise
+
+
+class FixtureToolDiagnosticsTests(unittest.TestCase):
+    """Failure reports retain native causes without retries or exception changes."""
+
+    def test_native_failures_keep_the_original_exception_and_visible_output(self):
+        arguments = ["/usr/bin/hdiutil", "create", "fixture.dmg"]
+        for error in (
+            subprocess.CalledProcessError(
+                1, arguments, output=b"progress", stderr=b"create failed: resource busy"
+            ),
+            subprocess.TimeoutExpired(
+                arguments, 60, output="partial progress", stderr="still creating"
+            ),
+        ):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(subprocess, "run", side_effect=error) as run:
+                    with self.assertRaises(type(error)) as caught:
+                        run_fixture_tool(arguments)
+                self.assertIs(caught.exception, error)
+                self.assertEqual(run.call_count, 1)
+                rendered = "".join(traceback.format_exception(error))
+                for stream in ("stdout", "stderr"):
+                    output = getattr(error, stream)
+                    if isinstance(output, bytes):
+                        output = output.decode("utf-8")
+                    self.assertIn(f"Native fixture {stream}: {output}", rendered)
+
+    def test_diagnostics_bound_large_output_and_handle_empty_or_invalid_text(self):
+        error = subprocess.TimeoutExpired(
+            ["/usr/bin/hdiutil"], 60, output=b"x" * 10000 + b"\xfffinal cause"
+        )
+        with patch.object(subprocess, "run", side_effect=error):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_fixture_tool(error.cmd)
+        self.assertEqual(len(error.stdout), 10012)
+        self.assertLess(len(error.__notes__[0]), 4200)
+        self.assertIn("[truncated; last 4096 bytes/characters]", error.__notes__[0])
+        self.assertTrue(error.__notes__[0].endswith("\ufffdfinal cause"))
+        self.assertEqual(error.__notes__[1], "Native fixture stderr: [empty]")
 
 
 class MacOSSigningConfigurationTests(unittest.TestCase):
@@ -98,7 +160,7 @@ class MacOSReleasePackageTests(unittest.TestCase):
     def disk_image(self, app):
         """Create a small real DMG containing the selected fixture app."""
         image = self.root / "fixture.dmg"
-        subprocess.run(
+        run_fixture_tool(
             [
                 "/usr/bin/hdiutil",
                 "create",
@@ -109,12 +171,27 @@ class MacOSReleasePackageTests(unittest.TestCase):
                 "-format",
                 "UDZO",
                 str(image),
-            ],
-            check=True,
-            capture_output=True,
-            timeout=60,
+            ]
         )
         return image
+
+    def assert_fixture_released(self, mounts, error=None):
+        """An expected payload rejection must not conceal a cleanup failure."""
+        if error is not None:
+            self.assertFalse(
+                getattr(error, "__notes__", []), "Unexpected verification cleanup error"
+            )
+        for mount in mounts:
+            self.assertFalse(mount.is_mount(), "Fixture volume is still mounted")
+            self.assertFalse(mount.parent.exists(), "Fixture mount directory remains")
+
+    def cleanup_fixture_mounts(self, mounts, run):
+        """Bound emergency cleanup and never delete through a remaining mount."""
+        for mount in mounts:
+            if mount.is_mount():
+                run(["/usr/bin/hdiutil", "detach", str(mount)], check=True, timeout=60)
+            self.assertFalse(mount.is_mount(), "Refusing to delete a mounted fixture")
+            shutil.rmtree(mount.parent, ignore_errors=True)
 
     def test_linker_signature_is_rejected(self):
         """Reproduce the original incomplete bundle signature failure."""
@@ -179,8 +256,25 @@ class MacOSReleasePackageTests(unittest.TestCase):
         shutil.copytree(self.app, other)
         (other / "Contents/Resources/example.txt").write_text("different valid app")
         self.sign(other)
-        with self.assertRaisesRegex(ValueError, "differs"):
-            macos_release.verify_dmg(self.disk_image(other), self.app)
+        image = self.disk_image(other)
+        real_run = subprocess.run
+        mounts = []
+
+        def record_attach(arguments, **kwargs):
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
+                mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
+            return real_run(arguments, **kwargs)
+
+        try:
+            with (
+                patch.object(macos_release.subprocess, "run", record_attach),
+                self.assertRaisesRegex(ValueError, "differs") as caught,
+            ):
+                macos_release.verify_dmg(image, self.app)
+            self.assertEqual(len(mounts), 1)
+            self.assert_fixture_released(mounts, caught.exception)
+        finally:
+            self.cleanup_fixture_mounts(mounts, real_run)
 
     def test_attach_failure_after_real_mount_releases_owned_volume(self):
         """A failed or timed-out attach still cleans a mount it established."""
@@ -214,12 +308,7 @@ class MacOSReleasePackageTests(unittest.TestCase):
                     self.assertFalse(mounts[0].is_mount())
                     self.assertFalse(mounts[0].parent.exists())
                 finally:
-                    for mount in mounts:
-                        if mount.is_mount():
-                            real_run(
-                                ["/usr/bin/hdiutil", "detach", str(mount)], check=True
-                            )
-                        shutil.rmtree(mount.parent, ignore_errors=True)
+                    self.cleanup_fixture_mounts(mounts, real_run)
 
     def test_detach_failure_preserves_primary_error_and_owned_mount(self):
         """A cleanup failure must not hide the verification failure or erase a mount."""
@@ -249,11 +338,17 @@ class MacOSReleasePackageTests(unittest.TestCase):
             self.assertEqual(len(mounts), 1)
             self.assertTrue(mounts[0].is_mount())
             self.assertTrue(mounts[0].parent.exists())
+            with self.assertRaisesRegex(
+                AssertionError, "Unexpected verification cleanup"
+            ):
+                self.assert_fixture_released(mounts, caught.exception)
+            with self.assertRaisesRegex(AssertionError, "still mounted"):
+                self.assert_fixture_released(mounts)
+            with self.assertRaisesRegex(AssertionError, "Refusing to delete"):
+                self.cleanup_fixture_mounts(mounts, lambda *_args, **_kwargs: None)
+            self.assertTrue(mounts[0].parent.exists())
         finally:
-            for mount in mounts:
-                if mount.is_mount():
-                    real_run(["/usr/bin/hdiutil", "detach", str(mount)], check=True)
-                shutil.rmtree(mount.parent, ignore_errors=True)
+            self.cleanup_fixture_mounts(mounts, real_run)
 
 
 if __name__ == "__main__":
