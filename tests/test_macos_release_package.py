@@ -19,6 +19,11 @@ SPEC = importlib.util.spec_from_file_location(
 )
 macos_release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(macos_release)
+ATTACH_SPEC = importlib.util.spec_from_file_location(
+    "macos_fixture_attach", ROOT / "tests/macos_fixture_attach.py"
+)
+fixture_attach = importlib.util.module_from_spec(ATTACH_SPEC)
+ATTACH_SPEC.loader.exec_module(fixture_attach)
 
 
 def run_fixture_tool(arguments):
@@ -173,6 +178,13 @@ class MacOSReleasePackageTests(unittest.TestCase):
                 str(image),
             ]
         )
+        self.enterContext(
+            patch.object(
+                macos_release,
+                "subprocess",
+                fixture_attach.FixtureSubprocess(self.root, image),
+            )
+        )
         return image
 
     def assert_fixture_released(self, mounts, error=None):
@@ -251,14 +263,36 @@ class MacOSReleasePackageTests(unittest.TestCase):
 
     def test_different_sealed_disk_image_is_rejected(self):
         """A separately valid signature cannot hide a substituted payload."""
+        self.assert_different_sealed_image_rejected(inject_eagain=False)
+
+    def test_injected_eagain_still_rejects_different_sealed_disk_image(self):
+        """Inject one EAGAIN; real retry and verification must reject other bytes."""
+        self.assert_different_sealed_image_rejected(inject_eagain=True)
+
+    def assert_different_sealed_image_rejected(self, *, inject_eagain):
         self.sign()
         other = self.root / "other/Inverter Desktop.app"
         shutil.copytree(self.app, other)
         (other / "Contents/Resources/example.txt").write_text("different valid app")
         self.sign(other)
         image = self.disk_image(other)
-        real_run = subprocess.run
+        proxy = macos_release.subprocess
+        raw_run = proxy.runner
+        real_run = macos_release.subprocess.run
         mounts = []
+        activity = {"attach": 0, "info": 0, "injected": 0}
+
+        def inject_first_attach(arguments, **kwargs):
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
+                activity["attach"] += 1
+                if inject_eagain and activity["attach"] == 1:
+                    activity["injected"] += 1
+                    raise subprocess.CalledProcessError(
+                        1, arguments, stderr=fixture_attach.EAGAIN + b"\n"
+                    )
+            if arguments == ["/usr/bin/hdiutil", "info", "-plist"]:
+                activity["info"] += 1
+            return raw_run(arguments, **kwargs)
 
         def record_attach(arguments, **kwargs):
             if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
@@ -267,12 +301,18 @@ class MacOSReleasePackageTests(unittest.TestCase):
 
         try:
             with (
+                patch.object(proxy, "runner", inject_first_attach),
                 patch.object(macos_release.subprocess, "run", record_attach),
                 self.assertRaisesRegex(ValueError, "differs") as caught,
             ):
                 macos_release.verify_dmg(image, self.app)
             self.assertEqual(len(mounts), 1)
             self.assert_fixture_released(mounts, caught.exception)
+            if inject_eagain:
+                self.assertEqual(activity["injected"], 1)
+                self.assertGreaterEqual(activity["attach"], 2)
+                self.assertLessEqual(activity["attach"], 3)
+                self.assertEqual(activity["info"], 2 * (activity["attach"] - 1))
         finally:
             self.cleanup_fixture_mounts(mounts, real_run)
 
@@ -280,7 +320,7 @@ class MacOSReleasePackageTests(unittest.TestCase):
         """A failed or timed-out attach still cleans a mount it established."""
         self.sign()
         image = self.disk_image(self.app)
-        real_run = subprocess.run
+        real_run = macos_release.subprocess.run
         for error_type in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             mounts = []
 
@@ -314,7 +354,7 @@ class MacOSReleasePackageTests(unittest.TestCase):
         """A cleanup failure must not hide the verification failure or erase a mount."""
         self.sign()
         image = self.disk_image(self.app)
-        real_run = subprocess.run
+        real_run = macos_release.subprocess.run
         mounts = []
 
         def fail_detach(arguments, **kwargs):
