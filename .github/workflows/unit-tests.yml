@@ -32,7 +32,7 @@ jobs:
         timeout-minutes: 2
         run: |
           printf '%s\n' 'fix(deps): validate TypeScript commitlint configuration with a header longer than seventy-two chars' | pnpm exec commitlint --strict
-          if printf '%s\n' 'invalid-type: reject this commit message' | pnpm exec commitlint --strict; then
+          if printf '%s\n' 'unsupported: reject this commit message' | pnpm exec commitlint --strict; then
             echo 'commitlint accepted an invalid commit type'
             exit 1
           fi
