@@ -66,7 +66,7 @@ const server = http.createServer((req, res) => {
   res.setHeader('Cache-Control', 'no-store')
   res.end(asset.data)
 })
-const scenarios = [], scenarioTimings = [], errors = [], blocked = [], consoleMessages = []
+const scenarios = [], scenarioTimings = [], errors = [], blocked = [], consoleMessages = [], downloads = []
 const timeouts = { actionMs: 30000, navigationMs: 15000, nativeStateMs: 10000 }
 let failedScenario = null
 async function eventually(read, predicate, message) {
@@ -74,6 +74,49 @@ async function eventually(read, predicate, message) {
   let value
   while (performance.now() < deadline) { value = await read(); if (predicate(value)) return value; await delay(40) }
   assert.fail(`${message}: ${JSON.stringify(value)}`)
+}
+async function readTariffDownload(download) {
+  let stream, timer, expired = false, cancelRequested = false
+  const timeoutError = new Error(`Tariff download completion and read exceeded ${timeouts.actionMs} ms`)
+  function cancelDownload() {
+    if (cancelRequested) return
+    cancelRequested = true
+    // Cleanup must not extend the deadline or leave a rejected cancel unhandled.
+    Promise.resolve().then(() => download.cancel()).catch(() => {})
+  }
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => { expired = true; reject(timeoutError) }, timeouts.actionMs)
+  })
+  const read = (async () => {
+    const failure = await download.failure()
+    if (expired) throw timeoutError
+    assert.equal(failure, null)
+    assert.equal(download.suggestedFilename(), 'electricity-tariff.json')
+    const opened = await download.createReadStream()
+    // The stream can arrive after the deadline/finally cleanup has already run.
+    if (expired) { opened?.destroy(); throw timeoutError }
+    stream = opened
+    assert(stream, 'The real browser download supplies a readable stream')
+    const chunks = []
+    let size = 0
+    for await (const chunk of stream) {
+      if (expired) throw timeoutError
+      size += chunk.length
+      assert(size <= 100_000, 'Tariff JSON download is bounded to 100 KB')
+      chunks.push(chunk)
+    }
+    assert(size > 0, 'Tariff JSON download is not empty')
+    return { plan: JSON.parse(Buffer.concat(chunks).toString('utf8')), size }
+  })()
+  try {
+    return await Promise.race([read, deadline])
+  } catch (error) {
+    cancelDownload()
+    throw error
+  } finally {
+    clearTimeout(timer)
+    stream?.destroy()
+  }
 }
 async function main() {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -95,8 +138,12 @@ async function main() {
     })
     await context.addInitScript({ content: `${mocks}\n(${function setup(fixture) {
       if (location.origin !== fixture.origin) return
+      // Match the native bootstrap before any application module is evaluated.
+      // Browser fallback is selected only on a new page load, with no marker.
+      const runtimeMode = new URL(location.href).searchParams.get('acceptanceRuntime') === 'browser' ? 'browser' : 'desktop'
+      if (runtimeMode === 'desktop') Object.defineProperty(window, 'isTauri', { value: true })
       const f = window.__acceptance = { ...fixture, calls: [], unexpected: [], authFailure: true,
-        unlocked: false, rejectSettings: false, notificationSession: null, tariffExports: [] }
+        unlocked: false, rejectSettings: false, notificationSession: null, tariffExports: [], runtimeMode }
       localStorage.setItem('theme', f.config.color_scheme)
       mockWindows(location.pathname === '/about' ? 'about' : location.pathname === '/config' ? 'config' : 'main')
       f.emit = (event, payload) => window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event, payload })
@@ -131,7 +178,11 @@ async function main() {
         }
       }, { shouldMockEvents: true })
     }.toString()})(${JSON.stringify({ ...fixture, origin })})` })
-    context.on('page', page => { page.on('pageerror', error => errors.push(String(error))); page.on('console', message => consoleMessages.push({ type: message.type(), text: message.text() })) })
+    context.on('page', page => {
+      page.on('pageerror', error => errors.push(String(error)))
+      page.on('console', message => consoleMessages.push({ type: message.type(), text: message.text() }))
+      page.on('download', download => downloads.push({ pageUrl: page.url(), url: download.url(), suggestedFilename: download.suggestedFilename() }))
+    })
     page = await context.newPage()
     async function scenario(name, run) {
       const started = performance.now()
@@ -216,18 +267,20 @@ async function main() {
       await tariffDialog().getByRole('button', { name: 'Export tariff', exact: true }).click()
       const exported = await eventually(tariffExports, list => list.length === count + 1, 'Exactly one tariff export reaches native IPC')
       await tariffDialog().getByText('Tariff exported.', { exact: true }).waitFor()
-      // Compare the entire plan, including all 336 prices and seasonal metadata.
+      // Compare the entire plan, including all 672 default/seasonal prices and metadata.
       assert.deepEqual(exported[count], expected)
+      assert.deepEqual(downloads, [], 'Desktop tariff export must use native IPC, never a browser download')
     }
     async function cancelTariff() {
       await tariffDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
       await tariffDialog().waitFor({ state: 'detached' })
       assert.equal(await page.locator('.tariff-sheet').count(), 0)
     }
-    let tariffBaseline, tariffAcceptance
+    let tariffBaseline, tariffAcceptance, tariffBrowserFallback
     const editedTariff = structuredClone(tariffFixture)
     await scenario('native authentication failure keeps the dashboard closed', async () => {
       await page.goto(origin)
+      assert.equal(await page.evaluate(() => window.isTauri), true, 'Desktop runtime is established before app startup')
       await page.getByText('Unable to open settings: Error: Synthetic settings unavailable', { exact: true }).waitFor()
       assert.equal(await page.getByRole('region', { name: 'Inverter dashboard' }).count(), 0)
       assert(!(await calls()).some(call => call.command === 'connect_mqtt'))
@@ -299,6 +352,7 @@ async function main() {
       assert((await calls()).some(c => ['plugin:window|close', 'close_config_window'].includes(c.command)))
     })
     await scenario('real Univer editor exports a pending cell without saving the tariff', async () => {
+      assert.equal(await page.evaluate(() => window.isTauri), true)
       await page.getByRole('button', { name: 'Electricity tariff', exact: true }).click()
       tariffBaseline = await tariffPersistence()
       assert.deepEqual(tariffBaseline.controller.electricity_tariff, tariffFixture)
@@ -336,6 +390,37 @@ async function main() {
       assert.deepEqual(await tariffPersistence(), tariffBaseline)
       tariffAcceptance = { baseline: tariffBaseline, exports: await tariffExports(), afterCancel: await tariffPersistence() }
     })
+    await scenario('browser-only tariff export downloads the real edited JSON without native export IPC', async () => {
+      await page.goto(`${origin}/config?acceptanceRuntime=browser`)
+      assert.equal(await page.evaluate(() => Boolean(window.isTauri)), false, 'Browser fallback starts without the native marker on a fresh page load')
+      assert.deepEqual(downloads, [])
+      await enable()
+      await page.evaluate(() => { window.__acceptance.unlocked = true })
+      await page.getByRole('button', { name: 'Retry', exact: true }).click()
+      await page.getByText('Configuration', { exact: true }).waitFor()
+      await page.getByRole('button', { name: 'Electricity tariff', exact: true }).click()
+      const baseline = await tariffPersistence()
+      assert.deepEqual(baseline.controller.electricity_tariff, tariffFixture)
+      assert.deepEqual(baseline.writes, [])
+      await openTariff()
+      await typeTariffCell(0, '0.6789')
+      const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        tariffDialog().getByRole('button', { name: 'Export tariff', exact: true }).click(),
+      ])
+      const { plan, size } = await readTariffDownload(download)
+      const expected = structuredClone(tariffFixture)
+      expected.rates[0][0] = 0.6789
+      assert.deepEqual(plan, expected, 'Browser export preserves all 672 default/seasonal prices and metadata')
+      await tariffDialog().getByText('Tariff exported.', { exact: true }).waitFor()
+      assert.equal(downloads.length, 1)
+      assert.deepEqual(await tariffExports(), [])
+      assert(!(await calls()).some(call => call.command === 'export_tariff'))
+      assert.deepEqual(await tariffPersistence(), baseline)
+      await cancelTariff()
+      assert.deepEqual(await tariffPersistence(), baseline)
+      tariffBrowserFallback = { plan, bytes: size, baseline, afterCancel: await tariffPersistence(), nativeExports: await tariffExports() }
+    })
     await scenario('about window uses native identity and safe opener commands', async () => {
       await page.goto(`${origin}/about`); await enable()
       await page.evaluate(() => { window.__acceptance.unlocked = true })
@@ -349,12 +434,13 @@ async function main() {
       assert.deepEqual(blocked, [])
       await page.screenshot({ path: path.join(output, 'about.png') })
     })
+    assert.equal(downloads.length, 1, 'Only the explicit browser-fallback scenario downloads a file')
     const runtimeFile = path.join(output, 'runtime.json')
     const runtime = fs.existsSync(runtimeFile) ? JSON.parse(fs.readFileSync(runtimeFile)) : { sourceSha: 'local' }
-    fs.writeFileSync(evidence, JSON.stringify({ ...runtime, engine: browser.browserType().name(), browserVersion: browser.version(), testsPassed: scenarios.length, testsFailed: 0, scenarios, scenarioTimings, timeouts, tariffAcceptance, fixtureBoundary: 'synthetic native IPC using pinned official Tauri mocks' }, null, 2))
+    fs.writeFileSync(evidence, JSON.stringify({ ...runtime, engine: browser.browserType().name(), browserVersion: browser.version(), testsPassed: scenarios.length, testsFailed: 0, scenarios, scenarioTimings, timeouts, tariffAcceptance, tariffBrowserFallback, downloads, fixtureBoundary: 'synthetic native IPC using pinned official Tauri mocks; explicit browser export on a fresh page load' }, null, 2))
   } catch (error) {
     const native = page ? await page.evaluate(() => window.__acceptance).catch(() => null) : null
-    fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ message: String(error.stack || error), failedScenario, scenarios, scenarioTimings, timeouts, errors, blocked, native, consoleMessages, chart: page ? await page.locator('.chart-wrap').evaluateAll(nodes => nodes.map(node => node.outerHTML)) : [] }, null, 2))
+    fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ message: String(error.stack || error), failedScenario, scenarios, scenarioTimings, timeouts, errors, blocked, native, consoleMessages, downloads, chart: page ? await page.locator('.chart-wrap').evaluateAll(nodes => nodes.map(node => node.outerHTML)) : [] }, null, 2))
     if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {})
     throw error
   } finally {
