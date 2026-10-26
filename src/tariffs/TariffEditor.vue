@@ -383,6 +383,7 @@ async function exportFile() {
 .tariff-content input,
 .tariff-content select {
   min-width: 0;
+  color-scheme: dark;
   background: #242e3c;
   color: #f5f7fa;
   padding: 8px;
