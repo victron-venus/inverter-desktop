@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.54] - 2026-10-27
+
+### Changed
+
+- Update the coordinated Univer spreadsheet packages to 1.2.0 and the Tauri CLI to 2.12.4.
+- Render native form controls in the tariff editor with the intended dark color scheme.
+- Extend tariff export browser acceptance and make the macOS packaging fixture tolerate a bounded transient attachment failure without weakening payload verification.
+
 ## [2.5.53] - 2026-10-25
 
 ### Changed
