@@ -12,7 +12,7 @@ concurrency:
 jobs:
   browser-compatibility:
     name: Desktop browser acceptance
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/typescript-ci.yml@682abe24b58641fd1ece769e91e834fc461948f5 # main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/typescript-ci.yml@94b1116449af128810b86f4c0c723602be17b372 # main
     permissions:
       contents: read
     with:
