@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.54] - 2026-10-27
+
+### Changed
+
+- Update the coordinated Univer spreadsheet packages to 1.2.0 and the Tauri CLI to 2.12.4.
+- Render native form controls in the tariff editor with the intended dark color scheme.
+- Extend tariff export browser acceptance and make the macOS packaging fixture tolerate a bounded transient attachment failure without weakening payload verification.
+
+### Upgrade
+
+Install the official package for the intended platform, preserving settings, credentials and plugin choices. Keep the accepted stable installation available while evaluating this beta. No configuration migration is required; verify native connections, notifications, plugins and spreadsheets on the target device.
+
+### Security
+
+Retain certificate verification, encrypted credential storage and signed-plugin requirements. macOS ad-hoc bundle sealing verifies local integrity but does not establish an Apple Developer ID identity or notarization; do not disable Gatekeeper to treat packaging checks as trust approval. Existing documented dependency deferrals remain subject to their own review deadlines.
+
 ## [2.5.53] - 2026-10-25
 
 ### Changed
