@@ -178,13 +178,9 @@ class MacOSReleasePackageTests(unittest.TestCase):
                 str(image),
             ]
         )
-        self.enterContext(
-            patch.object(
-                macos_release,
-                "subprocess",
-                fixture_attach.FixtureSubprocess(self.root, image),
-            )
-        )
+        proxy = fixture_attach.FixtureSubprocess(self.root, image)
+        self.enterContext(patch.object(macos_release, "subprocess", proxy))
+        self.addCleanup(proxy.cleanup_owned_image)
         return image
 
     def assert_fixture_released(self, mounts, error=None):
@@ -316,39 +312,67 @@ class MacOSReleasePackageTests(unittest.TestCase):
         finally:
             self.cleanup_fixture_mounts(mounts, real_run)
 
-    def test_attach_failure_after_real_mount_releases_owned_volume(self):
-        """A failed or timed-out attach still cleans a mount it established."""
+    def test_attach_error_after_real_mount_releases_owned_volume(self):
+        self.assert_attach_failure_releases_owned_volume(subprocess.CalledProcessError)
+
+    def test_attach_timeout_after_real_mount_releases_owned_volume(self):
+        self.assert_attach_failure_releases_owned_volume(subprocess.TimeoutExpired)
+
+    def assert_attach_failure_releases_owned_volume(self, error_type):
+        """Inject only after a real mount; native setup errors must remain failures."""
         self.sign()
         image = self.disk_image(self.app)
         real_run = macos_release.subprocess.run
-        for error_type in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            mounts = []
+        mounts, injections = [], []
+        injected = (subprocess.TimeoutExpired(["injected attach"], 60)
+                    if error_type is subprocess.TimeoutExpired
+                    else subprocess.CalledProcessError(1, ["injected attach"]))
 
-            def fail_after_attach(
-                arguments, _mounts=mounts, _error_type=error_type, **kwargs
+        def fail_after_attach(arguments, **kwargs):
+            attaching = arguments[:2] == ["/usr/bin/hdiutil", "attach"]
+            if attaching:
+                mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
+            result = real_run(arguments, **kwargs)
+            if attaching:
+                injections.append(injected)
+                raise injected
+            return result
+
+        try:
+            with (
+                patch.object(macos_release.subprocess, "run", fail_after_attach),
+                self.assertRaises(error_type) as caught,
             ):
-                result = real_run(arguments, **kwargs)
-                if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
-                    _mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
-                    if _error_type is subprocess.TimeoutExpired:
-                        raise subprocess.TimeoutExpired(arguments, 60)
-                    raise subprocess.CalledProcessError(1, arguments)
-                return result
+                macos_release.verify_dmg(image, self.app)
+            self.assertIs(caught.exception, injected)
+            self.assertEqual(injections, [injected])
+            self.assertEqual(len(mounts), 1)
+            self.assert_fixture_released(mounts, caught.exception)
+        finally:
+            self.cleanup_fixture_mounts(mounts, real_run)
 
-            with self.subTest(error=error_type.__name__):
-                try:
-                    with (
-                        patch.object(
-                            macos_release.subprocess, "run", fail_after_attach
-                        ),
-                        self.assertRaises(error_type),
-                    ):
-                        macos_release.verify_dmg(image, self.app)
-                    self.assertEqual(len(mounts), 1)
-                    self.assertFalse(mounts[0].is_mount())
-                    self.assertFalse(mounts[0].parent.exists())
-                finally:
-                    self.cleanup_fixture_mounts(mounts, real_run)
+    def test_fixture_teardown_releases_owned_registered_device(self):
+        """Exercise test-only recovery with one real, deliberately retained mount."""
+        self.sign()
+        image = self.disk_image(self.app)
+        proxy = macos_release.subprocess
+        directory = Path(tempfile.mkdtemp(prefix="inverter-dmg-check-"))
+        mount = directory / "volume"
+        mount.mkdir()
+        try:
+            proxy.run(fixture_attach.ATTACH_PREFIX + [str(mount), str(image)],
+                      check=True, timeout=60, stdout=subprocess.DEVNULL)
+            self.assertTrue(mount.is_mount())
+            proxy.cleanup_owned_image()
+            self.assertTrue(proxy.cleanup_detach_attempted)
+            self.assertFalse(mount.is_mount())
+            proxy.registry_clear(mount, proxy.clock() + 5)
+        finally:
+            if not proxy.cleanup_detach_attempted:
+                self.cleanup_fixture_mounts([mount], proxy.run)
+            elif not mount.is_mount():
+                shutil.rmtree(directory)
+            # An attempted but failed detach is retained; never retry the mutation.
 
     def test_detach_failure_preserves_primary_error_and_owned_mount(self):
         """A cleanup failure must not hide the verification failure or erase a mount."""

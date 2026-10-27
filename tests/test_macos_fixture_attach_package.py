@@ -2,6 +2,7 @@
 
 import importlib.util
 import io
+import os
 import plistlib
 import subprocess
 import tempfile
@@ -314,6 +315,169 @@ class FixtureAttachRetryTests(unittest.TestCase):
                 self.assertIs(caught.exception, failure)
                 self.assertEqual(len(self.calls), 1)
                 self.assertEqual(self.calls[0][:2], (arguments, options))
+
+    def owned_registry(self, *, mounted=False):
+        entity = {"dev-entry": "/dev/disk99s1"}
+        if mounted:
+            entity["mount-point"] = str(self.mount)
+        return {"images": [{"image-path": str(self.image), "system-entities": [
+            {"dev-entry": "/dev/disk99"}, entity]}]}
+
+    def test_cleanup_detaches_only_owned_partial_image_once_then_checks_absence(self):
+        for mounted in (False, True):
+            with self.subTest(mounted=mounted):
+                self.calls = []
+                self.proxy = fixture.FixtureSubprocess(
+                    self.root, self.image, runner=self.run_fake,
+                    clock=lambda: self.now, sleep=self.sleep, log=self.log,
+                )
+                self.proxy.attempted_mounts.add(self.mount)
+                self.registries = [self.owned_registry(mounted=mounted), {"images": []}]
+                self.proxy.cleanup_owned_image()
+                self.assertEqual(len(self.calls_for("detach")), 1)
+                self.assertEqual(self.calls_for("detach")[0][0],
+                                 ["/usr/bin/hdiutil", "detach", "/dev/disk99"])
+                self.assertEqual(len(self.calls_for("info")), 2)
+                self.assertEqual(self.calls_for("attach"), [])
+                self.assertEqual(self.sleeps, [])
+
+    def test_apfs_cleanup_uses_unique_actual_owned_mount_not_inferred_disk(self):
+        registry = self.owned_registry()
+        registry["images"][0]["system-entities"] += [
+            {"dev-entry": "/dev/disk100"},
+            {"dev-entry": "/dev/disk100s1", "mount-point": str(self.mount)}]
+        self.proxy.attempted_mounts.add(self.mount)
+        self.registries = [registry, {"images": []}]
+        with patch.object(Path, "is_mount", side_effect=[True, False]):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach")[0][0],
+                         ["/usr/bin/hdiutil", "detach", str(self.mount)])
+        self.assertEqual(len(self.calls_for("detach")), 1)
+
+    def test_cleanup_refuses_another_image_claiming_the_same_owned_mount(self):
+        registry = self.owned_registry(mounted=True)
+        registry["images"].append({"image-path": str(self.root / "other.dmg"),
+            "system-entities": [{"dev-entry": "/dev/disk101", "mount-point": str(self.mount)}]})
+        self.proxy.attempted_mounts.add(self.mount)
+        self.registries = [registry]
+        with self.assertRaisesRegex(fixture.UnsafeRetry, "mount is shared"):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_apfs_without_actual_owned_mount_is_not_detached(self):
+        registry = self.owned_registry()
+        registry["images"][0]["system-entities"] += [{"dev-entry": "/dev/disk100"}]
+        self.registries = [registry]
+        with self.assertRaisesRegex(fixture.UnsafeRetry, "requires one owned device"):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_cleanup_requires_explicit_whole_device_not_only_partition(self):
+        registry = self.owned_registry()
+        registry["images"][0]["system-entities"] = [{"dev-entry": "/dev/disk99s1"}]
+        self.registries = [registry]
+        with self.assertRaisesRegex(fixture.UnsafeRetry, "whole-device identity"):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_second_cleanup_preserves_timeout_without_repeating_detach(self):
+        self.registries = [self.owned_registry()]
+        timeout = subprocess.TimeoutExpired(["detach"], 60)
+        self.failures = [timeout]
+        for _ in range(2):
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                self.proxy.cleanup_owned_image()
+            self.assertIs(caught.exception, timeout)
+        self.assertEqual(len(self.calls_for("detach")), 1)
+
+    def test_cleanup_absent_image_leaves_unrelated_device_untouched(self):
+        self.registries = [{"images": [{"image-path": str(self.root / "other.dmg"),
+                            "system-entities": [{"dev-entry": "/dev/disk77"}]}]}]
+        self.proxy.cleanup_owned_image()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_absent_image_cleanup_needs_no_image_mutation_authority(self):
+        self.image.write_bytes(b"changed fixture with no active registration")
+        self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_absent_image_cannot_hide_registered_attempted_mount(self):
+        self.proxy.attempted_mounts.add(self.mount)
+        self.registries = [{"images": [{"image-path": str(self.root / "other.dmg"),
+            "system-entities": [{"dev-entry": "/dev/disk77", "mount-point": str(self.mount)}]}]}]
+        with self.assertRaisesRegex(fixture.UnsafeRetry, "mount remains registered"):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_absent_image_cannot_hide_mounted_attempted_path(self):
+        self.proxy.attempted_mounts.add(self.mount)
+        with patch.object(Path, "is_mount", return_value=True):
+            with self.assertRaisesRegex(fixture.UnsafeRetry, "volume is still mounted"):
+                self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_cleanup_refuses_ambiguous_shared_or_unexpected_mounts(self):
+        unexpected = self.owned_registry(mounted=True)
+        shared = self.owned_registry()
+        shared["images"].append({"image-path": str(self.root / "other.dmg"),
+                                 "system-entities": [{"dev-entry": "/dev/disk99s2"}]})
+        ambiguous = self.owned_registry()
+        ambiguous["images"][0]["system-entities"].append({"dev-entry": "/dev/disk100"})
+        empty = self.owned_registry()
+        empty["images"][0]["system-entities"] = []
+        for registry in (unexpected, shared, ambiguous, empty, {"images": [{}]}):
+            with self.subTest(registry=registry):
+                self.calls = []
+                self.registries = [registry]
+                with self.assertRaises(fixture.UnsafeRetry):
+                    self.proxy.cleanup_owned_image()
+                self.assertEqual(self.calls_for("detach"), [])
+
+    def test_cleanup_refuses_image_changed_during_observation(self):
+        self.registries = [self.owned_registry()]
+        self.after_info = lambda: self.image.write_bytes(b"changed")
+        with self.assertRaisesRegex(fixture.UnsafeRetry, "changed before"):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_cleanup_accepts_ctime_only_change_but_binds_complete_image_bytes(self):
+        self.image.chmod(0o600)
+        self.registries = [self.owned_registry(), {"images": []}]
+        self.proxy.cleanup_owned_image()
+        self.assertEqual(len(self.calls_for("detach")), 1)
+
+    def test_cleanup_rejects_changed_bytes_even_with_same_inode_size_and_mtime(self):
+        original = self.image.stat()
+        self.image.write_bytes(b"x" * original.st_size)
+        os.utime(self.image, ns=(original.st_atime_ns, original.st_mtime_ns))
+        self.registries = [self.owned_registry()]
+        with self.assertRaisesRegex(fixture.UnsafeRetry, "changed before cleanup"):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_cleanup_detach_failure_is_fatal_and_never_retried(self):
+        self.registries = [self.owned_registry()]
+        failure = subprocess.CalledProcessError(1, ["detach"])
+        self.failures = [failure]
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            self.proxy.cleanup_owned_image()
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(len(self.calls_for("detach")), 1)
+        self.assertEqual(self.sleeps, [])
+
+    def test_cleanup_requires_registry_clear_after_successful_detach(self):
+        self.registries = [self.owned_registry(), self.owned_registry()]
+        with self.assertRaisesRegex(fixture.UnsafeRetry, "owned image remains"):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(len(self.calls_for("detach")), 1)
+
+    def test_failed_attach_records_attempt_before_native_failure(self):
+        failure = self.error(b"unrelated failure")
+        self.failures = [failure]
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.invoke()
+        self.assertEqual(self.proxy.attempted_mounts, {self.mount})
 
     def test_private_proxy_does_not_change_global_run_or_swallow_injection(self):
         original = subprocess.run

@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - Extend tariff export browser acceptance and make the macOS packaging fixture tolerate a bounded transient attachment failure without weakening payload verification.
 - Update the locked UUID dependency to 1.29.0 and Biome tooling to 2.6.3 with the equivalent recommended lint preset.
 - Publish assets through the known release ID and tolerate bounded propagation of completed release-gate metadata without retrying an uncertain upload.
+- Isolate native DMG failure-injection fixtures and verify cleanup of their owned APFS mounts, preserving the original attachment error and payload checks.
 
 ### Upgrade
 
