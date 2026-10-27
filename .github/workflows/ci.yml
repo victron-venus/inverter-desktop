@@ -1,11 +1,13 @@
 name: CI
 on:
   workflow_call: {}
+  pull_request:
+    types: [opened, synchronize, reopened]
 permissions:
   contents: read
 jobs:
   generate-lock:
-    if: github.event_name == 'pull_request' && github.head_ref == 'scratch/biome-lock-20261027'
+    if: github.event_name == 'pull_request' && github.head_ref == 'scratch/biome-lock-20261027' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
