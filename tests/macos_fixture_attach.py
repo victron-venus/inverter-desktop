@@ -44,6 +44,17 @@ def file_identity(path):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def registration_summary(entities):
+    """Describe an already validated owned record without paths or new probes."""
+    devices = {entity["dev-entry"] for entity in entities}
+    roots = {re.match(r"/dev/disk[0-9]+", device)[0] for device in devices}
+    return (
+        f"entities={len(entities)}, device_roots={len(roots)}, "
+        f"whole_devices={len(roots & devices)}, "
+        f"mount_entries={sum('mount-point' in entity for entity in entities)}"
+    )
+
+
 def mount_identity(mount):
     parent = mount.parent
     if (
@@ -154,7 +165,9 @@ class FixtureSubprocess:
     def registry_clear(self, mount, deadline):
         for path, entities in self.registry_images(deadline):
             if path == self.image or (path.exists() and os.path.samefile(path, self.image)):
-                raise UnsafeRetry("owned image remains registered")
+                raise UnsafeRetry(
+                    "owned image remains registered (" + registration_summary(entities) + ")"
+                )
             if any("mount-point" in entity and canonical(entity["mount-point"]) == mount
                    for entity in entities):
                 raise UnsafeRetry("fixture mount remains registered")
@@ -224,7 +237,13 @@ class FixtureSubprocess:
             target = str(next(iter(mounts)))
         elif not mounts or (len(mounts) == 1 and not next(iter(mounts)).is_mount()):
             if len(roots) != 1:
-                raise UnsafeRetry("partial fixture cleanup requires one owned device")
+                # This refusal proves no single actual owned mount. Keep its
+                # observed topology in the error without another native query.
+                raise UnsafeRetry(
+                    "partial fixture cleanup requires one owned device ("
+                    + registration_summary(entities)
+                    + f", registered_mounts={len(mounts)}, actual_owned_mount=no)"
+                )
             target = next(iter(roots))
         else:
             raise UnsafeRetry("fixture cleanup requires one unambiguous owned mount")

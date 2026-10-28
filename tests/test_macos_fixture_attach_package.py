@@ -323,6 +323,76 @@ class FixtureAttachRetryTests(unittest.TestCase):
         return {"images": [{"image-path": str(self.image), "system-entities": [
             {"dev-entry": "/dev/disk99"}, entity]}]}
 
+    def test_registered_eagain_retains_original_error_and_observed_topology(self):
+        registry = self.owned_registry()
+        registry["images"][0]["system-entities"].append({"dev-entry": "/dev/disk100"})
+        failure = self.error()
+        self.failures, self.registries = [failure], [registry]
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            self.invoke()
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(failure.stderr, fixture.EAGAIN + b"\n")
+        self.assertEqual([call[0][1] for call in self.calls], ["attach", "info"])
+        self.assertEqual(self.sleeps, [])
+        self.assertFalse(self.proxy.cleanup_detach_attempted)
+        self.assertIn("entities=3, device_roots=2, whole_devices=2, mount_entries=0",
+                      failure.__notes__[0])
+
+    def test_partial_cleanup_diagnostic_distinguishes_absent_and_stale_mount(self):
+        for mounted in (False, True):
+            with self.subTest(registered_mount=mounted):
+                self.calls = []
+                registry = self.owned_registry(mounted=mounted)
+                registry["images"][0]["system-entities"].append(
+                    {"dev-entry": "/dev/disk100"})
+                self.proxy.attempted_mounts.add(self.mount)
+                self.registries = [registry]
+                with patch.object(Path, "is_mount", return_value=False) as is_mount:
+                    with self.assertRaisesRegex(fixture.UnsafeRetry, "requires one owned device") as caught:
+                        self.proxy.cleanup_owned_image()
+                self.assertEqual(is_mount.call_count, 2 if mounted else 0)
+                self.assertEqual([call[0][1] for call in self.calls], ["info"])
+                self.assertFalse(self.proxy.cleanup_detach_attempted)
+                self.assertIn(f"mount_entries={int(mounted)}, registered_mounts={int(mounted)}, "
+                              "actual_owned_mount=no", str(caught.exception))
+
+    def test_owned_diagnostic_never_serializes_paths_devices_or_extra_registry_fields(self):
+        registry = self.owned_registry(mounted=True)
+        registry["images"][0]["system-entities"][0].update(
+            {"content-hint": "private-content-hint", "volume-name": "private-volume-name"})
+        registry["images"].append({"image-path": str(self.root / "private-other.dmg"),
+            "system-entities": [{"dev-entry": "/dev/disk101", "private-key": "private-value"}]})
+        self.registries = [registry]
+        with self.assertRaises(fixture.UnsafeRetry) as caught:
+            self.proxy.registry_clear(self.mount, 60)
+        message = str(caught.exception)
+        self.assertIn("entities=2, device_roots=1, whole_devices=1, mount_entries=1", message)
+        for private in (str(self.root), str(self.mount), "/dev/disk", "private-"):
+            self.assertNotIn(private, message)
+        self.assertEqual([call[0][1] for call in self.calls], ["info"])
+
+    def test_largest_valid_owned_record_has_a_constant_size_diagnostic(self):
+        self.registries = [{"images": [{"image-path": str(self.image), "system-entities": [
+            {"dev-entry": f"/dev/disk{number}"} for number in range(128)]}]}]
+        with self.assertRaises(fixture.UnsafeRetry) as caught:
+            self.proxy.registry_clear(self.mount, 60)
+        message = str(caught.exception)
+        self.assertIn("entities=128, device_roots=128, whole_devices=128, mount_entries=0", message)
+        self.assertLess(len(message), 160)
+        self.assertEqual([call[0][1] for call in self.calls], ["info"])
+
+    def test_invalid_owned_registry_remains_validation_failure_without_summary(self):
+        registry = self.owned_registry()
+        registry["images"][0]["system-entities"][0]["dev-entry"] = "/private/not-a-device"
+        self.failures, self.registries = [self.error()], [registry]
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            self.invoke()
+        message = caught.exception.__notes__[0]
+        self.assertIn("registry device identity is missing or malformed", message)
+        self.assertNotIn("entities=", message)
+        self.assertNotIn("/private/not-a-device", message)
+        self.assertEqual([call[0][1] for call in self.calls], ["attach", "info"])
+
     def test_cleanup_detaches_only_owned_partial_image_once_then_checks_absence(self):
         for mounted in (False, True):
             with self.subTest(mounted=mounted):
