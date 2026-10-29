@@ -162,8 +162,8 @@ class MacOSReleasePackageTests(unittest.TestCase):
         )
         return archive
 
-    def disk_image(self, app):
-        """Create a small real DMG containing the selected fixture app."""
+    def disk_image(self, app, *, filesystem="APFS"):
+        """Keep normal package coverage on real APFS; allow focused setup fixtures."""
         image = self.root / "fixture.dmg"
         run_fixture_tool(
             [
@@ -175,6 +175,8 @@ class MacOSReleasePackageTests(unittest.TestCase):
                 "Inverter fixture",
                 "-format",
                 "UDZO",
+                "-fs",
+                filesystem,
                 str(image),
             ]
         )
@@ -321,7 +323,10 @@ class MacOSReleasePackageTests(unittest.TestCase):
     def assert_attach_failure_releases_owned_volume(self, error_type):
         """Inject only after a real mount; native setup errors must remain failures."""
         self.sign()
-        image = self.disk_image(self.app)
+        # These two tests exercise post-mount exception handling, not APFS topology.
+        # One HFS+ device keeps transient setup cleanup unambiguous; all normal
+        # package verification fixtures retain explicit APFS coverage.
+        image = self.disk_image(self.app, filesystem="HFS+")
         real_run = macos_release.subprocess.run
         mounts, injections = [], []
         injected = (subprocess.TimeoutExpired(["injected attach"], 60)
