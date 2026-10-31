@@ -130,7 +130,7 @@ jobs:
       - name: Store release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-assets-desktop-${{ matrix.artifact }}
+          name: release-assets-desktop-${{ matrix.artifact }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: release-output/desktop/*
           if-no-files-found: error
           retention-days: 14
@@ -287,7 +287,7 @@ jobs:
       - name: Store release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-assets-mobile-ios
+          name: release-assets-mobile-ios-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: release-output/ios/*
           if-no-files-found: error
           retention-days: 14
@@ -448,7 +448,7 @@ jobs:
       - name: Store release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-assets-mobile-android
+          name: release-assets-mobile-android-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: release-output/android/*
           if-no-files-found: error
           retention-days: 14
