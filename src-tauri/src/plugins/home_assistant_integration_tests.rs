@@ -1176,11 +1176,12 @@ async fn install_with_seed(
         std::env::consts::EXE_SUFFIX
     );
     let source = root.join("payload");
-    fs::create_dir_all(source.join("bin")).unwrap();
-    fs::copy(
+    tokio::fs::create_dir_all(source.join("bin")).await.unwrap();
+    tokio::fs::copy(
         required_file("INVERTER_HOME_ASSISTANT_WORKER"),
         source.join(&manifest.entrypoint),
     )
+    .await
     .unwrap();
     let archive = root.join("home-assistant.idplugin");
     write_package_atomic(

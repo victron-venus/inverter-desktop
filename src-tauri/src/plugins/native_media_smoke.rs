@@ -1149,9 +1149,12 @@ async fn exercise(
     .await?;
     until(|| Ok((!media.has_owned_work()).then_some(()))).await?;
     state.check("ended_event_and_automatic_close", json!(true));
-    let empty = std::fs::read_dir(profile.join("desktop-plugin-media"))
+    let empty = tokio::fs::read_dir(profile.join("desktop-plugin-media"))
+        .await
         .map_err(|_| "Cannot inspect owned media cleanup")?
-        .next()
+        .next_entry()
+        .await
+        .map_err(|_| "Cannot inspect owned media cleanup entry")?
         .is_none();
     state.check("owned_media_directory_empty", json!(empty));
     if !empty {

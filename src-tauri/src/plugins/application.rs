@@ -234,7 +234,9 @@ impl PackageApplication {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = Some(parent.to_owned());
             let media_root = parent.join("desktop-plugin-media");
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| error.to_string())?;
             let settings = SettingsStore::new(root.clone(), key);
             let worker_settings = settings.clone();
             let service = self.clone();
