@@ -44,12 +44,13 @@ impl Broker {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let config = root.join("mosquitto.conf");
-        fs::write(
+        tokio::fs::write(
             &config,
             format!(
                 "listener {port} 127.0.0.1\nallow_anonymous true\npersistence false\nlog_type all\n"
             ),
         )
+        .await
         .unwrap();
         let mut broker = Self {
             executable,
@@ -64,11 +65,14 @@ impl Broker {
 
     pub(super) async fn start(&mut self) {
         assert!(self.child.is_none());
-        let output = fs::OpenOptions::new()
+        let output = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log)
-            .unwrap();
+            .await
+            .unwrap()
+            .into_std()
+            .await;
         self.child = Some(
             Command::new(&self.executable)
                 .arg("-c")
@@ -301,7 +305,7 @@ async fn installed_application_with_media(
         .await;
     let epoch = service.session_changed(true).unwrap();
     let source = root.join("payload");
-    fs::create_dir_all(source.join("bin")).unwrap();
+    tokio::fs::create_dir_all(source.join("bin")).await.unwrap();
     let mut manifest: PluginManifest = serde_json::from_str(include_str!(
         "../../../scripts/plugins/frigate-manifest.json"
     ))
@@ -311,10 +315,11 @@ async fn installed_application_with_media(
         "bin/inverter-frigate-worker{}",
         std::env::consts::EXE_SUFFIX
     );
-    fs::copy(
+    tokio::fs::copy(
         required_file("INVERTER_FRIGATE_WORKER"),
         source.join(&manifest.entrypoint),
     )
+    .await
     .unwrap();
     let bytes = build_package(manifest, &source, publisher, &key).unwrap();
     let path = root.join("frigate.idplugin");

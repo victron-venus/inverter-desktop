@@ -11,7 +11,7 @@ use super::protocol::{DashboardContribution, HttpMediaKind, PluginManifest};
 use super::runtime::{LiveViewRequest, PluginHost, QueuedHttpVideo, WorkerState};
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
 
@@ -64,16 +64,19 @@ async fn installed(
         .await;
     let epoch = service.session_changed(true).unwrap();
     let payload = root.join("payload");
-    fs::create_dir_all(payload.join("bin")).unwrap();
+    tokio::fs::create_dir_all(payload.join("bin"))
+        .await
+        .unwrap();
     manifest.target = env!("INVERTER_DESKTOP_TARGET").into();
     manifest.entrypoint = format!(
         "bin/inverter-{provider}-worker{}",
         std::env::consts::EXE_SUFFIX
     );
-    fs::copy(
+    tokio::fs::copy(
         required_file(executable),
         payload.join(&manifest.entrypoint),
     )
+    .await
     .unwrap();
     let bytes = build_package(manifest, &payload, publisher, &key).unwrap();
     let path = root.join(format!("{provider}.idplugin"));

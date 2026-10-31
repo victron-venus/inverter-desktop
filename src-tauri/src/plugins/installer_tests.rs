@@ -2115,7 +2115,7 @@ fn store_lock_probe() {
 async fn store_lease_is_exclusive_across_real_processes() {
     let directory = TestDirectory::new();
     let (manager, _) = manager(&directory).await;
-    let result = std::process::Command::new(std::env::current_exe().unwrap())
+    let result = tokio::process::Command::new(std::env::current_exe().unwrap())
         .arg("store_lock_probe")
         .arg("--nocapture")
         .env(
@@ -2123,6 +2123,7 @@ async fn store_lease_is_exclusive_across_real_processes() {
             manager.0.root.join("store.lock"),
         )
         .output()
+        .await
         .unwrap();
     assert!(
         result.status.success(),
