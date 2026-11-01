@@ -79,7 +79,15 @@
       }
     ],
     "build_number_floor": 2005042,
-    "toolkit_revision": "5e413f80a4353d328b4529eae57992ac3987e2dd"
+    "toolkit_revision": "5e413f80a4353d328b4529eae57992ac3987e2dd",
+    "required_build_receipts": [
+      "release-inputs-aarch64-apple-darwin.json",
+      "release-inputs-android.json",
+      "release-inputs-ios.json",
+      "release-inputs-ubuntu-22.04.json",
+      "release-inputs-windows-latest.json",
+      "release-inputs-x86_64-apple-darwin.json"
+    ]
   },
   "build_secrets": [
     "ANDROID_KEYSTORE_BASE64",
