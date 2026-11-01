@@ -273,7 +273,11 @@ class MacOSReleasePackageTests(unittest.TestCase):
         shutil.copytree(self.app, other)
         (other / "Contents/Resources/example.txt").write_text("different valid app")
         self.sign(other)
-        image = self.disk_image(other)
+        # This injected failure tests retry orchestration, not APFS topology.
+        # Keep it on one HFS+ device; the ordinary mismatch case still
+        # exercises APFS, including its backing and synthesized devices.
+        filesystem = "HFS+" if inject_eagain else "APFS"
+        image = self.disk_image(other, filesystem=filesystem)
         proxy = macos_release.subprocess
         raw_run = proxy.runner
         real_run = macos_release.subprocess.run
