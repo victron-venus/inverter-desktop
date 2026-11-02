@@ -23,6 +23,8 @@ Install the official package for the intended platform, preserving settings, cre
 
 ### Security
 
+- Replace yanked async-executor 1.14.0 with 1.14.1 in the Linux D-Bus dependency graph, fixing the upstream-reported use-after-free when a waker fires during executor shutdown.
+
 Retain certificate verification, encrypted credential storage and signed-plugin requirements. macOS ad-hoc bundle sealing verifies local integrity but does not establish an Apple Developer ID identity or notarization; do not disable Gatekeeper to treat packaging checks as trust approval. Existing documented dependency deferrals remain subject to their own review deadlines.
 
 ## [2.5.53] - 2026-10-25
