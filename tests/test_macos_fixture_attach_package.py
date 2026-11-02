@@ -4,6 +4,7 @@ import importlib.util
 import io
 import os
 import plistlib
+import stat
 import subprocess
 import tempfile
 import traceback
@@ -428,16 +429,40 @@ class FixtureAttachRetryTests(unittest.TestCase):
         self.assertEqual(len(self.calls_for("attach")), 1)
         self.assertEqual(self.calls_for("detach"), [])
 
-    def test_retry_allows_ctime_only_change_with_exact_bytes_but_not_permissions(self):
+    def test_retry_allows_ctime_only_change_with_exact_bytes(self):
         before = self.image.stat()
         self.failures = [self.error()]
         self.after_attach = lambda: os.utime(
             self.image, ns=(before.st_atime_ns + 1, before.st_mtime_ns))
         self.assertEqual(self.invoke().returncode, 0)
-        self.calls, self.failures = [], [self.error()]
-        self.after_attach = lambda: self.image.chmod(0o600)
-        with self.assertRaises(subprocess.CalledProcessError):
-            self.invoke()
+
+    def test_retry_rejects_changed_permissions_with_exact_bytes(self):
+        self.failures = [self.error()]
+        permission_changed = False
+        real_lstat = Path.lstat
+
+        def change_permission():
+            nonlocal permission_changed
+            permission_changed = True
+
+        def controlled_lstat(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            if path != self.image or not permission_changed:
+                return info
+            fields = list(info)
+            fields[stat.ST_MODE] ^= stat.S_IWUSR
+            return os.stat_result(fields, {
+                "st_atime_ns": info.st_atime_ns,
+                "st_mtime_ns": info.st_mtime_ns,
+                "st_ctime_ns": info.st_ctime_ns,
+            })
+
+        # Windows chmod does not model POSIX permission bits. Change only the
+        # reported permission bit; real image bytes and identity stay intact.
+        self.after_attach = change_permission
+        with patch.object(Path, "lstat", controlled_lstat):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.invoke()
         self.assertEqual(len(self.calls_for("attach")), 1)
 
     def test_retry_rejects_changed_bytes_even_with_same_inode_size_and_mtime(self):
