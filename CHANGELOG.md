@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Update Lucide to 1.64.0, the Vue type checker to 3.3.14, Biome to 2.6.4, and Univer to 1.3.0 and the native dialog plugin to 2.8.4. Refresh the shared CI workflow revision.
+
 - Update both notification plugin packages to 2.8.0 and refresh the exact RustSec dependency review without extending its deadline.
 - Upgrade build-time glob matching to Glob 14 and Minimatch 11, retaining EditorConfig matching and Vue test formatting.
 - Update the coordinated Univer spreadsheet packages to 1.2.0 and the Tauri CLI to 2.12.4.
