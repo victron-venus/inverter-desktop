@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Update both notification plugin packages to 2.8.0 and refresh the exact RustSec dependency review without extending its deadline.
+- Upgrade build-time glob matching to Glob 14 and Minimatch 11, retaining EditorConfig matching and Vue test formatting.
 - Update the coordinated Univer spreadsheet packages to 1.2.0 and the Tauri CLI to 2.12.4.
 - Render native form controls in the tariff editor with the intended dark color scheme.
 - Extend tariff export browser acceptance and make the macOS packaging fixture tolerate a bounded transient attachment failure without weakening payload verification.

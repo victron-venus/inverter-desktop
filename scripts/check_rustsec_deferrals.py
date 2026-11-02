@@ -27,7 +27,7 @@ LOCKED_VERSIONS = {
     "zbus": "5.16.0",
     "zbus_macros": "5.16.0",
     "notify-rust": "4.18.2",
-    "tauri-plugin-notification": "2.7.0",
+    "tauri-plugin-notification": "2.8.0",
     "tauri-plugin-opener": "2.7.2",
     "secret-service": "5.1.0",
     "zbus-secret-service-keyring-store": "1.0.0",

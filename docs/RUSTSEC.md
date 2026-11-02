@@ -59,6 +59,17 @@ extend the deadline to accommodate an automated dependency PR.
 
 ## Enforcement
 
+### Dependency review on 2 November 2026
+
+Both the Rust and JavaScript notification packages move to 2.8.0. Upstream adds
+Android chronometer options and updates `rand` to 0.10; the locked Linux
+`notify-rust`, zbus and Secret Service versions above remain unchanged. The
+[upstream changes](https://github.com/tauri-apps/plugins-workspace/blob/main/plugins/notification/CHANGELOG.md)
+do not replace the retired zbus 5 dependency path. The exact-version guard now
+accepts this reviewed notification version; its advisory checks, exception list
+and 17 November deadline are unchanged. This review does not claim new hardware
+acceptance or removal of the existing retirement deferral.
+
 [`scripts/check_rustsec_deferrals.py`](../scripts/check_rustsec_deferrals.py) is the
 single source of the deadline and exact reviewed dependency versions. Cargo Deny
 CI fetches the current RustSec database, runs this guard, and then runs all four
