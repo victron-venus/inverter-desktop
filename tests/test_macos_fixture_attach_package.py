@@ -37,6 +37,8 @@ class FixtureAttachRetryTests(unittest.TestCase):
         self.attach_durations, self.info_durations = [], []
         self.after_attach = None
         self.after_info = None
+        self.disk_infos, self.disk_info_durations = [], []
+        self.after_disk_info = None
         self.log = io.StringIO()
         self.proxy = fixture.FixtureSubprocess(
             self.root, self.image, runner=self.run_fake,
@@ -52,6 +54,17 @@ class FixtureAttachRetryTests(unittest.TestCase):
 
     def run_fake(self, arguments, **options):
         self.calls.append((list(arguments), dict(options), self.now))
+        if arguments[:3] == ["/usr/sbin/diskutil", "info", "-plist"]:
+            self.now += self.disk_info_durations.pop(0) if self.disk_info_durations else 0.01
+            value = (self.disk_infos.pop(0) if self.disk_infos
+                     else self.apfs_disk_info(arguments[-1]))
+            if isinstance(value, BaseException):
+                raise value
+            options["stdout"].write(plistlib.dumps(value))
+            options["stdout"].flush()
+            if self.after_disk_info is not None:
+                self.after_disk_info()
+            return subprocess.CompletedProcess(arguments, 0)
         if arguments == ["/usr/bin/hdiutil", "info", "-plist"]:
             self.now += self.info_durations.pop(0) if self.info_durations else 0.01
             value = self.registries.pop(0) if self.registries else {"images": []}
@@ -322,6 +335,135 @@ class FixtureAttachRetryTests(unittest.TestCase):
             entity["mount-point"] = str(self.mount)
         return {"images": [{"image-path": str(self.image), "system-entities": [
             {"dev-entry": "/dev/disk99"}, entity]}]}
+
+    def apfs_registry(self):
+        return {"images": [{"image-path": str(self.image), "system-entities": [
+            {"dev-entry": "/dev/disk99", "content-hint": "GUID_partition_scheme"},
+            {"dev-entry": "/dev/disk99s1", "content-hint": "7C3457EF-0000-11AA-AA11-00306543ECAC"},
+            {"dev-entry": "/dev/disk100", "content-hint": "EF57347C-0000-11AA-AA11-00306543ECAC"},
+            {"dev-entry": "/dev/disk100s1", "content-hint": "41504653-0000-11AA-AA11-00306543ECAC"},
+        ]}]}
+
+    def apfs_disk_info(self, device):
+        identifier = device.removeprefix("/dev/")
+        result = {"DeviceNode": device, "DeviceIdentifier": identifier,
+                  "ParentWholeDisk": identifier, "VirtualOrPhysical": "Virtual",
+                  "BusProtocol": "Disk Image", "Content": "GUID_partition_scheme"}
+        if device == "/dev/disk100":
+            result.update(Content="EF57347C-0000-11AA-AA11-00306543ECAC",
+                          APFSContainerReference=identifier,
+                          APFSPhysicalStores=[{"APFSPhysicalStore": "disk99s1"}])
+        return result
+
+    def test_partial_apfs_cleanup_uses_verified_backing_not_synthesized_container(self):
+        self.registries = [self.apfs_registry(), self.apfs_registry(), {"images": []}]
+        self.proxy.cleanup_owned_image()
+        self.assertEqual([c[0] for c in self.calls_for("detach")],
+                         [["/usr/bin/hdiutil", "detach", "/dev/disk99"]])
+        self.assertTrue(self.proxy.cleanup_detach_attempted)
+        self.assertFalse(self.proxy.recovery_detach_attempted)
+
+    def test_eagain_partial_apfs_recovers_once_within_original_deadline(self):
+        failure = self.error()
+        self.failures = [failure]
+        self.registries = [self.apfs_registry()] * 3 + [{"images": []}] * 2
+        self.assertEqual(self.invoke().returncode, 0)
+        self.assertEqual(len(self.calls_for("attach")), 2)
+        self.assertEqual(len(self.calls_for("detach")), 1)
+        self.assertTrue(self.proxy.recovery_detach_attempted)
+        self.assertFalse(self.proxy.cleanup_detach_attempted)
+        self.assertIn("recovered on attempt 2", self.log.getvalue())
+        for _, options, at in self.calls:
+            self.assertLessEqual(options["timeout"], 60 - at)
+
+    def test_partial_apfs_rejects_unbound_multistore_physical_or_changed_devices(self):
+        for change in (lambda d: d.update(APFSPhysicalStores=[]),
+                       lambda d: d.update(APFSPhysicalStores=[{"APFSPhysicalStore": "disk88s1"}]),
+                       lambda d: d["APFSPhysicalStores"].append({"APFSPhysicalStore": "disk88s1"}),
+                       lambda d: d.update(VirtualOrPhysical="Physical"),
+                       lambda d: d.update(DeviceNode="/dev/disk88")):
+            with self.subTest(change=change):
+                self.calls = []
+                info = self.apfs_disk_info("/dev/disk100"); change(info)
+                self.disk_infos = [self.apfs_disk_info("/dev/disk99"), info]
+                self.registries = [self.apfs_registry()]
+                with self.assertRaises(fixture.UnsafeRetry):
+                    self.proxy.cleanup_owned_image()
+                self.assertEqual(self.calls_for("detach"), [])
+
+    def test_partial_apfs_rejects_shared_devices_and_registry_drift(self):
+        shared = self.apfs_registry()
+        shared["images"].append({"image-path": str(self.root / "other.dmg"),
+                                 "system-entities": [{"dev-entry": "/dev/disk99s2"}]})
+        for registries in ([shared], [self.apfs_registry(), shared]):
+            with self.subTest(registries=len(registries)):
+                self.calls, self.registries = [], registries.copy()
+                with self.assertRaises(fixture.UnsafeRetry):
+                    self.proxy.cleanup_owned_image()
+                self.assertEqual(self.calls_for("detach"), [])
+
+    def test_partial_apfs_binding_is_rechecked_before_detach(self):
+        bad = self.apfs_disk_info("/dev/disk100")
+        bad["APFSPhysicalStores"] = [{"APFSPhysicalStore": "disk88s1"}]
+        self.disk_infos = [self.apfs_disk_info("/dev/disk99"),
+                           self.apfs_disk_info("/dev/disk100"),
+                           self.apfs_disk_info("/dev/disk99"), bad]
+        self.registries = [self.apfs_registry()] * 2
+        with self.assertRaises(fixture.UnsafeRetry):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_partial_apfs_image_change_prevents_detach(self):
+        self.registries = [self.apfs_registry()] * 2
+        self.after_disk_info = lambda: self.image.write_bytes(b"modified owned image")
+        with self.assertRaises(fixture.UnsafeRetry):
+            self.proxy.cleanup_owned_image()
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_partial_apfs_recovery_cannot_extend_attach_budget(self):
+        self.failures, self.attach_durations = [self.error()], [59.99]
+        self.registries = [self.apfs_registry()] * 3
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.invoke()
+        self.assertEqual(len(self.calls_for("attach")), 1)
+        self.assertEqual(self.calls_for("detach"), [])
+
+    def test_retry_allows_ctime_only_change_with_exact_bytes_but_not_permissions(self):
+        before = self.image.stat()
+        self.failures = [self.error()]
+        self.after_attach = lambda: os.utime(
+            self.image, ns=(before.st_atime_ns + 1, before.st_mtime_ns))
+        self.assertEqual(self.invoke().returncode, 0)
+        self.calls, self.failures = [], [self.error()]
+        self.after_attach = lambda: self.image.chmod(0o600)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.invoke()
+        self.assertEqual(len(self.calls_for("attach")), 1)
+
+    def test_retry_rejects_changed_bytes_even_with_same_inode_size_and_mtime(self):
+        before = self.image.stat()
+        def change():
+            self.image.write_bytes(b"x" * before.st_size)
+            os.utime(self.image, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.failures, self.after_attach = [self.error()], change
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.invoke()
+        self.assertEqual(len(self.calls_for("attach")), 1)
+
+    def test_failed_recovery_detach_or_postcondition_is_never_repeated(self):
+        for failure in (self.error(b"detach failed"), None):
+            with self.subTest(failure=failure):
+                self.calls, self.now = [], 0.0
+                self.proxy = fixture.FixtureSubprocess(
+                    self.root, self.image, runner=self.run_fake,
+                    clock=lambda: self.now, sleep=self.sleep, log=self.log)
+                self.failures = [self.error(), failure]
+                self.registries = [self.apfs_registry()] * 4
+                with self.assertRaises(subprocess.CalledProcessError):
+                    self.invoke()
+                with self.assertRaises(Exception):
+                    self.proxy.cleanup_owned_image()
+                self.assertEqual(len(self.calls_for("detach")), 1)
 
     def test_registered_eagain_retains_original_error_and_observed_topology(self):
         registry = self.owned_registry()

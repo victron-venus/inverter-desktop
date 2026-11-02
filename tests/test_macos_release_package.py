@@ -423,6 +423,28 @@ class MacOSReleasePackageTests(unittest.TestCase):
         finally:
             self.cleanup_fixture_mounts(mounts, real_run)
 
+    def test_eagain_after_owned_unmounted_apfs_attach_recovers_and_verifies(self):
+        """Reproduce a partial native APFS registration before a bounded retry."""
+        self.sign()
+        image = self.disk_image(self.app)
+        proxy = macos_release.subprocess
+        native_run = proxy.runner
+        injected = []
+
+        def partial_attach(arguments, **options):
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"] and not injected:
+                native_run(["/usr/bin/hdiutil", "attach", "-readonly", "-nomount", str(image)],
+                           check=True, capture_output=True, timeout=options["timeout"])
+                injected.append(True)
+                raise subprocess.CalledProcessError(1, arguments, stderr=fixture_attach.EAGAIN)
+            return native_run(arguments, **options)
+
+        proxy.runner = partial_attach
+        macos_release.verify_dmg(image, self.app)
+        self.assertEqual(injected, [True])
+        self.assertTrue(proxy.recovery_detach_attempted)
+        proxy.registry_clear(None, proxy.clock() + 5)
+
 
 if __name__ == "__main__":
     unittest.main()

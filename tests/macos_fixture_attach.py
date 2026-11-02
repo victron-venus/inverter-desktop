@@ -41,7 +41,8 @@ def file_identity(path):
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode):
         raise UnsafeRetry("fixture image is not a regular file")
-    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+            stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid)
 
 
 def registration_summary(entities):
@@ -89,6 +90,7 @@ class FixtureSubprocess:
             raise UnsafeRetry("fixture image changed during initial hash")
         self.attempted_mounts = set()
         self.cleanup_detach_attempted = False
+        self.recovery_detach_attempted = False
         self.cleanup_failure = None
         self.runner = runner or subprocess.run
         self.clock = clock or time.monotonic
@@ -120,15 +122,18 @@ class FixtureSubprocess:
             raise UnsafeRetry("shared 60-second attach deadline exhausted")
         return remaining
 
-    def registry_images(self, deadline):
+    def read_tool_plist(self, arguments, deadline):
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-            self.runner(["/usr/bin/hdiutil", "info", "-plist"], check=True,
+            self.runner(arguments, check=True,
                         timeout=min(5, self.remaining(deadline)), stdout=output, stderr=errors)
             output.seek(0)
             data = output.read(MAX_REGISTRY + 1)
         if len(data) > MAX_REGISTRY:
             raise UnsafeRetry("registry exceeds observation bound")
-        registry = plistlib.loads(data, dict_type=UniqueDictionary)
+        return plistlib.loads(data, dict_type=UniqueDictionary)
+
+    def registry_images(self, deadline):
+        registry = self.read_tool_plist(["/usr/bin/hdiutil", "info", "-plist"], deadline)
         if not isinstance(registry, dict) or not isinstance(registry.get("images"), list):
             raise UnsafeRetry("registry images are missing or malformed")
         if len(registry["images"]) > 256:
@@ -162,9 +167,13 @@ class FixtureSubprocess:
             images.append((path, entities))
         return images
 
-    def registry_clear(self, mount, deadline):
-        for path, entities in self.registry_images(deadline):
+    def registry_clear(self, mount, deadline, *, recover_partial=False):
+        images = self.registry_images(deadline)
+        for path, entities in images:
             if path == self.image or (path.exists() and os.path.samefile(path, self.image)):
+                if recover_partial and path == self.image and len(entities) == 4:
+                    self.cleanup_owned_image(deadline=deadline, recovery_registry=images)
+                    return
                 raise UnsafeRetry(
                     "owned image remains registered (" + registration_summary(entities) + ")"
                 )
@@ -182,7 +191,7 @@ class FixtureSubprocess:
     def cleanup_image_unchanged(self):
         # hdiutil adds com.apple.diskimages.recentcksum, changing ctime only.
         # Cleanup binds the same regular inode, size, mtime and complete bytes.
-        # The stricter retry identity above deliberately remains unchanged.
+        # Retry additionally binds the original permissions and owner.
         before = file_identity(self.image)
         if before[:4] != self.identity[:4]:
             return False
@@ -190,12 +199,64 @@ class FixtureSubprocess:
         after = file_identity(self.image)
         return after[:4] == before[:4] and digest == self.cleanup_digest
 
-    def cleanup_owned_image(self):
+    def retry_image_unchanged(self):
+        # Native attach may change only ctime by writing its checksum xattr.
+        # Retain inode, size, mtime, permissions and owner; verify every byte.
+        before = file_identity(self.image)
+        if before[:4] != self.identity[:4] or before[5:] != self.identity[5:]:
+            return False
+        return self.cleanup_image_unchanged() and file_identity(self.image) == before
+
+    def apfs_backing_device(self, entities, deadline):
+        """Bind one unmounted APFS container to this image's one backing partition."""
+        if len(entities) != 4 or any("mount-point" in entity for entity in entities):
+            raise UnsafeRetry("partial APFS fixture must have four unmounted entities")
+        roles = {}
+        expected = {
+            "GUID_partition_scheme": "backing",
+            "7C3457EF-0000-11AA-AA11-00306543ECAC": "store",
+            "EF57347C-0000-11AA-AA11-00306543ECAC": "container",
+            "41504653-0000-11AA-AA11-00306543ECAC": "volume",
+        }
+        for entity in entities:
+            role = expected.get(entity.get("content-hint"))
+            if role is None or role in roles:
+                raise UnsafeRetry("partial APFS fixture topology is ambiguous")
+            roles[role] = entity["dev-entry"]
+        backing, container = roles["backing"], roles["container"]
+        if (not re.fullmatch(r"/dev/disk[0-9]+", backing)
+                or not re.fullmatch(r"/dev/disk[0-9]+", container)
+                or backing == container or roles["store"] != backing + "s1"
+                or roles["volume"] != container + "s1"):
+            raise UnsafeRetry("partial APFS fixture device relationships differ")
+        for device, content in ((backing, "GUID_partition_scheme"),
+                                (container, "EF57347C-0000-11AA-AA11-00306543ECAC")):
+            info = self.read_tool_plist(["/usr/sbin/diskutil", "info", "-plist", device], deadline)
+            identifier = device.removeprefix("/dev/")
+            if (not isinstance(info, dict) or info.get("DeviceNode") != device
+                    or info.get("DeviceIdentifier") != identifier
+                    or info.get("ParentWholeDisk") != identifier
+                    or info.get("VirtualOrPhysical") != "Virtual"
+                    or info.get("BusProtocol") != "Disk Image"
+                    or info.get("Content") != content):
+                raise UnsafeRetry("partial APFS fixture is not the expected virtual image")
+            if device == container and (
+                info.get("APFSContainerReference") != identifier
+                or info.get("APFSPhysicalStores") != [
+                    {"APFSPhysicalStore": roles["store"].removeprefix("/dev/")}]
+            ):
+                raise UnsafeRetry("partial APFS fixture physical store is not uniquely bound")
+        return backing
+
+    def cleanup_owned_image(self, *, deadline=None, recovery_registry=None):
         """Detach one exactly owned fixture image, including a partial attachment."""
         if self.cleanup_failure is not None:
             raise self.cleanup_failure
-        deadline = self.clock() + 60
+        deadline = self.clock() + 60 if deadline is None else deadline
         images = self.registry_images(deadline)
+        recovery = recovery_registry is not None
+        if recovery and images != recovery_registry:
+            raise UnsafeRetry("partial APFS fixture registry changed before recovery")
         owned = [(path, entities) for path, entities in images if path == self.image]
         if not owned:
             if any(path.exists() and os.path.samefile(path, self.image)
@@ -225,6 +286,8 @@ class FixtureSubprocess:
                 raise UnsafeRetry("fixture device is shared with another registry image")
         mounts = {canonical(entity["mount-point"]) for entity in entities
                   if "mount-point" in entity}
+        if recovery and (mounts or len(roots) != 2):
+            raise UnsafeRetry("attach recovery requires an unmounted APFS fixture")
         if not mounts.issubset(self.attempted_mounts):
             raise UnsafeRetry("fixture device has an unexpected mount point")
         if any("mount-point" in entity and canonical(entity["mount-point"]) in mounts
@@ -236,7 +299,13 @@ class FixtureSubprocess:
             # Use the single proven mount, never guess which root disk to detach.
             target = str(next(iter(mounts)))
         elif not mounts or (len(mounts) == 1 and not next(iter(mounts)).is_mount()):
-            if len(roots) != 1:
+            if len(roots) == 2 and len(entities) == 4 and not mounts:
+                target = self.apfs_backing_device(entities, deadline)
+                if self.registry_images(deadline) != images:
+                    raise UnsafeRetry("partial APFS fixture registry changed during observation")
+                if self.apfs_backing_device(entities, deadline) != target:
+                    raise UnsafeRetry("partial APFS fixture backing changed during observation")
+            elif len(roots) != 1:
                 # This refusal proves no single actual owned mount. Keep its
                 # observed topology in the error without another native query.
                 raise UnsafeRetry(
@@ -244,33 +313,35 @@ class FixtureSubprocess:
                     + registration_summary(entities)
                     + f", registered_mounts={len(mounts)}, actual_owned_mount=no)"
                 )
-            target = next(iter(roots))
+            else:
+                target = next(iter(roots))
         else:
             raise UnsafeRetry("fixture cleanup requires one unambiguous owned mount")
         if not self.cleanup_image_unchanged():
             raise UnsafeRetry("fixture image changed during cleanup observation")
         # Record intent before the call: even a timeout must never cause another detach.
-        if self.cleanup_detach_attempted:
+        attempt_flag = "recovery_detach_attempted" if recovery else "cleanup_detach_attempted"
+        if getattr(self, attempt_flag):
             raise UnsafeRetry("fixture cleanup detach was already attempted")
-        self.cleanup_detach_attempted = True
+        setattr(self, attempt_flag, True)
         try:
             self.runner(["/usr/bin/hdiutil", "detach", target], check=True,
                         timeout=self.remaining(deadline), stdout=subprocess.DEVNULL)
+            for mount in self.attempted_mounts or {None}:
+                self.registry_clear(mount, deadline)
+            if any(mount.is_mount() for mount in self.attempted_mounts):
+                raise UnsafeRetry("fixture remains mounted after cleanup")
+            if not self.cleanup_image_unchanged():
+                raise UnsafeRetry("fixture image changed during cleanup")
         except BaseException as error:
             self.cleanup_failure = error
             raise
-        for mount in self.attempted_mounts or {None}:
-            self.registry_clear(mount, deadline)
-        if any(mount.is_mount() for mount in self.attempted_mounts):
-            raise UnsafeRetry("fixture remains mounted after cleanup")
-        if not self.cleanup_image_unchanged():
-            raise UnsafeRetry("fixture image changed during cleanup")
 
-    def retry_safe(self, mount, identity, deadline):
-        if file_identity(self.image) != self.identity or mount_identity(mount) != identity:
+    def retry_safe(self, mount, identity, deadline, *, recover_partial=False):
+        if not self.retry_image_unchanged() or mount_identity(mount) != identity:
             raise UnsafeRetry("owned fixture identity changed")
-        self.registry_clear(mount, deadline)
-        if file_identity(self.image) != self.identity or mount_identity(mount) != identity:
+        self.registry_clear(mount, deadline, recover_partial=recover_partial)
+        if not self.retry_image_unchanged() or mount_identity(mount) != identity:
             raise UnsafeRetry("owned fixture changed during registry observation")
         self.remaining(deadline)
 
@@ -320,7 +391,7 @@ class FixtureSubprocess:
                     )
                     raise
                 try:
-                    self.retry_safe(mount, identity, deadline)
+                    self.retry_safe(mount, identity, deadline, recover_partial=True)
                     delay = 0.2 * attempt
                     if self.remaining(deadline) <= delay:
                         raise UnsafeRetry("no deadline budget for bounded attach backoff")
