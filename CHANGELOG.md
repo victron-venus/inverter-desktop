@@ -9,11 +9,15 @@ All notable changes to this project will be documented in this file.
 - Update the coordinated Univer spreadsheet packages to 1.3.1 and Lucide icons to 1.65.0.
 - Refresh the locked Rust logging dependency to 0.4.35. These are compatible dependency maintenance updates; no new application feature or security fix is claimed.
 
-### Upgrade and acceptance
+### Upgrade
 
 No configuration or stored-data migration is required. Preserve settings, credentials and plugin choices when evaluating the package for the intended platform.
 
 Beta and RC qualification covers the existing software checks and package validation. Physical-device and MQTT acceptance of the exact RC remains required before stable promotion; hosted checks do not establish that acceptance.
+
+### Security
+
+These dependency updates do not claim a security fix. Retain certificate verification, encrypted credential storage and signed-plugin requirements. Existing reviewed dependency deferrals remain subject to their recorded deadlines.
 
 ## [2.5.54] - 2026-10-27
 
