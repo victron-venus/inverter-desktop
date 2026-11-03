@@ -12,7 +12,7 @@ concurrency:
 jobs:
   browser-compatibility:
     name: Desktop browser acceptance
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/typescript-ci.yml@86c9afca5625a97ef3d69ef10348ccd28a27e0cf # main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/typescript-ci.yml@a1068073ef4b60b52542cd48954a99b4bc0be008 # main
     permissions:
       contents: read
     with:
@@ -33,7 +33,7 @@ jobs:
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -101,7 +101,8 @@ jobs:
 
   apple-tls:
     name: Apple TLS trust regressions
-    runs-on: macos-latest
+    # Native Apple trust on macOS 26; separate release builds retain ARM and Intel.
+    runs-on: macos-26-intel
     timeout-minutes: 30
     steps:
       - name: Harden the runner (Audit all outbound calls)
@@ -134,7 +135,8 @@ jobs:
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tls_key_policy -- --ignored --nocapture
           python -c 'import json, os; from pathlib import Path; p=Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]); reports=[json.loads((p/(n+".json")).read_text()) for n in ["plugin-download", "video-transfer"]]; assert all(r["profile"] == "apple-rsa-pkcs1-ecdsa" and len(r["observations"]) == 10 for r in reports)'
       - name: Verify macOS bundle and installer integrity regressions
-        run: python -m unittest discover -s tests -p 'test_macos_release_package.py' -v
+        # Native app archives are checked once here, outside each worker package job.
+        run: python -m unittest discover -s tests -p 'test_macos_release_*.py' -v
       - name: Upload Apple native TLS probe evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -150,7 +152,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Run all six worker suites natively on macOS 26 Intel.
+        # Separate ARM release builds do not provide native ARM test coverage.
+        os: [ubuntu-latest, macos-26-intel, windows-latest]
         plugin: [frigate, home-assistant, kerberos, ring, camera-common, worker-protocol]
         include:
           - plugin: frigate
@@ -250,7 +254,7 @@ jobs:
           egress-policy: audit
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

@@ -1,0 +1,368 @@
+"""Required native macOS signing and archive integrity regressions."""
+
+import platform
+import plistlib
+import shutil
+import subprocess
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+from test_macos_release_package import fixture_attach, macos_release, run_fixture_tool
+
+
+@unittest.skipUnless(platform.system() == "Darwin", "native macOS tools required")
+class MacOSReleasePackageTests(unittest.TestCase):
+    """Exercise real codesign, ditto and disk images with a tiny inert Mach-O."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.app = self.root / "Inverter Desktop.app"
+        contents = self.app / "Contents"
+        (contents / "MacOS").mkdir(parents=True)
+        (contents / "Resources").mkdir()
+        self.resource = contents / "Resources/example.txt"
+        self.resource.write_text("sealed resource")
+        self.plist = contents / "Info.plist"
+        self.plist.write_bytes(
+            plistlib.dumps(
+                {
+                    "CFBundleIdentifier": macos_release.BUNDLE_ID,
+                    "CFBundleExecutable": "inverter-dashboard",
+                    "CFBundlePackageType": "APPL",
+                    "CFBundleShortVersionString": "2.5.52",
+                    "CFBundleVersion": "201.52.41",
+                }
+            )
+        )
+        source = self.root / "fixture.c"
+        source.write_text("int main(void) { return 0; }\n")
+        subprocess.run(
+            [
+                "/usr/bin/clang",
+                str(source),
+                "-o",
+                str(contents / "MacOS/inverter-dashboard"),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+
+    def sign(self, app=None):
+        """Seal only this test fixture, never a production release artifact."""
+        subprocess.run(
+            ["/usr/bin/codesign", "--force", "--sign", "-", str(app or self.app)],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+
+    def archive(self):
+        """Use the same ZIP writer as the release collector."""
+        archive = self.root / "fixture.app.zip"
+        subprocess.run(
+            [
+                "/usr/bin/ditto",
+                "-c",
+                "-k",
+                "--sequesterRsrc",
+                "--keepParent",
+                str(self.app),
+                str(archive),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        return archive
+
+    def disk_image(self, app, *, filesystem="APFS"):
+        """Keep normal package coverage on real APFS; allow focused setup fixtures."""
+        image = self.root / "fixture.dmg"
+        run_fixture_tool(
+            [
+                "/usr/bin/hdiutil",
+                "create",
+                "-srcfolder",
+                str(app),
+                "-volname",
+                "Inverter fixture",
+                "-format",
+                "UDZO",
+                "-fs",
+                filesystem,
+                str(image),
+            ]
+        )
+        proxy = fixture_attach.FixtureSubprocess(self.root, image)
+        self.enterContext(patch.object(macos_release, "subprocess", proxy))
+        self.addCleanup(proxy.cleanup_owned_image)
+        return image
+
+    def assert_fixture_released(self, mounts, error=None):
+        """An expected payload rejection must not conceal a cleanup failure."""
+        if error is not None:
+            self.assertFalse(
+                getattr(error, "__notes__", []), "Unexpected verification cleanup error"
+            )
+        for mount in mounts:
+            self.assertFalse(mount.is_mount(), "Fixture volume is still mounted")
+            self.assertFalse(mount.parent.exists(), "Fixture mount directory remains")
+
+    def cleanup_fixture_mounts(self, mounts, run):
+        """Bound emergency cleanup and never delete through a remaining mount."""
+        for mount in mounts:
+            if mount.is_mount():
+                run(["/usr/bin/hdiutil", "detach", str(mount)], check=True, timeout=60)
+            self.assertFalse(mount.is_mount(), "Refusing to delete a mounted fixture")
+            shutil.rmtree(mount.parent, ignore_errors=True)
+
+    def test_linker_signature_is_rejected(self):
+        """Reproduce the original incomplete bundle signature failure."""
+        with self.assertRaises(subprocess.CalledProcessError):
+            macos_release.verify_bundle(self.app)
+
+    def test_sealed_bundle_and_zip_pass(self):
+        """A full ad-hoc seal and its exact ZIP payload pass verification."""
+        self.sign()
+        macos_release.verify_bundle(self.app)
+        macos_release.verify_zip(self.archive(), self.app)
+
+    def test_resource_mutation_is_rejected(self):
+        """Native verification rejects changed resource bytes after signing."""
+        self.sign()
+        self.resource.write_text("changed after signing")
+        with self.assertRaises(subprocess.CalledProcessError):
+            macos_release.verify_bundle(self.app)
+
+    def test_plist_mutation_is_rejected(self):
+        """Native verification binds plist metadata, including the version."""
+        self.sign()
+        info = plistlib.loads(self.plist.read_bytes())
+        info["CFBundleVersion"] = "999.1.1"
+        self.plist.write_bytes(plistlib.dumps(info))
+        with self.assertRaises(subprocess.CalledProcessError):
+            macos_release.verify_bundle(self.app)
+
+    def test_zip_rejects_unexpected_member(self):
+        """The archive cannot add files absent from the verified source app."""
+        self.sign()
+        archive = self.archive()
+        with zipfile.ZipFile(archive, "a") as package:
+            package.writestr("Inverter Desktop.app/Contents/extra", b"unexpected")
+        with self.assertRaisesRegex(ValueError, "Unexpected"):
+            macos_release.verify_zip(archive, self.app)
+
+    def test_zip_rejects_missing_seal(self):
+        """A valid source app cannot conceal an archive missing its seal."""
+        self.sign()
+        original = self.archive()
+        truncated = self.root / "missing-seal.app.zip"
+        with (
+            zipfile.ZipFile(original) as source,
+            zipfile.ZipFile(truncated, "w") as target,
+        ):
+            for item in source.infolist():
+                if "/_CodeSignature/" not in item.filename:
+                    target.writestr(item, source.read(item))
+        with self.assertRaisesRegex(ValueError, "differs"):
+            macos_release.verify_zip(truncated, self.app)
+
+    def test_sealed_disk_image_passes(self):
+        """The read-only mounted DMG contains the exact sealed app."""
+        self.sign()
+        macos_release.verify_dmg(self.disk_image(self.app), self.app)
+
+    def test_different_sealed_disk_image_is_rejected(self):
+        """A separately valid signature cannot hide a substituted payload."""
+        self.assert_different_sealed_image_rejected(inject_eagain=False)
+
+    def test_injected_eagain_still_rejects_different_sealed_disk_image(self):
+        """Inject one EAGAIN; real retry and verification must reject other bytes."""
+        self.assert_different_sealed_image_rejected(inject_eagain=True)
+
+    def assert_different_sealed_image_rejected(self, *, inject_eagain):
+        self.sign()
+        other = self.root / "other/Inverter Desktop.app"
+        shutil.copytree(self.app, other)
+        (other / "Contents/Resources/example.txt").write_text("different valid app")
+        self.sign(other)
+        # This injected failure tests retry orchestration, not APFS topology.
+        # Keep it on one HFS+ device; the ordinary mismatch case still
+        # exercises APFS, including its backing and synthesized devices.
+        filesystem = "HFS+" if inject_eagain else "APFS"
+        image = self.disk_image(other, filesystem=filesystem)
+        proxy = macos_release.subprocess
+        raw_run = proxy.runner
+        real_run = macos_release.subprocess.run
+        mounts = []
+        activity = {"attach": 0, "info": 0, "injected": 0}
+
+        def inject_first_attach(arguments, **kwargs):
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
+                activity["attach"] += 1
+                if inject_eagain and activity["attach"] == 1:
+                    activity["injected"] += 1
+                    raise subprocess.CalledProcessError(
+                        1, arguments, stderr=fixture_attach.EAGAIN + b"\n"
+                    )
+            if arguments == ["/usr/bin/hdiutil", "info", "-plist"]:
+                activity["info"] += 1
+            return raw_run(arguments, **kwargs)
+
+        def record_attach(arguments, **kwargs):
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
+                mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
+            return real_run(arguments, **kwargs)
+
+        try:
+            with (
+                patch.object(proxy, "runner", inject_first_attach),
+                patch.object(macos_release.subprocess, "run", record_attach),
+                self.assertRaisesRegex(ValueError, "differs") as caught,
+            ):
+                macos_release.verify_dmg(image, self.app)
+            self.assertEqual(len(mounts), 1)
+            self.assert_fixture_released(mounts, caught.exception)
+            if inject_eagain:
+                self.assertEqual(activity["injected"], 1)
+                self.assertGreaterEqual(activity["attach"], 2)
+                self.assertLessEqual(activity["attach"], 3)
+                self.assertEqual(activity["info"], 2 * (activity["attach"] - 1))
+        finally:
+            self.cleanup_fixture_mounts(mounts, real_run)
+
+    def test_attach_error_after_real_mount_releases_owned_volume(self):
+        self.assert_attach_failure_releases_owned_volume(subprocess.CalledProcessError)
+
+    def test_attach_timeout_after_real_mount_releases_owned_volume(self):
+        self.assert_attach_failure_releases_owned_volume(subprocess.TimeoutExpired)
+
+    def assert_attach_failure_releases_owned_volume(self, error_type):
+        """Inject only after a real mount; native setup errors must remain failures."""
+        self.sign()
+        # These two tests exercise post-mount exception handling, not APFS topology.
+        # One HFS+ device keeps transient setup cleanup unambiguous; all normal
+        # package verification fixtures retain explicit APFS coverage.
+        image = self.disk_image(self.app, filesystem="HFS+")
+        real_run = macos_release.subprocess.run
+        mounts, injections = [], []
+        injected = (subprocess.TimeoutExpired(["injected attach"], 60)
+                    if error_type is subprocess.TimeoutExpired
+                    else subprocess.CalledProcessError(1, ["injected attach"]))
+
+        def fail_after_attach(arguments, **kwargs):
+            attaching = arguments[:2] == ["/usr/bin/hdiutil", "attach"]
+            if attaching:
+                mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
+            result = real_run(arguments, **kwargs)
+            if attaching:
+                injections.append(injected)
+                raise injected
+            return result
+
+        try:
+            with (
+                patch.object(macos_release.subprocess, "run", fail_after_attach),
+                self.assertRaises(error_type) as caught,
+            ):
+                macos_release.verify_dmg(image, self.app)
+            self.assertIs(caught.exception, injected)
+            self.assertEqual(injections, [injected])
+            self.assertEqual(len(mounts), 1)
+            self.assert_fixture_released(mounts, caught.exception)
+        finally:
+            self.cleanup_fixture_mounts(mounts, real_run)
+
+    def test_fixture_teardown_releases_owned_registered_device(self):
+        """Exercise test-only recovery with one real, deliberately retained mount."""
+        self.sign()
+        image = self.disk_image(self.app)
+        proxy = macos_release.subprocess
+        directory = Path(tempfile.mkdtemp(prefix="inverter-dmg-check-"))
+        mount = directory / "volume"
+        mount.mkdir()
+        try:
+            proxy.run(fixture_attach.ATTACH_PREFIX + [str(mount), str(image)],
+                      check=True, timeout=60, stdout=subprocess.DEVNULL)
+            self.assertTrue(mount.is_mount())
+            proxy.cleanup_owned_image()
+            self.assertTrue(proxy.cleanup_detach_attempted)
+            self.assertFalse(mount.is_mount())
+            proxy.registry_clear(mount, proxy.clock() + 5)
+        finally:
+            if not proxy.cleanup_detach_attempted:
+                self.cleanup_fixture_mounts([mount], proxy.run)
+            elif not mount.is_mount():
+                shutil.rmtree(directory)
+            # An attempted but failed detach is retained; never retry the mutation.
+
+    def test_detach_failure_preserves_primary_error_and_owned_mount(self):
+        """A cleanup failure must not hide the verification failure or erase a mount."""
+        self.sign()
+        image = self.disk_image(self.app)
+        real_run = macos_release.subprocess.run
+        mounts = []
+
+        def fail_detach(arguments, **kwargs):
+            if arguments[:2] == ["/usr/bin/hdiutil", "detach"]:
+                raise subprocess.CalledProcessError(1, arguments)
+            result = real_run(arguments, **kwargs)
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"]:
+                mounts.append(Path(arguments[arguments.index("-mountpoint") + 1]))
+            return result
+
+        try:
+            with (
+                patch.object(macos_release.subprocess, "run", fail_detach),
+                patch.object(
+                    macos_release, "app_files", side_effect=ValueError("primary")
+                ),
+                self.assertRaisesRegex(ValueError, "primary") as caught,
+            ):
+                macos_release.verify_dmg(image, self.app)
+            self.assertIn("Cleanup of owned mount", caught.exception.__notes__[0])
+            self.assertEqual(len(mounts), 1)
+            self.assertTrue(mounts[0].is_mount())
+            self.assertTrue(mounts[0].parent.exists())
+            with self.assertRaisesRegex(
+                AssertionError, "Unexpected verification cleanup"
+            ):
+                self.assert_fixture_released(mounts, caught.exception)
+            with self.assertRaisesRegex(AssertionError, "still mounted"):
+                self.assert_fixture_released(mounts)
+            with self.assertRaisesRegex(AssertionError, "Refusing to delete"):
+                self.cleanup_fixture_mounts(mounts, lambda *_args, **_kwargs: None)
+            self.assertTrue(mounts[0].parent.exists())
+        finally:
+            self.cleanup_fixture_mounts(mounts, real_run)
+
+    def test_eagain_after_owned_unmounted_apfs_attach_recovers_and_verifies(self):
+        """Reproduce a partial native APFS registration before a bounded retry."""
+        self.sign()
+        image = self.disk_image(self.app)
+        proxy = macos_release.subprocess
+        native_run = proxy.runner
+        injected = []
+
+        def partial_attach(arguments, **options):
+            if arguments[:2] == ["/usr/bin/hdiutil", "attach"] and not injected:
+                native_run(["/usr/bin/hdiutil", "attach", "-readonly", "-nomount", str(image)],
+                           check=True, capture_output=True, timeout=options["timeout"])
+                injected.append(True)
+                raise subprocess.CalledProcessError(1, arguments, stderr=fixture_attach.EAGAIN)
+            return native_run(arguments, **options)
+
+        proxy.runner = partial_attach
+        macos_release.verify_dmg(image, self.app)
+        self.assertEqual(injected, [True])
+        self.assertTrue(proxy.recovery_detach_attempted)
+        proxy.registry_clear(None, proxy.clock() + 5)
+
+
+
+if __name__ == "__main__":
+    unittest.main()
