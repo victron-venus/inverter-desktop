@@ -101,7 +101,8 @@ jobs:
 
   apple-tls:
     name: Apple TLS trust regressions
-    runs-on: macos-latest
+    # Native Apple trust on macOS 26; separate release builds retain ARM and Intel.
+    runs-on: macos-26-intel
     timeout-minutes: 30
     steps:
       - name: Harden the runner (Audit all outbound calls)
