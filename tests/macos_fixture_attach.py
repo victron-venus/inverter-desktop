@@ -89,6 +89,7 @@ class FixtureSubprocess:
         if file_identity(self.image) != self.identity:
             raise UnsafeRetry("fixture image changed during initial hash")
         self.attempted_mounts = set()
+        self.completed_detach_mounts = set()
         self.cleanup_detach_attempted = False
         self.recovery_detach_attempted = False
         self.cleanup_failure = None
@@ -257,6 +258,9 @@ class FixtureSubprocess:
         recovery = recovery_registry is not None
         if recovery and images != recovery_registry:
             raise UnsafeRetry("partial APFS fixture registry changed before recovery")
+        if (not recovery and self.attempted_mounts
+                and self.attempted_mounts.issubset(self.completed_detach_mounts)):
+            images = self.settle_completed_detach(images, deadline)
         owned = [(path, entities) for path, entities in images if path == self.image]
         if not owned:
             if any(path.exists() and os.path.samefile(path, self.image)
@@ -337,6 +341,47 @@ class FixtureSubprocess:
             self.cleanup_failure = error
             raise
 
+    def settle_completed_detach(self, images, deadline):
+        """Observe a disappearing partial record; never detach a second time."""
+        for observation in range(5):
+            owned = [entities for path, entities in images if path == self.image]
+            if not owned:
+                # The caller still checks aliases, foreign claims and actual mounts.
+                return images
+            if not self.cleanup_image_unchanged():
+                raise UnsafeRetry("fixture image changed after completed detach")
+            entities = owned[0]
+            devices = {entity["dev-entry"] for entity in entities}
+            roots = {re.match(r"/dev/disk[0-9]+", device)[0] for device in devices}
+            # The observed failure was a nonempty residual partition record.
+            # A complete or empty record is not evidence of that transition.
+            if not roots or roots.issubset(devices):
+                raise UnsafeRetry("unexpected registry topology after completed detach")
+            mounts = {canonical(entity["mount-point"]) for entity in entities
+                      if "mount-point" in entity}
+            if not mounts.issubset(self.completed_detach_mounts):
+                raise UnsafeRetry("completed detach has an unexpected registered mount")
+            for path, others in images:
+                if path == self.image:
+                    continue
+                if ((path.exists() and os.path.samefile(path, self.image))
+                        or any(re.match(r"/dev/disk[0-9]+", entity["dev-entry"])[0] in roots
+                               for entity in others)
+                        or any("mount-point" in entity
+                               and canonical(entity["mount-point"]) in self.attempted_mounts
+                               for entity in others)):
+                    raise UnsafeRetry("completed detach has an ambiguous registry owner")
+            if any(mount.is_mount() for mount in self.attempted_mounts):
+                raise UnsafeRetry("completed detach has an actual mounted volume")
+            if observation == 4:
+                raise UnsafeRetry("partial fixture registry persists after completed detach")
+            delay = 0.1 * (2 ** observation)
+            if self.remaining(deadline) <= delay:
+                raise UnsafeRetry("no deadline budget for completed detach observation")
+            self.sleep(delay)
+            images = self.registry_images(deadline)
+        raise AssertionError("unreachable completed detach observation state")
+
     def retry_safe(self, mount, identity, deadline, *, recover_partial=False):
         if not self.retry_image_unchanged() or mount_identity(mount) != identity:
             raise UnsafeRetry("owned fixture identity changed")
@@ -359,9 +404,24 @@ class FixtureSubprocess:
     def run(self, arguments, **options):
         coordinates = self.coordinates(arguments, options)
         if coordinates is None:
-            return self.runner(arguments, **options)
+            owned_detach = None
+            if (isinstance(arguments, (list, tuple)) and len(arguments) == 3
+                    and list(arguments[:2]) == ["/usr/bin/hdiutil", "detach"]
+                    and options == {"check": True, "timeout": 60, "stdout": subprocess.DEVNULL}):
+                try:
+                    candidate = canonical(arguments[2])
+                    if candidate in self.attempted_mounts:
+                        owned_detach = candidate
+                except (OSError, UnsafeRetry, ValueError):
+                    pass
+            result = self.runner(arguments, **options)
+            if (owned_detach is not None and result.returncode == 0
+                    and not owned_detach.is_mount() and self.cleanup_image_unchanged()):
+                self.completed_detach_mounts.add(owned_detach)
+            return result
         mount, identity = coordinates
         self.attempted_mounts.add(mount)
+        self.completed_detach_mounts.discard(mount)
         deadline = self.clock() + 60
         previous = None
         for attempt in range(1, 4):

@@ -6,8 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Update the coordinated Univer spreadsheet packages to 1.3.1 and Lucide icons to 1.65.0.
-- Refresh the locked Rust logging dependency to 0.4.35. These are compatible dependency maintenance updates; no new application feature or security fix is claimed.
+- Update the coordinated Univer spreadsheet packages to 1.3.1 and Lucide icons to 1.66.0.
+- Refresh the locked Rust logging dependency to 0.4.35 and ZIP library to 9.2.0. These are compatible dependency maintenance updates; no new application feature or security fix is claimed.
+
+### Fixed
+
+- Keep native macOS package-integrity tests in their dedicated job while worker package jobs retain the portable contract checks.
+- Allow a bounded read-only wait for residual test disk-image registrations after successful detach, while rejecting ambiguous identities and never detaching twice.
 
 ### Upgrade
 
