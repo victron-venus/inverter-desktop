@@ -84,3 +84,24 @@ fixture tools. The Windows and macOS CI jobs explicitly invoke `--ignored`,
 require all three expected JSON reports across the native and worker jobs, and
 preserve failed-run reports. These steps do not add certificate trust or broaden
 job permissions.
+
+The Apple CI probe command is supervised by `python tests/tls-policy/run.py --
+COMMAND ...`. This POSIX test-only watchdog streams logs, limits the whole
+probe command to 600 seconds, and handles cancellation. The reviewed successful
+Apple step took 251 seconds after the preceding lib TLS compilation; the
+30-minute job limit is unchanged. The watchdog gives its own process group up
+to five seconds after TERM and five after KILL, reaps its leader, and checks that
+the group is gone even when the leader exits first. It removes only its own
+fixture temporary directory after confirmed cleanup; unresolved cleanup fails
+and retains that directory. No system trust or production client setting changes.
+
+`TLS_POLICY_PHASE` log records identify the last builder, case and phase reached;
+they contain no certificate, request or token contents. A deadline failure is
+not a TLS rejection or a successful policy result. The watchdog bounds a stalled
+probe and improves diagnostics; it does not establish the cause of the earlier
+hosted-run timeouts. Windows retains its existing native probe command.
+
+The orphan-leader regression runs on Darwin, the supervised CI target. Other
+POSIX systems may retain orphan zombies under a non-reaping container PID 1;
+the watchdog fails closed if the group remains observable. Its remaining inert
+process, cancellation and cleanup-error regressions run on every POSIX host.

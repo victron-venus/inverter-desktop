@@ -78,7 +78,9 @@ fn read_json(reader: &mut impl BufRead) -> Value {
 }
 
 pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBuilder) {
+    eprintln!("TLS_POLICY_PHASE builder={label} phase=prepare");
     let fixtures = fixtures();
+    eprintln!("TLS_POLICY_PHASE builder={label} phase=prepared");
     let mut observations = Vec::new();
     let mut failures = Vec::new();
     // Apple currently rejects both PSS certificate fixtures before our key guard.
@@ -111,6 +113,7 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
         if compatibility_only.contains(&case) {
             continue;
         }
+        eprintln!("TLS_POLICY_PHASE builder={label} case={case} phase=server-start");
         let child = Command::new(python())
             .arg(helper())
             .arg("serve")
@@ -122,10 +125,12 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
             .expect("TLS fixture server must start");
         let mut server = Server(child);
         let mut output = BufReader::new(server.0.stdout.take().unwrap());
+        eprintln!("TLS_POLICY_PHASE builder={label} case={case} phase=server-ready-wait");
         let ready = read_json(&mut output);
         assert_eq!(ready["oracle"]["phase"], "application");
         assert!(ready["oracle"]["bytes"].as_u64().unwrap() > 0);
         let port = ready["port"].as_u64().unwrap() as u16;
+        eprintln!("TLS_POLICY_PHASE builder={label} case={case} phase=client-build");
         let mut client = builder();
         if case != "untrusted" {
             let ca = std::fs::read(ready["root"].as_str().unwrap()).unwrap();
@@ -143,6 +148,7 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
         } else {
             "localhost"
         };
+        eprintln!("TLS_POLICY_PHASE builder={label} case={case} phase=request");
         let result = client
             .get(format!("https://{host}:{port}/actual-client"))
             .bearer_auth("disposable-tls-policy-test-token")
@@ -152,11 +158,14 @@ pub(crate) async fn matrix(label: &str, builder: impl Fn() -> reqwest::ClientBui
             .as_ref()
             .is_ok_and(|response| response.status().is_success());
         let error = result.err().map(|error| format!("{error:?}"));
+        eprintln!("TLS_POLICY_PHASE builder={label} case={case} phase=result-wait");
         let received = read_json(&mut output);
+        eprintln!("TLS_POLICY_PHASE builder={label} case={case} phase=server-exit-wait");
         assert!(
             server.0.wait().unwrap().success(),
             "TLS helper failed after a connection"
         );
+        eprintln!("TLS_POLICY_PHASE builder={label} case={case} phase=assertions");
         let request = received["request"].as_str().unwrap();
         let token_received = request.contains("disposable-tls-policy-test-token");
         let expected = if case.starts_with("strong") {
