@@ -5,15 +5,19 @@ import json
 import os
 from pathlib import Path
 import resource
+import select
 import signal
 import stat
 import struct
 import subprocess
 import sys
 import time
+import threading
 
 EXPECTED = ("Welcome — Setup", "Setup sections", "Connection mode")
 EVIDENCE = Path("/evidence")
+MAX_RUNTIME_FILE = 256 * 1024**2
+MAX_RETAINED_LOG = 1024**2
 
 
 def require(value, message):
@@ -23,7 +27,7 @@ def require(value, message):
 
 def child_limits():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (1024 * 1024, 1024 * 1024))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RUNTIME_FILE, MAX_RUNTIME_FILE))
 
 
 def visible_setup(rows):
@@ -94,15 +98,17 @@ def exit_status(returncode):
 
 def memfd_limit_probe(timeout):
     """Observe the unchanged per-process limit; never gate the application on it."""
+    actual_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
     code = ('import os,signal; signal.signal(signal.SIGXFSZ, signal.SIG_DFL); '
             'fd=os.memfd_create("smoke-limit-probe", os.MFD_CLOEXEC); '
             'os.ftruncate(fd, 2*1024*1024); os.close(fd)')
     try:
         result = subprocess.run([sys.executable, '-B', '-c', code],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=timeout, preexec_fn=child_limits)
+                                timeout=timeout)
         return dict(exit_status(result.returncode), requested_bytes=2*1024*1024,
-                    file_size_limit=1024*1024, gates_application=False)
+                    file_size_limit=actual_limit[0], hard_file_size_limit=actual_limit[1],
+                    gates_application=False)
     except (OSError, subprocess.SubprocessError) as error:
         return {'error_type': type(error).__name__, 'gates_application': False}
 
@@ -156,6 +162,57 @@ def profile_log_evidence(root):
     return result
 
 
+def start_log_reader(source, sink):
+    """Retain a bounded prefix while draining all remaining output without blocking it."""
+    state = {'observed_bytes': 0, 'retained_bytes': 0, 'discarded_bytes': 0,
+             'eof': False, 'stop_at': None, 'error': None}
+    def close_streams():
+        for owned in (source, sink):
+            try:
+                owned.close()
+            except (OSError, ValueError) as error:
+                state['error'] = type(error).__name__
+    def drain():
+        try:
+            fd = source.fileno()
+            while state['stop_at'] is None or time.monotonic() < state['stop_at']:
+                ready, _, _ = select.select([fd], [], [], .05)
+                if not ready:
+                    continue
+                data = os.read(fd, 64*1024)
+                if not data:
+                    state['eof'] = True
+                    break
+                keep = data[:max(0, MAX_RETAINED_LOG-state['retained_bytes'])]
+                if keep:
+                    sink.write(keep)
+                    sink.flush()
+                state['observed_bytes'] += len(data)
+                state['retained_bytes'] += len(keep)
+                state['discarded_bytes'] += len(data)-len(keep)
+        except (OSError, ValueError) as error:
+            state['error'] = type(error).__name__
+        finally:
+            close_streams()
+    thread = threading.Thread(target=drain, daemon=True)
+    try:
+        thread.start()
+    except BaseException:
+        close_streams()
+        raise
+    return thread, state
+
+
+def stop_log_readers(readers, grace=1):
+    # One shared shutdown deadline, including a pipe held open by a late child.
+    deadline = time.monotonic() + grace
+    for _, state in readers:
+        state['stop_at'] = deadline
+    for thread, _ in readers:
+        thread.join(max(0, deadline+.2-time.monotonic()))
+    return all(not thread.is_alive() for thread, _ in readers)
+
+
 def main():
     require(os.geteuid() != 0, "Application must run as an unprivileged user")
     interfaces = {row.split(':', 1)[0].strip() for row in Path('/proc/net/dev').read_text().splitlines() if ':' in row}
@@ -173,10 +230,14 @@ def main():
                       XDG_DATA_HOME='/home/smoke/data', XDG_RUNTIME_DIR='/home/smoke/runtime',
                       DISPLAY=':99', NO_AT_BRIDGE='0', GTK_A11Y='always', GTK_MODULES='atk-bridge')
     deadline = time.monotonic() + 120
-    children, streams = [], []
+    # Set inherited limits before any output-drain thread exists. No threaded preexec.
+    child_limits()
+    children, streams, readers = [], [], []
     app = None
     result = {"ready": False, "external_network": False, "app_reaped": False,
               'uid': os.geteuid(), 'interfaces': sorted(interfaces),
+              'runtime_file_limit_bytes': resource.getrlimit(resource.RLIMIT_FSIZE)[0],
+              'retained_log_limit_bytes': MAX_RETAINED_LOG,
               'net_namespace': os.readlink('/proc/self/ns/net'),
               'mount_namespace': os.readlink('/proc/self/ns/mnt')}
     require(result['net_namespace'] != os.environ['SMOKE_HOST_NET_NS'], 'Host network namespace retained')
@@ -193,9 +254,10 @@ def main():
     def launch(args, name, **kwargs):
         log = (EVIDENCE / name).open('wb')
         streams.append(log)
-        process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT,
-                                   preexec_fn=child_limits, **kwargs)
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   bufsize=0, **kwargs)
         children.append(process)
+        readers.append(start_log_reader(process.stdout, log))
         return process
 
     try:
@@ -277,8 +339,14 @@ def main():
             result['app_before_cleanup'] = exit_status(app.poll())
         for process in reversed(children):
             stop(process)
+        result['log_readers_stopped'] = stop_log_readers(readers)
+        result['log_captures'] = [{k: v for k, v in state.items() if k != 'stop_at'}
+                                  for _, state in readers]
+        if not result['log_readers_stopped']:
+            result['ready'] = False
         for stream in streams:
-            stream.close()
+            if not stream.closed and result['log_readers_stopped']:
+                stream.close()
         if app is not None:
             result['app_after_cleanup'] = exit_status(app.returncode)
         if not result['ready']:
@@ -290,7 +358,9 @@ def main():
         result['elapsed_seconds'] = round(120 - (deadline - time.monotonic()), 3)
         result['deadline_seconds'] = 120
         (EVIDENCE / 'inside-result.json').write_text(json.dumps(result, indent=2) + '\n')
-    require(result['ready'] and result['app_reaped'], 'Rendered application acceptance failed')
+    require(result['ready'] and result['app_reaped'] and result['log_readers_stopped']
+            and all(row['error'] is None for row in result['log_captures']),
+            'Rendered application acceptance failed')
 
 
 if __name__ == '__main__':

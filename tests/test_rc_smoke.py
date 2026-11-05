@@ -9,8 +9,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -209,7 +210,8 @@ class FailureDiagnostics(unittest.TestCase):
         self.assertEqual(result['signal'], 'SIGXFSZ')
         self.assertFalse(result['gates_application'])
         self.assertEqual(run.call_args.kwargs['timeout'], 2)
-        self.assertIs(run.call_args.kwargs['preexec_fn'], inside.child_limits)
+        self.assertNotIn('preexec_fn', run.call_args.kwargs)
+        self.assertEqual(result['file_size_limit'], inside.resource.getrlimit(inside.resource.RLIMIT_FSIZE)[0])
 
     def test_memfd_probe_failure_remains_diagnostic(self):
         with patch.object(inside.subprocess, 'run', side_effect=subprocess.TimeoutExpired('probe', 1)):
@@ -246,6 +248,91 @@ class FailureDiagnostics(unittest.TestCase):
             (root / 'link').symlink_to(root / 'real', target_is_directory=True)
             with self.assertRaises(OSError):
                 inside.profile_log_evidence(root / 'link')
+
+
+class RuntimeLimits(unittest.TestCase):
+    def file_probe(self, size):
+        code = ('import os,resource,signal,tempfile; '
+                f'resource.setrlimit(resource.RLIMIT_FSIZE, ({inside.MAX_RUNTIME_FILE}, {inside.MAX_RUNTIME_FILE})); '
+                'signal.signal(signal.SIGXFSZ, signal.SIG_DFL); '
+                'f=tempfile.TemporaryFile(); '
+                f'os.ftruncate(f.fileno(), {size})')
+        return subprocess.run([sys.executable, '-B', '-c', code],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+
+    def test_runtime_file_within_cap_succeeds(self):
+        self.assertEqual(self.file_probe(2*1024*1024).returncode, 0)
+
+    def test_runtime_file_above_cap_is_rejected(self):
+        self.assertEqual(self.file_probe(inside.MAX_RUNTIME_FILE+1).returncode, -signal.SIGXFSZ)
+
+    def test_flood_is_drained_but_retained_output_is_capped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'output.log'
+            process = subprocess.Popen([sys.executable, '-B', '-c',
+                'import sys; sys.stdout.buffer.write(b"x" * (3*1024*1024))'],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+            reader = inside.start_log_reader(process.stdout, path.open('wb'))
+            try:
+                self.assertEqual(process.wait(timeout=5), 0)
+                reader[0].join(timeout=2)
+                self.assertTrue(inside.stop_log_readers([reader]))
+                state = reader[1]
+                self.assertTrue(state['eof'])
+                self.assertIsNone(state['error'])
+                self.assertEqual(state['observed_bytes'], 3*1024*1024)
+                self.assertEqual(state['retained_bytes'], inside.MAX_RETAINED_LOG)
+                self.assertEqual(state['discarded_bytes'], 2*1024*1024)
+                self.assertEqual(path.stat().st_size, inside.MAX_RETAINED_LOG)
+            finally:
+                if process.poll() is None:
+                    process.kill(); process.wait(timeout=2)
+                inside.stop_log_readers([reader])
+
+    def close_error_case(self, which):
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        source = os.fdopen(read_fd, 'rb', buffering=0)
+        sink = tempfile.TemporaryFile()
+        wrappers = [Mock(wraps=source), Mock(wraps=sink)]
+        actual = (source, sink)[which]
+        def failing_close():
+            actual.close()
+            raise OSError('inert close-only failure')
+        wrappers[which].close.side_effect = failing_close
+        reader = inside.start_log_reader(*wrappers)
+        try:
+            reader[0].join(timeout=2)
+            self.assertTrue(inside.stop_log_readers([reader]))
+            self.assertEqual(reader[1]['error'], 'OSError')
+            self.assertTrue(source.closed and sink.closed)
+            for wrapper in wrappers:
+                wrapper.close.assert_called_once()
+        finally:
+            source.close(); sink.close()
+            inside.stop_log_readers([reader])
+
+    def test_source_close_only_error_is_recorded_and_sink_closed(self):
+        self.close_error_case(0)
+
+    def test_sink_close_only_error_is_recorded_and_source_closed(self):
+        self.close_error_case(1)
+
+    def test_late_pipe_writer_cannot_extend_log_shutdown(self):
+        read_fd, write_fd = os.pipe()
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.fdopen(read_fd, 'rb', buffering=0)
+            sink = (Path(directory)/'output.log').open('wb')
+            reader = inside.start_log_reader(source, sink)
+            started = time.monotonic()
+            try:
+                self.assertTrue(inside.stop_log_readers([reader], grace=.1))
+                self.assertLess(time.monotonic()-started, 2)
+                self.assertTrue(source.closed and sink.closed)
+                self.assertFalse(reader[1]['eof'])
+            finally:
+                os.close(write_fd)
+                inside.stop_log_readers([reader])
 
 
 if __name__ == '__main__':

@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Update the coordinated Univer spreadsheet packages to 1.3.1 and Lucide icons to 1.66.0.
-- Refresh the locked Rust logging dependency to 0.4.35 and ZIP library to 9.2.0. These are compatible dependency maintenance updates; no new application feature or security fix is claimed.
+- Refresh the locked Rust logging dependency to 0.4.35 and ZIP library to 9.2.2. These are dependency maintenance updates; no new application feature is claimed.
 
 ### Fixed
 
@@ -22,7 +22,9 @@ Beta and RC qualification covers the existing software checks and package valida
 
 ### Security
 
-These dependency updates do not claim a security fix. Retain certificate verification, encrypted credential storage and signed-plugin requirements. Existing reviewed dependency deferrals remain subject to their recorded deadlines.
+- Update Vue I18n to 11.4.17, addressing the upstream translated-HTML SVG sanitizer vulnerability [GHSA-473g-cvf6-mfxj](https://github.com/intlify/vue-i18n/security/advisories/GHSA-473g-cvf6-mfxj). The reviewed application renders translations as text; no exploitable application path was established.
+
+Retain certificate verification, encrypted credential storage and signed-plugin requirements. Existing reviewed dependency deferrals remain subject to their recorded deadlines.
 
 ## [2.5.54] - 2026-10-27
 
