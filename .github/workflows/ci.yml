@@ -132,7 +132,8 @@ jobs:
           "$DESKTOP_TLS_OPENSSL" version
           export DESKTOP_TLS_PROBE_OUTPUT_DIR="$RUNNER_TEMP/tls-policy-apple-native"
           python -c 'import os; from pathlib import Path; assert not Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]).exists(), "stale probe output"'
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tls_key_policy -- --ignored --nocapture
+          python -m unittest discover -s tests -p 'test_tls_policy_watchdog.py' -v
+          python tests/tls-policy/run.py -- cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tls_key_policy -- --ignored --nocapture
           python -c 'import json, os; from pathlib import Path; p=Path(os.environ["DESKTOP_TLS_PROBE_OUTPUT_DIR"]); reports=[json.loads((p/(n+".json")).read_text()) for n in ["plugin-download", "video-transfer"]]; assert all(r["profile"] == "apple-rsa-pkcs1-ecdsa" and len(r["observations"]) == 10 for r in reports)'
       - name: Verify macOS bundle and installer integrity regressions
         # Native app archives are checked once here, outside each worker package job.
