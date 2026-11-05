@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import resource
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -81,6 +82,80 @@ def stop(process):
     return process.returncode
 
 
+def exit_status(returncode):
+    result = {'returncode': returncode, 'signal': None}
+    if returncode is not None and returncode < 0:
+        try:
+            result['signal'] = signal.Signals(-returncode).name
+        except ValueError:
+            result['signal'] = 'UNKNOWN'
+    return result
+
+
+def memfd_limit_probe(timeout):
+    """Observe the unchanged per-process limit; never gate the application on it."""
+    code = ('import os,signal; signal.signal(signal.SIGXFSZ, signal.SIG_DFL); '
+            'fd=os.memfd_create("smoke-limit-probe", os.MFD_CLOEXEC); '
+            'os.ftruncate(fd, 2*1024*1024); os.close(fd)')
+    try:
+        result = subprocess.run([sys.executable, '-B', '-c', code],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=timeout, preexec_fn=child_limits)
+        return dict(exit_status(result.returncode), requested_bytes=2*1024*1024,
+                    file_size_limit=1024*1024, gates_application=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        return {'error_type': type(error).__name__, 'gates_application': False}
+
+
+def profile_log_evidence(root):
+    """Read only regular, singly linked logs through retained nofollow directories."""
+    result = {'files': [], 'visited': 0, 'bytes': 0, 'truncated': False, 'errors': []}
+    def visit(directory, prefix):
+        with os.scandir(directory) as rows:
+            for row in rows:
+                if result['visited'] >= 256 or len(result['files']) >= 8:
+                    result['truncated'] = True
+                    return
+                result['visited'] += 1
+                name = prefix + row.name
+                fd = None
+                try:
+                    info = row.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(info.st_mode):
+                        fd = os.open(row.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                     dir_fd=directory)
+                        visit(fd, name + '/')
+                    elif stat.S_ISREG(info.st_mode) and '.log' in row.name:
+                        fd = os.open(row.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=directory)
+                        current = os.fstat(fd)
+                        if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
+                            continue
+                        budget = min(16*1024, 64*1024-result['bytes'])
+                        if budget <= 0:
+                            result['truncated'] = True
+                            return
+                        # Last bounded bytes often contain the startup failure.
+                        os.lseek(fd, max(0, current.st_size-budget), os.SEEK_SET)
+                        raw = os.read(fd, budget)
+                        result['bytes'] += len(raw)
+                        result['files'].append({'path': name[:512], 'size': current.st_size,
+                                                'tail_bytes': len(raw),
+                                                'tail': raw.decode('utf-8', errors='replace')})
+                except OSError as error:
+                    if len(result['errors']) < 8:
+                        result['errors'].append({'path': name[:512], 'errno': error.errno})
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        visit(fd, '')
+    finally:
+        os.close(fd)
+    return result
+
+
 def main():
     require(os.geteuid() != 0, "Application must run as an unprivileged user")
     interfaces = {row.split(':', 1)[0].strip() for row in Path('/proc/net/dev').read_text().splitlines() if ':' in row}
@@ -99,6 +174,7 @@ def main():
                       DISPLAY=':99', NO_AT_BRIDGE='0', GTK_A11Y='always', GTK_MODULES='atk-bridge')
     deadline = time.monotonic() + 120
     children, streams = [], []
+    app = None
     result = {"ready": False, "external_network": False, "app_reaped": False,
               'uid': os.geteuid(), 'interfaces': sorted(interfaces),
               'net_namespace': os.readlink('/proc/self/ns/net'),
@@ -123,6 +199,7 @@ def main():
         return process
 
     try:
+        result['phase'] = 'namespace-preflight'
         # Test the same namespace facilities WebKit needs; never disable its sandbox.
         nested = subprocess.run(['/usr/bin/bwrap', '--unshare-user', '--unshare-pid', '--unshare-net',
                                  '--ro-bind', '/', '/', '--proc', '/proc', '--',
@@ -131,6 +208,7 @@ def main():
                                 capture_output=True, timeout=left(8), check=True)
         require(nested.stdout.decode().strip() != result['net_namespace'], 'Nested network namespace unavailable')
         result['nested_namespace_preflight'] = True
+        result['phase'] = 'private-display-and-keyring'
         xvfb = launch(['Xvfb', ':99', '-screen', '0', '1280x900x24', '-nolisten', 'tcp'], 'xvfb.log')
         while not Path('/tmp/.X11-unix/X99').exists():
             require(xvfb.poll() is None, 'Xvfb exited')
@@ -146,22 +224,30 @@ def main():
                        check=True, timeout=left(12), stdout=subprocess.DEVNULL)
         executable = Path('/package/usr/bin/inverter-dashboard')
         require(executable.is_file() and not executable.is_symlink(), 'Exact package executable missing')
+        result['memfd_limit_probe'] = memfd_limit_probe(left(5))
+        result['phase'] = 'application-readiness'
         app = launch([str(executable)], 'application.log', stdin=subprocess.DEVNULL,
                      cwd='/home/smoke')
         while True:
-            require(app.poll() is None, 'Packaged application exited before readiness')
+            status = app.poll()
+            result['app_before_cleanup'] = exit_status(status)
+            require(status is None, 'Packaged application exited before readiness')
             try:
                 found = subprocess.run([sys.executable, '-B', __file__, '--probe', str(app.pid)],
                                        capture_output=True, timeout=left(4))
                 require(len(found.stdout) <= 512 * 1024 and len(found.stderr) <= 64 * 1024,
                         'Probe output bound')
+                result['last_accessibility_probe'] = dict(exit_status(found.returncode),
+                    stderr_tail=found.stderr[-4096:].decode('utf-8', errors='replace'))
                 evidence = json.loads(found.stdout) if found.returncode == 0 else None
-            except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            except (subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                result['last_accessibility_probe'] = {'error_type': type(error).__name__}
                 evidence = None
             if evidence and evidence['pid'] == app.pid and evidence['ready']:
                 break
             left(1)
             time.sleep(.25)
+        result['phase'] = 'rendered-evidence'
         (EVIDENCE / 'accessibility.json').write_text(json.dumps(evidence, indent=2) + '\n')
         subprocess.run(['import', '-display', ':99', '-window', 'root', 'png:/evidence/rendered.png'],
                        check=True, timeout=left(8), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -183,11 +269,23 @@ def main():
         result.update(ready=True, rendered_heading_colors=len(colors), expected_text=list(EXPECTED),
                       executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
                       screenshot_sha256=hashlib.sha256(screenshot).hexdigest())
+    except Exception as error:
+        result['failure'] = {'type': type(error).__name__, 'message': str(error)[:512]}
+        raise
     finally:
+        if app is not None:
+            result['app_before_cleanup'] = exit_status(app.poll())
         for process in reversed(children):
             stop(process)
         for stream in streams:
             stream.close()
+        if app is not None:
+            result['app_after_cleanup'] = exit_status(app.returncode)
+        if not result['ready']:
+            try:
+                result['profile_log_evidence'] = profile_log_evidence('/home/smoke')
+            except OSError as error:
+                result['profile_log_evidence'] = {'error_type': type(error).__name__, 'errno': error.errno}
         result['app_reaped'] = bool(children) and all(p.returncode is not None for p in children)
         result['elapsed_seconds'] = round(120 - (deadline - time.monotonic()), 3)
         result['deadline_seconds'] = 120

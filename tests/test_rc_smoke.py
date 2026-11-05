@@ -196,5 +196,57 @@ class Lifetime(unittest.TestCase):
         self.assertEqual(result['child_returncode'], 7)
 
 
+class FailureDiagnostics(unittest.TestCase):
+    def test_natural_signal_and_cleanup_status_are_distinct(self):
+        self.assertEqual(inside.exit_status(-signal.SIGXFSZ),
+                         {'returncode': -signal.SIGXFSZ, 'signal': 'SIGXFSZ'})
+        self.assertEqual(inside.exit_status(None), {'returncode': None, 'signal': None})
+        self.assertEqual(inside.exit_status(7), {'returncode': 7, 'signal': None})
+
+    def test_memfd_probe_reports_limit_without_gating_app(self):
+        with patch.object(inside.subprocess, 'run', return_value=subprocess.CompletedProcess([], -signal.SIGXFSZ)) as run:
+            result = inside.memfd_limit_probe(2)
+        self.assertEqual(result['signal'], 'SIGXFSZ')
+        self.assertFalse(result['gates_application'])
+        self.assertEqual(run.call_args.kwargs['timeout'], 2)
+        self.assertIs(run.call_args.kwargs['preexec_fn'], inside.child_limits)
+
+    def test_memfd_probe_failure_remains_diagnostic(self):
+        with patch.object(inside.subprocess, 'run', side_effect=subprocess.TimeoutExpired('probe', 1)):
+            self.assertEqual(inside.memfd_limit_probe(1),
+                             {'error_type': 'TimeoutExpired', 'gates_application': False})
+
+    def test_profile_evidence_does_not_follow_links_or_read_nonlogs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'home'; root.mkdir()
+            outside = Path(directory) / 'outside.log'; outside.write_text('outside-secret')
+            (root / 'linked.log').symlink_to(outside)
+            (root / 'linked-dir').symlink_to(outside.parent, target_is_directory=True)
+            (root / 'config.json').write_text('not-a-log')
+            (root / 'app.log').write_text('native-startup')
+            result = inside.profile_log_evidence(root)
+        self.assertEqual([f['path'] for f in result['files']], ['app.log'])
+        self.assertEqual(result['files'][0]['tail'], 'native-startup')
+        self.assertNotIn('outside-secret', json.dumps(result))
+
+    def test_profile_evidence_byte_and_count_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for i in range(12):
+                (root / f'{i}.log').write_bytes(b'x' * 20000)
+            result = inside.profile_log_evidence(root)
+        self.assertLessEqual(result['bytes'], 64*1024)
+        self.assertLessEqual(len(result['files']), 8)
+        self.assertTrue(result['truncated'])
+        self.assertTrue(all(f['tail_bytes'] <= 16*1024 for f in result['files']))
+
+    def test_profile_root_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'real').mkdir()
+            (root / 'link').symlink_to(root / 'real', target_is_directory=True)
+            with self.assertRaises(OSError):
+                inside.profile_log_evidence(root / 'link')
+
+
 if __name__ == '__main__':
     unittest.main()
