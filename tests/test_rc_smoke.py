@@ -112,6 +112,37 @@ class Extraction(unittest.TestCase):
             prepare.PublicAssetRedirect().redirect_request(request, None, 302, '', {}, 'https://example.invalid/a')
 
 
+class ScreenshotRuntime(unittest.TestCase):
+    def test_packaged_binary_ignores_missing_alternatives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / 'import-im6.q16'
+            binary.write_text('inert')
+            binary.chmod(0o755)
+            (Path(directory) / 'import').symlink_to('/missing/etc/alternatives/import')
+            with patch.object(inside, 'SCREENSHOT_BINARY', binary):
+                args = inside.screenshot_command()
+            self.assertEqual(args, [str(binary), '-display', ':99', '-window', 'root',
+                                    'png:/evidence/rendered.png'])
+
+    def test_missing_nonexecuting_and_linked_binary_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / 'import-im6.q16'
+            with patch.object(inside, 'SCREENSHOT_BINARY', binary):
+                with self.assertRaisesRegex(RuntimeError, 'screenshot executable'):
+                    inside.screenshot_command()
+                binary.write_text('inert')
+                binary.chmod(0o644)
+                with self.assertRaisesRegex(RuntimeError, 'screenshot executable'):
+                    inside.screenshot_command()
+                target = Path(directory) / 'other'
+                target.write_text('inert')
+                target.chmod(0o755)
+                binary.unlink()
+                binary.symlink_to(target)
+                with self.assertRaisesRegex(RuntimeError, 'screenshot executable'):
+                    inside.screenshot_command()
+
+
 class RenderedReadiness(unittest.TestCase):
     def rows(self):
         return [dict(name=t, text='', showing=True, visible=True, x=10, y=10, width=100, height=20)
@@ -150,6 +181,9 @@ class Isolation(unittest.TestCase):
         self.assertNotIn(['/home', '/home'], binds)
         self.assertNotIn(['/run', '/run'], binds)
         self.assertIn(['/owned/home', '/home/smoke'], binds)
+        self.assertIn(['/etc/ImageMagick-6', '/etc/ImageMagick-6'], binds)
+        self.assertNotIn(['/etc', '/etc'], binds)
+        self.assertNotIn(['/etc/alternatives', '/etc/alternatives'], binds)
 
     def test_lifetime_eof_required(self):
         read_fd, write_fd = os.pipe()

@@ -18,11 +18,21 @@ EXPECTED = ("Welcome — Setup", "Setup sections", "Connection mode")
 EVIDENCE = Path("/evidence")
 MAX_RUNTIME_FILE = 256 * 1024**2
 MAX_RETAINED_LOG = 1024**2
+SCREENSHOT_BINARY = Path("/usr/bin/import-im6.q16")
 
 
 def require(value, message):
     if not value:
         raise RuntimeError(message)
+
+
+def screenshot_command():
+    # Use the packaged executable; /usr/bin/import follows /etc/alternatives.
+    require(SCREENSHOT_BINARY.is_file() and not SCREENSHOT_BINARY.is_symlink()
+            and os.access(SCREENSHOT_BINARY, os.X_OK),
+            "Packaged screenshot executable unavailable")
+    return [str(SCREENSHOT_BINARY), '-display', ':99', '-window', 'root',
+            'png:/evidence/rendered.png']
 
 
 def child_limits():
@@ -261,6 +271,9 @@ def main():
         return process
 
     try:
+        result['phase'] = 'screenshot-runtime-preflight'
+        screenshot_args = screenshot_command()
+        result['screenshot_binary'] = screenshot_args[0]
         result['phase'] = 'namespace-preflight'
         # Test the same namespace facilities WebKit needs; never disable its sandbox.
         nested = subprocess.run(['/usr/bin/bwrap', '--unshare-user', '--unshare-pid', '--unshare-net',
@@ -311,7 +324,7 @@ def main():
             time.sleep(.25)
         result['phase'] = 'rendered-evidence'
         (EVIDENCE / 'accessibility.json').write_text(json.dumps(evidence, indent=2) + '\n')
-        subprocess.run(['import', '-display', ':99', '-window', 'root', 'png:/evidence/rendered.png'],
+        subprocess.run(screenshot_args,
                        check=True, timeout=left(8), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         screenshot = (EVIDENCE / 'rendered.png').read_bytes()
         require(0 < len(screenshot) <= 4 * 1024 * 1024 and screenshot[:8] == b'\x89PNG\r\n\x1a\n',

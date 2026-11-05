@@ -50,7 +50,8 @@ def sandbox_command(root, package, evidence, sync_fd, uid, gid, host_net, host_m
                '--bind', str(root / 'tmp'), '/tmp',
                '--bind', str(evidence), '/evidence',
                '--ro-bind', str(package), '/package',
-               '--ro-bind', str(Path(__file__).resolve().parent), '/check']
+               '--ro-bind', str(Path(__file__).resolve().parent), '/check',
+               '--ro-bind', '/etc/ImageMagick-6', '/etc/ImageMagick-6']
     if Path('/lib64').exists():
         command += ['--ro-bind', '/lib64', '/lib64']
     for name in ('passwd', 'group', 'nsswitch.conf', 'hosts', 'machine-id'):
@@ -135,6 +136,9 @@ def supervise(command, sync_read, sync_write, root, watchdog, *, timeout=TIMEOUT
 
 def main():
     require(sys.platform == 'linux' and os.geteuid() != 0, 'Unprivileged Linux runner required')
+    screenshot_config = Path('/etc/ImageMagick-6')
+    require(screenshot_config.is_dir() and not screenshot_config.is_symlink(),
+            'Packaged screenshot configuration unavailable')
     binding = json.loads(Path(sys.argv[1]).read_text())
     package, output = Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve()
     require(package.is_dir() and not package.is_symlink(), 'Prepared package required')
