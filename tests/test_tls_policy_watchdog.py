@@ -105,7 +105,8 @@ class WatchdogTests(unittest.TestCase):
             pidfile = Path(outside) / "pid"
             process = subprocess.Popen(
                 [sys.executable, str(SCRIPT), "--", sys.executable, "-c",
-                 "import os,pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(60)",
+                 ("import os,pathlib,signal,sys,time;signal.alarm(10);"
+                  "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(60)"),
                  str(pidfile)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                 text=True,
             )
@@ -119,6 +120,7 @@ class WatchdogTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 128 + signal.SIGTERM, error)
                 result = json.loads(error.split("TLS_POLICY_WATCHDOG ")[-1])
                 self.assertTrue(result["process_group_clean"])
+                self.assertEqual(result["child_returncode"], -signal.SIGTERM)
                 self.assertTrue(result["scratch_removed"])
                 self.assert_gone(int(pidfile.read_text()))
             finally:
@@ -127,44 +129,21 @@ class WatchdogTests(unittest.TestCase):
                     try:
                         process.communicate(timeout=12)
                     except subprocess.TimeoutExpired:
-                        # The child is a fresh session leader recorded by our
-                        # inert fixture. Never leave it alive if the supervisor
-                        # itself is broken and must be killed by this test.
+                        # Only this directly owned Popen may be signalled here.
+                        # The fixture self-expires; its recorded PID is never
+                        # authority to signal a potentially reused identity.
+                        process.kill()
+                        process.communicate(timeout=2)
+                if pidfile.exists():
+                    deadline = time.monotonic() + 12
+                    while True:
                         try:
-                            self.clean_recorded_group(pidfile)
-                        finally:
-                            process.kill()
-                            process.communicate(timeout=2)
-                self.clean_recorded_group(pidfile)
-
-    def clean_recorded_group(self, pidfile):
-        if not pidfile.exists():
-            return
-        pid = int(pidfile.read_text())
-        deadline = time.monotonic() + 2
-        while True:
-            try:
-                self.assertEqual(os.getpgid(pid), pid)
-                break
-            except ProcessLookupError:
-                return
-            except PermissionError:
-                if time.monotonic() >= deadline:
-                    self.fail("owned child group identity remains unavailable")
-                time.sleep(.02)
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(pid, sig)
-            except ProcessLookupError:
-                return
-            except PermissionError:
-                pass
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                if WATCHDOG.group_state(pid) is False:
-                    return
-                time.sleep(.02)
-        self.fail("owned inert child group survived bounded cleanup")
+                            os.kill(int(pidfile.read_text()), 0)
+                        except ProcessLookupError:
+                            break
+                        if time.monotonic() >= deadline:
+                            self.fail("self-expiring fixture remains observable")
+                        time.sleep(.02)
 
     def test_cleanup_error_restores_signals_and_preserves_other_paths(self):
         previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
@@ -193,31 +172,119 @@ class WatchdogTests(unittest.TestCase):
         result = json.loads(log.getvalue().split("TLS_POLICY_WATCHDOG ")[-1])
         self.assertTrue(result["scratch_removed"])
 
-    def test_permission_denied_never_means_group_absent(self):
-        with mock.patch.object(WATCHDOG.os, "killpg", side_effect=PermissionError):
-            self.assertIsNone(WATCHDOG.group_state(12345))
-            process = mock.Mock(pid=12345)
-            process.poll.return_value = 0
-            self.assertEqual(WATCHDOG.stop_group(process, grace=.03), (False, False))
-
-    def test_exited_child_unknown_then_absent_is_not_an_orphan(self):
-        with mock.patch.object(WATCHDOG, "group_state", side_effect=[None, False]):
-            result = self.execute("pass")
-        self.assertEqual(result["returncode"], 0)
-        self.assertFalse(result["orphaned_children"])
-
-    def test_exited_child_unknown_then_present_is_an_orphan(self):
-        with mock.patch.object(WATCHDOG, "group_state", side_effect=[None, True, False]):
-            result = self.execute("pass")
-        self.assertEqual(result["returncode"], 1)
-        self.assertTrue(result["orphaned_children"])
-
-    def test_transient_permission_denied_observation_can_settle(self):
-        with mock.patch.object(
-            WATCHDOG.os, "killpg", side_effect=[PermissionError, ProcessLookupError]
+    def test_signals_finish_before_reaping(self):
+        events = []
+        process = mock.Mock(pid=12345, returncode=None)
+        process.wait.side_effect = lambda **_: events.append("reap")
+        snapshots = [[{"pid": 12345, "state": "S"}], [], []]
+        with (
+            mock.patch.object(WATCHDOG, "observed_exit", return_value=object()),
+            mock.patch.object(WATCHDOG, "group_members", side_effect=snapshots),
+            mock.patch.object(WATCHDOG.os, "killpg", side_effect=lambda *_: events.append("signal")),
         ):
-            self.assertIsNone(WATCHDOG.group_state(12345))
-            self.assertFalse(WATCHDOG.group_state(12345))
+            self.assertEqual(WATCHDOG.stop_group(process, .1), (True, True))
+        self.assertEqual(events, ["signal", "reap"])
+        process.poll.assert_not_called()
+
+    def test_zombie_leader_is_reaped_without_group_signal(self):
+        process = mock.Mock(pid=12345, returncode=None)
+        with (
+            mock.patch.object(WATCHDOG, "observed_exit", return_value=object()),
+            mock.patch.object(WATCHDOG, "group_members", side_effect=[[{"pid": 12345, "state": "Z"}], []]),
+            mock.patch.object(WATCHDOG.os, "killpg") as kill,
+        ):
+            self.assertEqual(WATCHDOG.stop_group(process, .1), (True, False))
+        kill.assert_not_called()
+        process.wait.assert_called_once()
+        process.poll.assert_not_called()
+
+    def test_denied_signal_cannot_reap_live_group_or_report_cleanup(self):
+        process = mock.Mock(pid=12345, returncode=None)
+        with (
+            mock.patch.object(WATCHDOG, "observed_exit", return_value=object()),
+            mock.patch.object(WATCHDOG, "group_members", return_value=[{"pid": 12345, "state": "S"}]),
+            mock.patch.object(WATCHDOG.os, "killpg", side_effect=PermissionError),
+        ):
+            self.assertEqual(WATCHDOG.stop_group(process, .03), (False, True))
+        process.wait.assert_not_called()
+        process.poll.assert_not_called()
+
+    def test_already_reaped_leader_refuses_signals(self):
+        process = mock.Mock(pid=12345, returncode=0)
+        with (
+            mock.patch.object(WATCHDOG.os, "killpg") as kill,
+            self.assertRaisesRegex(RuntimeError, "already reaped"),
+        ):
+            WATCHDOG.stop_group(process, .03)
+        kill.assert_not_called()
+
+    def test_post_reap_observation_never_sends_another_signal(self):
+        process = mock.Mock(pid=12345, returncode=None)
+        with (
+            mock.patch.object(WATCHDOG, "observed_exit", return_value=object()),
+            mock.patch.object(WATCHDOG, "group_members", side_effect=[[], [{"pid": 12345, "state": "S"}], []]),
+            mock.patch.object(WATCHDOG.os, "killpg") as kill,
+        ):
+            self.assertEqual(WATCHDOG.stop_group(process, .1), (True, False))
+        kill.assert_not_called()
+        process.wait.assert_called_once()
+
+    def test_unknown_unrelated_state_does_not_hide_owned_zombie(self):
+        raw = f"{os.getpid()} 1 ?\n12345 12345 Z\n".encode()
+        with mock.patch.object(WATCHDOG.subprocess, "check_output", return_value=raw):
+            self.assertEqual(WATCHDOG.group_members(12345, time.monotonic() + 1),
+                             [{"pid": 12345, "state": "Z"}])
+
+    def test_unknown_owned_state_retries_without_extending_deadline(self):
+        prefix = f"{os.getpid()} 1 S\n"
+        deadline = time.monotonic() + 1
+        snapshot = WATCHDOG.group_snapshot
+        with (
+            mock.patch.object(WATCHDOG, "group_snapshot", wraps=snapshot) as observe,
+            mock.patch.object(WATCHDOG.subprocess, "check_output", side_effect=[
+                (prefix + "12345 12345 ?Es\n").encode(),
+                (prefix + "12345 12345 Z\n").encode(),
+            ]) as read,
+        ):
+            self.assertEqual(WATCHDOG.group_members(12345, deadline),
+                             [{"pid": 12345, "state": "Z"}])
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(observe.call_args_list, [mock.call(12345, deadline)] * 2)
+
+    def test_persistent_unknown_state_never_reaps_or_signals(self):
+        process = mock.Mock(pid=12345, returncode=None)
+        raw = f"{os.getpid()} 1 S\n12345 12345 ?Es\n".encode()
+        with (
+            mock.patch.object(WATCHDOG, "observed_exit", return_value=object()),
+            mock.patch.object(WATCHDOG.subprocess, "check_output", return_value=raw),
+            mock.patch.object(WATCHDOG.os, "killpg") as kill,
+            self.assertRaises(TimeoutError),
+        ):
+            WATCHDOG.stop_group(process, .03)
+        kill.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_lost_child_reservation_refuses_signals(self):
+        process = mock.Mock(pid=12345, returncode=None)
+        with (
+            mock.patch.object(WATCHDOG.os, "waitid", side_effect=ChildProcessError),
+            mock.patch.object(WATCHDOG.os, "killpg") as kill,
+            self.assertRaises(ChildProcessError),
+        ):
+            WATCHDOG.stop_group(process, .03)
+        kill.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_nondefault_child_handler_fails_before_launch(self):
+        original = signal.getsignal(signal.SIGCHLD)
+        try:
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+            with mock.patch.object(WATCHDOG.subprocess, "Popen") as spawn:
+                with self.assertRaisesRegex(RuntimeError, "SIGCHLD"):
+                    WATCHDOG.supervise([sys.executable, "-c", "pass"])
+                spawn.assert_not_called()
+        finally:
+            signal.signal(signal.SIGCHLD, original)
 
 
 if __name__ == "__main__":

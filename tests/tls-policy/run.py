@@ -17,45 +17,99 @@ PROBE_SECONDS = 600
 GRACE_SECONDS = 5
 
 
-def group_state(pid):
-    try:
-        os.killpg(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Darwin can report EPERM while a group is exiting. It is not proof of
-        # absence: keep observing within the original cleanup deadline.
-        return None
-    return True
+def observed_exit(process):
+    """Observe exit without releasing the leader PID/PGID reservation."""
+    if process.returncode is not None:
+        raise RuntimeError("Leader already reaped; refusing group signals")
+    return os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+
+
+def group_snapshot(pgid, deadline):
+    """Read numeric identities, validating states only for the owned group."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Process cleanup observation deadline")
+    raw = subprocess.check_output(
+        ["/bin/ps", "-ax", "-o", "pid=,pgid=,stat="], timeout=min(1, remaining)
+    )
+    if not raw or len(raw) > 2 * 1024**2:
+        raise RuntimeError("Invalid process registry snapshot")
+    rows, seen = [], set()
+    for line in raw.decode("ascii").splitlines():
+        fields = line.split()
+        if (len(fields) != 3 or not fields[0].isdigit() or not fields[1].isdigit()
+                or int(fields[0]) <= 0 or int(fields[1]) < 0):
+            raise RuntimeError("Malformed process registry snapshot: " + repr(line[:128]))
+        pid, group = int(fields[0]), int(fields[1])
+        if pid in seen:
+            raise RuntimeError("Duplicate process identity")
+        seen.add(pid)
+        if group == pgid:
+            if not fields[2][0].isalpha() or len(fields[2]) > 16:
+                raise RuntimeError("Owned process state is unknown: " + repr(line[:128]))
+            rows.append({"pid": pid, "state": fields[2]})
+    if os.getpid() not in seen:
+        raise RuntimeError("Incomplete process registry snapshot")
+    return rows
+
+
+def group_members(pgid, deadline):
+    """Retry transient unknown snapshots without extending cleanup time."""
+    while True:
+        try:
+            return group_snapshot(pgid, deadline)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Cannot confirm owned process state") from error
+            time.sleep(min(.02, remaining))
 
 
 def stop_group(process, grace):
-    """Return cleanup certainty and whether the group was confirmed present."""
+    """Signal before reaping; never signal a potentially reused group ID."""
+    observed_exit(process)
+    start = time.monotonic()
+    deadline = start + 2 * grace
     present = False
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        process.poll()
-        state = group_state(process.pid)
-        present |= state is True
-        if state is False:
-            return process.poll() is not None, present
+    for index, sig in enumerate((signal.SIGTERM, signal.SIGKILL), start=1):
+        members = group_members(process.pid, deadline)
+        live = any(row["state"][0] != "Z" for row in members)
+        present |= live
+        if not live:
+            break
+        observed_exit(process)
         try:
             os.killpg(process.pid, sig)
         except (ProcessLookupError, PermissionError):
+            # Denial is never proof of cleanup. The registry must confirm it.
             pass
-        deadline = time.monotonic() + grace
-        while time.monotonic() < deadline:
-            process.poll()
-            state = group_state(process.pid)
-            present |= state is True
-            if state is False:
-                return process.poll() is not None, present
-            time.sleep(0.02)
-    return False, present
+        phase_deadline = start + index * grace
+        while time.monotonic() < phase_deadline:
+            members = group_members(process.pid, deadline)
+            live = any(row["state"][0] != "Z" for row in members)
+            if not live:
+                break
+            time.sleep(min(.02, max(0, phase_deadline - time.monotonic())))
+        if not live:
+            break
+    if live or observed_exit(process) is None:
+        return False, present
+    # All possible signals are finished. Only now release the reserved PID.
+    process.wait(timeout=max(.001, deadline - time.monotonic()))
+    while group_members(process.pid, deadline):
+        if time.monotonic() >= deadline:
+            return False, present
+        time.sleep(.02)
+    return True, present
 
 
 def supervise(command, *, timeout=PROBE_SECONDS, grace=GRACE_SECONDS):
     if os.name != "posix":
         raise RuntimeError("The TLS process-group watchdog requires POSIX")
+    if not all(hasattr(os, name) for name in ("waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT")):
+        raise RuntimeError("Non-reaping child observation is required")
+    if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+        raise RuntimeError("Default SIGCHLD handling is required")
     if not command or timeout <= 0 or grace <= 0:
         raise ValueError("A command and positive deadlines are required")
     root = Path(tempfile.mkdtemp(prefix="desktop-tls-watchdog-"))
@@ -84,7 +138,7 @@ def supervise(command, *, timeout=PROBE_SECONDS, grace=GRACE_SECONDS):
         )
         cleanup = False
         deadline = started + timeout
-        while process.poll() is None:
+        while observed_exit(process) is None:
             if received:
                 reason = "cancelled"
                 break
@@ -96,11 +150,11 @@ def supervise(command, *, timeout=PROBE_SECONDS, grace=GRACE_SECONDS):
             reason = "exited"
         # Even an exited leader can leave a helper behind. Clean the group on
         # every path and never count orphan cleanup as a successful test run.
-        leader_exited = process.poll() is not None
+        leader_exited = observed_exit(process) is not None
         cleanup_attempted = True
         cleanup, group_was_present = stop_group(process, grace)
         orphaned = leader_exited and group_was_present
-        code = process.poll()
+        code = process.returncode
         if received:
             returncode = 128 + received[0]
         elif reason == "timeout":

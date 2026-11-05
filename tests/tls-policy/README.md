@@ -105,3 +105,15 @@ The orphan-leader regression runs on Darwin, the supervised CI target. Other
 POSIX systems may retain orphan zombies under a non-reaping container PID 1;
 the watchdog fails closed if the group remains observable. Its remaining inert
 process, cancellation and cleanup-error regressions run on every POSIX host.
+
+Before sending any group signal, the supervisor retains its child leader with
+non-reaping `waitid(WNOWAIT)` observations. It reaps only after the last possible
+signal, then performs read-only disappearance checks. This reserves the PID/PGID
+through cleanup and prevents signals reaching a newly reused group identity.
+Platforms without this observation API or default SIGCHLD handling fail before
+launch; there is no early-reaping fallback. Process-state snapshots distinguish
+a zombie leader from live descendants, while denied signals remain unconfirmed
+until the bounded snapshot proves no writers remain. Transient unknown states
+in the owned group are retried within that same cleanup deadline; state labels
+of other groups do not affect the owned process check. Apple CI pins Python
+3.13, which exposes `waitid` on macOS.
