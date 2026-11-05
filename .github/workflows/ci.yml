@@ -295,3 +295,12 @@ jobs:
           if-no-files-found: error
       - run: cargo run --locked --manifest-path src-tauri/Cargo.toml --example plugin-package -- --help
       - run: cargo run --locked --manifest-path src-tauri/Cargo.toml --example plugin-media-smoke --features native-media-smoke -- --help
+
+  published-rc-smoke:
+    name: Published RC Linux smoke
+    # This one fixed-artifact acceptance belongs to the retained draft PR only.
+    # Other PRs and release events retain their existing validation behavior.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/published-rc-linux-smoke' && github.event.pull_request.base.sha == '5b264792f4e5e1d089c53bbfa5c2234f27a0f99d'
+    uses: ./.github/workflows/rc-artifact-smoke.yml
+    permissions:
+      contents: read

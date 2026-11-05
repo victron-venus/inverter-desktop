@@ -1,0 +1,15 @@
+{
+  "activation": "ACCEPTED_RC",
+  "repository": "victron-venus/inverter-desktop",
+  "source": "5b264792f4e5e1d089c53bbfa5c2234f27a0f99d",
+  "tag": "v2.5.55-rc.4",
+  "run": 41967223371,
+  "attempt": 1,
+  "watchdog_sha256": "39062c4c7a7c9940f9f186f62bb9a8a1d61ccd7a0cdd9b1ec2929d3ab6aa1317",
+  "release_id": 434805506,
+  "asset_id": 712156578,
+  "name": "Linux_Inverter.Desktop_2.5.55_amd64.deb",
+  "size": 11789164,
+  "sha256": "786c26a418adaa1ed35b4136e37c821e616eb20ddebd2cafcdaf6baac30b0f7f",
+  "rc_proof_sha256": "158fb7043702acf39b5c3ebb2e04768ebea9f2c50d49d29e0d8de87dcfbca2b8"
+}
