@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   exact-linux-package:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/published-rc-linux-smoke' && github.event.pull_request.base.sha == '5b264792f4e5e1d089c53bbfa5c2234f27a0f99d'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/published-rc-linux-smoke' && github.event.pull_request.base.sha == '12cad7a2808688aa59195351a7ea74f491cb21ba'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
