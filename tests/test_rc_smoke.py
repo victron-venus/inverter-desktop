@@ -143,6 +143,66 @@ class ScreenshotRuntime(unittest.TestCase):
                     inside.screenshot_command()
 
 
+class PaintedReadiness(unittest.TestCase):
+    def exercise(self, readiness, paints, *, budget=30, screenshot_error=None):
+        app = Mock(pid=123)
+        app.poll.return_value = None
+        result, calls = {}, []
+        remaining = [budget]
+        def left(cap):
+            remaining[0] -= 1
+            if remaining[0] <= 0:
+                raise RuntimeError('Original application deadline exceeded')
+            return min(cap, remaining[0])
+        probes = iter(readiness)
+        def run(args, **kwargs):
+            calls.append((args, kwargs))
+            if '--probe' in args:
+                ready = next(probes, readiness[-1])
+                value = {'pid': app.pid, 'ready': ready, 'rows': [], 'observation': len(calls)}
+                return subprocess.CompletedProcess(args, 0, json.dumps(value).encode(), b'')
+            if screenshot_error:
+                raise screenshot_error
+            (inside.EVIDENCE / 'rendered.png').write_bytes(b'bounded fixture')
+            return subprocess.CompletedProcess(args, 0)
+        self.result, self.calls = result, calls
+        with tempfile.TemporaryDirectory() as directory, patch.object(inside, 'EVIDENCE', Path(directory)), \
+             patch.object(inside.subprocess, 'run', side_effect=run), \
+             patch.object(inside, 'heading_colors', side_effect=paints), patch.object(inside.time, 'sleep'):
+            answer = inside.wait_for_rendered(app, left, ['/usr/bin/import-im6.q16'], result)
+            self.assertEqual(sorted(x.name for x in Path(directory).iterdir()),
+                             ['accessibility.json', 'rendered.png'])
+            return answer
+
+    def test_blank_first_paint_then_fresh_matching_frame(self):
+        colors = [(1, (i * 30,) * 3) for i in range(8)]
+        answer = self.exercise([True, True], [[(1, (255, 255, 255))], colors])
+        self.assertEqual(self.result['readiness_attempts'], 2)
+        self.assertEqual(self.result['paint_attempts'], 2)
+        self.assertTrue(self.result['last_paint']['matched'])
+        self.assertEqual(answer[0]['observation'], 3)
+
+    def test_old_accessibility_cannot_qualify_later_frame(self):
+        colors = [(1, (i * 30,) * 3) for i in range(8)]
+        answer = self.exercise([True, False, True], [[(1, (255, 255, 255))], colors])
+        self.assertEqual(self.result['readiness_attempts'], 3)
+        self.assertEqual(self.result['paint_attempts'], 2)
+        self.assertEqual(answer[0]['observation'], 4)
+
+    def test_unpainted_state_expires_original_budget(self):
+        with self.assertRaisesRegex(RuntimeError, 'Original application deadline'):
+            self.exercise([True], [[(1, (255, 255, 255))]] * 10, budget=7)
+        self.assertFalse(self.result['last_paint']['matched'])
+        self.assertEqual(self.result['paint_attempts'], 2)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_screenshot_execution_failure_is_not_retried(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.exercise([True], [], screenshot_error=subprocess.CalledProcessError(1, 'screenshot'))
+        self.assertEqual(self.result['readiness_attempts'], 1)
+        self.assertEqual(self.result['paint_attempts'], 1)
+
+
 class RenderedReadiness(unittest.TestCase):
     def rows(self):
         return [dict(name=t, text='', showing=True, visible=True, x=10, y=10, width=100, height=20)

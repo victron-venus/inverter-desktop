@@ -223,6 +223,61 @@ def stop_log_readers(readers, grace=1):
     return all(not thread.is_alive() for thread, _ in readers)
 
 
+def heading_colors(screenshot, evidence):
+    require(0 < len(screenshot) <= 4 * 1024 * 1024 and screenshot[:8] == b'\x89PNG\r\n\x1a\n',
+            'Screenshot is missing or outside bounds')
+    require(struct.unpack('>II', screenshot[16:24]) == (1280, 900), 'Screenshot dimensions differ')
+    from PIL import Image
+    with Image.open(io.BytesIO(screenshot)) as image:
+        require(image.size == (1280, 900), 'Decoded screenshot dimensions differ')
+        heading = next(row for row in evidence['rows'] if EXPECTED[0] in (row['name'], row['text'])
+                       and row['visible'] and row['showing'] and row['width'] > 0 and row['height'] > 0)
+        crop_left, top = max(0, heading['x']), max(0, heading['y'])
+        right, bottom = min(1280, heading['x'] + heading['width']), min(900, heading['y'] + heading['height'])
+        require(crop_left < right and top < bottom, 'Heading screenshot crop is outside viewport')
+        return image.crop((crop_left, top, right, bottom)).convert('RGB').getcolors(1280 * 900)
+
+
+def wait_for_rendered(app, left, screenshot_args, result):
+    # Accessibility can precede composited pixels. Both must pass in one attempt.
+    result['readiness_attempts'] = 0
+    result['paint_attempts'] = 0
+    while True:
+        result['readiness_attempts'] += 1
+        result['phase'] = 'application-readiness'
+        status = app.poll()
+        result['app_before_cleanup'] = exit_status(status)
+        require(status is None, 'Packaged application exited before readiness')
+        try:
+            found = subprocess.run([sys.executable, '-B', __file__, '--probe', str(app.pid)],
+                                   capture_output=True, timeout=left(4))
+            require(len(found.stdout) <= 512 * 1024 and len(found.stderr) <= 64 * 1024,
+                    'Probe output bound')
+            result['last_accessibility_probe'] = dict(exit_status(found.returncode),
+                stderr_tail=found.stderr[-4096:].decode('utf-8', errors='replace'))
+            evidence = json.loads(found.stdout) if found.returncode == 0 else None
+        except (subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+            result['last_accessibility_probe'] = {'error_type': type(error).__name__}
+            evidence = None
+        if evidence and evidence['pid'] == app.pid and evidence['ready']:
+            result['phase'] = 'rendered-evidence'
+            result['paint_attempts'] += 1
+            (EVIDENCE / 'accessibility.json').write_text(json.dumps(evidence, indent=2) + '\n')
+            subprocess.run(screenshot_args, check=True, timeout=left(8),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            screenshot = (EVIDENCE / 'rendered.png').read_bytes()
+            colors = heading_colors(screenshot, evidence)
+            painted = visible_contrast(colors)
+            result['last_paint'] = {'matched': painted, 'heading_color_count': len(colors) if colors else 0}
+            require(app.poll() is None, 'Application exited during rendered evidence')
+            if painted:
+                return evidence, screenshot, len(colors)
+            result['last_readiness_mismatch'] = 'Heading screenshot is blank, unpainted or lacks contrast'
+        else:
+            result['last_readiness_mismatch'] = 'Exact application accessibility content is not ready'
+        time.sleep(min(.25, left(1)))
+
+
 def main():
     require(os.geteuid() != 0, "Application must run as an unprivileged user")
     interfaces = {row.split(':', 1)[0].strip() for row in Path('/proc/net/dev').read_text().splitlines() if ':' in row}
@@ -303,45 +358,8 @@ def main():
         result['phase'] = 'application-readiness'
         app = launch([str(executable)], 'application.log', stdin=subprocess.DEVNULL,
                      cwd='/home/smoke')
-        while True:
-            status = app.poll()
-            result['app_before_cleanup'] = exit_status(status)
-            require(status is None, 'Packaged application exited before readiness')
-            try:
-                found = subprocess.run([sys.executable, '-B', __file__, '--probe', str(app.pid)],
-                                       capture_output=True, timeout=left(4))
-                require(len(found.stdout) <= 512 * 1024 and len(found.stderr) <= 64 * 1024,
-                        'Probe output bound')
-                result['last_accessibility_probe'] = dict(exit_status(found.returncode),
-                    stderr_tail=found.stderr[-4096:].decode('utf-8', errors='replace'))
-                evidence = json.loads(found.stdout) if found.returncode == 0 else None
-            except (subprocess.TimeoutExpired, json.JSONDecodeError) as error:
-                result['last_accessibility_probe'] = {'error_type': type(error).__name__}
-                evidence = None
-            if evidence and evidence['pid'] == app.pid and evidence['ready']:
-                break
-            left(1)
-            time.sleep(.25)
-        result['phase'] = 'rendered-evidence'
-        (EVIDENCE / 'accessibility.json').write_text(json.dumps(evidence, indent=2) + '\n')
-        subprocess.run(screenshot_args,
-                       check=True, timeout=left(8), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        screenshot = (EVIDENCE / 'rendered.png').read_bytes()
-        require(0 < len(screenshot) <= 4 * 1024 * 1024 and screenshot[:8] == b'\x89PNG\r\n\x1a\n',
-                'Screenshot is missing or outside bounds')
-        require(struct.unpack('>II', screenshot[16:24]) == (1280, 900), 'Screenshot dimensions differ')
-        from PIL import Image
-        with Image.open(io.BytesIO(screenshot)) as image:
-            require(image.size == (1280, 900), 'Decoded screenshot dimensions differ')
-            heading = next(row for row in evidence['rows'] if EXPECTED[0] in (row['name'], row['text'])
-                           and row['visible'] and row['showing'] and row['width'] > 0 and row['height'] > 0)
-            left, top = max(0, heading['x']), max(0, heading['y'])
-            right, bottom = min(1280, heading['x'] + heading['width']), min(900, heading['y'] + heading['height'])
-            require(left < right and top < bottom, 'Heading screenshot crop is outside viewport')
-            colors = image.crop((left, top, right, bottom)).convert('RGB').getcolors(1280 * 900)
-            require(visible_contrast(colors), 'Heading screenshot is blank, unpainted or lacks contrast')
-        require(app.poll() is None, 'Application exited during rendered evidence')
-        result.update(ready=True, rendered_heading_colors=len(colors), expected_text=list(EXPECTED),
+        evidence, screenshot, color_count = wait_for_rendered(app, left, screenshot_args, result)
+        result.update(ready=True, rendered_heading_colors=color_count, expected_text=list(EXPECTED),
                       executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
                       screenshot_sha256=hashlib.sha256(screenshot).hexdigest())
     except Exception as error:
