@@ -187,3 +187,11 @@ a safe regeneration tool. Do not rerun an older full generator just to update
 change scope. Preserve custom workflow adapters through explicit review if the
 scoped generator rejects their graph. Keep release qualification full and run
 the local workflow-contract tests after every regeneration.
+
+### Mobile validation for documentation changes
+
+Proven documentation-only pull requests and merge-queue checks skip the iOS
+archive build. Android validation still builds the app because its Java/Kotlin
+CodeQL analysis observes real compilation. Source changes, manual runs and full release qualification
+retain both mobile targets. Keep the mobile workflow's scoped input when updating
+generated workflows; the workflow contract tests verify this adapter.

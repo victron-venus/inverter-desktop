@@ -64,6 +64,8 @@ jobs:
     if: ${{ needs.scope.outputs.run == 'true' }}
   check-2:
     uses: ./.github/workflows/mobile.yml
+    with:
+      run-ios-build: ${{ needs.scope.outputs.run != 'false' || needs.scope.outputs.reason != 'documentation-only' }}
     permissions:
       contents: read
       actions: read
