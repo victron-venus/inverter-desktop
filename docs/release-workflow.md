@@ -195,3 +195,17 @@ archive build. Android validation still builds the app because its Java/Kotlin
 CodeQL analysis observes real compilation. Source changes, manual runs and full release qualification
 retain both mobile targets. Keep the mobile workflow's scoped input when updating
 generated workflows; the workflow contract tests verify this adapter.
+
+### Verify a documentation-only run
+
+Open the **Quality gate** run for the pull request's current commit. In
+**Change scope**, inspect **Classify documentation and build inputs**: the final
+JSON must report `run: false` and `reason: documentation-only` before the reduced
+validation route applies. The mobile `ios` job should be **Skipped**; the
+`android` job still compiles the app for its required Java/Kotlin CodeQL analysis.
+The remaining required checks and **CI gate** must succeed before merging.
+
+A missing or unrecognized scope result keeps the iOS build enabled. Source,
+workflow, mixed, manual, and forced full-qualification runs also retain it.
+Do not infer reduced validation from a PR title or file extension alone; inspect
+the classifier result at the exact commit being reviewed.
