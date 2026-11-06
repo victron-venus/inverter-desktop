@@ -66,12 +66,29 @@ coverage remain. Changes must not silently expand accepted warning classes.
 
 ## Dependencies and release evidence
 
-Review Dependabot/Renovate proposals, cargo-audit, cargo-deny, CodeQL and secret
+Review Renovate proposals, cargo-audit, cargo-deny, CodeQL and secret
 scanning. The host and six worker lockfiles are separate; updating one does not
 update the others. CodeQL covers Rust/JavaScript/TypeScript, Python, GitHub Actions
 and Java/Kotlin extracted during the Android build. Compiler/linter passes alone
 are not security analysis. Known scanner findings need an actual applicability
 review rather than blanket suppression.
+
+Renovate updates the Android Gradle dependency declarations without executing the
+repository's Gradle wrapper. The Android project does not enable dependency
+locking; its former comment-only `gradle.lockfile` did not record any resolved
+versions and is not needed for manifest updates.
+
+Gradle wrapper updates, including security fixes, require a reviewed manual change.
+Update the wrapper scripts, JAR and
+`src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties` together using a
+trusted Gradle installation. Verify the new distribution and wrapper against the
+official Gradle checksums, retain `distributionSha256Sum`, and update both reviewed
+file hashes in `scripts/android/verify_gradle_wrapper.py`. Run
+`python3 scripts/android/verify_gradle_wrapper.py` and
+`python3 -m unittest discover -s tests -p 'test_gradle_wrapper_integrity.py' -v`,
+then require the existing complete Android CI checks. For a security update,
+confirm that the selected Gradle version is in the advisory's fixed range; do not
+bypass the bootstrap verifier or enable wrapper execution in the updater.
 
 The [release policy](../RELEASING.md) requires reviewed versioned notes, exact
 candidate acceptance and normal release gates. [FUZZING.md](../FUZZING.md) documents

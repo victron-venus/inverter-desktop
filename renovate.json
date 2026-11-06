@@ -9,7 +9,6 @@
     "custom.regex",
     "github-actions",
     "gradle",
-    "gradle-wrapper",
     "npm",
     "pip_requirements"
   ],
