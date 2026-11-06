@@ -177,16 +177,21 @@ A local candidate package also needs the saved `.release-plan.json` at its exact
 
 ### Updating change-scope policy safely
 
-Use the [fixed scope-only generator](https://github.com/victron-venus/venus-os-ci-toolkit/commit/56863cf0beed5ab97c4f27d7adb5aedb83c758d5)
-or a reviewed later revision for recognized generated graphs:
+Follow the [shared CI Toolkit regeneration guide](https://github.com/victron-venus/venus-os-ci-toolkit/blob/main/docs/CHANGE_SCOPE.md#regenerate-documentation-scope-safely)
+from this repository's root. It defines the supported pinned generator, required
+clean-checkout checks, and scope-only update and verification commands.
 
-```sh
-python3 /path/to/venus-os-ci-toolkit/scripts/install_release.py "$PWD" --change-scope-only
-python3 /path/to/venus-os-ci-toolkit/scripts/install_release.py "$PWD" --change-scope-only --check
-```
 
 The policy's historical `toolkit_revision` records provenance; it does not select
 a safe regeneration tool. Do not rerun an older full generator just to update
 change scope. Preserve custom workflow adapters through explicit review if the
 scoped generator rejects their graph. Keep release qualification full and run
 the local workflow-contract tests after every regeneration.
+
+### Mobile validation for documentation changes
+
+Proven documentation-only pull requests and merge-queue checks skip the iOS
+archive build. Android validation still builds the app because its Java/Kotlin
+CodeQL analysis observes real compilation. Source changes, manual runs and full release qualification
+retain both mobile targets. Keep the mobile workflow's scoped input when updating
+generated workflows; the workflow contract tests verify this adapter.
