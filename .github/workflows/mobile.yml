@@ -1,7 +1,12 @@
 name: Mobile
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      run-ios-build:
+        description: Run the iOS archive for source changes and full qualification
+        type: boolean
+        default: true
   # Quality gate owns PR validation; Release pipeline owns main validation.
   workflow_dispatch: {}
 
@@ -14,6 +19,7 @@ permissions:
 
 jobs:
   ios:
+    if: ${{ github.event_name == 'workflow_dispatch' || inputs.run-ios-build }}
     runs-on: macos-latest
     env:
       INVERTER_BUILD_PROFILE: mobile
