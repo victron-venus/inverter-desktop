@@ -85,21 +85,27 @@ impl Default for DownloadPolicy {
 impl DownloadPolicy {
     fn https_only(&self) -> bool {
         #[cfg(test)]
-        if self.allow_loopback_http {
-            return false;
+        {
+            !self.allow_loopback_http
         }
-        true
+        #[cfg(not(test))]
+        {
+            true
+        }
     }
 
     fn accepts_scheme(&self, url: &Url) -> bool {
-        if url.scheme() == "https" {
-            return true;
-        }
         #[cfg(test)]
-        if self.allow_loopback_http && url.scheme() == "http" {
-            return matches!(url.host_str(), Some("127.0.0.1" | "[::1]"));
+        {
+            url.scheme() == "https"
+                || (self.allow_loopback_http
+                    && url.scheme() == "http"
+                    && matches!(url.host_str(), Some("127.0.0.1" | "[::1]")))
         }
-        false
+        #[cfg(not(test))]
+        {
+            url.scheme() == "https"
+        }
     }
 }
 

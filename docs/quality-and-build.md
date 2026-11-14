@@ -1,5 +1,19 @@
 # Build and quality evidence
 
+The isolated MQTT acceptance fixtures take an explicit `MOSQUITTO_BIN`.
+Linux CI also creates a unique runner-owned, mode-0700 parent under
+`/etc/mosquitto/conf.d` and supplies it as `MOSQUITTO_CONFIG_DIR`. The Ubuntu
+26 broker profile permits this recursive configuration subtree; a nested
+directory directly under `/etc/mosquitto` is not covered by its one-level rule.
+The unique parent is a directory, not a direct `.conf` include, so the distro
+service does not load these synthetic fixtures. Each broker owns and
+removes its private temporary child directory after its process is reaped;
+the job removes only the empty parent. Other hosts can omit the optional
+parent and keep their normal fixture directory. These inputs are test-only:
+application startup, installed broker configuration and credentials do not
+consume them. A five-second startup probe reports a bounded broker exit log
+before native compilation; all signed-worker acceptance scenarios still run.
+
 ## Reproduce the checks
 
 Use current stable Rust with Cargo, rustfmt and Clippy; Node.js 24 with pnpm 10;
