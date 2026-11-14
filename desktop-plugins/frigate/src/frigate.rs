@@ -9,6 +9,16 @@ const ID_TTL: Duration = Duration::from_secs(600);
 const CAMERA_COOLDOWN: Duration = Duration::from_secs(45);
 const MAX_CACHE_ENTRIES: usize = 512;
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
 #[derive(Deserialize)]
 struct FrigateEvent {
     #[serde(rename = "type")]
@@ -70,10 +80,7 @@ impl ClipEvents {
         let url = crate::media::clip_url(base, &event.after.id)?;
         let title = self.history.admit(&event.after, now)?;
         Some(Clip {
-            id: format!(
-                "frigate-clip-{:x}",
-                Sha256::digest(event.after.id.as_bytes())
-            ),
+            id: format!("frigate-clip-{}", sha256_hex(event.after.id.as_bytes())),
             title,
             url,
         })
@@ -119,7 +126,7 @@ impl MotionEvents {
         }
         let title = self.admit(&after, now)?;
         Some(Motion {
-            id: format!("frigate-{:x}", Sha256::digest(after.id.as_bytes())),
+            id: format!("frigate-{}", sha256_hex(after.id.as_bytes())),
             title,
             camera: after.camera,
         })
@@ -226,6 +233,14 @@ mod tests {
         assert_ne!(motion.id, clip.id);
         assert!(motion.id.starts_with("frigate-"));
         assert!(clip.id.starts_with("frigate-clip-"));
+        assert_eq!(
+            motion.id,
+            "frigate-dfd4f62880435b82a520b8379cb49545945d7bd1ad5a87b80b7cacb084dc74f6"
+        );
+        assert_eq!(
+            clip.id,
+            "frigate-clip-dfd4f62880435b82a520b8379cb49545945d7bd1ad5a87b80b7cacb084dc74f6"
+        );
         assert!(crate::config::valid_token(&clip.id));
         assert_eq!(clip.title, motion.title);
         assert_eq!(

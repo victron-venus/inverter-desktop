@@ -118,3 +118,13 @@ notification delivery, file reveal, the Apple trust regressions and the native
 desktop/mobile CI matrix. Then remove the three ignore entries and the temporary
 guard after a fresh Cargo Deny scan succeeds without them. Do not silently extend
 the deadline when an upstream release is still pending.
+
+## QUIC transport patch levels
+
+The app and Home Assistant worker lockfiles retain `quinn-proto` 0.11.19 and
+`quinn-udp` 0.5.16. These address the client Retry-token and stream-limit issues
+([RUSTSEC-2026-0524](https://rustsec.org/advisories/RUSTSEC-2026-0524.html),
+[RUSTSEC-2026-0523](https://rustsec.org/advisories/RUSTSEC-2026-0523.html)) and the
+receive-loop issue ([RUSTSEC-2026-0538](https://rustsec.org/advisories/RUSTSEC-2026-0538.html)).
+Preserve these minimum patch levels when regenerating either lockfile. The
+required audit continues to reject vulnerable dependencies.
