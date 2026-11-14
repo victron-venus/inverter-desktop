@@ -68,8 +68,7 @@
         :loading="toggle.pending"
         @click="activate(toggle)"
       >
-        <span class="mobile-header-label">{{ toggle.label }}</span
-        ><span
+        <span class="mobile-header-label">{{ toggle.label }}</span><span
           v-if="toggle.failed"
           role="alert"
           title="Action unconfirmed; check the current state before retrying."

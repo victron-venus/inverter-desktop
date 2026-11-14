@@ -17,8 +17,9 @@
               :key="index"
               class="classic-inset flex flex-col items-center min-w-[40px] !px-1 !py-0.5"
             >
-              <span class="text-[8px] text-muted">{{ day.datetime.slice(5, 10) }}</span
-              ><span class="text-[10px] font-bold">{{ day.temperature }}{{ item.unit }}</span
+              <span class="text-[8px] text-muted">{{ day.datetime.slice(5, 10) }}</span><span
+                class="text-[10px] font-bold"
+                >{{ day.temperature }}{{ item.unit }}</span
               ><span class="text-[8px] text-muted capitalize truncate max-w-[36px]">{{
                 day.condition
               }}</span>
