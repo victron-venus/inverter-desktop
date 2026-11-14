@@ -71,6 +71,40 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev mosquitto
+      - name: Verify private-loopback MQTT fixture startup before compilation
+        shell: python3 {0}
+        run: |
+          import pathlib, socket, subprocess, tempfile, time
+          with tempfile.TemporaryDirectory(prefix="inverter-broker-probe-") as directory:
+              root = pathlib.Path(directory)
+              with socket.socket() as listener:
+                  listener.bind(("127.0.0.1", 0))
+                  port = listener.getsockname()[1]
+              config = root / "mosquitto.conf"
+              config.write_text(f"listener {port} 127.0.0.1\nallow_anonymous true\npersistence false\nlog_type all\n")
+              with (root / "mosquitto.log").open("w+b") as log:
+                  child = subprocess.Popen(["/usr/sbin/mosquitto", "-c", str(config)], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+                  try:
+                      deadline = time.monotonic() + 5
+                      while time.monotonic() < deadline:
+                          if (status := child.poll()) is not None:
+                              log.seek(max(0, log.seek(0, 2) - 8192))
+                              raise RuntimeError(f"Private-loopback broker exited {status}: " + log.read(8192).decode(errors="replace"))
+                          try:
+                              with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                                  break
+                          except OSError:
+                              time.sleep(0.025)
+                      else:
+                          raise RuntimeError("Private-loopback broker readiness timed out")
+                  finally:
+                      if child.poll() is None:
+                          child.terminate()
+                      try:
+                          child.wait(timeout=3)
+                      except subprocess.TimeoutExpired:
+                          child.kill()
+                          child.wait(timeout=3)
       - name: Exercise patched GLib string iterator with optimizations
         run: cargo test --release --locked --manifest-path tests/glib-variant-regression/Cargo.toml
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check

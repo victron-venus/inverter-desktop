@@ -85,7 +85,21 @@ impl Broker {
         );
         timeout(WAIT, async {
             loop {
-                assert!(self.child.as_mut().unwrap().try_wait().unwrap().is_none());
+                if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
+                    let mut log = Vec::new();
+                    if let Ok(mut file) = fs::File::open(&self.log) {
+                        if let Ok(metadata) = file.metadata() {
+                            let start = metadata.len().saturating_sub(8192);
+                            let _ = std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(start));
+                        }
+                        let mut bounded = std::io::Read::take(file, 8192);
+                        let _ = std::io::Read::read_to_end(&mut bounded, &mut log);
+                    }
+                    panic!(
+                        "private loopback MQTT broker exited {status}: {}",
+                        String::from_utf8_lossy(&log)
+                    );
+                }
                 if TcpStream::connect(("127.0.0.1", self.port)).await.is_ok() {
                     break;
                 }
