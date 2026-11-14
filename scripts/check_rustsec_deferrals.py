@@ -26,13 +26,16 @@ LOCKED_VERSIONS = {
     "zbus_names": "4.3.2",
     "zbus": "5.16.0",
     "zbus_macros": "5.16.0",
-    "notify-rust": "4.18.2",
-    "tauri-plugin-notification": "2.8.0",
-    "tauri-plugin-opener": "2.7.2",
+    "notify-rust": "4.19.0",
+    "tauri-plugin-notification": "2.8.1",
+    "tauri-plugin-opener": "2.7.3",
     "secret-service": "5.1.0",
     "zbus-secret-service-keyring-store": "1.0.0",
     "keyring": "4.2.0",
 }
+# notify-rust 4.19 uses maintained zbus 6, while Tauri and Secret Service
+# still require the exact reviewed zbus 5 path. Both copies remain mandatory.
+PARALLEL_VERSIONS = {"zbus": ("6.3.0",), "zbus_macros": ("6.3.0",)}
 EXISTING_IGNORES = {"RUSTSEC-2026-0192", "RUSTSEC-2024-0370"}
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 
@@ -69,9 +72,10 @@ def validate_deferrals(root: Path, database: Path, now: datetime) -> None:
     packages = tomllib.loads((root / "src-tauri/Cargo.lock").read_text())["package"]
     for name, version in LOCKED_VERSIONS.items():
         matches = [package for package in packages if package["name"] == name]
-        if len(matches) != 1 or (
-            matches[0]["version"], matches[0].get("source")
-        ) != (version, REGISTRY):
+        expected = (version, *PARALLEL_VERSIONS.get(name, ()))
+        if sorted((package["version"], package.get("source", "")) for package in matches) != sorted(
+            (reviewed, REGISTRY) for reviewed in expected
+        ):
             raise ValueError(f"Review deferral after dependency change: {name}@{version}")
 
     expected_ignores = EXISTING_IGNORES | DEFERRALS.keys()

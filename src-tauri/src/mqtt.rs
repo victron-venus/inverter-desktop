@@ -1,6 +1,8 @@
 use crate::notification_session::{NotificationSession, SessionAppHandle};
 use chrono::{TimeZone, Utc};
-use rumqttc::{Client, ConnectReturnCode, MqttOptions, Packet, QoS, SubscribeFilter};
+use rumqttc::{
+    Client, ConnectReturnCode, MqttOptions, Packet, PublishOptions, QoS, SubscribeFilter,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -1769,7 +1771,7 @@ impl MqttClient {
                     _ = connection.cancelled() => break,
                     _ = interval.tick() => {
                         // Never block a Tokio worker on a full sync-client queue.
-                        if client.try_publish(&topic, QoS::AtMostOnce, false, "").is_err() {
+                        if client.try_publish(&topic, "", PublishOptions::at_most_once()).is_err() {
                             break;
                         }
                     }
@@ -2865,7 +2867,7 @@ impl MqttClient {
                 "W/{}/platform/{}/Notifications/{}/{}",
                 portal, platform_instance, slot, field
             );
-            if let Err(e) = client.publish(&topic, QoS::AtLeastOnce, false, payload) {
+            if let Err(e) = client.publish(&topic, payload, PublishOptions::at_least_once()) {
                 log::warn!("Cerbo per-slot ack publish {field} failed: {e}");
             }
         }
@@ -2874,7 +2876,7 @@ impl MqttClient {
             portal, platform_instance
         );
         client
-            .publish(ack_all, QoS::AtLeastOnce, false, payload)
+            .publish(ack_all, payload, PublishOptions::at_least_once())
             .map_err(|e| format!("Cerbo AcknowledgeAll publish failed: {e}"))?;
         Ok(())
     }
@@ -2925,7 +2927,7 @@ impl MqttClient {
         let topic = Self::water_mode_write_topic(&portal, instance);
         let payload = serde_json::json!({ "value": mode }).to_string();
         client
-            .publish(topic, QoS::AtLeastOnce, false, payload)
+            .publish(topic, payload, PublishOptions::at_least_once())
             .map_err(|e| format!("Cerbo water Mode publish failed: {e}"))?;
         Ok(())
     }
@@ -2948,9 +2950,8 @@ impl MqttClient {
         client
             .try_publish(
                 "inverter/cmd/setpoint_override",
-                QoS::AtMostOnce,
-                false,
                 serde_json::json!({"value": value, "request_id": request_id}).to_string(),
+                PublishOptions::at_most_once(),
             )
             .map_err(|e| format!("Could not send setpoint override: {e}"))
     }
@@ -2997,9 +2998,9 @@ impl MqttClient {
             QoS::AtLeastOnce
         };
         if action == "set_ess_mode" {
-            client.try_publish(topic, qos, false, payload_str)?;
+            client.try_publish(topic, payload_str, PublishOptions::new(qos))?;
         } else {
-            client.publish(topic, qos, false, payload_str)?;
+            client.publish(topic, payload_str, PublishOptions::new(qos))?;
         }
         Ok(())
     }
@@ -3605,6 +3606,82 @@ mod tests {
             .publish_command("toggle", serde_json::json!({"entity": "only_charging"}))
             .unwrap_err();
         assert!(err.to_string().contains("not connected"));
+    }
+
+    #[test]
+    fn publish_options_preserve_wire_qos_retention_and_payloads() {
+        // Inspect real rumqttc requests without a broker, network, or MQTT runtime.
+        let mut client =
+            MqttClient::new("localhost".into(), 1883, None, None, "options-test".into());
+        client.set_portal_id(Some("fixture".into()));
+        let (tx, rx) = flume::bounded(16);
+        *client.client.lock().unwrap() = Some(Client::from_sender(tx));
+        {
+            let mut state = client.state.lock().unwrap();
+            state.setpoint_override = Some(SetpointOverrideStatus::default());
+            state.ess_mode = Some(EssMode {
+                selection_supported: Some(true),
+                ..Default::default()
+            });
+            state.ess_mode_observed_at = Some(Utc::now().timestamp_millis() as f64 / 1000.0);
+        }
+        client
+            .publish_command("toggle", serde_json::json!({"entity":"only_charging"}))
+            .unwrap();
+        client
+            .publish_command(
+                "set_ess_mode",
+                serde_json::json!({"mode":"off","request_id":"fixture"}),
+            )
+            .unwrap();
+        client
+            .request_setpoint_override(Some(-10), "fixture")
+            .unwrap();
+        client.set_water_mode("pump", 1).unwrap();
+        client.acknowledge_victron_notification(3, 4).unwrap();
+        let expected = [
+            ("inverter/cmd/toggle", QoS::AtLeastOnce),
+            ("inverter/cmd/set_ess_mode", QoS::AtMostOnce),
+            ("inverter/cmd/setpoint_override", QoS::AtMostOnce),
+            ("W/fixture/pump/1/Mode", QoS::AtLeastOnce),
+            (
+                "W/fixture/platform/3/Notifications/4/Silenced",
+                QoS::AtLeastOnce,
+            ),
+            (
+                "W/fixture/platform/3/Notifications/4/Acknowledged",
+                QoS::AtLeastOnce,
+            ),
+            (
+                "W/fixture/platform/3/Notifications/AcknowledgeAll",
+                QoS::AtLeastOnce,
+            ),
+        ];
+        for (index, (topic, qos)) in expected.into_iter().enumerate() {
+            let rumqttc::Request::Publish(packet) = rx.try_recv().unwrap() else {
+                panic!("Expected queued publish");
+            };
+            assert_eq!(packet.topic.as_ref(), topic.as_bytes());
+            assert_eq!(packet.qos, qos);
+            assert!(
+                !packet.retain,
+                "Commands must not be replayed as retained state"
+            );
+            let value: serde_json::Value = serde_json::from_slice(&packet.payload).unwrap();
+            match index {
+                0 => assert_eq!(value["entity"], "only_charging"),
+                1 => {
+                    assert_eq!(value["mode"], "off");
+                    assert_eq!(value["request_id"], "fixture");
+                }
+                2 => assert_eq!(
+                    value,
+                    serde_json::json!({"value":-10,"request_id":"fixture"})
+                ),
+                _ => assert_eq!(value, serde_json::json!({"value":1})),
+            }
+        }
+        assert!(rx.is_empty());
     }
 
     #[test]

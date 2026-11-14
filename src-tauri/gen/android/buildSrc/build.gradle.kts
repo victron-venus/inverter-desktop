@@ -16,7 +16,7 @@ repositories {
     mavenCentral()
 }
 
-val agpVersion = "8.11.0"
+val agpVersion = "8.13.2"
 
 dependencies {
     compileOnly(gradleApi())

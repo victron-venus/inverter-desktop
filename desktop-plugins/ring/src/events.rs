@@ -11,6 +11,16 @@ use std::{
 
 const COOLDOWN: Duration = Duration::from_secs(20);
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
 pub fn valid_ring_identity(value: &str) -> bool {
     valid_identity(value) && !matches!(value, "." | "..") && !value.contains(['%', '\\'])
 }
@@ -76,7 +86,7 @@ impl Provider for Events {
         if self.seen.contains_key(&key) || self.seen.len() >= MAX_CACHE_ENTRIES {
             return vec![];
         }
-        let cooldown_id = format!("ring-{:x}", Sha256::digest(key.as_bytes()));
+        let cooldown_id = format!("ring-{}", sha256_hex(key.as_bytes()));
         self.seen.insert(key, now);
         let name = self.labels.get(&camera).cloned().unwrap_or_else(|| {
             format!(
@@ -197,6 +207,10 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0]["title"], "Ring Entrance camera motion detected");
         assert_eq!(frames[1]["media_kind"], "png");
+        assert_eq!(
+            frames[1]["cooldown_id"],
+            "ring-c2fc4621d0d07bbe73f8635bd792b7bb5d8025ca0c1ad0523056d21eff3cb60d"
+        );
         assert_eq!(frames[0]["id"], frames[1]["id"]);
         assert_eq!(frames[1]["url"], "https://ha.test/api/front?event=ding");
         assert!(!serde_json::to_string(&frames)

@@ -1,5 +1,6 @@
 import java.util.Properties
 import groovy.json.JsonSlurper
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -61,11 +62,18 @@ android {
             )
         }
     }
-    kotlinOptions {
-        jvmTarget = "1.8"
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
     buildFeatures {
         buildConfig = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_1_8)
     }
 }
 
@@ -73,14 +81,14 @@ rust {
     rootDirRel = "../../../"
 }
 
-val webkitVersion = "1.14.0"
-val appcompatVersion = "1.7.1"
-val activityKtxVersion = "1.10.1"
-val materialVersion = "1.12.0"
-val lifecycleProcessVersion = "2.10.0"
+val webkitVersion = "1.18.0"
+val appcompatVersion = "1.8.0"
+val activityKtxVersion = "1.13.0"
+val materialVersion = "1.14.0"
+val lifecycleProcessVersion = "2.11.0"
 val junitVersion = "4.13.2"
-val testExtJunitVersion = "1.1.4"
-val testEspressoVersion = "3.5.0"
+val testExtJunitVersion = "1.3.0"
+val testEspressoVersion = "3.7.0"
 
 dependencies {
     implementation("androidx.webkit:webkit:$webkitVersion")

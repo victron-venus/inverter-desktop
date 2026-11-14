@@ -23,6 +23,14 @@ prerequisites are listed by the [CI workflow](../.github/workflows/ci.yml); Appl
 and mobile builds additionally need their platform SDKs. The obsolete Rust 1.70
 README badge was not a tested minimum supported Rust version.
 
+Android uses Gradle 8.14.3, AGP 8.13.2 and Kotlin 2.3.21 so the compiler can
+read the updated AndroidX libraries' Kotlin metadata. This combination is in
+[Kotlin's supported matrix](https://kotlinlang.org/docs/gradle-configure-project.html);
+[AGP 8.13.2 includes the Kotlin 2.3-capable R8](https://developer.android.com/build/releases/agp-8-13-0-release-notes).
+Java and Kotlin retain bytecode target 1.8, `minSdk` 24 and compile/target SDK 36.
+The required Android build continues to assemble arm64-v8a, armeabi-v7a, x86
+and x86_64; it does not bypass Kotlin metadata checks.
+
 From a clean checkout run `bash scripts/ci.sh`. This performs locked dependency
 installation, frontend/mobile tests and builds, Rust formatting, Clippy and Rust
 tests. CI additionally runs `pnpm lint`, independent worker tests/builds on Linux,
