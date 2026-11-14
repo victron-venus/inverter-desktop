@@ -31,6 +31,7 @@ pub(super) struct Broker {
     executable: PathBuf,
     config: PathBuf,
     log: PathBuf,
+    _config_directory: Option<tempfile::TempDir>,
     pub(super) port: u16,
     child: Option<Child>,
 }
@@ -43,7 +44,16 @@ impl Broker {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        let config = root.join("mosquitto.conf");
+        let config_directory = std::env::var_os("MOSQUITTO_CONFIG_DIR").map(|parent| {
+            tempfile::Builder::new()
+                .prefix("inverter-mqtt-")
+                .tempdir_in(PathBuf::from(parent))
+                .expect("create an owned private directory under the explicit broker config parent")
+        });
+        let config = config_directory
+            .as_ref()
+            .map_or(root, |directory| directory.path())
+            .join("mosquitto.conf");
         tokio::fs::write(
             &config,
             format!(
@@ -56,6 +66,7 @@ impl Broker {
             executable,
             config,
             log: root.join("mosquitto.log"),
+            _config_directory: config_directory,
             port,
             child: None,
         };
@@ -85,7 +96,25 @@ impl Broker {
         );
         timeout(WAIT, async {
             loop {
-                assert!(self.child.as_mut().unwrap().try_wait().unwrap().is_none());
+                if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
+                    let mut log = Vec::new();
+                    if let Ok(mut file) = tokio::fs::File::open(&self.log).await {
+                        if let Ok(metadata) = file.metadata().await {
+                            let start = metadata.len().saturating_sub(8192);
+                            let _ = tokio::io::AsyncSeekExt::seek(
+                                &mut file,
+                                std::io::SeekFrom::Start(start),
+                            )
+                            .await;
+                        }
+                        let mut bounded = file.take(8192);
+                        let _ = bounded.read_to_end(&mut log).await;
+                    }
+                    panic!(
+                        "private loopback MQTT broker exited {status}: {}",
+                        String::from_utf8_lossy(&log)
+                    );
+                }
                 if TcpStream::connect(("127.0.0.1", self.port)).await.is_ok() {
                     break;
                 }

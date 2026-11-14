@@ -12,7 +12,7 @@ concurrency:
 jobs:
   browser-compatibility:
     name: Desktop browser acceptance
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/typescript-ci.yml@b07180c5b397133fd8ba296181eb630fd603d468 # main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/typescript-ci.yml@4c0b1565d4437315d1a8aadb4b2ab3e3fa350526 # main
     permissions:
       contents: read
     with:
@@ -28,6 +28,8 @@ jobs:
     name: Rust CI (with frontend)
     runs-on: ${{ fromJSON((vars.CI_RUNNER_MODE == 'self-hosted' || vars.CI_RUNNER_MODE == 'k3s') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) && (vars.CI_RUNNER_LABELS || '[]') || '["ubuntu-latest"]') }}
     timeout-minutes: 45
+    env:
+      MOSQUITTO_CONFIG_DIR: /etc/mosquitto/conf.d/inverter-desktop-ci-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
@@ -71,6 +73,42 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev mosquitto
+          test ! -e "$MOSQUITTO_CONFIG_DIR" && test ! -L "$MOSQUITTO_CONFIG_DIR"
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 "$MOSQUITTO_CONFIG_DIR"
+      - name: Verify private-loopback MQTT fixture startup before compilation
+        shell: python3 {0}
+        run: |
+          import os, pathlib, socket, subprocess, tempfile, time
+          with tempfile.TemporaryDirectory(prefix="inverter-broker-probe-", dir=os.environ["MOSQUITTO_CONFIG_DIR"]) as directory:
+              root = pathlib.Path(directory)
+              with socket.socket() as listener:
+                  listener.bind(("127.0.0.1", 0))
+                  port = listener.getsockname()[1]
+              config = root / "mosquitto.conf"
+              config.write_text(f"listener {port} 127.0.0.1\nallow_anonymous true\npersistence false\nlog_type all\n")
+              with (root / "mosquitto.log").open("w+b") as log:
+                  child = subprocess.Popen(["/usr/sbin/mosquitto", "-c", str(config)], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+                  try:
+                      deadline = time.monotonic() + 5
+                      while time.monotonic() < deadline:
+                          if (status := child.poll()) is not None:
+                              log.seek(max(0, log.seek(0, 2) - 8192))
+                              raise RuntimeError(f"Private-loopback broker exited {status}: " + log.read(8192).decode(errors="replace"))
+                          try:
+                              with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                                  break
+                          except OSError:
+                              time.sleep(0.025)
+                      else:
+                          raise RuntimeError("Private-loopback broker readiness timed out")
+                  finally:
+                      if child.poll() is None:
+                          child.terminate()
+                      try:
+                          child.wait(timeout=3)
+                      except subprocess.TimeoutExpired:
+                          child.kill()
+                          child.wait(timeout=3)
       - name: Exercise patched GLib string iterator with optimizations
         run: cargo test --release --locked --manifest-path tests/glib-variant-regression/Cargo.toml
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
@@ -98,6 +136,14 @@ jobs:
           INVERTER_RING_WORKER: ${{ github.workspace }}/desktop-plugins/ring/target/release/inverter-ring-worker
           MOSQUITTO_BIN: /usr/sbin/mosquitto
         run: python3 scripts/run-ci-acceptance.py
+      - name: Remove the empty private MQTT configuration parent
+        if: always()
+        shell: bash
+        run: |
+          if [[ -e "$MOSQUITTO_CONFIG_DIR" || -L "$MOSQUITTO_CONFIG_DIR" ]]; then
+            test -d "$MOSQUITTO_CONFIG_DIR" && test ! -L "$MOSQUITTO_CONFIG_DIR"
+            sudo rmdir -- "$MOSQUITTO_CONFIG_DIR"
+          fi
 
   apple-tls:
     name: Apple TLS trust regressions
