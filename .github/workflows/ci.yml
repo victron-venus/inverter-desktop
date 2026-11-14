@@ -78,7 +78,13 @@ jobs:
       - name: Verify private-loopback MQTT fixture startup before compilation
         shell: python3 {0}
         run: |
-          import os, pathlib, socket, subprocess, tempfile, time
+          import json, os, pathlib, socket, stat, subprocess, tempfile, time
+          def readable_context(path, maximum=16384):
+              try:
+                  with pathlib.Path(path).open("rb") as source:
+                      return source.read(maximum).decode(errors="replace")
+              except OSError as error:
+                  return type(error).__name__
           with tempfile.TemporaryDirectory(prefix="inverter-broker-probe-", dir=os.environ["MOSQUITTO_CONFIG_DIR"]) as directory:
               root = pathlib.Path(directory)
               with socket.socket() as listener:
@@ -86,14 +92,34 @@ jobs:
                   port = listener.getsockname()[1]
               config = root / "mosquitto.conf"
               config.write_text(f"listener {port} 127.0.0.1\nallow_anonymous true\npersistence false\nlog_type all\n")
+              config_stat = config.stat()
+              context = {"parent_uid": os.geteuid(), "parent_gid": os.getegid(),
+                         "parent_profile": readable_context("/proc/self/attr/current"),
+                         "config_owner": config_stat.st_uid, "config_group": config_stat.st_gid,
+                         "config_mode": oct(stat.S_IMODE(config_stat.st_mode)),
+                         "config_readable_by_parent": os.access(config, os.R_OK, effective_ids=True)}
               with (root / "mosquitto.log").open("w+b") as log:
                   child = subprocess.Popen(["/usr/sbin/mosquitto", "-c", str(config)], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+                  context["child_profile"] = readable_context(f"/proc/{child.pid}/attr/current")
+                  context["child_ids"] = [line for line in readable_context(f"/proc/{child.pid}/status").splitlines() if line.startswith(("Uid:", "Gid:", "Name:"))]
                   try:
                       deadline = time.monotonic() + 5
                       while time.monotonic() < deadline:
                           if (status := child.poll()) is not None:
                               log.seek(max(0, log.seek(0, 2) - 8192))
-                              raise RuntimeError(f"Private-loopback broker exited {status}: " + log.read(8192).decode(errors="replace"))
+                              context["loaded_mosquitto_profiles"] = [line for line in readable_context("/sys/kernel/security/apparmor/profiles", 65536).splitlines() if "mosquitto" in line.lower() or line.endswith("Error")]
+                              context["config_parent_traversal"] = []
+                              for parent in config.parents:
+                                  metadata = parent.lstat()
+                                  context["config_parent_traversal"].append({"path": str(parent), "uid": metadata.st_uid, "gid": metadata.st_gid, "mode": oct(stat.S_IMODE(metadata.st_mode)), "traversable_by_parent": os.access(parent, os.X_OK, effective_ids=True)})
+                              for profile in ("/etc/apparmor.d/usr.sbin.mosquitto", "/etc/apparmor.d/mosquitto"):
+                                  try:
+                                      metadata = pathlib.Path(profile).lstat()
+                                      if metadata.st_uid == 0 and stat.S_ISREG(metadata.st_mode):
+                                          context[profile] = readable_context(profile)
+                                  except OSError:
+                                      pass
+                              raise RuntimeError(f"Private-loopback broker exited {status}: " + log.read(8192).decode(errors="replace") + "\nBroker context: " + json.dumps(context, sort_keys=True))
                           try:
                               with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                                   break
