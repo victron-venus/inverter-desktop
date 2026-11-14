@@ -5,7 +5,7 @@ buildscript {
     }
     dependencies {
         val agpVersion = "8.13.2"
-        val kotlinPluginVersion = "2.3.21"
+        val kotlinPluginVersion = "2.4.21"
         classpath("com.android.tools.build:gradle:$agpVersion")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinPluginVersion")
     }
