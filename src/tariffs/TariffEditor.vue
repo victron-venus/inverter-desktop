@@ -114,9 +114,9 @@
       </p>
       <p v-if="error" role="alert" class="tariff-error">{{ error }}</p>
       <footer>
-        <button v-if="plan" type="button" :disabled="busy" @click="clear">{{ clearLabel }}</button
-        ><button type="button" :disabled="busy" @click="emit('close')">Cancel</button
-        ><button type="button" class="tariff-save" :disabled="busy" @click="save">
+        <button v-if="plan" type="button" :disabled="busy" @click="clear">{{ clearLabel }}</button>
+        <button type="button" :disabled="busy" @click="emit('close')">Cancel</button>
+        <button type="button" class="tariff-save" :disabled="busy" @click="save">
           {{
             busy
               ? 'Working…'
