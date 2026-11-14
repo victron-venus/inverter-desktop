@@ -110,6 +110,32 @@ class RustSecDeferralTests(unittest.TestCase):
                     self.validate()
             path.write_text(original)
 
+    def test_parallel_maintained_versions_remain_exact_and_registry_sourced(self):
+        path = self.root / "src-tauri/Cargo.lock"
+        original = path.read_text()
+        for name, versions in GUARD.PARALLEL_VERSIONS.items():
+            for version in versions:
+                before = f'name = "{name}"\nversion = "{version}"\nsource = "{GUARD.REGISTRY}"'
+                self.assertIn(before, original)
+                for changed in (
+                    before.replace(version, "99.0.0"),
+                    before.replace(GUARD.REGISTRY, "git+https://example.invalid"),
+                    before + "\n\n[[package]]\n" + before,
+                ):
+                    with self.subTest(package=name, mutation=changed):
+                        path.write_text(original.replace(before, changed, 1))
+                        with self.assertRaisesRegex(ValueError, "dependency change"):
+                            self.validate()
+                block = next(
+                    section for section in original.split("\n[[package]]\n")
+                    if section.startswith(f'name = "{name}"\nversion = "{version}"\n')
+                )
+                with self.subTest(package=name, mutation="missing maintained copy"):
+                    path.write_text(original.replace("\n[[package]]\n" + block, "", 1))
+                    with self.assertRaisesRegex(ValueError, "dependency change"):
+                        self.validate()
+                path.write_text(original)
+
     def test_additional_vulnerable_version_requires_review(self):
         path = self.root / "src-tauri/Cargo.lock"
         with path.open("a") as output:
