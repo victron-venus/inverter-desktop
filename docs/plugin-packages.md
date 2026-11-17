@@ -184,7 +184,7 @@ legacy fields alone never download anything. Core MQTT/IGW is unchanged.
 Hosted desktop releases generate `.idplugin` assets, `.sha256` files, and
 `desktop-plugins-<target>.json` fragments. Their pinned URLs refer to that frozen
 release tag and become usable only after publication. See the
-[release output contract](release-workflow.md#desktop-plugin-release-assets).
+[release build job](../.github/workflows/release-build.yml).
 
 ## Selecting and reviewing a signed package
 
