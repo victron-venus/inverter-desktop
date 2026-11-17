@@ -20,6 +20,8 @@ Desktop and mobile application for monitoring Victron inverter systems via MQTT.
 
 [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md) · [Governance](GOVERNANCE.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [OpenSSF evidence](docs/openssf-evidence.md)
 
+Docs index: [docs/README.md](docs/README.md).
+
 The OpenSSF image reports the live assessment. It does not promise a Silver badge or replace release acceptance on the intended device.
 
 Android and iOS contain the inverter core: telemetry, MQTT controls, Cerbo EV/water,
