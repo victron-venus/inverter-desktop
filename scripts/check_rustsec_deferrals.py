@@ -12,7 +12,7 @@ import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPIRES = datetime(2026, 11, 17, tzinfo=timezone.utc)
+EXPIRES = datetime(2026, 12, 1, tzinfo=timezone.utc)
 DEFERRALS = {
     "RUSTSEC-2026-0370": "zvariant",
     "RUSTSEC-2026-0371": "zbus_names",

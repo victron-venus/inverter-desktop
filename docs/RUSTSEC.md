@@ -17,7 +17,12 @@ updates for the latest release.
 
 ## Temporary decision
 
-The three retirement notices are deferred **until 17 November 2026 at 00:00 UTC**.
+The original exception expired on **17 November 2026 at 00:00 UTC** and the guard
+correctly rejected it. Following a new explicit user decision on 18 November
+2026 (UTC), the same three retirement notices are deferred **until 1 December
+2026 at 00:00 UTC**, when the guard fails closed again. The new review and its
+limited beta-release authorization are recorded below.
+
 The exception does not cover vulnerability advisories. No production dependency,
 keyring backend, credential format, notification backend or Tauri version changes
 as part of this decision.
@@ -33,9 +38,8 @@ Locally forking the four dependency stacks would require a separate runtime
 migration: zbus 6 removes its blocking API, changes runtimes and changes wire
 types. Switching keyring implementations solely to remove a warning would also
 need proof that existing encrypted configurations can still retrieve their key
-from the same Secret Service item. Keeping the current tested runtime while
-tracking that upstream work avoids introducing this unrelated compatibility
-change into a documentation update.
+from the same Secret Service item. The original decision kept the tested runtime
+while tracking that upstream work; it did not qualify a runtime migration.
 
 ### Dependency review on 20 October 2026
 
@@ -84,6 +88,47 @@ retirement only; their classification/remediation checks and the **17 November
 2026** deadline are unchanged. Required Linux builds and security checks qualify
 the combined graph; this review does not claim a physical notification or
 credential-store migration test.
+
+### Explicit exception review on 18 November 2026 (UTC)
+
+The original 17 November deadline was reached; the
+[18 November Cargo Deny failure](https://github.com/victron-venus/inverter-desktop/actions/runs/44236253143/job/134575006142)
+reported that expiry. The user then explicitly approved a narrow exception
+through **1 December 2026 at 00:00 UTC** and a beta release. This is a new human
+review decision, not an automatic renewal or a dependency-update exemption. It
+allows the beta to proceed only after the existing release checks succeed; it
+does not establish stable-release or runtime-migration acceptance.
+
+The RustSec records were rechecked at 06:36 UTC on 18 November against
+[advisory-db revision `233155b4025b854c68a4b199c0e32d7fd53291a2`](https://github.com/RustSec/advisory-db/tree/233155b4025b854c68a4b199c0e32d7fd53291a2).
+All three still identify their original packages as informational `unmaintained`,
+with no CVSS, vulnerability aliases, categories, withdrawal or available patched
+or unaffected versions. This evidence supports only that unchanged classification;
+it does not promise security fixes for the retired zbus 5 branch.
+
+The released dependency paths were reviewed again. Tauri
+[notification 2.8.1](https://crates.io/crates/tauri-plugin-notification/2.8.1/dependencies)
+and [opener 2.7.3](https://crates.io/crates/tauri-plugin-opener/2.7.3/dependencies)
+still require zbus 5. The newer released
+[Secret Service 5.2.0](https://crates.io/crates/secret-service/5.2.0/dependencies)
+and [keyring store 1.0.1](https://crates.io/crates/zbus-secret-service-keyring-store/1.0.1/dependencies)
+also retain that dependency, so there is no complete released retirement path.
+Those newer versions are not adopted or admitted by this exception: the existing
+locked Secret Service 5.1.0 and keyring store 1.0.0 remain mandatory. A separate
+runtime migration still needs Linux Secret Service key continuity, notification
+race/delivery coverage and the other platform checks below. Continuing to use
+retired dependencies remains the accepted, time-limited risk.
+
+Only the guard's expiry changes. Its advisory IDs and classification/remediation
+checks, exact versions, registry sources and multiplicity are unchanged, including
+both required zbus/zbus_macros versions. The two unrelated existing ignore entries
+(`RUSTSEC-2026-0192` and `RUSTSEC-2024-0370`) and both Cargo Deny configurations are
+unchanged. All four Cargo Deny checks, their fresh database snapshot, cargo-audit
+and the release gates remain enabled. Any change to the guarded advisory
+classification/remediation, dependency inventory or exception list still fails
+before the new deadline; reaching the deadline fails even if all other inputs
+remain unchanged. Another extension requires a new explicit review
+and decision and must not happen silently.
 
 [`scripts/check_rustsec_deferrals.py`](../scripts/check_rustsec_deferrals.py) is the
 single source of the deadline and exact reviewed dependency versions. Cargo Deny
