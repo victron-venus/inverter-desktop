@@ -60,11 +60,23 @@ An old `final-build` RC cannot be reinterpreted as a `promote-bytes` RC.
 - If source, dependencies or packaging change after RC acceptance, build and
   accept a new RC. Do not replace assets, re-sign published binaries, rewrite
   tags or alter version-allocation history.
-- If promotion evidence has expired or is missing or invalid, create and accept
-  a new RC. Do not use a local rebuild as substitute promotion evidence.
-- For a transient publication failure, inspect the existing run and any draft
-  before recovery. Prefer the already queued automatic beta at the intended
-  source; do not dispatch duplicate candidates without checking run state.
+- If promotion evidence has expired or is missing or invalid, inspect the failed
+  run, stable tag, drafts and allocation ledger before creating a new RC. An
+  existing stable tag or draft blocks that base even if publication never
+  completed: preserve it, prepare and merge a reviewed new base version, then
+  build and accept a new RC. If the stable base is unoccupied, a fresh RC may use
+  that base. Follow [version-allocation recovery](VERSIONING.md#durable-allocation-and-retries);
+  never delete tags, drafts or ledger history to force a retry, or substitute a
+  local rebuild for promotion evidence.
+- If stable promotion fails before creating its tag or draft and the accepted RC
+  remains eligible, retry that RC through the protected stable workflow in a new
+  run. Do not publish a queued beta or another newer native build first: advancing
+  the publication floor makes the older RC ineligible. If it is already
+  ineligible, build and accept a new RC, using a new base if the stable tag or
+  draft exists as described above.
+- For a transient beta-candidate publication failure, inspect the existing run
+  and any draft before recovery. Prefer the already queued automatic beta at the
+  intended source; do not dispatch duplicate candidates without checking run state.
 
 A move to an immutable macOS builder would be a separate infrastructure change
 requiring review and validation.
