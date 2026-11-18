@@ -7,7 +7,7 @@ use crate::mqtt::{
     PvInverter, SetpointOverrideStatus,
 };
 use crate::notification_session::{NotificationSession, SessionAppHandle};
-use chrono::Utc;
+use crate::utc_time;
 use log::{info, warn};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -465,10 +465,7 @@ fn map_controller(snap: &GatewaySnapshot, st: &mut InverterState) {
     // Local observation time for the frontend ESS command gate (field is
     // skip_deserializing on InverterState). Live IGW polls stamp here; cached
     // invalidate clears below. Does not weaken the MQTT publish_command gate.
-    st.ess_mode_observed_at = st
-        .ess_mode
-        .as_ref()
-        .map(|_| Utc::now().timestamp_millis() as f64 / 1000.0);
+    st.ess_mode_observed_at = st.ess_mode.as_ref().map(|_| utc_time::unix_seconds_now());
     st.ui_config = serde_json::from_value(field("ui_config")).ok();
     st.features = serde_json::from_value(field("features")).ok();
     st.version = serde_json::from_value(field("version")).ok();

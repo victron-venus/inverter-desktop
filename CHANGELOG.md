@@ -26,6 +26,7 @@ Beta and RC qualification covers the existing software checks and package valida
 
 ### Security
 
+- Replace the application's retired `chrono` timestamp dependency with the already-locked `time` 0.3.53 for [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html), preserving UTC event times and observation freshness. No new advisory exception is added.
 - Update Vue I18n to 11.4.22 for [GHSA-786j-gfwp-vhm5](https://github.com/intlify/vue-i18n/security/advisories/GHSA-786j-gfwp-vhm5), an SSR translated-HTML sanitizer issue. The checked application does not use `v-html` or `escapeParameter`; application exploitation is not claimed.
 - Update Vue I18n to 11.4.17, addressing the upstream translated-HTML SVG sanitizer vulnerability [GHSA-473g-cvf6-mfxj](https://github.com/intlify/vue-i18n/security/advisories/GHSA-473g-cvf6-mfxj). The reviewed application renders translations as text; no exploitable application path was established.
 

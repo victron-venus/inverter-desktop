@@ -25,6 +25,7 @@ mod tls;
 #[cfg(all(test, desktop))]
 #[path = "../../tests/tls-policy/probe.rs"]
 mod tls_policy_tests;
+mod utc_time;
 
 #[cfg(all(desktop, feature = "native-media-smoke"))]
 pub use plugins::native_media_smoke::run as run_native_media_smoke;

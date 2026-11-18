@@ -1,5 +1,5 @@
 use crate::notification_session::{NotificationSession, SessionAppHandle};
-use chrono::{TimeZone, Utc};
+use crate::utc_time;
 use rumqttc::{
     Client, ConnectReturnCode, MqttOptions, Packet, PublishOptions, QoS, SubscribeFilter,
 };
@@ -1160,9 +1160,7 @@ impl PlatformNotifSlot {
             .to_string();
         let ts = self
             .date_time
-            .filter(|secs| *secs > 0)
-            .and_then(|secs| Utc.timestamp_opt(secs, 0).single())
-            .map(|dt| dt.to_rfc3339())
+            .and_then(utc_time::notification_timestamp)
             // MQTT fields arrive separately. Keep the alarm visible while its
             // DateTime is missing, without presenting an old replay as new.
             .unwrap_or_default();
@@ -2635,7 +2633,7 @@ impl MqttClient {
                 new_state.grid_using_backup = Some(false);
             }
             new_state.grid_backup = backup;
-            new_state.grid_backup_observed_at = Some(Utc::now().timestamp_millis() as f64 / 1000.0);
+            new_state.grid_backup_observed_at = Some(utc_time::unix_seconds_now());
         }
         merge_opt!(grid_using_backup, raw.grid_using_backup);
         merge_opt!(version, raw.version);
@@ -2646,7 +2644,7 @@ impl MqttClient {
         if let Some(mode) = raw.ess_mode {
             new_state.ess_mode = Some(mode);
             new_state.ess_mode_observed_at =
-                (!raw.ess_mode_retained).then(|| Utc::now().timestamp_millis() as f64 / 1000.0);
+                (!raw.ess_mode_retained).then(utc_time::unix_seconds_now);
         }
         if !cerbo_owns_chargers {
             merge_opt!(mppt_individual, raw.mppt_individual);
@@ -2749,7 +2747,7 @@ impl MqttClient {
                                             title: title.clone(),
                                             body: body.clone(),
                                             source: "system".to_string(),
-                                            ts: Utc::now().to_rfc3339(),
+                                            ts: utc_time::rfc3339_now(),
                                         },
                                     );
                                 }
@@ -2778,7 +2776,7 @@ impl MqttClient {
                                         title: title.clone(),
                                         body: body.clone(),
                                         source: "system".to_string(),
-                                        ts: Utc::now().to_rfc3339(),
+                                        ts: utc_time::rfc3339_now(),
                                     },
                                 );
                             }
@@ -2804,7 +2802,7 @@ impl MqttClient {
                                         title: title.clone(),
                                         body: body.clone(),
                                         source: "system".to_string(),
-                                        ts: Utc::now().to_rfc3339(),
+                                        ts: utc_time::rfc3339_now(),
                                     },
                                 );
                             }
@@ -2830,7 +2828,7 @@ impl MqttClient {
                                         title: title.clone(),
                                         body: body.clone(),
                                         source: "system".to_string(),
-                                        ts: Utc::now().to_rfc3339(),
+                                        ts: utc_time::rfc3339_now(),
                                     },
                                 );
                             }
@@ -3046,7 +3044,7 @@ impl MqttClient {
                 .state
                 .lock()
                 .map_err(|e| format!("Internal error: {e}"))?;
-            let now = Utc::now().timestamp_millis() as f64 / 1000.0;
+            let now = utc_time::unix_seconds_now();
             if state
                 .ess_mode
                 .as_ref()
@@ -3099,8 +3097,7 @@ mod tests {
                 selection_supported: Some(true),
                 ..Default::default()
             });
-            state.ess_mode_observed_at =
-                age.map(|age| Utc::now().timestamp_millis() as f64 / 1000.0 - age);
+            state.ess_mode_observed_at = age.map(|age| utc_time::unix_seconds_now() - age);
             drop(state);
             assert!(client
                 .publish_command("set_ess_mode", body.clone())
@@ -3768,7 +3765,7 @@ mod tests {
                 selection_supported: Some(true),
                 ..Default::default()
             });
-            state.ess_mode_observed_at = Some(Utc::now().timestamp_millis() as f64 / 1000.0);
+            state.ess_mode_observed_at = Some(utc_time::unix_seconds_now());
         }
         client
             .publish_command("toggle", serde_json::json!({"entity":"only_charging"}))
