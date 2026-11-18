@@ -1,6 +1,6 @@
 //! GUIv2 notification snapshots use the same banner semantics as direct MQTT.
 use crate::mqtt::{MqttNotification, PlatformNotifSlot};
-use chrono::{TimeZone, Utc};
+use crate::utc_time;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -53,7 +53,7 @@ impl GatewayNotifications {
                 .is_some_and(|v| v.is_boolean() || matches!(v.as_i64(), Some(0 | 1)))
                 || !fields.get("DateTime").is_some_and(|v| {
                     v.as_i64()
-                        .is_some_and(|t| t > 0 && Utc.timestamp_opt(t, 0).single().is_some())
+                        .is_some_and(|t| utc_time::notification_timestamp(t).is_some())
                 })
             {
                 continue;

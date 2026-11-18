@@ -7,7 +7,7 @@ use crate::mqtt::{
     PvInverter, SetpointOverrideStatus,
 };
 use crate::notification_session::{NotificationSession, SessionAppHandle};
-use chrono::Utc;
+use crate::utc_time;
 use log::{info, warn};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -162,6 +162,12 @@ impl GatewayClient {
                 join.abort();
             }
         }
+    }
+
+    pub(crate) fn override_session(&self, expected: &str) -> Result<NotificationSession, String> {
+        self.notification_session.ensure_matches(expected)?;
+        self.http_auth().ensure_active()?;
+        Ok(self.notification_session.clone())
     }
 
     pub fn http_auth(&self) -> GatewayHttpAuth {
@@ -459,10 +465,7 @@ fn map_controller(snap: &GatewaySnapshot, st: &mut InverterState) {
     // Local observation time for the frontend ESS command gate (field is
     // skip_deserializing on InverterState). Live IGW polls stamp here; cached
     // invalidate clears below. Does not weaken the MQTT publish_command gate.
-    st.ess_mode_observed_at = st
-        .ess_mode
-        .as_ref()
-        .map(|_| Utc::now().timestamp_millis() as f64 / 1000.0);
+    st.ess_mode_observed_at = st.ess_mode.as_ref().map(|_| utc_time::unix_seconds_now());
     st.ui_config = serde_json::from_value(field("ui_config")).ok();
     st.features = serde_json::from_value(field("features")).ok();
     st.version = serde_json::from_value(field("version")).ok();
@@ -1017,7 +1020,12 @@ pub(crate) fn start_gateway_client(
                         let _ = app.emit("mqtt-notification", notification);
                     }
                     for id in changes.clear {
-                        let _ = app.emit("mqtt-notification-clear", json!({ "id": id }));
+                        // The tracker also clears incomplete/malformed metadata
+                        // and acknowledged slots; absence alone is not a new occurrence.
+                        let _ = app.emit(
+                            "mqtt-notification-clear",
+                            json!({ "id": id, "occurrence_ended": false }),
+                        );
                     }
                     let mut mapped = snapshot_to_state_with_instances(&snap, instances);
                     if let Ok(mut g) = state_c.lock() {
@@ -1113,6 +1121,15 @@ mod tests {
             .unwrap()
             .get("notification_session")
             .is_none());
+    }
+
+    #[test]
+    fn override_session_rejects_replaced_and_stopped_producers() {
+        let client = idle_test_client();
+        assert!(client.override_session("previous").is_err());
+        assert!(client.override_session("test-gateway").is_ok());
+        client.stop();
+        assert!(client.override_session("test-gateway").is_err());
     }
 
     #[test]

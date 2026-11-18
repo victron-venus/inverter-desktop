@@ -18,7 +18,7 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("Cannot load RustSec deferral guard")
 GUARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GUARD)
-NOW = datetime(2026, 10, 18, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 18, tzinfo=timezone.utc)
 
 
 class RustSecDeferralTests(unittest.TestCase):
@@ -57,11 +57,29 @@ class RustSecDeferralTests(unittest.TestCase):
     def test_current_reviewed_dependency_graph_passes(self):
         self.validate()
 
+    def test_new_review_accepts_graph_after_original_expiry(self):
+        original_expiry = datetime(2026, 11, 17, tzinfo=timezone.utc)
+        self.assertGreater(NOW, original_expiry)
+        self.validate(NOW)
+
     def test_exact_utc_expiry_is_enforced(self):
-        self.validate(GUARD.EXPIRES - timedelta(microseconds=1))
-        for now in (GUARD.EXPIRES, GUARD.EXPIRES + timedelta(days=1)):
+        approved_expiry = datetime(2026, 12, 1, tzinfo=timezone.utc)
+        self.assertEqual(GUARD.EXPIRES, approved_expiry)
+        self.validate(approved_expiry - timedelta(microseconds=1))
+        for now in (
+            approved_expiry,
+            approved_expiry + timedelta(microseconds=1),
+            approved_expiry + timedelta(days=1),
+        ):
             with self.subTest(now=now), self.assertRaisesRegex(ValueError, "expired"):
                 self.validate(now)
+
+    def test_expiry_is_the_same_in_another_timezone(self):
+        pacific_standard_time = timezone(timedelta(hours=-8))
+        local_expiry = datetime(2026, 11, 30, 16, tzinfo=pacific_standard_time)
+        self.validate(local_expiry - timedelta(microseconds=1))
+        with self.assertRaisesRegex(ValueError, "expired"):
+            self.validate(local_expiry)
 
     def test_every_advisory_reclassification_fails(self):
         for advisory_id, package in GUARD.DEFERRALS.items():

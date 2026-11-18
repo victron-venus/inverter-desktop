@@ -1,5 +1,5 @@
 use crate::notification_session::{NotificationSession, SessionAppHandle};
-use chrono::{TimeZone, Utc};
+use crate::utc_time;
 use rumqttc::{
     Client, ConnectReturnCode, MqttOptions, Packet, PublishOptions, QoS, SubscribeFilter,
 };
@@ -29,6 +29,32 @@ pub fn mqtt_reconnect_delay_secs(attempt: u32) -> u64 {
     let shift = attempt.min(4);
     let delay = 5u64.saturating_mul(1u64 << shift);
     delay.min(60)
+}
+
+type MqttLoopError = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(Default)]
+struct MqttLoopOutcome {
+    ever_connected: bool,
+    error: Option<MqttLoopError>,
+}
+
+impl MqttLoopOutcome {
+    fn failed(ever_connected: bool, error: MqttLoopError) -> Self {
+        Self {
+            ever_connected,
+            error: Some(error),
+        }
+    }
+
+    fn reconnect_delay(&self, attempt: &mut u32) -> u64 {
+        if self.ever_connected {
+            *attempt = 0;
+        }
+        let delay = mqtt_reconnect_delay_secs(*attempt);
+        *attempt = attempt.saturating_add(1);
+        delay
+    }
 }
 
 /// Short TCP + MQTT CONNACK probe. Does not leave a permanent client.
@@ -979,6 +1005,7 @@ pub struct MqttClient {
     password: Option<String>,
     transport: rumqttc::Transport,
     app_handle: Option<SessionAppHandle>,
+    notification_session: Option<NotificationSession>,
     /// Shared so runtime inverter/portal discovery updates W/ ack topics.
     portal_id: Arc<Mutex<Option<String>>>,
     /// Cerbo GX water instances: (tank, pump, valve). Any side may be None;
@@ -1133,9 +1160,7 @@ impl PlatformNotifSlot {
             .to_string();
         let ts = self
             .date_time
-            .filter(|secs| *secs > 0)
-            .and_then(|secs| Utc.timestamp_opt(secs, 0).single())
-            .map(|dt| dt.to_rfc3339())
+            .and_then(utc_time::notification_timestamp)
             // MQTT fields arrive separately. Keep the alarm visible while its
             // DateTime is missing, without presenting an old replay as new.
             .unwrap_or_default();
@@ -1332,6 +1357,7 @@ impl MqttClient {
             password,
             transport: rumqttc::Transport::tcp(),
             app_handle: None,
+            notification_session: None,
             portal_id: Arc::new(Mutex::new(None)),
             water_instances: None,
             ev_instances: None,
@@ -1356,6 +1382,7 @@ impl MqttClient {
     /// do not keep discovering the portal and fighting for messages.
     pub fn stop(&self) {
         self.shutdown.stop();
+        Self::invalidate_connection_state(&self.state);
         self.emitter.stop();
         if let Ok(mut slot) = self.client.lock() {
             if let Some(client) = slot.take() {
@@ -1364,11 +1391,31 @@ impl MqttClient {
         }
     }
 
+    fn invalidate_connection_state(state: &Arc<Mutex<InverterState>>) {
+        if let Ok(mut state) = state.lock() {
+            state.ess_mode_observed_at = None;
+            state.setpoint_override = None;
+        }
+    }
+
+    pub(crate) fn override_session(&self, expected: &str) -> Result<NotificationSession, String> {
+        if self.shutdown.is_stopped() {
+            return Err("MQTT connection changed; refresh override status".into());
+        }
+        let session = self
+            .notification_session
+            .as_ref()
+            .ok_or_else(|| "MQTT notification session is not configured".to_string())?;
+        session.ensure_matches(expected)?;
+        Ok(session.clone())
+    }
+
     pub(crate) fn set_app_handle(
         &mut self,
         handle: tauri::AppHandle,
         notification_session: NotificationSession,
     ) {
+        self.notification_session = Some(notification_session.clone());
         self.app_handle = Some(SessionAppHandle::new(handle, notification_session));
     }
 
@@ -1450,8 +1497,7 @@ impl MqttClient {
                     log::info!("MQTT client stopped, exiting reconnect loop");
                     break;
                 }
-                // Log error separately so `result` drops before the await
-                {
+                let outcome = {
                     let loop_result = Self::run_mqtt_loop(
                         &host,
                         port,
@@ -1475,16 +1521,15 @@ impl MqttClient {
                         emitter.clone(),
                     )
                     .await;
-                    let is_err = loop_result.is_err();
-                    let ever_connected = loop_result.ok() == Some(true);
+                    // A network error after ConnAck is still a failed connection,
+                    // but it must retain its successful-session history for backoff.
+                    let outcome =
+                        loop_result.unwrap_or_else(|error| MqttLoopOutcome::failed(false, error));
                     if shutdown.is_stopped() {
                         log::info!("MQTT client stopped after disconnect");
                         break;
                     }
-                    if ever_connected {
-                        reconnect_attempt = 0;
-                    }
-                    if is_err {
+                    if outcome.error.is_some() {
                         log::error!("MQTT loop ended (err), will reconnect with backoff...");
                     } else {
                         log::info!("MQTT disconnected, will reconnect with backoff...");
@@ -1494,17 +1539,15 @@ impl MqttClient {
                     if let Ok(mut slot) = client_slot.lock() {
                         *slot = None;
                     }
-                    if let Ok(mut state) = state.lock() {
-                        state.ess_mode_observed_at = None;
-                    }
+                    Self::invalidate_connection_state(&state);
                     if let Some(ref handle) = app_handle {
                         shutdown.while_running(|| {
                             let _ = handle.emit(&status_event, false);
                         });
                     }
-                }
-                let delay = mqtt_reconnect_delay_secs(reconnect_attempt);
-                reconnect_attempt = reconnect_attempt.saturating_add(1);
+                    outcome
+                };
+                let delay = outcome.reconnect_delay(&mut reconnect_attempt);
                 log::info!("MQTT reconnect in {delay}s (attempt backoff)");
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(delay)) => {},
@@ -1538,7 +1581,7 @@ impl MqttClient {
         ev_cache: Arc<Mutex<EvCache>>,
         shutdown: Arc<Shutdown>,
         emitter: Arc<StateEmitter>,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<MqttLoopOutcome, MqttLoopError> {
         let connection_shutdown = Arc::new(Shutdown::new());
         let _connection_guard = CancelOnDrop(connection_shutdown.clone());
         let keepalive_secs = MQTT_KEEP_ALIVE_SECS;
@@ -1564,7 +1607,7 @@ impl MqttClient {
         // Store the connected client so publish_command can use it.
         if let Ok(mut slot) = client_slot.lock() {
             if shutdown.is_stopped() {
-                return Ok(false);
+                return Ok(MqttLoopOutcome::default());
             }
             *slot = Some(client.clone());
         }
@@ -1673,36 +1716,42 @@ impl MqttClient {
                     Ok(rumqttc::Event::Incoming(_)) => {}
                     Err(e) => {
                         log::error!("MQTT error: {:?}", e);
-                        // Emit disconnect and return (exit for reconnect)
+                        // Clear command status before observers can retry after
+                        // the disconnect event, including the IPC getter.
+                        Self::invalidate_connection_state(&state_c);
                         if let Some(ref handle) = app_c {
                             shutdown.while_running(|| {
                                 let _ = handle.emit(&se, false);
                             });
                         }
-                        return Err(e.into());
+                        return Ok(MqttLoopOutcome::failed(ever_connected, e.into()));
                     }
                     _ => {}
                 }
             }
-            Ok::<bool, Box<dyn std::error::Error + Send + Sync>>(ever_connected)
+            Ok::<MqttLoopOutcome, MqttLoopError>(MqttLoopOutcome {
+                ever_connected,
+                error: None,
+            })
         })
         .await;
 
-        let ever_connected = match con_result {
+        let outcome = match con_result {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => return Err(e),
             Err(e) => return Err(e.into()),
         };
 
-        // Connection ended cleanly (EOF) — signal reconnect
-        if !outer_shutdown.is_stopped() {
+        // A finished connection cannot retain command readiness while waiting.
+        Self::invalidate_connection_state(&state);
+        if outcome.error.is_none() && !outer_shutdown.is_stopped() {
             if let Some(ref handle) = app_handle {
                 outer_shutdown.while_running(|| {
                     let _ = handle.emit(status_event, false);
                 });
             }
         }
-        Ok(ever_connected)
+        Ok(outcome)
     }
 
     /// Subscribe the GX portal topics (alarms + dbus-pump water + active loads).
@@ -1868,6 +1917,7 @@ impl MqttClient {
             Self::handle_alarm_message(
                 topic,
                 payload,
+                retained,
                 alarms,
                 platform_notifs_seen,
                 cerbo_devices,
@@ -2200,7 +2250,9 @@ impl MqttClient {
         } else {
             let _ = handle.emit(
                 "mqtt-notification-clear",
-                serde_json::json!({ "id": notification.banner_id() }),
+                // Missing description or acknowledgement can also hide a slot;
+                // neither proves that the underlying occurrence ended.
+                serde_json::json!({ "id": notification.banner_id(), "occurrence_ended": false }),
             );
         }
     }
@@ -2411,11 +2463,38 @@ impl MqttClient {
         }
     }
 
+    fn raw_alarm_observation(payload: &str, retained: bool) -> (u8, bool) {
+        let value = serde_json::from_str::<serde_json::Value>(payload)
+            .ok()
+            .and_then(|v| v.get("value").and_then(|x| x.as_u64()));
+        // Preserve banner handling, but only an explicit live zero proves an
+        // occurrence ended. Malformed/unknown/retained data is visibility-only.
+        (value.unwrap_or(0) as u8, !retained && value == Some(0))
+    }
+
+    /// Decide which raw observations reach the notification emitter. Numeric
+    /// equality cannot suppress newly confirmed resolution after unknown or
+    /// retained data, or the initial zero of a replacement connection.
+    fn update_raw_alarm(
+        topic: &str,
+        payload: &str,
+        retained: bool,
+        alarms: &Arc<Mutex<HashMap<String, u8>>>,
+    ) -> Option<(u8, bool)> {
+        let (value, occurrence_ended) = Self::raw_alarm_observation(payload, retained);
+        let mut map = alarms.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = map.entry(topic.to_string()).or_insert(0);
+        let previous = *entry;
+        *entry = value;
+        (previous != value || occurrence_ended).then_some((value, occurrence_ended))
+    }
+
     /// Track a Victron alarm topic (fallback when platform Notifications unavailable).
     /// Value 0 clears the banner. Suppressed once platform notifications are seen.
     fn handle_alarm_message(
         topic: &str,
         payload: &str,
+        retained: bool,
         alarms: &Arc<Mutex<HashMap<String, u8>>>,
         platform_notifs_seen: &Arc<std::sync::atomic::AtomicBool>,
         cerbo_devices: &Arc<Mutex<CerboDevices>>,
@@ -2425,25 +2504,11 @@ impl MqttClient {
             return;
         }
 
-        let value = serde_json::from_str::<serde_json::Value>(payload)
-            .ok()
-            .and_then(|v| v.get("value").and_then(|x| x.as_u64()))
-            .unwrap_or(0) as u8;
-
-        let prev = {
-            let mut map = match alarms.lock() {
-                Ok(g) => g,
-                Err(e) => e.into_inner(),
-            };
-            let entry = map.entry(topic.to_string()).or_insert(0);
-            let prev = *entry;
-            *entry = value;
-            prev
-        };
-
-        if prev == value {
+        let Some((value, occurrence_ended)) =
+            Self::update_raw_alarm(topic, payload, retained, alarms)
+        else {
             return;
-        }
+        };
 
         let (service, instance, alarm_name) = match Self::parse_alarm_topic(topic) {
             Some(t) => t,
@@ -2484,7 +2549,10 @@ impl MqttClient {
                     },
                 );
             } else {
-                let _ = handle.emit("mqtt-notification-clear", serde_json::json!({ "id": id }));
+                let _ = handle.emit(
+                    "mqtt-notification-clear",
+                    serde_json::json!({ "id": id, "occurrence_ended": occurrence_ended }),
+                );
             }
         }
     }
@@ -2565,7 +2633,7 @@ impl MqttClient {
                 new_state.grid_using_backup = Some(false);
             }
             new_state.grid_backup = backup;
-            new_state.grid_backup_observed_at = Some(Utc::now().timestamp_millis() as f64 / 1000.0);
+            new_state.grid_backup_observed_at = Some(utc_time::unix_seconds_now());
         }
         merge_opt!(grid_using_backup, raw.grid_using_backup);
         merge_opt!(version, raw.version);
@@ -2576,7 +2644,7 @@ impl MqttClient {
         if let Some(mode) = raw.ess_mode {
             new_state.ess_mode = Some(mode);
             new_state.ess_mode_observed_at =
-                (!raw.ess_mode_retained).then(|| Utc::now().timestamp_millis() as f64 / 1000.0);
+                (!raw.ess_mode_retained).then(utc_time::unix_seconds_now);
         }
         if !cerbo_owns_chargers {
             merge_opt!(mppt_individual, raw.mppt_individual);
@@ -2679,7 +2747,7 @@ impl MqttClient {
                                             title: title.clone(),
                                             body: body.clone(),
                                             source: "system".to_string(),
-                                            ts: Utc::now().to_rfc3339(),
+                                            ts: utc_time::rfc3339_now(),
                                         },
                                     );
                                 }
@@ -2708,7 +2776,7 @@ impl MqttClient {
                                         title: title.clone(),
                                         body: body.clone(),
                                         source: "system".to_string(),
-                                        ts: Utc::now().to_rfc3339(),
+                                        ts: utc_time::rfc3339_now(),
                                     },
                                 );
                             }
@@ -2734,7 +2802,7 @@ impl MqttClient {
                                         title: title.clone(),
                                         body: body.clone(),
                                         source: "system".to_string(),
-                                        ts: Utc::now().to_rfc3339(),
+                                        ts: utc_time::rfc3339_now(),
                                     },
                                 );
                             }
@@ -2760,7 +2828,7 @@ impl MqttClient {
                                         title: title.clone(),
                                         body: body.clone(),
                                         source: "system".to_string(),
-                                        ts: Utc::now().to_rfc3339(),
+                                        ts: utc_time::rfc3339_now(),
                                     },
                                 );
                             }
@@ -2837,7 +2905,11 @@ impl MqttClient {
         }
         if let Some(ref handle) = self.app_handle {
             let id = format!("victron-platform-{}-{}", platform_instance, slot);
-            let _ = handle.emit("mqtt-notification-clear", serde_json::json!({ "id": id }));
+            // Local dismissal hides the banner before remote acknowledgement.
+            let _ = handle.emit(
+                "mqtt-notification-clear",
+                serde_json::json!({ "id": id, "occurrence_ended": false }),
+            );
         }
 
         let portal = {
@@ -2933,6 +3005,9 @@ impl MqttClient {
     }
 
     pub fn setpoint_override_status(&self) -> Option<SetpointOverrideStatus> {
+        if self.shutdown.is_stopped() {
+            return None;
+        }
         self.state.lock().ok()?.setpoint_override.clone()
     }
 
@@ -2941,7 +3016,9 @@ impl MqttClient {
         &self,
         value: Option<i32>,
         request_id: &str,
+        expected_session: &str,
     ) -> Result<(), String> {
+        self.override_session(expected_session)?;
         if self.setpoint_override_status().is_none() {
             return Err("Waiting for inverter-control override support on Cerbo".into());
         }
@@ -2967,7 +3044,7 @@ impl MqttClient {
                 .state
                 .lock()
                 .map_err(|e| format!("Internal error: {e}"))?;
-            let now = Utc::now().timestamp_millis() as f64 / 1000.0;
+            let now = utc_time::unix_seconds_now();
             if state
                 .ess_mode
                 .as_ref()
@@ -3020,8 +3097,7 @@ mod tests {
                 selection_supported: Some(true),
                 ..Default::default()
             });
-            state.ess_mode_observed_at =
-                age.map(|age| Utc::now().timestamp_millis() as f64 / 1000.0 - age);
+            state.ess_mode_observed_at = age.map(|age| utc_time::unix_seconds_now() - age);
             drop(state);
             assert!(client
                 .publish_command("set_ess_mode", body.clone())
@@ -3164,14 +3240,16 @@ mod tests {
 
     #[test]
     fn override_requires_daemon_support_and_connected_mqtt() {
-        let client = MqttClient::new("localhost".into(), 1883, None, None, "override-test".into());
+        let mut client =
+            MqttClient::new("localhost".into(), 1883, None, None, "override-test".into());
+        client.notification_session = Some(NotificationSession::new("current".into()).unwrap());
         assert!(client
-            .request_setpoint_override(Some(-10), "id")
+            .request_setpoint_override(Some(-10), "id", "current")
             .unwrap_err()
             .contains("support"));
         client.state.lock().unwrap().setpoint_override = Some(SetpointOverrideStatus::default());
         assert!(client
-            .request_setpoint_override(Some(-10), "id")
+            .request_setpoint_override(Some(-10), "id", "current")
             .unwrap_err()
             .contains("not connected"));
     }
@@ -3242,6 +3320,69 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn raw_alarm_handler_forwards_live_resolution_after_visibility_only_zero() {
+        let topic = "N/test/battery/0/Alarms/HighVoltage";
+        for (unconfirmed, retained) in [("invalid", false), (r#"{"value":0}"#, true)] {
+            let alarms = Arc::new(Mutex::new(HashMap::new()));
+            let update =
+                |payload, retained| MqttClient::update_raw_alarm(topic, payload, retained, &alarms);
+            // The actual handler's cache/dedup decision admits an active alarm,
+            // then a visibility-only clear. That clear must not end history.
+            assert_eq!(update(r#"{"value":1}"#, false), Some((1, false)));
+            assert_eq!(update(r#"{"value":1}"#, false), None);
+            assert_eq!(update(unconfirmed, retained), Some((0, false)));
+            assert_eq!(alarms.lock().unwrap().get(topic), Some(&0));
+            // Even though the cached numeric value is already zero, confirmed
+            // resolution must reach the UI before the next active occurrence.
+            assert_eq!(update(r#"{"value":0}"#, false), Some((0, true)));
+            assert_eq!(update(r#"{"value":1}"#, false), Some((1, false)));
+            assert_eq!(update(r#"{"value":1}"#, false), None);
+        }
+    }
+
+    #[test]
+    fn replacement_alarm_cache_does_not_hide_its_first_live_resolution() {
+        let topic = "N/test/battery/0/Alarms/HighVoltage";
+        let alarms = Arc::new(Mutex::new(HashMap::new()));
+        assert_eq!(
+            MqttClient::update_raw_alarm(topic, r#"{"value":0}"#, true, &alarms),
+            None
+        );
+        assert_eq!(
+            MqttClient::update_raw_alarm(topic, r#"{"value":0}"#, false, &alarms),
+            Some((0, true))
+        );
+        assert_eq!(
+            MqttClient::update_raw_alarm(topic, r#"{"value":1}"#, false, &alarms),
+            Some((1, false))
+        );
+    }
+
+    #[test]
+    fn raw_alarm_terminal_provenance_requires_an_explicit_live_zero() {
+        assert_eq!(
+            MqttClient::raw_alarm_observation(r#"{"value":0}"#, false),
+            (0, true)
+        );
+        for (payload, retained) in [
+            (r#"{"value":0}"#, true),
+            (r#"{"value":1}"#, false),
+            (r#"{"value":2}"#, false),
+            (r#"{"value":256}"#, false),
+            (r#"{"value":null}"#, false),
+            (r#"{"value":"0"}"#, false),
+            (r#"{"value":false}"#, false),
+            (r#"{}"#, false),
+            ("invalid", false),
+        ] {
+            assert!(
+                !MqttClient::raw_alarm_observation(payload, retained).1,
+                "{payload}"
+            );
+        }
     }
 
     #[test]
@@ -3614,6 +3755,7 @@ mod tests {
         let mut client =
             MqttClient::new("localhost".into(), 1883, None, None, "options-test".into());
         client.set_portal_id(Some("fixture".into()));
+        client.notification_session = Some(NotificationSession::new("current".into()).unwrap());
         let (tx, rx) = flume::bounded(16);
         *client.client.lock().unwrap() = Some(Client::from_sender(tx));
         {
@@ -3623,7 +3765,7 @@ mod tests {
                 selection_supported: Some(true),
                 ..Default::default()
             });
-            state.ess_mode_observed_at = Some(Utc::now().timestamp_millis() as f64 / 1000.0);
+            state.ess_mode_observed_at = Some(utc_time::unix_seconds_now());
         }
         client
             .publish_command("toggle", serde_json::json!({"entity":"only_charging"}))
@@ -3635,7 +3777,7 @@ mod tests {
             )
             .unwrap();
         client
-            .request_setpoint_override(Some(-10), "fixture")
+            .request_setpoint_override(Some(-10), "fixture", "current")
             .unwrap();
         client.set_water_mode("pump", 1).unwrap();
         client.acknowledge_victron_notification(3, 4).unwrap();
@@ -4419,7 +4561,32 @@ mod tests {
 
 #[cfg(test)]
 mod reconnect_policy_tests {
-    use super::mqtt_reconnect_delay_secs;
+    use super::{mqtt_reconnect_delay_secs, MqttLoopOutcome};
+
+    #[test]
+    fn connected_error_resets_backoff_without_hiding_the_failure() {
+        let mut attempt = 0;
+        for expected in [5, 10, 20, 40, 60, 60] {
+            let failed = MqttLoopOutcome::failed(false, "connection refused".into());
+            assert_eq!(failed.reconnect_delay(&mut attempt), expected);
+        }
+        for _ in 0..3 {
+            let interrupted =
+                MqttLoopOutcome::failed(true, "connection reset after ConnAck".into());
+            assert!(interrupted.error.is_some());
+            assert_eq!(interrupted.reconnect_delay(&mut attempt), 5);
+            assert_eq!(attempt, 1);
+        }
+        assert_eq!(
+            MqttLoopOutcome::failed(false, "offline".into()).reconnect_delay(&mut attempt),
+            10
+        );
+        let clean = MqttLoopOutcome {
+            ever_connected: true,
+            error: None,
+        };
+        assert_eq!(clean.reconnect_delay(&mut attempt), 5);
+    }
 
     #[test]
     fn mqtt_reconnect_delay_secs_caps() {
@@ -4435,6 +4602,105 @@ mod reconnect_policy_tests {
 #[cfg(test)]
 mod keepalive_lifecycle_tests {
     use super::*;
+    #[test]
+    fn disconnect_and_stop_withdraw_override_until_fresh_telemetry() {
+        let mut client = MqttClient::new(
+            "unused.invalid".into(),
+            1883,
+            None,
+            None,
+            "offline-test".into(),
+        );
+        client.notification_session = Some(NotificationSession::new("current".into()).unwrap());
+        let active = SetpointOverrideStatus {
+            value: Some(100),
+            request_id: Some("old".into()),
+            last_error: None,
+        };
+        assert!(client.setpoint_override_status().is_none());
+        client.state.lock().unwrap().setpoint_override = Some(SetpointOverrideStatus {
+            value: None,
+            request_id: Some("accepted-stop".into()),
+            last_error: None,
+        });
+        let inactive = client.setpoint_override_status().unwrap();
+        assert_eq!(inactive.value, None);
+        assert_eq!(inactive.request_id.as_deref(), Some("accepted-stop"));
+        client.state.lock().unwrap().setpoint_override = Some(active.clone());
+        assert_eq!(client.setpoint_override_status().unwrap().value, Some(100));
+        MqttClient::invalidate_connection_state(&client.state);
+        assert!(client.setpoint_override_status().is_none());
+        assert!(client
+            .request_setpoint_override(Some(200), "next", "current")
+            .unwrap_err()
+            .contains("Waiting"));
+        // Transport construction alone does not restore the old status.
+        let options = MqttOptions::new("offline-test", ("unused.invalid".to_string(), 1883));
+        let (publisher, _connection) = Client::builder(options).capacity(4).build();
+        *client.client.lock().unwrap() = Some(publisher);
+        assert!(client.setpoint_override_status().is_none());
+        assert!(client
+            .request_setpoint_override(Some(200), "next", "current")
+            .is_err());
+        client.state.lock().unwrap().setpoint_override = Some(active);
+        assert!(client.setpoint_override_status().is_some());
+        client.stop();
+        assert!(client.state.lock().unwrap().setpoint_override.is_none());
+        assert!(client.setpoint_override_status().is_none());
+    }
+
+    #[test]
+    fn stale_override_command_is_rejected_before_any_enqueue() {
+        let mut client = MqttClient::new(
+            "unused.invalid".into(),
+            1883,
+            None,
+            None,
+            "offline-test".into(),
+        );
+        client.notification_session = Some(NotificationSession::new("current".into()).unwrap());
+        client.state.lock().unwrap().setpoint_override = Some(SetpointOverrideStatus {
+            value: None,
+            request_id: None,
+            last_error: None,
+        });
+        // Inspect actual rumqttc requests without a broker or network runtime.
+        let (tx, rx) = flume::bounded(1);
+        *client.client.lock().unwrap() = Some(Client::from_sender(tx));
+        for _ in 0..8 {
+            let error = client
+                .request_setpoint_override(Some(200), "stale", "previous")
+                .unwrap_err();
+            assert!(error.contains("connection changed"));
+            assert!(!error.contains("request was sent"));
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "stale source must not enqueue a command"
+        );
+        client
+            .request_setpoint_override(Some(200), "current-request", "current")
+            .unwrap();
+        let rumqttc::Request::Publish(publish) = rx.try_recv().unwrap() else {
+            panic!("expected exactly one publish");
+        };
+        assert_eq!(
+            publish.topic.as_ref(),
+            "inverter/cmd/setpoint_override".as_bytes()
+        );
+        assert_eq!(publish.qos, QoS::AtMostOnce);
+        assert!(!publish.retain);
+        let body: serde_json::Value = serde_json::from_slice(&publish.payload).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"value":200,"request_id":"current-request"})
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "must not retry or send a second command"
+        );
+    }
+
     #[test]
     fn stopping_session_or_connection_finishes_actual_keepalive_task() {
         for stop_session in [false, true] {

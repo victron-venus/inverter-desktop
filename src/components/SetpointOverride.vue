@@ -103,13 +103,21 @@
 import { SlidersHorizontal } from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
-import { acceptsCurrentTransportEvent } from '../composables/transportSession'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import {
+  acceptsCurrentTransportEvent,
+  activeTransportSession,
+  getCurrentTransportSession,
+} from '../composables/transportSession'
 import UiButton from './UiButton.vue'
 
 interface OverrideStatus {
   value: number | null
   last_error: string | null
+}
+interface OverrideEnvelope {
+  notification_session: string
+  status: OverrideStatus | null
 }
 
 const props = defineProps<{ currentSetpoint?: number }>()
@@ -135,6 +143,27 @@ let unlistenConnection: UnlistenFn | undefined
 let disposed = false
 let eventRevision = 0
 
+// Identity retirement is synchronous: the old editor cannot stay ready while
+// configuration/probe/IPC work is still selecting a replacement transport.
+watch(
+  activeTransportSession,
+  () => {
+    eventRevision += 1
+    receiveStatus(null)
+    commandError.value = null
+  },
+  { flush: 'sync' }
+)
+
+function currentRequest(session: string | null, revision: number) {
+  return (
+    !disposed &&
+    session !== null &&
+    session === getCurrentTransportSession() &&
+    eventRevision === revision
+  )
+}
+
 function describeError(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
@@ -148,12 +177,20 @@ function receiveStatus(result: OverrideStatus | null) {
 
 async function refreshStatus() {
   const revision = eventRevision
+  const session = getCurrentTransportSession()
+  if (session === null) {
+    receiveStatus(null)
+    return
+  }
   try {
-    const result = await invoke<OverrideStatus | null>('get_setpoint_override')
-    if (!disposed && eventRevision === revision) receiveStatus(result)
+    const result = await invoke<OverrideEnvelope>('get_setpoint_override', {
+      notificationSession: session,
+    })
+    if (currentRequest(session, revision) && acceptsCurrentTransportEvent(result))
+      receiveStatus(result.status)
   } catch (cause) {
-    // A newer live event wins over both an old getter value and its failure.
-    if (disposed || eventRevision !== revision) return
+    // A newer live event or replacement wins over an old getter and its failure.
+    if (!currentRequest(session, revision)) return
     receiveStatus(null)
     loadError.value = describeError(cause)
     throw cause
@@ -166,14 +203,11 @@ async function initialize() {
   loadError.value = null
   try {
     if (!unlisten) {
-      const unsubscribe = await listen<OverrideStatus | null>(
-        'setpoint-override-update',
-        (event) => {
-          if (disposed) return
-          eventRevision += 1
-          receiveStatus(event.payload)
-        }
-      )
+      const unsubscribe = await listen<OverrideEnvelope>('setpoint-override-update', (event) => {
+        if (disposed || !acceptsCurrentTransportEvent(event.payload)) return
+        eventRevision += 1
+        receiveStatus(event.payload.status)
+      })
       if (disposed) {
         unsubscribe()
         return
@@ -252,26 +286,41 @@ function submit() {
 }
 
 async function apply(value: number | null) {
-  if (!ready.value || saving.value) return
+  const session = getCurrentTransportSession()
+  if (!ready.value || saving.value || session === null) return
   saving.value = true
   commandError.value = null
   inputError.value = null
   let succeeded = false
   const revision = eventRevision
   try {
-    const result = await invoke<OverrideStatus>('set_setpoint_override', { value })
-    if (disposed) return
-    if (eventRevision === revision) receiveStatus(result)
+    const result = await invoke<OverrideEnvelope>('set_setpoint_override', {
+      value,
+      notificationSession: session,
+    })
+    if (
+      disposed ||
+      session !== getCurrentTransportSession() ||
+      !acceptsCurrentTransportEvent(result)
+    )
+      return
+    if (eventRevision === revision) receiveStatus(result.status)
     // Reconcile events that raced the command response without allowing an
     // older getter response to overwrite a newer background error/update.
     try {
       await refreshStatus()
     } catch (cause) {
-      if (!disposed) loadError.value = describeError(cause)
+      if (!disposed && session === getCurrentTransportSession())
+        loadError.value = describeError(cause)
     }
-    succeeded = ready.value && !status.value?.last_error && !loadError.value
+    succeeded =
+      session === getCurrentTransportSession() &&
+      ready.value &&
+      !status.value?.last_error &&
+      !loadError.value
   } catch (cause) {
-    if (!disposed) commandError.value = describeError(cause)
+    if (!disposed && session === getCurrentTransportSession())
+      commandError.value = describeError(cause)
   } finally {
     if (!disposed) saving.value = false
   }

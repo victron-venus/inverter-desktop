@@ -17,6 +17,7 @@ fn is_scoped_event(event: &str) -> bool {
             | "notification"
             | "mqtt-state-update"
             | "mqtt-connection-status"
+            | "setpoint-override-update"
     )
 }
 
@@ -31,6 +32,21 @@ impl NotificationSession {
             return Err("notificationSession must contain 1–128 printable ASCII bytes".into());
         }
         Ok(Self(session.into()))
+    }
+
+    pub(crate) fn ensure_matches(&self, expected: &str) -> Result<(), String> {
+        if self.0.as_ref() == expected {
+            Ok(())
+        } else {
+            Err("Inverter connection changed; refresh status before sending a command".into())
+        }
+    }
+
+    pub(crate) fn override_payload(
+        &self,
+        status: impl Serialize,
+    ) -> Result<Value, serde_json::Error> {
+        self.bind(serde_json::json!({ "status": status }))
     }
 
     pub(crate) fn bind(&self, payload: impl Serialize) -> Result<Value, serde_json::Error> {
@@ -61,6 +77,8 @@ impl NotificationSession {
                 ));
             };
             self.bind(serde_json::json!({ "connected": connected }))
+        } else if event == "setpoint-override-update" {
+            self.override_payload(payload)
         } else {
             self.bind(payload)
         }
@@ -221,7 +239,31 @@ mod tests {
             current.event_payload("notification", &alert).unwrap(),
             alert
         );
-        assert!(!is_scoped_event("setpoint-override-update"));
+        assert!(is_scoped_event("setpoint-override-update"));
+    }
+
+    #[test]
+    fn override_values_and_withdrawals_retain_the_actual_producer() {
+        let old = NotificationSession::new("old".into()).unwrap();
+        let replacement = NotificationSession::new("replacement".into()).unwrap();
+        for status in [
+            serde_json::Value::Null,
+            json!({ "value": 100, "last_error": null,
+            "notification_session": "replacement" }),
+        ] {
+            let queued = old
+                .event_payload("setpoint-override-update", &status)
+                .unwrap();
+            assert_eq!(queued["notification_session"], "old");
+            assert_eq!(queued["status"], status);
+            assert_eq!(
+                replacement.override_payload(&status).unwrap()["notification_session"],
+                "replacement"
+            );
+        }
+        assert!(old.ensure_matches("replacement").is_err());
+        assert!(old.ensure_matches("").is_err());
+        assert!(replacement.ensure_matches("replacement").is_ok());
     }
 
     #[test]

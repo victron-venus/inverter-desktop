@@ -17,6 +17,11 @@ import { useDashboardControls, sendControlAction } from '../composables/useDashb
 import { useConnection } from '../composables/useConnection'
 import { appConfig, state } from '../composables/useInverterState'
 import { defaultConfig } from '../config'
+import {
+  activateTransportSession,
+  invalidateTransportSession,
+  reserveTransportSession,
+} from '../composables/transportSession'
 
 const { invoke, listen, emit } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -254,10 +259,15 @@ describe('mobile build feature boundary', () => {
   })
 
   it('starts and stops the core setpoint override from mobile StatCards without optional services', async () => {
+    const notificationSession = reserveTransportSession()
+    activateTransportSession(notificationSession)
     let override: number | null = null
     invoke.mockImplementation(async (command: string, args?: { value: number | null }) => {
       if (command === 'set_setpoint_override') override = args!.value
-      return { value: override, last_error: null }
+      return {
+        notification_session: notificationSession,
+        status: { value: override, last_error: null },
+      }
     })
     const wrapper = mount(StatCards, {
       props: { mpptTotal: 0, pvInvertersTotal: 0, setpoint: 125 },
@@ -267,19 +277,25 @@ describe('mobile build feature boundary', () => {
       await flushPromises()
       expect(featureSetupAvailable).toBe(false)
       expect(listen).toHaveBeenCalledWith('setpoint-override-update', expect.any(Function))
-      expect(invoke).toHaveBeenCalledWith('get_setpoint_override')
+      expect(invoke).toHaveBeenCalledWith('get_setpoint_override', { notificationSession })
       await wrapper.find('button[aria-label="Setpoint override"]').trigger('click')
       expect((wrapper.find('dialog input').element as HTMLInputElement).value).toBe('125')
       await wrapper.find('dialog input').setValue('-250')
       await wrapper.find('dialog form').trigger('submit')
       await flushPromises()
-      expect(invoke).toHaveBeenCalledWith('set_setpoint_override', { value: -250 })
+      expect(invoke).toHaveBeenCalledWith('set_setpoint_override', {
+        value: -250,
+        notificationSession,
+      })
       expect(wrapper.find('output').text()).toContain('-250 W')
       await wrapper.find('button[aria-label="Setpoint override"]').trigger('click')
       const stop = wrapper.findAll('button').find((button) => button.text() === 'Stop override')!
       await stop.trigger('click')
       await flushPromises()
-      expect(invoke).toHaveBeenCalledWith('set_setpoint_override', { value: null })
+      expect(invoke).toHaveBeenCalledWith('set_setpoint_override', {
+        value: null,
+        notificationSession,
+      })
       expect(wrapper.find('output').exists()).toBe(false)
       expect(
         invoke.mock.calls.every(([command]) =>
@@ -293,6 +309,7 @@ describe('mobile build feature boundary', () => {
       ).toBe(true)
     } finally {
       wrapper.unmount()
+      invalidateTransportSession(notificationSession)
     }
   })
 

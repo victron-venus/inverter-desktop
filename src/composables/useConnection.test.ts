@@ -18,6 +18,8 @@ import {
   TELEMETRY_STALE_AFTER_MS,
   bannerNotifications,
   notifications,
+  markAllNotificationsRead,
+  dismissBanner,
 } from './useInverterState'
 
 const boundary = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), getConfig: vi.fn() }))
@@ -140,27 +142,144 @@ describe('inverter transport configuration lifecycle', () => {
         await nextTick()
         expect(wrapper.get('time').text()).toBe('1h 15m ago')
         expect(notifications.value[0]?.timestamp).toBe(Date.parse(eventTime))
+        const entryId = notifications.value[0]?.id
+        markAllNotificationsRead()
         await connection.connectMqtt()
         emitCurrentNotification('mqtt-notification', alarm)
         await nextTick()
         expect(wrapper.get('time').text()).toBe('1h 15m ago')
         expect(notifications.value[0]?.timestamp).toBe(Date.parse(eventTime))
+        expect(notifications.value).toHaveLength(1)
+        expect(notifications.value[0]).toMatchObject({
+          id: entryId,
+          read: true,
+        })
         // A partially replayed slot has unknown time until its DateTime arrives.
         emitCurrentNotification('mqtt-notification', { ...alarm, ts: '' })
         await nextTick()
         expect(wrapper.text()).not.toContain('just now')
-        expect(notifications.value[0]?.timestamp).toBeNull()
+        // History retains an event time already known before the partial replay.
+        expect(notifications.value[0]?.timestamp).toBe(Date.parse(eventTime))
         emitCurrentNotification('mqtt-notification', alarm)
         await nextTick()
         expect(wrapper.get('time').text()).toBe('1h 15m ago')
         expect(notifications.value[0]?.timestamp).toBe(Date.parse(eventTime))
+        expect(notifications.value).toHaveLength(1)
+        expect(notifications.value[0]).toMatchObject({
+          id: entryId,
+          read: true,
+        })
         emitCurrentNotification('notification', { title: 'Local event', body: 'Occurred here' })
         expect(notifications.value[0]?.timestamp).toBe(Date.now())
+        expect(notifications.value).toHaveLength(2)
       } finally {
         wrapper.unmount()
       }
     }
   )
+
+  it('ends an alarm history occurrence only for a current source clear', async () => {
+    await connection.connectMqtt()
+    const alarm = {
+      ...nativeAlarm(),
+      id: 'victron-N/portal/battery/1/Alarms/LowVoltage',
+      ts: '',
+    }
+    emitCurrentNotification('mqtt-notification', alarm)
+    markAllNotificationsRead()
+    emit('mqtt-notification-clear', {
+      id: alarm.id,
+      notification_session: 'old-session',
+      occurrence_ended: true,
+    })
+    emitCurrentNotification('mqtt-notification', {
+      ...alarm,
+      body: 'Battery cell detail',
+    })
+    expect(notifications.value).toHaveLength(1)
+    expect(notifications.value[0]).toMatchObject({
+      body: 'Battery cell detail',
+      read: true,
+    })
+    emitCurrentNotification('mqtt-notification-clear', { id: alarm.id, occurrence_ended: true })
+    expect(bannerNotifications.value).toHaveLength(0)
+    emitCurrentNotification('mqtt-notification', alarm)
+    expect(notifications.value).toHaveLength(2)
+    expect(notifications.value[0].read).toBe(false)
+    expect(notifications.value[1].read).toBe(true)
+  })
+
+  it('retains read history through a new client partial clear and a later complete replay', async () => {
+    await connection.connectMqtt()
+    const alarm = nativeAlarm()
+    emitCurrentNotification('mqtt-notification', alarm)
+    markAllNotificationsRead()
+    const entryId = notifications.value[0].id
+    await connection.connectMqtt()
+    // Native slot reconstruction can hide an incomplete slot before Description arrives.
+    emitCurrentNotification('mqtt-notification-clear', { id: alarm.id })
+    emitCurrentNotification('mqtt-notification', { ...alarm, ts: '' })
+    emitCurrentNotification('mqtt-notification', alarm)
+    expect(notifications.value).toHaveLength(1)
+    expect(notifications.value[0]).toMatchObject({
+      id: entryId,
+      read: true,
+      timestamp: Date.parse(alarm.ts),
+    })
+    expect(bannerNotifications.value[0]?.id).toBe(alarm.id)
+  })
+
+  it('does not treat the native visibility clear after local dismissal as source resolution', async () => {
+    await connection.connectMqtt()
+    const alarm = nativeAlarm()
+    emitCurrentNotification('mqtt-notification', alarm)
+    markAllNotificationsRead()
+    const entryId = notifications.value[0].id
+    // The native acknowledgement command hides the banner before any broker ACK.
+    boundary.invoke.mockImplementationOnce(async (command: string) => {
+      expect(command).toBe('acknowledge_victron_banner')
+      emitCurrentNotification('mqtt-notification-clear', { id: alarm.id })
+    })
+    await dismissBanner(alarm.id)
+    expect(bannerNotifications.value).toHaveLength(0)
+    emitCurrentNotification('mqtt-notification', alarm)
+    expect(notifications.value).toHaveLength(1)
+    expect(notifications.value[0]).toMatchObject({ id: entryId, read: true })
+  })
+
+  it.each([false, undefined, 'true', 1])(
+    'does not infer source resolution from occurrence_ended=%j',
+    async (occurrence_ended) => {
+      await connection.connectMqtt()
+      const alarm = nativeAlarm()
+      emitCurrentNotification('mqtt-notification', alarm)
+      markAllNotificationsRead()
+      emitCurrentNotification('mqtt-notification-clear', { id: alarm.id, occurrence_ended })
+      expect(bannerNotifications.value).toHaveLength(0)
+      emitCurrentNotification('mqtt-notification', alarm)
+      expect(notifications.value).toHaveLength(1)
+      expect(notifications.value[0].read).toBe(true)
+    }
+  )
+
+  it('keeps connection settings out of history and retains occurrence identity across credential changes', async () => {
+    boundary.getConfig.mockResolvedValue({
+      ...igwConfig(),
+      gateway_url: 'https://fixture-user:fixture-password@igw.example/api?token=fixture-token',
+    })
+    await connection.connectMqtt()
+    emitCurrentNotification('mqtt-notification', nativeAlarm())
+    markAllNotificationsRead()
+    boundary.getConfig.mockResolvedValue({
+      ...igwConfig(),
+      gateway_url: 'https://another-user:another-password@igw.example/api?token=another-token',
+    })
+    await connection.connectMqtt()
+    emitCurrentNotification('mqtt-notification', nativeAlarm())
+    expect(notifications.value).toHaveLength(1)
+    expect(notifications.value[0].read).toBe(true)
+    expect(JSON.stringify(notifications.value)).not.toMatch(/fixture-|another-|igw\.example/)
+  })
 
   it('repopulates native banners across automatic MQTT/IGW failover and recovery', async () => {
     boundary.getConfig.mockResolvedValue({
@@ -542,7 +661,7 @@ describe('native notification transport identities', () => {
       expect(bannerNotifications.value.find(({ id }) => id === nativeAlarm().id)?.title).toBe(
         'Current alarm'
       )
-      expect(notifications.value).toHaveLength(3)
+      expect(notifications.value).toHaveLength(target === 'same-gateway' ? 2 : 3)
       emitCurrentNotification('mqtt-notification-clear', { id: nativeAlarm().id })
       expect(bannerNotifications.value.map(({ id }) => id)).toEqual(['controller-1'])
     }
@@ -809,7 +928,8 @@ describe('native notification transport identities', () => {
       callback({ payload: { id: nativeAlarm().id, notification_session: oldToken } })
     emit('mqtt-notification', { ...nativeAlarm('Previous owner'), notification_session: oldToken })
     expect(bannerNotifications.value[0]?.title).toBe('New owner')
-    expect(notifications.value).toHaveLength(2)
+    expect(notifications.value).toHaveLength(1)
+    expect(notifications.value[0].title).toBe('New owner')
   })
 
   it('fences delayed events during automatic failover and pending recovery connect', async () => {
@@ -850,7 +970,8 @@ describe('native notification transport identities', () => {
     emit('mqtt-notification', { ...nativeAlarm('Late IGW'), notification_session: igwToken })
     emit('mqtt-notification-clear', { id: nativeAlarm().id, notification_session: igwToken })
     expect(bannerNotifications.value[0]?.title).toBe('Recovered MQTT')
-    expect(notifications.value).toHaveLength(3)
+    expect(notifications.value).toHaveLength(1)
+    expect(notifications.value[0].title).toBe('Recovered MQTT')
     recovery.resolve()
     await vi.advanceTimersByTimeAsync(0)
   })

@@ -23,12 +23,14 @@ import {
   clearBanner,
   clearVictronBanners,
   dataSource,
+  endNotificationOccurrence,
   type InverterState,
   mqttConnected,
   refreshTelemetryQuality,
   resetInverterState,
   state,
   upsertBanner,
+  upsertNotification,
 } from './useInverterState'
 import { notify } from './useSystemNotifications'
 import {
@@ -45,6 +47,33 @@ export { notify }
 
 // Serialize transport commands across composable owners as well as reconnects.
 let transportOperations: Promise<unknown> = Promise.resolve()
+
+let notificationSourceKey: string | null = null
+let notificationSourceRevision = 0
+
+function historyScope(config: AppConfig): string {
+  let gateway: string[] | null = null
+  try {
+    const url = new URL(config.gateway_url || '')
+    gateway = [url.protocol, url.hostname, url.port, url.pathname]
+  } catch {
+    // An invalid or absent endpoint cannot identify an additional source.
+  }
+  // Compare only source endpoints, without credentials or display preferences.
+  const key = JSON.stringify([
+    config.mqtt_host,
+    config.mqtt_port,
+    config.mqtt_tls === true,
+    config.portal_id,
+    gateway,
+  ])
+  if (key !== notificationSourceKey) {
+    notificationSourceKey = key
+    notificationSourceRevision += 1
+  }
+  // History holds an opaque revision, never copied connection settings.
+  return String(notificationSourceRevision)
+}
 
 async function ensureNotificationPermission() {
   try {
@@ -119,6 +148,7 @@ export function useConnection() {
   let session = 0
   let inverterEnabled = false
   let connectionKey: string | null = null
+  let notificationHistoryScope = ''
   let freshnessTimer: ReturnType<typeof setInterval> | null = null
   let listeners: Array<() => void> = []
   let transportGeneration = 0
@@ -300,6 +330,8 @@ export function useConnection() {
 
   function applyConnectionConfig(config: AppConfig) {
     inverterEnabled = isMqttConfigured(config) || isIgwConfigured(config)
+    // Source identity survives reconnect/failover, but not an installation change.
+    notificationHistoryScope = historyScope(config)
     const nextKey = JSON.stringify([
       config.mqtt_host,
       config.mqtt_port,
@@ -465,17 +497,24 @@ export function useConnection() {
       await listenForSession<TransportEvent<BannerNotification>>('mqtt-notification', (event) => {
         if (!acceptsNotification(event.payload)) return
         upsertBanner(event.payload)
-        addNotification(
-          event.payload.title,
-          event.payload.body,
-          notificationTimestampMs(event.payload.ts)
+        upsertNotification(
+          event.payload,
+          notificationTimestampMs(event.payload.ts),
+          notificationHistoryScope
         )
       })
 
-      await listenForSession<TransportEvent<{ id: string }>>('mqtt-notification-clear', (event) => {
-        if (!acceptsNotification(event.payload)) return
-        clearBanner(event.payload.id)
-      })
+      await listenForSession<TransportEvent<{ id: string; occurrence_ended?: boolean }>>(
+        'mqtt-notification-clear',
+        (event) => {
+          if (!acceptsNotification(event.payload)) return
+          // Partial native snapshots and local dismissals hide banners too.
+          // Only positively confirmed source resolution ends the occurrence.
+          if (event.payload.occurrence_ended === true)
+            endNotificationOccurrence(event.payload.id, notificationHistoryScope)
+          clearBanner(event.payload.id)
+        }
+      )
 
       if (!requestIsCurrent()) return
       const mqttOk = isMqttConfigured(config)

@@ -25,6 +25,7 @@ mod tls;
 #[cfg(all(test, desktop))]
 #[path = "../../tests/tls-policy/probe.rs"]
 mod tls_policy_tests;
+mod utc_time;
 
 #[cfg(all(desktop, feature = "native-media-smoke"))]
 pub use plugins::native_media_smoke::run as run_native_media_smoke;
@@ -364,15 +365,13 @@ fn stop_inverter_clients(
 
 #[tauri::command]
 fn disconnect_inverter(
-    app: tauri::AppHandle,
     mqtt_client: State<MqttState>,
     gateway_client: State<GatewayState>,
     lifecycle: State<InverterLifecycle>,
 ) -> Result<(), String> {
     stop_inverter_clients(&mqtt_client, &gateway_client, &lifecycle)?;
-    // stop() aborts/silences each poller, so its final status event is not
-    // guaranteed. Explicit disconnect must immediately invalidate the editor.
-    let _ = app.emit("setpoint-override-update", serde_json::Value::Null);
+    // The frontend retires its reactive transport identity before disconnecting;
+    // never broadcast an unscoped reset that could erase a replacement's status.
     Ok(())
 }
 
@@ -397,59 +396,134 @@ fn get_state(
     }
 }
 
-#[tauri::command]
-async fn get_setpoint_override(
-    mqtt_client: State<'_, MqttState>,
-    gateway_client: State<'_, GatewayState>,
-) -> Result<SetpointOverrideStatus, String> {
-    if let Some(auth) = active_gateway_auth(&gateway_client)? {
-        return gateway_actions::get_setpoint_override(&auth).await;
-    }
-    mqtt_setpoint_override(&mqtt_client)
+fn override_gateway(
+    gateway_client: &GatewayState,
+    expected_session: &str,
+) -> Result<
+    Option<(
+        gateway::GatewayHttpAuth,
+        notification_session::NotificationSession,
+    )>,
+    String,
+> {
+    gateway_client
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .map(|client| {
+            Ok((
+                client.http_auth(),
+                client.override_session(expected_session)?,
+            ))
+        })
+        .transpose()
 }
 
-fn mqtt_setpoint_override(mqtt_client: &MqttState) -> Result<SetpointOverrideStatus, String> {
+#[tauri::command]
+async fn get_setpoint_override(
+    notification_session: String,
+    mqtt_client: State<'_, MqttState>,
+    gateway_client: State<'_, GatewayState>,
+) -> Result<serde_json::Value, String> {
+    if let Some((auth, session)) = override_gateway(&gateway_client, &notification_session)? {
+        let status = gateway_actions::get_setpoint_override(&auth).await?;
+        return session
+            .override_payload(status)
+            .map_err(|error| error.to_string());
+    }
+    let (session, status) = mqtt_override_for_session(&mqtt_client, &notification_session)?;
+    session
+        .override_payload(status)
+        .map_err(|error| error.to_string())
+}
+
+fn mqtt_override_for_session(
+    mqtt_client: &MqttState,
+    expected_session: &str,
+) -> Result<
+    (
+        notification_session::NotificationSession,
+        SetpointOverrideStatus,
+    ),
+    String,
+> {
     let guard = mqtt_client.0.lock().map_err(|e| e.to_string())?;
-    guard
-        .as_ref()
-        .and_then(MqttClient::setpoint_override_status)
-        .ok_or_else(|| {
-            "Current Setpoint Override status is unavailable; wait for fresh MQTT telemetry".into()
-        })
+    let client = guard.as_ref().ok_or("Cerbo MQTT is not connected")?;
+    let session = client.override_session(expected_session)?;
+    let status = client
+        .setpoint_override_status()
+        .ok_or("Current Setpoint Override status is unavailable; wait for fresh MQTT telemetry")?;
+    Ok((session, status))
+}
+
+fn override_acknowledgement_matches(
+    status: &SetpointOverrideStatus,
+    request_id: &str,
+    requested_value: Option<i32>,
+) -> Result<bool, String> {
+    if status.request_id.as_deref() != Some(request_id) {
+        return Ok(false);
+    }
+    if let Some(error) = status.last_error.as_ref() {
+        return Err(error.clone());
+    }
+    if status.value != requested_value {
+        return Err(
+            "Cerbo acknowledged a different override value; check its current status".into(),
+        );
+    }
+    Ok(true)
+}
+
+// Called only after a single successful enqueue. Losing the source does not
+// establish whether Cerbo applied the command, so do not imply cancellation.
+fn mqtt_override_acknowledgement(
+    mqtt_client: &MqttState,
+    expected_session: &str,
+    request_id: &str,
+    requested_value: Option<i32>,
+) -> Result<Option<serde_json::Value>, String> {
+    let (session, status) = mqtt_override_for_session(mqtt_client, expected_session).map_err(|reason|
+        format!("Override request was sent, but its acknowledgement was not observed; the result is uncertain. Check current status before trying again. {reason}"))?;
+    if !override_acknowledgement_matches(&status, request_id, requested_value)? {
+        return Ok(None);
+    }
+    session
+        .override_payload(status)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn set_setpoint_override(
     value: Option<i32>,
+    notification_session: String,
     mqtt_client: State<'_, MqttState>,
     gateway_client: State<'_, GatewayState>,
-) -> Result<SetpointOverrideStatus, String> {
+) -> Result<serde_json::Value, String> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    if let Some(auth) = active_gateway_auth(&gateway_client)? {
-        return gateway_actions::set_setpoint_override(&auth, value, &request_id).await;
+    if let Some((auth, session)) = override_gateway(&gateway_client, &notification_session)? {
+        let status = gateway_actions::set_setpoint_override(&auth, value, &request_id).await?;
+        return session
+            .override_payload(status)
+            .map_err(|error| error.to_string());
     }
-    let shared_state = {
+    {
         let guard = mqtt_client.0.lock().map_err(|e| e.to_string())?;
         let client = guard
             .as_ref()
             .ok_or("Connect to Cerbo MQTT to change the override")?;
-        client.request_setpoint_override(value, &request_id)?;
-        client.state.clone()
-    };
+        // Validate the displayed producer while holding the slot through enqueue.
+        // A changed source is an error, never a reason to replay on its replacement.
+        client.request_setpoint_override(value, &request_id, &notification_session)?;
+    }
     // Confirm daemon acceptance instead of presenting MQTT enqueue as success.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let status = shared_state
-            .lock()
-            .map_err(|e| e.to_string())?
-            .setpoint_override
-            .clone();
         if let Some(status) =
-            status.filter(|s| s.request_id.as_deref() == Some(request_id.as_str()))
+            mqtt_override_acknowledgement(&mqtt_client, &notification_session, &request_id, value)?
         {
-            if let Some(error) = status.last_error.as_ref() {
-                return Err(error.clone());
-            }
             return Ok(status);
         }
         if tokio::time::Instant::now() >= deadline {
@@ -1005,7 +1079,11 @@ async fn connect_mqtt_impl(
     }
     // A newly saved config may be invalid. Stop the old source before rejecting
     // it so controls cannot target an old broker under the new endpoint's UI.
-    let _ = app.emit("setpoint-override-update", serde_json::Value::Null);
+    let _ = notification_session::SessionAppHandle::new(app.clone(), notification_session.clone())
+        .emit(
+            "setpoint-override-update",
+            Option::<SetpointOverrideStatus>::None,
+        );
     client.configure_transport(tls)?;
     client.set_app_handle(app, notification_session);
     client.set_portal_id(portal_id);
@@ -1077,7 +1155,12 @@ async fn connect_gateway(
             info!("connect_gateway: stopping prior gateway client");
             old.stop();
         }
-        let _ = app.emit("setpoint-override-update", serde_json::Value::Null);
+        let _ =
+            notification_session::SessionAppHandle::new(app.clone(), notification_session.clone())
+                .emit(
+                    "setpoint-override-update",
+                    Option::<SetpointOverrideStatus>::None,
+                );
         let client = gateway::start_gateway_client(
             app.clone(),
             notification_session,
@@ -2372,27 +2455,58 @@ mod inverter_action_routing_tests {
     }
 
     #[test]
-    fn missing_mqtt_override_status_is_unknown_not_inactive() {
+    fn override_getters_reject_absent_or_unbound_mqtt_and_wrong_gateway_sessions() {
         let absent = MqttState(Arc::new(Mutex::new(None)));
-        assert!(mqtt_setpoint_override(&absent).is_err());
+        assert!(mqtt_override_for_session(&absent, "old").is_err());
         let mqtt = mqtt_slot();
-        assert!(mqtt_setpoint_override(&mqtt).is_err());
-        mqtt.0
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap()
-            .setpoint_override = Some(SetpointOverrideStatus {
-            value: None,
-            request_id: Some("accepted-stop".into()),
-            last_error: None,
-        });
-        let inactive = mqtt_setpoint_override(&mqtt).unwrap();
-        assert_eq!(inactive.value, None);
-        assert_eq!(inactive.request_id.as_deref(), Some("accepted-stop"));
+        assert!(mqtt_override_for_session(&mqtt, "old").is_err());
+        let gateway = GatewayState(Arc::new(Mutex::new(Some(gateway::idle_test_client()))));
+        assert!(override_gateway(&gateway, "old").is_err());
+        let (_, session) = override_gateway(&gateway, "test-gateway").unwrap().unwrap();
+        assert_eq!(
+            session
+                .override_payload(Option::<SetpointOverrideStatus>::None)
+                .unwrap(),
+            json!({"notification_session":"test-gateway","status":null})
+        );
+        gateway.0.lock().unwrap().as_ref().unwrap().stop();
+        assert!(override_gateway(&gateway, "test-gateway").is_err());
+    }
+
+    #[test]
+    fn mqtt_override_acknowledgement_requires_request_and_value_including_stop() {
+        for value in [Some(-500), Some(i32::MIN), Some(i32::MAX), None] {
+            let mut status = SetpointOverrideStatus {
+                value,
+                request_id: Some("current".into()),
+                last_error: None,
+            };
+            assert!(override_acknowledgement_matches(&status, "current", value).unwrap());
+            assert!(!override_acknowledgement_matches(&status, "old", value).unwrap());
+            let different = if value.is_some() { None } else { Some(100) };
+            assert!(
+                override_acknowledgement_matches(&status, "current", different)
+                    .unwrap_err()
+                    .contains("different override value")
+            );
+            status.last_error = Some("Controller rejected value".into());
+            assert_eq!(
+                override_acknowledgement_matches(&status, "current", value).unwrap_err(),
+                "Controller rejected value"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_post_dispatch_acknowledgement_reports_uncertainty_not_cancellation() {
+        let absent = MqttState(Arc::new(Mutex::new(None)));
+        let error = mqtt_override_acknowledgement(&absent, "original", "sent-request", Some(100))
+            .unwrap_err();
+        assert!(error.contains("request was sent"));
+        assert!(error.contains("acknowledgement was not observed"));
+        assert!(error.contains("result is uncertain"));
+        assert!(!error.contains("cancelled"));
+        assert!(!error.contains("rejected"));
     }
 
     #[test]
