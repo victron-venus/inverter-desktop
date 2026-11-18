@@ -240,6 +240,8 @@ const OVERRIDE_DEADLINE: Duration = Duration::from_secs(5);
 const OVERRIDE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const OVERRIDE_UNCONFIRMED: &str =
     "Cerbo has not confirmed the override. Check its connection and current status before trying again.";
+const OVERRIDE_UNCERTAIN: &str =
+    "The override command may have been sent, but its acknowledgement was not observed. The result is uncertain; check fresh status before trying again.";
 
 async fn before_deadline<T>(
     deadline: Instant,
@@ -291,12 +293,16 @@ where
         deadline,
         post(json!({"value":value,"request_id":request_id})),
     )
-    .await?;
-    active()?;
+    .await
+    .map_err(|_| OVERRIDE_UNCERTAIN.to_string())?;
+    active().map_err(|_| OVERRIDE_UNCERTAIN.to_string())?;
     loop {
-        let snap = before_deadline(deadline, snapshot()).await?;
-        active()?;
-        let status = crate::gateway::snapshot_override_status(&snap)?;
+        let snap = before_deadline(deadline, snapshot())
+            .await
+            .map_err(|_| OVERRIDE_UNCERTAIN.to_string())?;
+        active().map_err(|_| OVERRIDE_UNCERTAIN.to_string())?;
+        let status = crate::gateway::snapshot_override_status(&snap)
+            .map_err(|_| OVERRIDE_UNCERTAIN.to_string())?;
         if status.request_id.as_deref() == Some(request_id) {
             if let Some(error) = status.last_error.as_ref() {
                 return Err(error.clone());
@@ -313,8 +319,9 @@ where
             tokio::time::sleep(OVERRIDE_POLL_INTERVAL).await;
             Ok(())
         })
-        .await?;
-        active()?;
+        .await
+        .map_err(|_| OVERRIDE_UNCERTAIN.to_string())?;
+        active().map_err(|_| OVERRIDE_UNCERTAIN.to_string())?;
     }
 }
 
@@ -764,7 +771,7 @@ mod override_tests {
             || Ok(()),
         )
         .await;
-        assert_eq!(result.unwrap_err(), OVERRIDE_UNCONFIRMED);
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCERTAIN);
         assert_eq!(posts.get(), 1);
         assert_eq!(Instant::now() - started, OVERRIDE_DEADLINE);
     }
@@ -795,7 +802,7 @@ mod override_tests {
             || Ok(()),
         )
         .await;
-        assert_eq!(result.unwrap_err(), OVERRIDE_UNCONFIRMED);
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCERTAIN);
         assert_eq!(posts.get(), 1);
         assert_eq!(reads.get(), 2);
         assert_eq!(Instant::now() - started, OVERRIDE_DEADLINE);
@@ -826,7 +833,7 @@ mod override_tests {
             || Ok(()),
         )
         .await;
-        assert_eq!(result.unwrap_err(), OVERRIDE_UNCONFIRMED);
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCERTAIN);
         assert_eq!(posts.get(), 1);
     }
 
@@ -875,7 +882,14 @@ mod override_tests {
                 resume_tx.send(()).unwrap();
             };
             let (result, ()) = tokio::join!(operation, stop);
-            assert!(result.unwrap_err().contains("connection changed"));
+            let error = result.unwrap_err();
+            if stop_at == 1 {
+                assert!(error.contains("connection changed"));
+                assert!(!error.contains("may have been sent"));
+            } else {
+                assert_eq!(error, OVERRIDE_UNCERTAIN);
+                assert!(!error.contains("retry the action"));
+            }
             assert_eq!(posts.get(), stop_at - 1);
         }
     }
@@ -903,7 +917,7 @@ mod override_tests {
                 || Ok(()),
             )
             .await;
-            assert!(result.is_err());
+            assert_eq!(result.unwrap_err(), OVERRIDE_UNCERTAIN);
             assert_eq!(posts.get(), 1);
         }
         let posts = Cell::new(0);
@@ -918,7 +932,7 @@ mod override_tests {
             || Ok(()),
         )
         .await;
-        assert_eq!(result.unwrap_err(), "POST response lost");
+        assert_eq!(result.unwrap_err(), OVERRIDE_UNCERTAIN);
         assert_eq!(posts.get(), 1);
     }
 }

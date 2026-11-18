@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserve the event time and read state of a Victron alarm when connection replay or battery detail updates repeat it. Distinguish a confirmed alarm clear from a partial snapshot or local banner dismissal.
+- Fence Setpoint Override status, requests and acknowledgements to the selected connection. Require fresh status after MQTT loss and report an unconfirmed command outcome without resending it.
+- Reset MQTT reconnect backoff after a successful connection, so later independent outages do not inherit earlier retry delays.
+- Show explicit lock states and unconfirmed outcomes in header controls, matching the Home section.
 - Keep native macOS package-integrity tests in their dedicated job while worker package jobs retain the portable contract checks.
 - Allow a bounded read-only wait for residual test disk-image registrations after successful detach, while rejecting ambiguous identities and never detaching twice.
 
@@ -22,6 +26,7 @@ Beta and RC qualification covers the existing software checks and package valida
 
 ### Security
 
+- Update Vue I18n to 11.4.22 for [GHSA-786j-gfwp-vhm5](https://github.com/intlify/vue-i18n/security/advisories/GHSA-786j-gfwp-vhm5), an SSR translated-HTML sanitizer issue. The checked application does not use `v-html` or `escapeParameter`; application exploitation is not claimed.
 - Update Vue I18n to 11.4.17, addressing the upstream translated-HTML SVG sanitizer vulnerability [GHSA-473g-cvf6-mfxj](https://github.com/intlify/vue-i18n/security/advisories/GHSA-473g-cvf6-mfxj). The reviewed application renders translations as text; no exploitable application path was established.
 
 Retain certificate verification, encrypted credential storage and signed-plugin requirements. Existing reviewed dependency deferrals remain subject to their recorded deadlines.

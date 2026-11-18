@@ -61,15 +61,25 @@
         v-for="toggle in headerControls"
         :key="toggle.id"
         class="mobile-header-touch mobile-header-control"
-        toggle
+        :toggle="!toggle.lockState || isStableLock(toggle)"
+        v-bind="lockAccessibility(toggle)"
         :active="(toggle.state ?? controlStates?.[toggle.id]) === 'on'"
         :unavailable="isToggleUnavailable(toggle.state ?? controlStates?.[toggle.id])"
-        :disabled="toggle.disabled"
+        :disabled="toggle.disabled || (!!toggle.lockState && !isStableLock(toggle))"
         :loading="toggle.pending"
         @click="activate(toggle)"
       >
-        <span class="mobile-header-label">{{ toggle.label }}</span><span
-          v-if="toggle.failed"
+        <span class="mobile-header-label">
+          {{ toggle.label }}
+          <span
+            v-if="toggle.lockState"
+            class="block font-normal"
+            aria-live="polite"
+            :role="toggle.failed ? 'alert' : undefined"
+            >{{ lockStatus(toggle) }}</span
+          > </span
+        ><span
+          v-if="toggle.failed && !toggle.lockState"
           role="alert"
           title="Action unconfirmed; check the current state before retrying."
           >!</span
@@ -107,16 +117,25 @@
           :key="toggle.id"
           class="min-w-[55px]"
           size="sm"
-          toggle
+          :toggle="!toggle.lockState || isStableLock(toggle)"
+          v-bind="lockAccessibility(toggle)"
           :active="(toggle.state ?? controlStates?.[toggle.id]) === 'on'"
           :unavailable="isToggleUnavailable(toggle.state ?? controlStates?.[toggle.id])"
-          :disabled="toggle.disabled"
+          :disabled="toggle.disabled || (!!toggle.lockState && !isStableLock(toggle))"
           :loading="toggle.pending"
           @click="activate(toggle)"
         >
-          {{ toggle.label
-          }}<span
-            v-if="toggle.failed"
+          <span>
+            {{ toggle.label }}
+            <span
+              v-if="toggle.lockState"
+              class="block font-normal"
+              aria-live="polite"
+              :role="toggle.failed ? 'alert' : undefined"
+              >{{ lockStatus(toggle) }}</span
+            > </span
+          ><span
+            v-if="toggle.failed && !toggle.lockState"
             role="alert"
             title="Action unconfirmed; check the current state before retrying."
             >!</span
@@ -162,10 +181,12 @@ import {
 } from '@lucide/vue'
 import { isMobileApp } from '@features'
 import { ref, useId } from 'vue'
+import { useI18n } from 'vue-i18n'
 import UiButton from './UiButton.vue'
 import EssModeMenu from './EssModeMenu.vue'
 import type { EssModeState } from '../essMode'
 import type { DashboardControlView } from '../dashboardControlView'
+import { createLockPresentation, isStableLock } from '../lockPresentation'
 
 defineProps<{
   dryRun: boolean
@@ -185,9 +206,11 @@ const emit = defineEmits<{
   'toggle-theme': []
   'open-config': []
 }>()
+const { t } = useI18n()
+const { lockStatus, lockAccessibility } = createLockPresentation(t)
 
 function activate(control: DashboardControlView) {
-  if (control.disabled || control.pending) return
+  if (control.disabled || control.pending || (control.lockState && !isStableLock(control))) return
   if (control.activate) control.activate()
   else emit('send', 'toggle', { entity: control.entity })
 }

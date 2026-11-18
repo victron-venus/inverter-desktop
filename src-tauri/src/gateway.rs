@@ -164,6 +164,12 @@ impl GatewayClient {
         }
     }
 
+    pub(crate) fn override_session(&self, expected: &str) -> Result<NotificationSession, String> {
+        self.notification_session.ensure_matches(expected)?;
+        self.http_auth().ensure_active()?;
+        Ok(self.notification_session.clone())
+    }
+
     pub fn http_auth(&self) -> GatewayHttpAuth {
         GatewayHttpAuth {
             base: self.base.clone(),
@@ -1017,7 +1023,12 @@ pub(crate) fn start_gateway_client(
                         let _ = app.emit("mqtt-notification", notification);
                     }
                     for id in changes.clear {
-                        let _ = app.emit("mqtt-notification-clear", json!({ "id": id }));
+                        // The tracker also clears incomplete/malformed metadata
+                        // and acknowledged slots; absence alone is not a new occurrence.
+                        let _ = app.emit(
+                            "mqtt-notification-clear",
+                            json!({ "id": id, "occurrence_ended": false }),
+                        );
                     }
                     let mut mapped = snapshot_to_state_with_instances(&snap, instances);
                     if let Ok(mut g) = state_c.lock() {
@@ -1113,6 +1124,15 @@ mod tests {
             .unwrap()
             .get("notification_session")
             .is_none());
+    }
+
+    #[test]
+    fn override_session_rejects_replaced_and_stopped_producers() {
+        let client = idle_test_client();
+        assert!(client.override_session("previous").is_err());
+        assert!(client.override_session("test-gateway").is_ok());
+        client.stop();
+        assert!(client.override_session("test-gateway").is_err());
     }
 
     #[test]

@@ -165,9 +165,12 @@ async function main() {
           case 'connect_mqtt':
             f.notificationSession = args.notificationSession
             await f.emit('mqtt-connection-status', { connected: true, notification_session: f.notificationSession })
+            await f.emit('setpoint-override-update', { notification_session: f.notificationSession, status: { value: null, last_error: null } })
             return null
           case 'get_plugin_snapshot': case 'get_plugin_groups': return []
-          case 'get_setpoint_override': return { value: null, last_error: null }
+          case 'get_setpoint_override':
+            if (!args.notificationSession || args.notificationSession !== f.notificationSession) throw Error('Synthetic inverter connection changed')
+            return { notification_session: args.notificationSession, status: { value: null, last_error: null } }
           case 'plugin:notification|is_permission_granted': return true
           case 'set_window_hidden': case 'disconnect_inverter': case 'send_notification':
           case 'test_mqtt_connection': case 'set_auto_start': case 'close_config_window':

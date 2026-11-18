@@ -2,59 +2,69 @@
 
 The desktop and mobile release adapters use Node.js **24.21.0**, pnpm
 **10.34.7** and Rust **1.99.1**. Python is fixed to **3.12.15** on Linux
-and **3.12.10** on macOS/Windows, matching the available official installers and
-the versions already used by the accepted platform builds. The macOS jobs select
-`macos-26` explicitly. The reviewed workflow fixes these versions for every
-channel; updating them requires a new candidate from the changed source.
+and **3.12.10** on macOS/Windows. Both macOS targets use `macos-26`.
+The reviewed workflow fixes these versions for candidate builds; updating the
+source or build recipe requires a new candidate.
 
 A major-version selector such as `node-version: 24` can select a different
 locally cached patch version on different hosted images. The exact Node pin
-removes that variation. See the [setup-node version selection documentation](https://github.com/actions/setup-node/blob/main/docs/advanced-usage.md#check-latest-version).
+removes that variation. See the
+[setup-node version selection documentation](https://github.com/actions/setup-node/blob/main/docs/advanced-usage.md#check-latest-version).
 
-## What is checked
+## Candidate builds and stable promotion
 
-1. The preparation job validates the accepted RC, source, policy and payloads,
-   then reserves the final version plan with its exact parent manifest identity.
-2. After setting up the tools, each final package job runs
-   `scripts/check-release-toolchain.py`. It verifies the selected RC receipt
-   against its published manifest and immutable Actions evidence, checks the
-   reserved parent, source and current RC attempt, then compares the **entire**
-   recorded toolchain object with the current environment. A mismatch stops the
-   job before frontend installation and native package compilation.
-3. The final publisher repeats the complete RC and asset checks and compares
-   every platform receipt again. The early check does not accept a package or
-   replace the protected release environment and actual package acceptance.
+The current `.release-policy.json` selects **`promote-bytes`**. Nightly, beta and
+RC requests build the required platform matrix from one frozen version plan.
+Every required validation workflow, platform package and Release gate must pass
+before candidate publication. RC requests also require the configured fuzzing
+campaigns. Platform receipts record the source, version inputs, actual toolchain
+and package hashes; immutable Actions evidence binds them to the candidate.
 
-The recorded toolchain includes the actual runner image revision (`ImageVersion`),
-OS and architecture, Python, and the detected Node, Rust, Cargo, Go and Xcode
-versions. No fields are removed or normalized for comparison. pnpm is fixed in
-the workflow; it is not currently a separate field in the shared toolchain receipt.
+RC packages already contain the final package version. Their embedded descriptor
+retains the RC tag, source SHA and reserved native build counters. After the exact
+RC assets have passed acceptance, stable promotion copies those assets byte for
+byte. It does not run a final package matrix, compile again or re-sign the app.
+The original RC descriptor remains visible after stable promotion.
 
-## Hosted image limits
+The protected `release` environment still requires approval. Promotion verifies
+the accepted RC's original successful run and attempt, source and policy,
+default-branch ancestry, Release gate, retained immutable evidence and payload
+checksums. Neither successful CI nor a beta publication proves RC acceptance.
+See the [release runbook](release-workflow.md) for commands and ownership.
 
-`macos-26` fixes the OS family, **not** an immutable machine image. Standard
-GitHub-hosted images still receive updates. GitHub's custom-image feature can pin
-an image version, but its [supported platforms](https://docs.github.com/en/actions/how-tos/manage-runners/larger-runners/use-custom-images#setting-up-an-image-generation-runner)
-are Linux and Windows; it does not provide a pinned macOS image for this workflow.
-An exact final/RC match on standard hosted macOS is therefore checked, not promised
-by the runner label. The early check makes a rollout mismatch cheaper to detect.
+## Recorded environment and hosted image limits
 
-For example, a failed final build used macOS image `20261013.0424.1` and Node
-`24.21.0`, while its accepted RC used image `20260907.0351.1` and Node `24.20.0`.
-The release correctly stopped despite passing its other checks. Fixing only the
-Node selector would not make the two image revisions equal.
+The toolchain receipt records the actual runner image revision (`ImageVersion`),
+OS and architecture, Python, and detected Node, Rust, Cargo, Go and Xcode versions.
+pnpm is fixed in the workflow; it is not currently a separate field in the shared
+toolchain receipt.
 
-## Recovery from a mismatch
+`macos-26` selects an OS family, not an immutable machine image. Standard hosted
+images receive updates. A new candidate can therefore record a different image
+revision even with unchanged tool version pins. The current promotion profile
+avoids an RC/final runner-image comparison because stable uses the accepted RC's
+existing bytes. This does not claim that independent rebuilds are reproducible.
 
-- Preserve the failed run, both platform receipts and the exact differing fields.
-  Do not approve or publish its staged packages.
-- Check which image revisions and tool versions are available. A repeated job or
-  a new RC by itself does not guarantee that a hosted rollout has finished.
-- Review any required workflow/toolchain change, merge normally, then build and
-  accept a fresh RC from that source. A changed recipe invalidates an older RC.
-- Build the final packages from that same source. Require the early check, full
-  final verification and acceptance of those new package bytes before approval.
+The shared release tooling also supports a separate **`final-build`** profile.
+For that profile only, `scripts/check-release-toolchain.py` verifies the accepted
+RC and compares the entire recorded toolchain object before final compilation;
+the final publisher checks the receipts again. A historical final build stopped
+because its macOS image and Node version differed from its RC. That historical
+failure explains the retained helper, but it is not the current stable workflow.
+An old `final-build` RC cannot be reinterpreted as a `promote-bytes` RC.
 
-A future move to a maintained, immutable macOS builder would be an infrastructure
-change requiring its own review and validation. This workflow does not silently
-fall back to another image or relax the equality check.
+## Recovery
+
+- Preserve a failed candidate run, its receipts and the observed errors. Correct
+  source or recipe defects through review and create a fresh candidate.
+- If source, dependencies or packaging change after RC acceptance, build and
+  accept a new RC. Do not replace assets, re-sign published binaries, rewrite
+  tags or alter version-allocation history.
+- If promotion evidence has expired or is missing or invalid, create and accept
+  a new RC. Do not use a local rebuild as substitute promotion evidence.
+- For a transient publication failure, inspect the existing run and any draft
+  before recovery. Prefer the already queued automatic beta at the intended
+  source; do not dispatch duplicate candidates without checking run state.
+
+A move to an immutable macOS builder would be a separate infrastructure change
+requiring review and validation.

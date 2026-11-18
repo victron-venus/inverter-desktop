@@ -161,6 +161,7 @@ import { Car, Droplets, Home as HomeIcon, Loader2 } from '@lucide/vue'
 import UiButton from './UiButton.vue'
 import { useI18n } from 'vue-i18n'
 import { isInverterControlFlag } from '../inverterControl'
+import { createLockPresentation, isStableLock } from '../lockPresentation'
 const props = defineProps<{
   showEv?: boolean
   evSectionVisible?: boolean
@@ -182,26 +183,14 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ send: [action: string, payload?: Record<string, unknown>] }>()
 const { t: $t } = useI18n()
+const { lockStatus, lockAccessibility } = createLockPresentation(
+  $t,
+  (label) => props.getControlLabel?.(label) ?? label
+)
 function activate(control: DashboardControlView) {
   if (control.disabled || control.pending || (control.lockState && !isStableLock(control))) return
   if (control.activate) control.activate()
   else emit('send', 'toggle', { entity: control.entity })
-}
-function isStableLock(control: DashboardControlView) {
-  return control.lockState === 'locked' || control.lockState === 'unlocked'
-}
-function lockStatus(control: DashboardControlView) {
-  if (!control.lockState) return undefined
-  const state = $t(`lock.${control.lockState}`)
-  if (control.pending) return `${state} · ${$t('lock.pending')}`
-  if (control.failed) return `${state} · ${$t('lock.notConfirmed')}`
-  return state
-}
-function lockAccessibility(control: DashboardControlView) {
-  if (!control.lockState) return {}
-  const label = props.getControlLabel?.(control.label) ?? control.label
-  const description = `${label}: ${lockStatus(control)}${control.failed ? `. ${$t('lock.unconfirmed')}` : ''}`
-  return { 'aria-label': description, title: description }
 }
 function onValveClick() {
   if (props.waterValve === false && !window.confirm('Open city water valve?')) return

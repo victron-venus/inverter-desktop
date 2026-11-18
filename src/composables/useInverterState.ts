@@ -395,6 +395,7 @@ export interface NotificationEntry {
   body: string
   timestamp: number | null
   read: boolean
+  occurrence?: { id: string; source?: string; scope: string; active: boolean }
 }
 
 const notifId = ref(0)
@@ -411,6 +412,54 @@ export function addNotification(
     { id: ++notifId.value, title, body, timestamp, read: false },
     ...notifications.value,
   ].slice(0, MAX_NOTIFICATIONS)
+}
+
+/** Replays and detail updates describe an occurrence, not another unread event. */
+export function upsertNotification(
+  notification: BannerNotification,
+  timestamp: number | null,
+  scope = ''
+) {
+  const entry = notifications.value.find(
+    (item) =>
+      item.occurrence?.active &&
+      item.occurrence.id === notification.id &&
+      item.occurrence.source === notification.source &&
+      item.occurrence.scope === scope
+  )
+  if (entry && (timestamp === null || entry.timestamp === null || entry.timestamp === timestamp)) {
+    entry.title = notification.title
+    entry.body = notification.body
+    // A partial reconnect replay must not discard an already known event time.
+    entry.timestamp = timestamp ?? entry.timestamp
+    return
+  }
+  // A reused source slot with a different event time starts a new occurrence.
+  if (entry?.occurrence) entry.occurrence.active = false
+  notifications.value = [
+    {
+      id: ++notifId.value,
+      title: notification.title,
+      body: notification.body,
+      timestamp,
+      read: false,
+      occurrence: {
+        id: notification.id,
+        source: notification.source,
+        scope,
+        active: true,
+      },
+    },
+    ...notifications.value,
+  ].slice(0, MAX_NOTIFICATIONS)
+}
+
+/** Only a source clear ends an occurrence; dismissing its banner does not. */
+export function endNotificationOccurrence(id: string, scope = '') {
+  for (const entry of notifications.value) {
+    if (entry.occurrence?.id === id && entry.occurrence.scope === scope)
+      entry.occurrence.active = false
+  }
 }
 
 export function markNotificationRead(id: number) {

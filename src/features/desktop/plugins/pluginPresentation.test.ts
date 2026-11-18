@@ -7,6 +7,7 @@ import { defaultConfig } from '../../../config'
 import PluginCompactPanels from './PluginCompactPanels.vue'
 import PluginConnectionStatus from './PluginConnectionStatus.vue'
 import PluginNumberSlider from './PluginNumberSlider.vue'
+import AppHeader from '../../../components/AppHeader.vue'
 import { createPluginPresentation, pluginPresentationKey } from './presentation'
 import type { NumberInputContribution, PluginSnapshot } from './types'
 import type { LockState } from '../../../dashboardControlView'
@@ -397,6 +398,34 @@ describe('lock presentation intent and pending state', () => {
   function requests() {
     return native.invoke.mock.calls.filter(([command]) => command === 'plugin_action')
   }
+  it('renders the advertised header lock state without generic off semantics for a jam', async () => {
+    await observe('locked', 'first')
+    const wrapper = mount(AppHeader, {
+      props: {
+        dryRun: false,
+        essClass: 'off',
+        essText: 'ESS',
+        showHeaderToggles: true,
+        headerControls: context.mergeControls('header', []),
+        controlStates: {},
+        isDark: false,
+      },
+    })
+    wrappers.push(wrapper)
+    const button = wrapper.get('button[aria-label^="C100 Plus:"]')
+    expect(button.text()).toContain('lock.locked')
+    expect(button.attributes('aria-pressed')).toBe('true')
+    await observe('jammed', 'second')
+    await wrapper.setProps({
+      headerControls: context.mergeControls('header', []),
+    })
+    expect(button.text()).toContain('lock.jammed')
+    expect(button.attributes('aria-pressed')).toBeUndefined()
+    expect(button.attributes('disabled')).toBeDefined()
+    await button.trigger('click')
+    expect(requests()).toHaveLength(0)
+    expect(wrapper.emitted('send')).toBeUndefined()
+  })
   it('shares pending across projections, state transitions and opposite intents until the original request settles', async () => {
     await observe('unlocked', 'before')
     const old = context.mergeControls('home', [])[0]

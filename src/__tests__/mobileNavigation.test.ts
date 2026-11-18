@@ -106,6 +106,7 @@ describe('single WebView mobile settings', () => {
 
   it('offers a visible Settings action without offering GitHub sideload updates', async () => {
     wrapper = mount(AppHeader, {
+      global: { plugins: [i18n] },
       props: {
         dryRun: false,
         essClass: 'on',
