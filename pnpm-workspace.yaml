@@ -3,7 +3,7 @@ packages: []
 overrides:
   # Glob 14 supports the fixed Minimatch 11 matcher API.
   glob: 14.0.6
-  editorconfig>minimatch: 11.0.8
+  editorconfig>minimatch: 11.0.9
   nanoid: 5.1.16
   postcss: 8.5.33
   # Permit compatible security updates; pnpm-lock.yaml fixes the installed version.
