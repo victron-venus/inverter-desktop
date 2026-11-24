@@ -481,6 +481,16 @@ fn map_controller(snap: &GatewaySnapshot, st: &mut InverterState) {
             .and_then(bool_value)
             .unwrap_or(false),
     );
+    let text = |name: &str| {
+        controller
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    st.grid_control_valid = controller.get("grid_control_valid").and_then(bool_value);
+    st.grid_control_reason = text("grid_control_reason");
+    st.grid_control_source = text("grid_control_source");
+    st.grid_primary_reason = text("grid_primary_reason");
     // Polling a cached controller every two seconds must not renew a stale
     // submeter. The measurement timestamp is stable across repeated snapshots.
     st.grid_backup_observed_at = st
@@ -503,6 +513,10 @@ fn invalidate_gateway_controls(st: &mut InverterState) {
     st.grid_backup = None;
     st.grid_using_backup = Some(false);
     st.grid_backup_observed_at = None;
+    st.grid_control_valid = None;
+    st.grid_control_reason = None;
+    st.grid_control_source = None;
+    st.grid_primary_reason = None;
     st.setpoint_override = None;
     st.water_level = None;
     st.pump_switch = None;

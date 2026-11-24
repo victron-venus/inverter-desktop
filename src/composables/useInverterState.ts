@@ -25,6 +25,11 @@ export interface InverterState {
   grid_backup?: GridBackupStatus | null
   grid_using_backup?: boolean
   grid_backup_observed_at?: number
+  /** Control provenance from the daemon; null/absent means no opinion. */
+  grid_control_valid?: boolean | null
+  grid_control_reason?: string | null
+  grid_control_source?: string | null
+  grid_primary_reason?: string | null
   gt?: number
   g1?: number
   g2?: number
@@ -227,6 +232,10 @@ const GATEWAY_OWNED_FIELDS = [
   'grid_backup',
   'grid_using_backup',
   'grid_backup_observed_at',
+  'grid_control_valid',
+  'grid_control_reason',
+  'grid_control_source',
+  'grid_primary_reason',
   'water_level',
   'pump_switch',
   'water_valve',
@@ -255,6 +264,16 @@ function mergeStateFields(merged: InverterState, newState: InverterState) {
   for (const [key, val] of Object.entries(newState)) {
     if (val !== undefined && val !== null) {
       ;(merged as Record<string, unknown>)[key] = val
+    }
+  }
+  // Explicit null means the daemon withdrew a reason; keep no stale explanation.
+  for (const key of [
+    'grid_control_reason',
+    'grid_control_source',
+    'grid_primary_reason',
+  ] as const) {
+    if (Object.prototype.hasOwnProperty.call(newState, key) && newState[key] == null) {
+      delete merged[key]
     }
   }
 }

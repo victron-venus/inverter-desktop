@@ -15,6 +15,15 @@
         >
           · {{ backupPower }}
         </span>
+        <span
+          v-if="controlLabel"
+          data-testid="grid-control"
+          class="normal-case tracking-normal font-normal"
+          :class="controlValid ? 'opacity-70' : 'text-amber-500'"
+          :title="controlHint"
+        >
+          · {{ controlLabel }}
+        </span>
       </div>
       <div class="classic-stat-value text-[1.75rem] font-bold text-grid">
         {{ formatGridPower(gtH) }}
@@ -101,6 +110,12 @@ const props = withDefaults(
     gridBackup?: GridBackupStatus | null
     gridUsingBackup?: boolean
     gridBackupObservedAt?: number
+    /** One object: a Boolean prop would default to false and invent an opinion. */
+    gridControl?: {
+      valid?: boolean | null
+      reason?: string | null
+      source?: string | null
+    } | null
     tt?: number
     t1?: number
     t2?: number
@@ -148,6 +163,27 @@ const backupPower = computed(() => {
     Number.isFinite(backup.power)
     ? formatPower(backup.power)
     : '—'
+})
+const controlValid = computed(() => props.gridControl?.valid)
+const controlLabel = computed(() => {
+  if (controlValid.value == null) return ''
+  if (controlValid.value) {
+    // Only the published control source decides the chip, so a source switch
+    // always replaces the label instead of mixing in display-only state.
+    const service = props.gridControl?.source ?? ''
+    if (service.startsWith('com.victronenergy.acload.')) return 'fallback'
+    if (service.startsWith('com.victronenergy.grid.')) return 'meter'
+    return 'live'
+  }
+  const reason = (props.gridControl?.reason ?? '').toLowerCase()
+  if (reason.includes('override')) return 'override'
+  if (reason.includes('phase')) return 'phases'
+  return 'paused'
+})
+const controlHint = computed(() => {
+  if (controlValid.value == null) return ''
+  if (controlValid.value) return `Setpoint from ${props.gridControl?.source ?? 'live meter'}`
+  return `Grid control paused: ${props.gridControl?.reason || 'no valid grid measurement'}`
 })
 const backupHint = computed(() => {
   if (!backupLive.value) return 'Grid submeter status is stale'

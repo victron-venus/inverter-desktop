@@ -56,6 +56,58 @@ describe('StatCards sticky hold', () => {
     expect(wrapper.get('[data-testid="grid-backup"]').attributes('title')).toContain('stale')
   })
 
+  it('names the control source and pauses visibly when it is invalid', async () => {
+    const wrapper = mount(StatCards, {
+      props: {
+        ...baseProps,
+        gridControl: { valid: true, source: 'com.victronenergy.grid.ve_meter' },
+      },
+    })
+    const control = wrapper.get('[data-testid="grid-control"]')
+    expect(control.text()).toBe('· meter')
+    expect(control.attributes('title')).toContain('com.victronenergy.grid.ve_meter')
+    await wrapper.setProps({
+      gridControl: {
+        valid: false,
+        reason: 'Grid phase count decreased; waiting for established topology',
+        source: null,
+      },
+    })
+    expect(wrapper.get('[data-testid="grid-control"]').text()).toBe('· phases')
+    expect(wrapper.get('[data-testid="grid-control"]').attributes('title')).toContain('decreased')
+  })
+
+  it('replaces the control chip when the source changes and drops it when unknown', async () => {
+    const wrapper = mount(StatCards, {
+      props: {
+        ...baseProps,
+        gridControl: { valid: true, source: 'com.victronenergy.grid.ve_meter' },
+      },
+    })
+    await wrapper.setProps({
+      gridControl: { valid: true, source: 'com.victronenergy.acload.emporia_ch8' },
+    })
+    expect(wrapper.get('[data-testid="grid-control"]').text()).toBe('· fallback')
+    await wrapper.setProps({
+      gridControl: {
+        valid: true,
+        source: null,
+        reason: 'Grid phase count decreased; waiting for established topology',
+      },
+    })
+    expect(wrapper.get('[data-testid="grid-control"]').text()).toBe('· live')
+    expect(wrapper.get('[data-testid="grid-control"]').attributes('title')).not.toContain(
+      'decreased'
+    )
+    await wrapper.setProps({ gridControl: null })
+    expect(wrapper.find('[data-testid="grid-control"]').exists()).toBe(false)
+  })
+
+  it('shows no control chip when the daemon reports no opinion', () => {
+    const wrapper = mount(StatCards, { props: baseProps })
+    expect(wrapper.find('[data-testid="grid-control"]').exists()).toBe(false)
+  })
+
   it('shows only the selected submeter next to Grid, preserving primary totals', () => {
     const wrapper = mount(StatCards, { props: { ...baseProps, gridBackup } })
     const card = wrapper.find('.metric-card')
