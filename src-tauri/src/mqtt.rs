@@ -405,9 +405,7 @@ where
 }
 
 /// Distinguish an absent key (keep the value) from an explicit null (clear it).
-fn deserialize_optional_string<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<String>>, D::Error>
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
