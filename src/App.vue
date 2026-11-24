@@ -49,6 +49,11 @@
           :gridBackup="state.grid_backup"
           :gridUsingBackup="state.grid_using_backup"
           :gridBackupObservedAt="state.grid_backup_observed_at"
+          :gridControl="{
+            valid: state.grid_control_valid,
+            reason: state.grid_control_reason,
+            source: state.grid_control_source,
+          }"
           :tt="state.tt"
           :t1="state.t1"
           :t2="state.t2"

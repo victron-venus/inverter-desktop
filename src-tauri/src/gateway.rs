@@ -481,13 +481,42 @@ fn map_controller(snap: &GatewaySnapshot, st: &mut InverterState) {
             .and_then(bool_value)
             .unwrap_or(false),
     );
-    // Polling a cached controller every two seconds must not renew a stale
-    // submeter. The measurement timestamp is stable across repeated snapshots.
-    st.grid_backup_observed_at = st
-        .grid_backup
-        .as_ref()
-        .and_then(|v| v.measurement_time)
-        .filter(|v| v.is_finite());
+    let text = |name: &str| {
+        controller
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    st.grid_control_valid = controller.get("grid_control_valid").and_then(bool_value);
+    st.grid_control_reason = text("grid_control_reason");
+    st.grid_control_source = text("grid_control_source");
+    st.grid_primary_reason = text("grid_primary_reason");
+    // Freshness is stamped locally by preserve_grid_backup_observation: the
+    // daemon's measurement_time uses the GX wall clock, which must never be
+    // compared against this machine's clock.
+    st.grid_backup_observed_at = None;
+}
+
+/// Keep submeter freshness on local receipt time, renewed only when the daemon
+/// publishes a new measurement.
+///
+/// Repeated polls return the same measurement_time and must not extend the
+/// chip's life. Comparing that timestamp with the local clock instead breaks as
+/// soon as the GX and this machine disagree by more than the freshness window.
+fn preserve_grid_backup_observation(prev: &InverterState, next: &mut InverterState) {
+    let sample = |state: &InverterState| {
+        state
+            .grid_backup
+            .as_ref()
+            .and_then(|backup| backup.measurement_time)
+    };
+    next.grid_backup_observed_at = match (sample(prev), sample(next)) {
+        (Some(previous), Some(current)) if previous == current => prev
+            .grid_backup_observed_at
+            .or_else(|| Some(utc_time::unix_seconds_now())),
+        (_, Some(_)) => Some(utc_time::unix_seconds_now()),
+        (_, None) => None,
+    };
 }
 
 fn invalidate_gateway_controls(st: &mut InverterState) {
@@ -503,6 +532,10 @@ fn invalidate_gateway_controls(st: &mut InverterState) {
     st.grid_backup = None;
     st.grid_using_backup = Some(false);
     st.grid_backup_observed_at = None;
+    st.grid_control_valid = None;
+    st.grid_control_reason = None;
+    st.grid_control_source = None;
+    st.grid_primary_reason = None;
     st.setpoint_override = None;
     st.water_level = None;
     st.pump_switch = None;
@@ -1030,6 +1063,7 @@ pub(crate) fn start_gateway_client(
                     let mut mapped = snapshot_to_state_with_instances(&snap, instances);
                     if let Ok(mut g) = state_c.lock() {
                         preserve_battery_time_to_go(&g, &mut mapped);
+                        preserve_grid_backup_observation(&g, &mut mapped);
                         *g = mapped.clone();
                     }
                     if !connected_emitted {
@@ -1740,18 +1774,26 @@ mod tests {
     fn repeated_backup_snapshots_never_renew_measurement_timestamp() {
         let snap = complete_snapshot();
         let first = snapshot_to_state(&snap);
-        let repeated = snapshot_to_state(&snap);
-        assert_eq!(first.grid_backup_observed_at, Some(1700000000.0));
-        assert_eq!(
-            first.grid_backup_observed_at,
-            repeated.grid_backup_observed_at
-        );
+        assert_eq!(first.grid_backup_observed_at, None);
+
+        let mut previous = snapshot_to_state(&snap);
+        previous.grid_backup_observed_at = Some(1.0);
+        let mut repeated = snapshot_to_state(&snap);
+        preserve_grid_backup_observation(&previous, &mut repeated);
+        assert_eq!(repeated.grid_backup_observed_at, Some(1.0));
+
+        let mut advanced = snapshot_to_state(&snap);
+        advanced.grid_backup.as_mut().unwrap().measurement_time = Some(1700000003.0);
+        preserve_grid_backup_observation(&repeated, &mut advanced);
+        assert!(advanced
+            .grid_backup_observed_at
+            .is_some_and(|value| value > 1_000_000_000.0));
+
         let mut absent_time = snap;
         absent_time.inverter.as_mut().unwrap()["grid_backup"]["measurement_time"] = Value::Null;
-        assert_eq!(
-            snapshot_to_state(&absent_time).grid_backup_observed_at,
-            None
-        );
+        let mut absent = snapshot_to_state(&absent_time);
+        preserve_grid_backup_observation(&repeated, &mut absent);
+        assert_eq!(absent.grid_backup_observed_at, None);
     }
 
     #[test]

@@ -240,6 +240,11 @@ pub struct InverterState {
     pub grid_using_backup: Option<bool>,
     /// Genuine daemon receipt time; unrelated Cerbo overlays never renew it.
     pub grid_backup_observed_at: Option<f64>,
+    /// Control provenance published by inverter-control, not a measurement.
+    pub grid_control_valid: Option<bool>,
+    pub grid_control_reason: Option<String>,
+    pub grid_control_source: Option<String>,
+    pub grid_primary_reason: Option<String>,
     pub setpoint_override: Option<SetpointOverrideStatus>,
     pub gt: Option<f64>,
     pub g1: Option<f64>,
@@ -319,6 +324,13 @@ struct RawInverterState {
     #[serde(default, deserialize_with = "deserialize_grid_backup")]
     grid_backup: Option<Option<GridBackupStatus>>,
     grid_using_backup: Option<bool>,
+    grid_control_valid: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    grid_control_reason: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    grid_control_source: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    grid_primary_reason: Option<Option<String>>,
     // Deserialized for completeness / tests; never merged into live tiles.
     #[allow(dead_code)]
     gt: Option<f64>,
@@ -390,6 +402,14 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<GridBackupStatus>::deserialize(deserializer).map(Some)
+}
+
+/// Distinguish an absent key (keep the value) from an explicit null (clear it).
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 impl RawInverterState {
@@ -2636,6 +2656,16 @@ impl MqttClient {
             new_state.grid_backup_observed_at = Some(utc_time::unix_seconds_now());
         }
         merge_opt!(grid_using_backup, raw.grid_using_backup);
+        merge_opt!(grid_control_valid, raw.grid_control_valid);
+        if let Some(reason) = raw.grid_control_reason {
+            new_state.grid_control_reason = reason;
+        }
+        if let Some(source) = raw.grid_control_source {
+            new_state.grid_control_source = source;
+        }
+        if let Some(reason) = raw.grid_primary_reason {
+            new_state.grid_primary_reason = reason;
+        }
         merge_opt!(version, raw.version);
         merge_opt!(dashboard_version, raw.dashboard_version);
         merge_opt!(uptime, raw.uptime);
